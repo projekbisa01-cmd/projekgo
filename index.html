@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pendapatan Rider</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Plus+Jakarta+Sans', sans-serif;
+            background-color: #f8fafc;
+        }
+
+        .orange-gradient {
+            background: linear-gradient(135deg, #ff8c00 0%, #ff5e00 100%);
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+        }
+
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 50;
+        }
+
+        .progress-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: #e2e8f0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #ff8c00;
+            transition: width 0.3s ease;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px; width: 18px;
+            left: 3px; bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #22c55e; }
+        input:checked + .slider:before { transform: translateX(26px); }
+
+        .hidden-page { display: none; }
+
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: white;
+            z-index: 100;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Halaman Login */
+        #login-page {
+            position: fixed;
+            inset: 0;
+            background: #f8fafc;
+            z-index: 150;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .refreshing {
+            animation: spin-slow 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="pb-24">
+
+    <!-- Halaman Login -->
+    <div id="login-page">
+        <div class="w-full max-sm space-y-8 text-center">
+            <div class="space-y-2">
+                <div class="w-20 h-20 orange-gradient rounded-3xl flex items-center justify-center text-white text-3xl mx-auto shadow-lg mb-4">
+                    <i class="fa-solid fa-motorcycle"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-gray-800">Masuk Rider</h2>
+                <p class="text-sm text-gray-500 px-8">Masukkan ID unik Anda untuk mengakses dashboard pendapatan</p>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="relative">
+                    <span class="absolute inset-y-0 left-0 pl-4 flex items-center text-gray-400">
+                        <i class="fa-solid fa-user-tag"></i>
+                    </span>
+                    <input type="text" id="uid-input" placeholder="Masukkan UID Anda..." class="w-full pl-12 pr-4 py-4 bg-white border border-gray-100 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold text-gray-800 uppercase">
+                </div>
+                <button onclick="handleLogin()" id="login-btn" class="w-full py-4 orange-gradient text-white font-bold rounded-2xl shadow-lg transform active:scale-95 transition-all">
+                    Buka Dashboard
+                </button>
+                <div id="login-error-msg" class="hidden text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl border border-red-100">
+                    UID tidak ditemukan atau salah.
+                </div>
+            </div>
+            <p class="text-[10px] text-gray-400 uppercase tracking-widest">© 2024 Rider Management System</p>
+        </div>
+    </div>
+
+    <!-- Layar Loading -->
+    <div id="loading-overlay">
+        <div id="loading-spinner" class="w-12 h-12 border-4 border-orange-200 border-t-orange-600 rounded-full animate-spin"></div>
+        <p id="loading-text" class="mt-4 text-sm font-bold text-gray-500">Menghubungkan ke Google Sheets...</p>
+        <button id="retry-btn" onclick="location.reload()" class="hidden mt-4 px-6 py-2 bg-orange-500 text-white rounded-xl font-bold">Coba Lagi</button>
+    </div>
+
+    <!-- KONTEN UTAMA APLIKASI -->
+    <div id="main-app" class="hidden">
+        <!-- HALAMAN BERANDA -->
+        <div id="page-home">
+            <!-- Header Profil -->
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <div class="relative">
+                            <img src="https://ui-avatars.com/api/?name=Rider+Pro&background=ff8c00&color=fff" alt="Profil" class="w-12 h-12 rounded-full border-2 border-orange-500 p-0.5">
+                            <div id="status-indicator" class="absolute bottom-0 right-0 w-3 h-3 bg-gray-400 border-2 border-white rounded-full"></div>
+                        </div>
+                        <div>
+                            <h1 class="text-sm text-gray-500">Selamat bekerja,</h1>
+                            <p id="display-rider-name" class="font-bold text-gray-800">Memuat...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center space-x-3">
+                        <button onclick="manualRefresh()" id="refresh-btn" class="w-10 h-10 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center border border-gray-100 active:scale-90 transition-all">
+                            <i class="fa-solid fa-rotate-right" id="refresh-icon"></i>
+                        </button>
+                        <div class="flex flex-col items-end">
+                            <span id="onbid-text" class="text-[10px] font-bold text-gray-400 mb-1 uppercase tracking-wider">Off-Bid</span>
+                            <label class="switch">
+                                <input type="checkbox" id="onbid-toggle" onchange="toggleOnbid()">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <main class="p-5 max-w-md mx-auto space-y-6">
+                <!-- Kartu Pendapatan Utama -->
+                <div class="orange-gradient rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                    <div class="relative z-10">
+                        <p class="text-sm opacity-80">Pendapatan Bersih Hari Ini</p>
+                        <h2 id="today-net-earnings" class="text-3xl font-bold mt-1">Rp 0</h2>
+                    </div>
+                    <div class="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full"></div>
+                </div>
+
+                <!-- Grid Statistik -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-white p-4 rounded-2xl card-shadow border border-gray-50">
+                        <div class="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center mb-3">
+                            <i class="fa-solid fa-receipt"></i>
+                        </div>
+                        <p class="text-xs text-gray-500">Adm. Harian</p>
+                        <p id="today-adm" class="text-lg font-bold text-gray-800">Rp 0</p>
+                    </div>
+                    <div class="bg-white p-4 rounded-2xl card-shadow border border-gray-50">
+                        <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center mb-3">
+                            <i class="fa-solid fa-motorcycle"></i>
+                        </div>
+                        <p class="text-xs text-gray-500">Jumlah Tarikan</p>
+                        <p id="current-trips" class="text-lg font-bold text-gray-800">0 Trip</p>
+                    </div>
+                </div>
+
+                <!-- Bagian Target Harian -->
+                <div class="bg-white p-5 rounded-2xl card-shadow border border-gray-50">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold text-gray-800">Target Pendapatan Bersih</h3>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="adjustTarget(-10000)" class="w-6 h-6 rounded-md bg-gray-100 text-gray-600 flex items-center justify-center">
+                                <i class="fa-solid fa-minus text-[10px]"></i>
+                            </button>
+                            <span id="target-value" class="text-sm font-bold text-orange-600">Rp 100.000</span>
+                            <button onclick="adjustTarget(10000)" class="w-6 h-6 rounded-md bg-gray-100 text-gray-600 flex items-center justify-center">
+                                <i class="fa-solid fa-plus text-[10px]"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="progress-bar mb-3">
+                        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span id="progress-text">Rp 0 / Rp 100.000</span>
+                        <span id="remaining-text">Sisa Rp 100.000</span>
+                    </div>
+                </div>
+
+                <!-- Riwayat Terbaru -->
+                <div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold text-gray-800">Riwayat Hari Ini</h3>
+                    </div>
+                    <div id="history-list" class="space-y-3"></div>
+                </div>
+            </main>
+        </div>
+
+        <!-- HALAMAN MINGGUAN -->
+        <div id="page-weekly" class="hidden-page">
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40">
+                <h1 class="font-bold text-xl text-gray-800">Riwayat Pertanggal</h1>
+                <p id="weekly-period-label" class="text-xs text-gray-500">30 Hari Terakhir</p>
+            </header>
+
+            <main class="p-5 max-w-md mx-auto space-y-6">
+                <div class="orange-gradient rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                    <div class="relative z-10">
+                        <p class="text-sm opacity-80">Total Pendapatan Bersih (Mingguan)</p>
+                        <h2 id="weekly-net-total" class="text-3xl font-bold mt-1">Rp 0</h2>
+                        <div class="flex justify-between items-center mt-4 border-t border-white/20 pt-4">
+                            <div>
+                                <p class="text-[10px] opacity-70">Adm. (16%)</p>
+                                <p id="weekly-adm-total" class="font-bold">Rp 0</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-[10px] opacity-70">Total Order</p>
+                                <p id="weekly-order-total" class="font-bold">0 Selesai</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="font-bold text-gray-800 mb-4">Daftar Harian</h3>
+                    <div id="weekly-history-list" class="space-y-3"></div>
+                </div>
+            </main>
+        </div>
+
+        <!-- HALAMAN BULANAN -->
+        <div id="page-monthly" class="hidden-page">
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40">
+                <h1 class="font-bold text-xl text-gray-800">Laporan Bulanan</h1>
+                <p id="monthly-period-label" class="text-xs text-gray-500">Bulan Berjalan</p>
+            </header>
+
+            <main class="p-5 max-w-md mx-auto space-y-6">
+                <div class="bg-white p-6 rounded-3xl card-shadow border border-gray-50 text-center space-y-6">
+                    <div class="space-y-1">
+                        <p class="text-xs text-gray-500 uppercase tracking-wider font-semibold">Pendapatan Bersih Bulanan</p>
+                        <h2 id="monthly-net-total" class="text-3xl font-extrabold text-orange-600">Rp 0</h2>
+                    </div>
+                    <div class="w-full h-px bg-gray-100"></div>
+                    <div class="space-y-1">
+                        <p class="text-xs text-gray-500 uppercase tracking-wider font-semibold">Total Trip Bulanan</p>
+                        <h3 id="monthly-order-total" class="text-2xl font-bold text-gray-800">0 Trip</h3>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- HALAMAN PROFIL -->
+        <div id="page-profile" class="hidden-page bg-white min-h-screen">
+            <header class="p-6 text-center border-b border-gray-100">
+                <h1 class="font-bold text-xl text-gray-800">Profil Rider</h1>
+            </header>
+            <main class="p-6 max-w-md mx-auto">
+                <div class="flex flex-col items-center mb-8">
+                    <div class="relative mb-4">
+                        <img id="profile-img" src="https://ui-avatars.com/api/?name=Rider&background=ff8c00&color=fff&size=128" class="w-32 h-32 rounded-full border-4 border-orange-100 object-cover shadow-sm">
+                    </div>
+                    <h2 id="profile-name" class="text-2xl font-bold text-gray-800">Memuat...</h2>
+                    <p id="profile-id" class="text-sm text-gray-400 font-medium">ID: -</p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                        <div class="flex items-center space-x-3 text-gray-500">
+                            <i class="fa-solid fa-motorcycle text-orange-500"></i>
+                            <span class="text-sm font-medium">Jenis Motor</span>
+                        </div>
+                        <span id="profile-motor" class="text-sm font-bold text-gray-800">Memuat...</span>
+                    </div>
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                        <div class="flex items-center space-x-3 text-gray-500">
+                            <i class="fa-solid fa-id-card text-orange-500"></i>
+                            <span class="text-sm font-medium">Plat Nomor</span>
+                        </div>
+                        <span id="profile-plat" class="text-sm font-bold text-gray-800 uppercase">Memuat...</span>
+                    </div>
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                        <div class="flex items-center space-x-3 text-gray-500">
+                            <i class="fa-solid fa-calendar-check text-orange-500"></i>
+                            <span class="text-sm font-medium">Bergabung Sejak</span>
+                        </div>
+                        <span id="profile-join" class="text-sm font-bold text-gray-800">Memuat...</span>
+                    </div>
+                </div>
+
+                <button onclick="handleLogout()" class="w-full mt-10 py-4 bg-red-50 text-red-500 font-bold rounded-2xl active:scale-95 transition-all">Keluar / Ganti Akun</button>
+            </main>
+        </div>
+
+        <!-- Navigasi Bawah -->
+        <nav class="bottom-nav glass-effect border-t border-gray-100 px-6 py-4">
+            <div class="flex items-center justify-between max-w-md mx-auto">
+                <button onclick="switchPage('home')" id="nav-home" class="nav-btn flex flex-col items-center space-y-1 text-orange-600">
+                    <i class="fa-solid fa-house text-xl"></i>
+                    <span class="text-[10px] font-bold">Beranda</span>
+                </button>
+                <button onclick="switchPage('weekly')" id="nav-weekly" class="nav-btn flex flex-col items-center space-y-1 text-gray-400">
+                    <i class="fa-solid fa-calendar-week text-xl"></i>
+                    <span class="text-[10px] font-medium">Mingguan</span>
+                </button>
+                <button onclick="switchPage('monthly')" id="nav-monthly" class="nav-btn flex flex-col items-center space-y-1 text-gray-400">
+                    <i class="fa-solid fa-calendar-days text-xl"></i>
+                    <span class="text-[10px] font-medium">Bulanan</span>
+                </button>
+                <button onclick="switchPage('profile')" id="nav-profile" class="nav-btn flex flex-col items-center space-y-1 text-gray-400">
+                    <i class="fa-solid fa-user text-xl"></i>
+                    <span class="text-[10px] font-medium">Profil</span>
+                </button>
+            </div>
+        </nav>
+    </div>
+
+    <script>
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiOzL5JEmw0F6B7M7Vf9eZm_hsSgOWDygAVbC3Jct71NELc8ZmJT7V0Z0RUPxL2bwU/exec";
+        const ADM_RATE = 0.16;
+        let currentUserUID = "";
+        let rawData = [];
+        let dailyIncomeTarget = 100000;
+
+        /**
+         * Mendapatkan tanggal Jakarta (MM-DD-YYYY)
+         */
+        function getJakartaDateString(offsetDays = 0) {
+            const date = new Date();
+            if (offsetDays !== 0) date.setDate(date.getDate() + offsetDays);
+            
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            const parts = formatter.formatToParts(date);
+            const m = parts.find(p => p.type === 'month').value;
+            const d = parts.find(p => p.type === 'day').value;
+            const y = parts.find(p => p.type === 'year').value;
+            
+            return ${m}-${d}-${y};
+        }
+
+        /**
+         * Parser Tanggal Lembar Kerja
+         */
+        function parseSheetDate(dateInput) {
+            if (!dateInput) return "";
+            
+            let d;
+            if (dateInput instanceof Date) {
+                d = dateInput;
+            } else if (typeof dateInput === 'number') {
+                d = new Date((dateInput - 25569) * 86400 * 1000);
+            } else {
+                const str = String(dateInput).trim();
+                d = new Date(str);
+                
+                if (isNaN(d.getTime())) {
+                    const parts = str.split(/[\/\-\.]/);
+                    if (parts.length === 3) {
+                        const p0 = parseInt(parts[0]);
+                        const p1 = parseInt(parts[1]);
+                        const p2 = parts[2].length === 2 ? 2000 + parseInt(parts[2]) : parseInt(parts[2]);
+                        
+                        if (p0 > 12) {
+                            d = new Date(p2, p1 - 1, p0);
+                        } else {
+                            d = new Date(p2, p0 - 1, p1);
+                        }
+                    }
+                }
+            }
+
+            if (isNaN(d.getTime())) return "";
+
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            const parts = formatter.formatToParts(d);
+            const mm = parts.find(p => p.type === 'month').value;
+            const dd = parts.find(p => p.type === 'day').value;
+            const yyyy = parts.find(p => p.type === 'year').value;
+            return ${mm}-${dd}-${yyyy};
+        }
+
+        /**
+         * Parser Format Waktu (HH:mm)
+         */
+        function parseSheetTime(timeInput) {
+            if (!timeInput) return "-";
+            
+            if (timeInput instanceof Date || !isNaN(Date.parse(timeInput))) {
+                const d = new Date(timeInput);
+                if (!isNaN(d.getTime())) {
+                    return d.toLocaleTimeString('id-ID', { 
+                        hour: '2-digit', 
+                        minute: '2-digit', 
+                        hour12: false,
+                        timeZone: 'Asia/Jakarta' 
+                    }).replace('.', ':');
+                }
+            }
+            
+            return String(timeInput).trim();
+        }
+
+        window.onload = function() {
+            const savedUID = localStorage.getItem('rider_uid');
+            const savedTarget = localStorage.getItem('rider_target_income');
+            if (savedTarget) dailyIncomeTarget = Number(savedTarget);
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlUID = urlParams.get('uid');
+
+            if (urlUID) {
+                document.getElementById('uid-input').value = urlUID;
+                handleLogin();
+            } else if (savedUID) {
+                document.getElementById('uid-input').value = savedUID;
+                handleLogin();
+            }
+        }
+
+        async function manualRefresh() {
+            const icon = document.getElementById('refresh-icon');
+            icon.classList.add('refreshing');
+            await fetchData();
+            icon.classList.remove('refreshing');
+        }
+
+        async function handleLogin() {
+            const input = document.getElementById('uid-input');
+            const errorMsg = document.getElementById('login-error-msg');
+            const uid = input.value.trim();
+            
+            if (!uid) { 
+                errorMsg.innerText = "Silakan masukkan UID Anda.";
+                errorMsg.classList.remove('hidden');
+                return; 
+            }
+            
+            errorMsg.classList.add('hidden');
+            currentUserUID = uid;
+            
+            // Sembunyikan login, tunjukkan loading
+            document.getElementById('login-page').style.display = 'none';
+            document.getElementById('loading-overlay').style.display = 'flex';
+            
+            await fetchData();
+        }
+
+        async function fetchData() {
+            const errorMsg = document.getElementById('login-error-msg');
+            try {
+                const response = await fetch(SCRIPT_URL);
+                if (!response.ok) throw new Error("Koneksi gagal.");
+                const data = await response.json();
+                
+                const items = Array.isArray(data) ? data : [];
+
+                rawData = items.filter(item => {
+                    if (item.UID === undefined || item.UID === null) return false;
+                    return String(item.UID).trim().toLowerCase() === String(currentUserUID).trim().toLowerCase();
+                });
+
+                // JIKA UID SALAH / TIDAK DITEMUKAN
+                if (rawData.length === 0) {
+                    // Kembali ke halaman login (Dashboard Masuk)
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    document.getElementById('login-page').style.display = 'flex';
+                    
+                    // Tampilkan pesan error
+                    errorMsg.innerText = ID ${currentUserUID} tidak ditemukan.;
+                    errorMsg.classList.remove('hidden');
+                    return;
+                }
+
+                // JIKA UID BENAR
+                localStorage.setItem('rider_uid', currentUserUID);
+                updateUI();
+                document.getElementById('loading-overlay').style.display = 'none';
+                document.getElementById('main-app').classList.remove('hidden');
+            } catch (error) {
+                // Jika terjadi error koneksi
+                document.getElementById('loading-overlay').style.display = 'none';
+                document.getElementById('login-page').style.display = 'flex';
+                errorMsg.innerText = "Gagal memuat data. Periksa koneksi Anda.";
+                errorMsg.classList.remove('hidden');
+            }
+        }
+
+        function updateUI() {
+            if (rawData.length === 0) return;
+            const firstEntry = rawData[0];
+            
+            const riderName = firstEntry.Nama_Rider || "Rider";
+            document.getElementById('display-rider-name').innerText = riderName;
+            document.getElementById('profile-name').innerText = riderName;
+            document.getElementById('profile-id').innerText = ID: ${firstEntry.UID};
+            document.getElementById('profile-motor').innerText = firstEntry.Jenis_Motor || "-";
+            document.getElementById('profile-plat').innerText = firstEntry.Plat_Nomor || "-";
+            
+            const joinDate = parseSheetDate(firstEntry.Bergabung_Sejak || firstEntry.Tanggal);
+            if(joinDate) {
+                const parts = joinDate.split('-');
+                const d = new Date(parts[2], parts[0]-1, parts[1]);
+                document.getElementById('profile-join').innerText = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+            } else {
+                document.getElementById('profile-join').innerText = "-";
+            }
+
+            processData();
+        }
+
+        function processData() {
+            const todayKey = getJakartaDateString();
+            const todayData = rawData.filter(item => parseSheetDate(item.Tanggal) === todayKey);
+            
+            let todayNetTotal = 0;
+            let todayAdmTotal = 0;
+            let todayTripsCount = 0;
+
+            todayData.forEach(curr => {
+                if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
+                    const kotor = (Number(curr.Nominal_Kotor) || 0) * 1000;
+                    const tambahan = (Number(curr.Tambahan) || 0) * 1000;
+                    const netFromKotor = kotor * (1 - ADM_RATE);
+                    const admFromKotor = kotor * ADM_RATE;
+                    todayNetTotal += (netFromKotor + tambahan); 
+                    todayAdmTotal += admFromKotor;
+                    todayTripsCount++;
+                }
+            });
+
+            document.getElementById('today-net-earnings').innerText = Rp ${Math.round(todayNetTotal).toLocaleString('id-ID')};
+            document.getElementById('today-adm').innerText = Rp ${Math.round(todayAdmTotal).toLocaleString('id-ID')};
+            document.getElementById('current-trips').innerText = ${todayTripsCount} Trip;
+            
+            renderHistory(todayData);
+            updateTargetUI(todayNetTotal);
+
+            const weeklyKeys = [];
+            for(let i=0; i<7; i++) weeklyKeys.push(getJakartaDateString(-i));
+            const weeklyDataFiltered = rawData.filter(item => weeklyKeys.includes(parseSheetDate(item.Tanggal)));
+            let weeklyNetTotal = 0;
+            let weeklyAdmTotal = 0;
+            let weeklyTripsCount = 0;
+
+            weeklyDataFiltered.forEach(curr => {
+                if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
+                    const kotor = (Number(curr.Nominal_Kotor) || 0) * 1000;
+                    const tambahan = (Number(curr.Tambahan) || 0) * 1000;
+                    weeklyNetTotal += (kotor * (1 - ADM_RATE)) + tambahan;
+                    weeklyAdmTotal += (kotor * ADM_RATE);
+                    weeklyTripsCount++;
+                }
+            });
+
+            document.getElementById('weekly-net-total').innerText = Rp ${Math.round(weeklyNetTotal).toLocaleString('id-ID')};
+            document.getElementById('weekly-adm-total').innerText = Rp ${Math.round(weeklyAdmTotal).toLocaleString('id-ID')};
+            document.getElementById('weekly-order-total').innerText = ${weeklyTripsCount} Selesai;
+
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            const monthlyDataFiltered = rawData.filter(item => {
+                const dateParts = parseSheetDate(item.Tanggal).split('-');
+                if (dateParts.length !== 3) return false;
+                return (parseInt(dateParts[0]) === currentMonth) && (parseInt(dateParts[2]) === currentYear);
+            });
+
+            let monthlyNetTotal = 0;
+            let monthlyTripsCount = 0;
+            monthlyDataFiltered.forEach(curr => {
+                if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
+                    const kotor = (Number(curr.Nominal_Kotor) || 0) * 1000;
+                    const tambahan = (Number(curr.Tambahan) || 0) * 1000;
+                    monthlyNetTotal += (kotor * (1 - ADM_RATE)) + tambahan;
+                    monthlyTripsCount++;
+                }
+            });
+
+            document.getElementById('monthly-net-total').innerText = Rp ${Math.round(monthlyNetTotal).toLocaleString('id-ID')};
+            document.getElementById('monthly-order-total').innerText = ${monthlyTripsCount} Trip;
+        }
+
+        function renderHistory(data) {
+            const container = document.getElementById('history-list');
+            container.innerHTML = '';
+            if (data.length === 0) {
+                container.innerHTML = <div class="bg-white p-4 rounded-xl text-center card-shadow border border-gray-50"><p class="text-xs text-gray-400">Belum ada tarikan untuk hari ini</p></div>;
+                return;
+            }
+            data.forEach(item => {
+                const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai';
+                let netto = 0;
+                if (isDone) {
+                    const kotor = (Number(item.Nominal_Kotor) || 0) * 1000;
+                    const tambahan = (Number(item.Tambahan) || 0) * 1000;
+                    netto = (kotor * (1 - ADM_RATE)) + tambahan;
+                }
+                const jamDisplay = parseSheetTime(item.Jam);
+                const div = document.createElement('div');
+                div.className = "bg-white p-4 rounded-xl flex items-center justify-between border border-gray-50 card-shadow";
+                div.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <i class="fa-solid ${isDone ? 'fa-circle-check text-green-500' : 'fa-circle-xmark text-red-500'}"></i>
+                        <div>
+                            <p class="text-[10px] font-bold text-gray-400 tracking-wider">${item.Keterangan || 'ORDER'}</p>
+                            <p class="text-sm font-bold text-gray-800">${jamDisplay}</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="font-bold text-sm ${isDone ? 'text-green-600' : 'text-gray-400'}">Rp ${Math.round(netto).toLocaleString('id-ID')}</p>
+                    </div>`;
+                container.appendChild(div);
+            });
+        }
+
+        function renderWeeklyList() {
+            const container = document.getElementById('weekly-history-list');
+            container.innerHTML = '';
+            const dataMap = rawData.reduce((acc, curr) => {
+                const key = parseSheetDate(curr.Tanggal);
+                if (!key) return acc;
+                if (!acc[key]) acc[key] = { total: 0, trips: 0 };
+                if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
+                    const kotor = (Number(curr.Nominal_Kotor) || 0) * 1000;
+                    const tambahan = (Number(curr.Tambahan) || 0) * 1000;
+                    acc[key].total += (kotor * (1 - ADM_RATE)) + tambahan;
+                    acc[key].trips += 1;
+                }
+                return acc;
+            }, {});
+
+            for (let i = 0; i < 30; i++) {
+                const key = getJakartaDateString(-i);
+                const dayData = dataMap[key] || { total: 0, trips: 0 };
+                const dateParts = key.split('-');
+                const dateObj = new Date(dateParts[2], dateParts[0]-1, dateParts[1]);
+                const displayDate = dateObj.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' });
+                const isToday = i === 0;
+
+                const div = document.createElement('div');
+                div.className = bg-white p-4 rounded-xl flex items-center justify-between border ${isToday ? 'border-orange-200 bg-orange-50/30' : 'border-gray-50'} card-shadow;
+                div.innerHTML = `
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <p class="text-sm font-bold text-gray-800">${displayDate}</p>
+                            ${isToday ? '<span class="text-[8px] bg-orange-500 text-white px-1.5 py-0.5 rounded-full uppercase font-bold">Hari Ini</span>' : ''}
+                        </div>
+                        <p class="text-[10px] text-gray-400">${dayData.trips} Trip Berhasil</p>
+                    </div>
+                    <p class="font-bold text-gray-800 text-sm">Rp ${Math.round(dayData.total).toLocaleString('id-ID')}</p>
+                `;
+                container.appendChild(div);
+            }
+        }
+
+        function switchPage(page) {
+            ['home', 'weekly', 'monthly', 'profile'].forEach(p => document.getElementById(page-${p}).classList.add('hidden-page'));
+            document.getElementById(page-${page}).classList.remove('hidden-page');
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.replace('text-orange-600', 'text-gray-400');
+                btn.querySelector('span').classList.replace('font-bold', 'font-medium');
+            });
+            const active = document.getElementById(nav-${page});
+            active.classList.replace('text-gray-400', 'text-orange-600');
+            active.querySelector('span').classList.replace('font-medium', 'font-bold');
+            if (page === 'weekly') renderWeeklyList();
+        }
+
+        function toggleOnbid() {
+            const check = document.getElementById('onbid-toggle').checked;
+            document.getElementById('onbid-text').innerText = check ? "On-Bid" : "Off-Bid";
+            document.getElementById('onbid-text').className = text-[10px] font-bold ${check ? 'text-green-500' : 'text-gray-400'} mb-1 uppercase tracking-wider;
+            document.getElementById('status-indicator').className = absolute bottom-0 right-0 w-3 h-3 ${check ? 'bg-green-500' : 'bg-gray-400'} border-2 border-white rounded-full;
+        }
+
+        function adjustTarget(amt) {
+            dailyIncomeTarget = Math.max(0, dailyIncomeTarget + amt);
+            localStorage.setItem('rider_target_income', dailyIncomeTarget);
+            const currentNetStr = document.getElementById('today-net-earnings').innerText.replace('Rp ', '').replace(/\./g, '');
+            const currentNet = parseInt(currentNetStr) || 0;
+            updateTargetUI(currentNet);
+        }
+
+        function updateTargetUI(netIncome) {
+            const perc = dailyIncomeTarget > 0 ? Math.min((netIncome / dailyIncomeTarget) * 100, 100) : 100;
+            document.getElementById('target-value').innerText = Rp ${dailyIncomeTarget.toLocaleString('id-ID')};
+            document.getElementById('progress-fill').style.width = perc + '%';
+            document.getElementById('progress-text').innerText = Rp ${Math.round(netIncome).toLocaleString('id-ID')} / Rp ${dailyIncomeTarget.toLocaleString('id-ID')};
+            const rem = dailyIncomeTarget - netIncome;
+            document.getElementById('remaining-text').innerText = rem > 0 ? Sisa Rp ${Math.round(rem).toLocaleString('id-ID')} : 'Target Tercapai!';
+        }
+
+        function handleLogout() { 
+            localStorage.removeItem('rider_uid'); 
+            document.getElementById('main-app').classList.add('hidden');
+            document.getElementById('login-page').style.display = 'flex';
+            document.getElementById('uid-input').value = "";
+            document.getElementById('login-error-msg').classList.add('hidden');
+            location.reload(); 
+        }
+    </script>
+</body>
+</html>
