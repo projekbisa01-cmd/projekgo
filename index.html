@@ -1019,72 +1019,73 @@
         function parseSheetDate(dateInput) {
             if (!dateInput) return "";
             
-            // 1. Handle Date Object (jika data dari JSON sudah Date)
-            if (dateInput instanceof Date) { 
-                return formatDateToInternal(dateInput);
-            }
-            
-            // 2. Handle Excel Serial Number (Angka)
-            if (typeof dateInput === 'number') { 
-                const d = new Date((dateInput - 25569) * 86400 * 1000);
-                return formatDateToInternal(d);
-            }
-
-            const str = String(dateInput).trim();
-            
-            // 3. Handle ISO String YYYY-MM-DD secara eksplisit (Paling sering benar)
-            // Regex ini memastikan format YYYY-MM-DD
-            if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
-                const parts = str.split('-');
-                const d = new Date(parts[0], parts[1]-1, parts[2]);
-                return formatDateToInternal(d);
-            }
-
-            // 4. Coba parsing standar Date constructor (untuk format internasional lainnya)
-            let d = new Date(str);
-            if (!isNaN(d.getTime())) {
-                 return formatDateToInternal(d);
-            }
-
-            // 5. Fallback Manual Parsing (Format Indonesia DD/MM/YYYY atau DD-MM-YYYY)
-            // Memisahkan berdasarkan /, -, atau .
-            const parts = str.split(/[\/\-\.]/);
-            if (parts.length === 3) {
-                let p0 = parseInt(parts[0], 10);
-                let p1 = parseInt(parts[1], 10);
-                let p2 = parseInt(parts[2], 10);
-                
-                // Jika format YYYY-MM-DD tapi gagal di regex awal (misal separator slash)
-                if (parts[0].length === 4) {
-                    d = new Date(p0, p1 - 1, p2);
-                } 
-                // Jika format DD-MM-YYYY atau DD-MM-YY (Ini yang sering salah tahun)
-                else {
-                    let year = p2;
-                    // Jika tahun hanya 2 digit (misal '25'), ubah jadi 2025
-                    if (year < 100) {
-                        year += 2000;
-                    }
-                    // Konstruktor Date: (Tahun, Bulan-1, Tanggal)
-                    d = new Date(year, p1 - 1, p0);
+            try {
+                // 1. Handle Date Object (jika data dari JSON sudah Date)
+                if (dateInput instanceof Date) { 
+                    return formatDateToInternal(dateInput);
                 }
                 
-                if (!isNaN(d.getTime())) {
+                // 2. Handle Excel Serial Number (Angka)
+                if (typeof dateInput === 'number') { 
+                    const d = new Date((dateInput - 25569) * 86400 * 1000);
                     return formatDateToInternal(d);
                 }
+
+                const str = String(dateInput).trim();
+                
+                // 3. Handle ISO String YYYY-MM-DD secara eksplisit (Paling sering benar)
+                if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
+                    const parts = str.split('-');
+                    const d = new Date(parts[0], parts[1]-1, parts[2]);
+                    return formatDateToInternal(d);
+                }
+
+                // 4. Fallback Manual Parsing (Format Indonesia DD/MM/YYYY atau DD-MM-YYYY)
+                const parts = str.split(/[\/\-\.]/);
+                if (parts.length === 3) {
+                    let p0 = parseInt(parts[0], 10);
+                    let p1 = parseInt(parts[1], 10);
+                    let p2 = parseInt(parts[2], 10);
+                    
+                    let d;
+                    // Jika format YYYY-MM-DD tapi gagal di regex awal
+                    if (String(p0).length === 4) {
+                        d = new Date(p0, p1 - 1, p2);
+                    } 
+                    // Jika format DD-MM-YYYY
+                    else {
+                        let year = p2;
+                        if (year < 100) year += 2000;
+                        d = new Date(year, p1 - 1, p0);
+                    }
+                    
+                    if (!isNaN(d.getTime())) {
+                        return formatDateToInternal(d);
+                    }
+                }
+                
+                // 5. Terakhir coba Date constructor biasa
+                let d = new Date(str);
+                if (!isNaN(d.getTime())) {
+                     return formatDateToInternal(d);
+                }
+            } catch (e) {
+                console.error("Error parsing date:", dateInput, e);
             }
 
             return "";
         }
 
         function formatDateToInternal(d) {
-            // Helper untuk output MM-DD-YYYY (format internal app)
-            // Menggunakan DATE_FORMATTER agar konsisten dengan timeZone Jakarta
-            const parts = DATE_FORMATTER.formatToParts(d);
-            const month = parts.find(p => p.type === 'month').value;
-            const day = parts.find(p => p.type === 'day').value;
-            const year = parts.find(p => p.type === 'year').value;
-            return `${month}-${day}-${year}`;
+            try {
+                const parts = DATE_FORMATTER.formatToParts(d);
+                const month = parts.find(p => p.type === 'month').value;
+                const day = parts.find(p => p.type === 'day').value;
+                const year = parts.find(p => p.type === 'year').value;
+                return `${month}-${day}-${year}`;
+            } catch (e) {
+                return "";
+            }
         }
 
         function parseSheetTime(timeInput) {
@@ -1168,7 +1169,11 @@
 
             // 2. Fetch Data Terbaru di Background (atau Foreground jika belum ada cache)
             try {
-                const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`);
+                const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, {
+                    method: 'GET',
+                    credentials: 'omit',
+                    redirect: 'follow' 
+                });
                 if (!response.ok) throw new Error("Koneksi gagal.");
                 const data = await response.json();
                 const items = Array.isArray(data) ? data : [];
@@ -1234,7 +1239,11 @@
 
         async function muatRatingRider(namaRider) {
             try {
-                const response = await fetch(`${RATING_SCRIPT_URL}?t=${Date.now()}`);
+                const response = await fetch(`${RATING_SCRIPT_URL}?t=${Date.now()}`, {
+                    method: 'GET',
+                    credentials: 'omit',
+                    redirect: 'follow' 
+                });
                 if (!response.ok) return;
                 const allRatings = await response.json();
                 const namaLower = String(namaRider).trim().toLowerCase();
@@ -1259,7 +1268,11 @@
                     document.getElementById('profile-motor').innerText = "Mengambil data...";
                 }
                 
-                const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`);
+                const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`, {
+                    method: 'GET',
+                    credentials: 'omit',
+                    redirect: 'follow' 
+                });
                 if (!response.ok) throw new Error("Gagal mengambil data profil");
                 
                 const data = await response.json();
