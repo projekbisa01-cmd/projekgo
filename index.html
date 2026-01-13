@@ -7,6 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Tambahkan library untuk download gambar -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
         
@@ -180,6 +182,28 @@
             padding-top: 12px;
             padding-bottom: 12px;
             margin-top: -12px;
+        }
+
+        /* Styling Nota Receipt */
+        .receipt-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: relative;
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .receipt-paper {
+            background: #fff;
+            padding: 20px;
+            border: 1px dashed #cbd5e1;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .cut-line {
+            border-top: 2px dashed #94a3b8;
+            margin: 15px 0;
         }
     </style>
 </head>
@@ -511,6 +535,102 @@
             </main>
         </div>
 
+        <!-- HALAMAN NOTA (BARU) -->
+        <div id="page-nota" class="hidden-page page-container">
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40">
+                <h1 class="font-bold text-xl text-gray-800">Buat Nota Baru</h1>
+                <p class="text-xs text-gray-500">Input data order untuk dicetak</p>
+            </header>
+            <main class="p-5 max-w-md mx-auto space-y-6">
+                <!-- Form Input -->
+                <div class="bg-white p-5 rounded-2xl card-shadow border border-gray-50 space-y-4">
+                    <div>
+                        <label class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 block">Nama Customer</label>
+                        <input type="text" id="nota-customer" class="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-500 transition-colors" placeholder="Contoh: Ibu Ani" oninput="updateNotaPreview()">
+                    </div>
+                    
+                    <div class="p-4 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
+                        <div class="flex justify-between items-center">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Input Item Barang/Jasa</p>
+                        </div>
+                        
+                        <div>
+                            <input type="text" id="nota-input-item" class="w-full p-2.5 bg-white rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-orange-500 mb-2" placeholder="Nama Item (Contoh: Ayam Geprek)">
+                            <div class="flex space-x-2">
+                                <div class="w-1/3">
+                                    <input type="number" id="nota-input-qty" class="w-full p-2.5 bg-white rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-orange-500 text-center" placeholder="Jml" value="1">
+                                </div>
+                                <div class="w-2/3">
+                                    <input type="number" id="nota-input-price" class="w-full p-2.5 bg-white rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-orange-500 text-right font-bold text-gray-700" placeholder="Harga Total (Rp)">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button onclick="addNotaItem()" class="w-full py-3 bg-orange-500 text-white font-bold rounded-xl shadow-md active:scale-95 transition-all text-xs uppercase tracking-wider">
+                            <i class="fa-solid fa-plus mr-1"></i> Tambah Item
+                        </button>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button onclick="resetNota()" class="text-xs font-bold text-red-400 px-3 py-1 rounded-lg hover:bg-red-50">
+                            <i class="fa-solid fa-rotate-right mr-1"></i> Reset Nota
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Preview Nota -->
+                <div>
+                    <h3 class="font-bold text-sm text-gray-800 mb-3 px-1">Preview Nota</h3>
+                    <!-- ID ini penting untuk html2canvas -->
+                    <div id="receipt-preview" class="receipt-container">
+                        <div class="receipt-paper">
+                            <div class="text-center mb-4">
+                                <h2 class="font-bold text-lg leading-tight uppercase text-black">PROJEKGO DELIVERY ORDER</h2>
+                                <p class="text-[10px] text-gray-500 mt-1 italic">#pesansekarangdiantarsekarang</p>
+                            </div>
+                            
+                            <div class="text-xs space-y-1 mb-4 text-gray-600 border-b border-dashed border-gray-400 pb-3">
+                                <div class="flex justify-between">
+                                    <span>Tanggal:</span>
+                                    <span id="nota-preview-date" class="font-bold text-black">--/--/----</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Rider:</span>
+                                    <span id="nota-preview-rider" class="font-bold uppercase text-black">...</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Customer:</span>
+                                    <span id="nota-preview-customer" class="font-bold uppercase text-black">...</span>
+                                </div>
+                            </div>
+
+                            <!-- Container Item Dinamis -->
+                            <div id="nota-items-list" class="text-sm font-medium text-black mb-4 space-y-1" style="min-height: 40px;">
+                                <div class="text-center text-gray-400 italic text-xs py-4">- Belum ada item ditambahkan -</div>
+                            </div>
+
+                            <div class="border-t-2 border-dashed border-black pt-3 mb-6">
+                                <div class="flex justify-between items-center text-lg font-bold text-black">
+                                    <span>TOTAL</span>
+                                    <span id="nota-preview-total">Rp 0</span>
+                                </div>
+                            </div>
+
+                            <div class="text-center space-y-1">
+                                <p class="text-xs font-bold text-black">TERIMA KASIH</p>
+                                <p class="text-[10px] text-gray-500">Atas kepercayaan Anda menggunakan jasa kami.</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button onclick="downloadNota()" class="w-full mt-4 py-4 bg-gray-800 text-white font-bold rounded-2xl shadow-lg transform active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center space-x-2">
+                        <i class="fa-solid fa-download"></i>
+                        <span>Download Nota (Gambar)</span>
+                    </button>
+                </div>
+            </main>
+        </div>
+
         <!-- HALAMAN BULANAN -->
         <div id="page-monthly" class="hidden-page page-container">
             <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40">
@@ -687,8 +807,8 @@
             </main>
         </div>
 
-        <nav class="bottom-nav glass-effect border-t border-gray-100 px-6 py-4">
-            <div class="flex items-center justify-between max-w-md mx-auto">
+        <nav class="bottom-nav glass-effect border-t border-gray-100 px-2 py-3">
+            <div class="grid grid-cols-5 gap-1 max-w-md mx-auto items-end">
                 <button onclick="switchPage('home')" id="nav-home" class="nav-btn flex flex-col items-center space-y-1 text-orange-600">
                     <i class="fa-solid fa-house text-xl"></i>
                     <span class="text-[10px] font-bold">Beranda</span>
@@ -697,6 +817,15 @@
                     <i class="fa-solid fa-calendar-week text-xl"></i>
                     <span class="text-[10px] font-medium">Mingguan</span>
                 </button>
+                
+                <!-- Icon Nota (Tengah) -->
+                <button onclick="switchPage('nota')" id="nav-nota" class="nav-btn flex flex-col items-center justify-center space-y-1 relative -top-5">
+                     <div class="w-14 h-14 bg-orange-500 rounded-full flex items-center justify-center text-white shadow-lg border-4 border-[#f8fafc] active:scale-95 transition-all">
+                        <i class="fa-solid fa-receipt text-xl"></i>
+                     </div>
+                     <span class="text-[10px] font-bold text-gray-400">Nota</span>
+                </button>
+
                 <button onclick="switchPage('monthly')" id="nav-monthly" class="nav-btn flex flex-col items-center space-y-1 text-gray-400">
                     <i class="fa-solid fa-calendar-days text-xl"></i>
                     <span class="text-[10px] font-medium">Bulanan</span>
@@ -712,6 +841,8 @@
     <script>
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
         const RATING_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwB0Z1bQ-HTrn8kP84wc2iOc3J9bJk1V2dtYqjfno4BgkncGdjCSyvZvOkNnyYtjq15/exec";
+        // URL Baru untuk data Profil (Kendaraan & Dokumen)
+        const PROFILE_DOCS_URL = "https://script.google.com/macros/s/AKfycbwkJO8a7SuS24kkDsMFam_ey-T8pvYC8DKSzEiXLV2Yc6OUrClx7KD6M-Dbuo-s8CKa/exec";
         
         const ADM_RATE_FIXED_PRO = 0.16; 
         let currentUserUID = "";
@@ -721,6 +852,117 @@
         let weeklyChartInstance = null;
         let lastUpdated = 0;
         let profileCached = false;
+        
+        // --- LOGIKA NOTA BARU ---
+        let notaItems = [];
+
+        function addNotaItem() {
+            const nameInput = document.getElementById('nota-input-item');
+            const qtyInput = document.getElementById('nota-input-qty');
+            const priceInput = document.getElementById('nota-input-price');
+            
+            const name = nameInput.value.trim();
+            const qty = parseInt(qtyInput.value) || 1;
+            const price = parseInt(priceInput.value) || 0;
+
+            if (!name) {
+                alert("Masukkan nama barang!");
+                return;
+            }
+
+            // Tambahkan item ke array
+            notaItems.push({ name, qty, price });
+            
+            // Reset input
+            nameInput.value = "";
+            qtyInput.value = "1";
+            priceInput.value = "";
+            nameInput.focus();
+
+            updateNotaPreview();
+            playBeep(600, 0.05); // Suara feedback
+        }
+
+        function resetNota() {
+            if(confirm("Hapus semua item dan buat nota baru?")) {
+                notaItems = [];
+                document.getElementById('nota-customer').value = "";
+                updateNotaPreview();
+            }
+        }
+
+        function updateNotaPreview() {
+            const customer = document.getElementById('nota-customer').value || "...";
+            const itemsListContainer = document.getElementById('nota-items-list');
+            const totalPriceEl = document.getElementById('nota-preview-total');
+            const riderName = document.getElementById('profile-name').innerText;
+            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
+
+            // Update Header Info
+            document.getElementById('nota-preview-customer').innerText = customer;
+            document.getElementById('nota-preview-rider').innerText = riderName;
+            document.getElementById('nota-preview-date').innerText = dateStr;
+
+            // Render Items List
+            if (notaItems.length === 0) {
+                itemsListContainer.innerHTML = `<div class="text-center text-gray-400 italic text-xs py-4">- Belum ada item ditambahkan -</div>`;
+                totalPriceEl.innerText = "Rp 0";
+                return;
+            }
+
+            let html = '';
+            let grandTotal = 0;
+
+            notaItems.forEach(item => {
+                grandTotal += item.price;
+                html += `
+                    <div class="flex justify-between items-start border-b border-dashed border-gray-200 pb-1 mb-1">
+                        <div>
+                            <span class="font-bold text-black">${item.name}</span>
+                            <div class="text-xs text-gray-500">x${item.qty}</div>
+                        </div>
+                        <div class="font-bold text-black">Rp ${item.price.toLocaleString('id-ID')}</div>
+                    </div>
+                `;
+            });
+
+            itemsListContainer.innerHTML = html;
+            totalPriceEl.innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
+        }
+
+        function downloadNota() {
+            const element = document.getElementById("receipt-preview");
+            
+            // Efek visual tombol
+            const btn = event.currentTarget;
+            const originalContent = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i><span>Memproses...</span>`;
+            
+            html2canvas(element, {
+                scale: 2, // Kualitas lebih tinggi
+                backgroundColor: "#ffffff",
+                useCORS: true // Penting jika ada gambar eksternal
+            }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = `NOTA-PROJEKGO-${Date.now()}.png`;
+                link.href = canvas.toDataURL("image/png");
+                link.click();
+                
+                // Kembalikan tombol
+                btn.innerHTML = originalContent;
+                playBeep(880, 0.1);
+            }).catch(err => {
+                console.error("Gagal download nota:", err);
+                alert("Gagal membuat gambar nota. Coba lagi.");
+                btn.innerHTML = originalContent;
+            });
+        }
+        
+        // --- AKHIR LOGIKA NOTA ---
+
+        // --- OPTIMASI 1: Global Formatter agar tidak membuat instance baru setiap loop ---
+        const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const TIME_FORMATTER_OPTS = { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' };
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playBeep(frequency, duration) {
@@ -742,8 +984,7 @@
         function getJakartaDateString(offsetDays = 0) {
             const date = new Date();
             if (offsetDays !== 0) date.setDate(date.getDate() + offsetDays);
-            const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-            const parts = formatter.formatToParts(date);
+            const parts = DATE_FORMATTER.formatToParts(date);
             return `${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`;
         }
 
@@ -754,28 +995,76 @@
             return new Date(d.setDate(diff));
         }
 
+        // --- OPTIMASI 2 & FIX BUG TAHUN: Fungsi Parsing Diperbaiki ---
         function parseSheetDate(dateInput) {
             if (!dateInput) return "";
-            let d;
-            if (dateInput instanceof Date) { d = dateInput; } 
-            else if (typeof dateInput === 'number') { d = new Date((dateInput - 25569) * 86400 * 1000); } 
-            else {
-                const str = String(dateInput).trim();
-                d = new Date(str);
-                if (isNaN(d.getTime())) {
-                    const parts = str.split(/[\/\-\.]/);
-                    if (parts.length === 3) {
-                        const p0 = parseInt(parts[0]);
-                        const p1 = parseInt(parts[1]);
-                        const p2 = parts[2].length === 2 ? 2000 + parseInt(parts[2]) : parseInt(parts[2]);
-                        if (p0 > 12) { d = new Date(p2, p1 - 1, p0); } else { d = new Date(p2, p0 - 1, p1); }
+            
+            // 1. Handle Date Object (jika data dari JSON sudah Date)
+            if (dateInput instanceof Date) { 
+                return formatDateToInternal(dateInput);
+            }
+            
+            // 2. Handle Excel Serial Number (Angka)
+            if (typeof dateInput === 'number') { 
+                const d = new Date((dateInput - 25569) * 86400 * 1000);
+                return formatDateToInternal(d);
+            }
+
+            const str = String(dateInput).trim();
+            
+            // 3. Handle ISO String YYYY-MM-DD secara eksplisit (Paling sering benar)
+            // Regex ini memastikan format YYYY-MM-DD
+            if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
+                const parts = str.split('-');
+                const d = new Date(parts[0], parts[1]-1, parts[2]);
+                return formatDateToInternal(d);
+            }
+
+            // 4. Coba parsing standar Date constructor (untuk format internasional lainnya)
+            let d = new Date(str);
+            if (!isNaN(d.getTime())) {
+                 return formatDateToInternal(d);
+            }
+
+            // 5. Fallback Manual Parsing (Format Indonesia DD/MM/YYYY atau DD-MM-YYYY)
+            // Memisahkan berdasarkan /, -, atau .
+            const parts = str.split(/[\/\-\.]/);
+            if (parts.length === 3) {
+                let p0 = parseInt(parts[0], 10);
+                let p1 = parseInt(parts[1], 10);
+                let p2 = parseInt(parts[2], 10);
+                
+                // Jika format YYYY-MM-DD tapi gagal di regex awal (misal separator slash)
+                if (parts[0].length === 4) {
+                    d = new Date(p0, p1 - 1, p2);
+                } 
+                // Jika format DD-MM-YYYY atau DD-MM-YY (Ini yang sering salah tahun)
+                else {
+                    let year = p2;
+                    // Jika tahun hanya 2 digit (misal '25'), ubah jadi 2025
+                    if (year < 100) {
+                        year += 2000;
                     }
+                    // Konstruktor Date: (Tahun, Bulan-1, Tanggal)
+                    d = new Date(year, p1 - 1, p0);
+                }
+                
+                if (!isNaN(d.getTime())) {
+                    return formatDateToInternal(d);
                 }
             }
-            if (isNaN(d.getTime())) return "";
-            const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-            const parts = formatter.formatToParts(d);
-            return `${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`;
+
+            return "";
+        }
+
+        function formatDateToInternal(d) {
+            // Helper untuk output MM-DD-YYYY (format internal app)
+            // Menggunakan DATE_FORMATTER agar konsisten dengan timeZone Jakarta
+            const parts = DATE_FORMATTER.formatToParts(d);
+            const month = parts.find(p => p.type === 'month').value;
+            const day = parts.find(p => p.type === 'day').value;
+            const year = parts.find(p => p.type === 'year').value;
+            return `${month}-${day}-${year}`;
         }
 
         function parseSheetTime(timeInput) {
@@ -783,7 +1072,7 @@
             if (timeInput instanceof Date || !isNaN(Date.parse(timeInput))) {
                 const d = new Date(timeInput);
                 if (!isNaN(d.getTime())) {
-                    return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                    return d.toLocaleTimeString('id-ID', TIME_FORMATTER_OPTS).replace('.', ':');
                 }
             }
             return String(timeInput).trim();
@@ -802,7 +1091,8 @@
         async function manualRefresh() {
             const icon = document.getElementById('refresh-icon');
             icon.classList.add('refreshing');
-            await fetchData();
+            // Paksa fetch baru (bukan dari cache)
+            await fetchData(true);
             icon.classList.remove('refreshing');
         }
 
@@ -818,38 +1108,87 @@
             await fetchData();
         }
 
-        async function fetchData() {
+        // --- OPTIMASI 3: Fetch Data dengan Caching (Stale-While-Revalidate) ---
+        async function fetchData(forceRefresh = false) {
             const errorMsg = document.getElementById('login-error-msg');
+            const cacheKey = `rider_data_${currentUserUID}`;
+            
+            // Jika refresh manual, hapus cache Dokumen & Rating juga agar data yang 'salah tahun' terhapus
+            if (forceRefresh) {
+                localStorage.removeItem(`rider_docs_${currentUserUID}`);
+                localStorage.removeItem(`rider_rating_${currentUserUID}`);
+            }
+
+            // 1. Cek Cache dulu (jika tidak dipaksa refresh)
+            if (!forceRefresh) {
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    try {
+                        const parsedCache = JSON.parse(cached);
+                        // Render langsung dari cache agar UI muncul instan
+                        if (parsedCache.length > 0) {
+                            rawData = parsedCache;
+                            document.getElementById('loading-overlay').style.display = 'none';
+                            document.getElementById('main-app').classList.remove('hidden');
+                            updateUI(); 
+                            
+                            // Load data tambahan dari cache jika ada
+                            const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
+                            if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
+                            
+                            const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
+                            if (cachedDocs) updateDocsUI(JSON.parse(cachedDocs));
+                        }
+                    } catch (e) { console.error("Cache error", e); }
+                }
+            }
+
+            // 2. Fetch Data Terbaru di Background (atau Foreground jika belum ada cache)
             try {
                 const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`);
                 if (!response.ok) throw new Error("Koneksi gagal.");
                 const data = await response.json();
                 const items = Array.isArray(data) ? data : [];
                 const uidLower = String(currentUserUID).trim().toLowerCase();
-                rawData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
+                const newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
                 
-                if (rawData.length === 0) {
-                    document.getElementById('loading-overlay').style.display = 'none';
-                    document.getElementById('login-page').style.display = 'flex';
-                    errorMsg.innerText = `ID ${currentUserUID} tidak ditemukan.`;
-                    errorMsg.classList.remove('hidden');
+                if (newData.length === 0) {
+                    // Hanya tampilkan error jika tidak ada data sama sekali (termasuk di cache)
+                    if (rawData.length === 0) {
+                        document.getElementById('loading-overlay').style.display = 'none';
+                        document.getElementById('login-page').style.display = 'flex';
+                        errorMsg.innerText = `ID ${currentUserUID} tidak ditemukan.`;
+                        errorMsg.classList.remove('hidden');
+                    }
                     return;
                 }
+                
+                // Simpan ke Global Var dan Cache
+                rawData = newData;
                 localStorage.setItem('rider_uid', currentUserUID);
+                localStorage.setItem(cacheKey, JSON.stringify(rawData));
                 
                 requestAnimationFrame(() => {
                     updateUI();
                     if (rawData[0] && rawData[0].Nama_Rider) {
+                        // Panggil data sekunder secara paralel (jangan await agar UI tidak blocking)
                         muatRatingRider(rawData[0].Nama_Rider);
                     }
                     document.getElementById('loading-overlay').style.display = 'none';
                     document.getElementById('main-app').classList.remove('hidden');
+                    
+                    // Trigger fetch docs di background
+                    fetchVehicleAndDocsData(currentUserUID);
                 });
             } catch (error) {
-                document.getElementById('loading-overlay').style.display = 'none';
-                document.getElementById('login-page').style.display = 'flex';
-                errorMsg.innerText = "Gagal memuat data. Periksa koneksi Anda.";
-                errorMsg.classList.remove('hidden');
+                console.error(error);
+                // Jika fetch gagal tapi ada cache, biarkan user tetap di app
+                if (rawData.length === 0) {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    document.getElementById('login-page').style.display = 'flex';
+                    errorMsg.innerText = "Gagal memuat data. Periksa koneksi Anda.";
+                    errorMsg.classList.remove('hidden');
+                }
             }
         }
 
@@ -862,9 +1201,49 @@
                 const filteredRatings = allRatings.filter(item => 
                     item.Nama_Rider && String(item.Nama_Rider).trim().toLowerCase() === namaLower
                 );
+                // Simpan cache rating
+                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filteredRatings));
                 renderRatingUI(filteredRatings);
             } catch (error) {
                 console.error("Gagal memuat rating:", error);
+            }
+        }
+
+        // --- FUNGSI BARU UNTUK MEMUAT DATA PROFIL KHUSUS ---
+        async function fetchVehicleAndDocsData(uid) {
+            try {
+                // Jangan reset text ke "Loading..." jika sudah ada data di UI (dari cache)
+                const hasData = document.getElementById('profile-motor').innerText !== "Mengambil data..." && document.getElementById('profile-motor').innerText !== "Memuat...";
+                
+                if (!hasData) {
+                    document.getElementById('profile-motor').innerText = "Mengambil data...";
+                }
+                
+                const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`);
+                if (!response.ok) throw new Error("Gagal mengambil data profil");
+                
+                const data = await response.json();
+                const uidLower = String(uid).trim().toLowerCase();
+                const riderDocData = data.find(item => String(item.UID || '').trim().toLowerCase() === uidLower);
+                
+                if (riderDocData) {
+                    // Simpan cache docs
+                    localStorage.setItem(`rider_docs_${currentUserUID}`, JSON.stringify(riderDocData));
+                    updateDocsUI(riderDocData);
+                }
+            } catch (error) {
+                console.error("Error fetching docs:", error);
+            }
+        }
+        
+        function updateDocsUI(data) {
+             if (data) {
+                document.getElementById('profile-motor').innerText = data.Jenis_Motor || "-";
+                document.getElementById('profile-plat').innerText = data.Plat_Nomor || "-";
+                
+                checkDocumentStatus(data.Masa_Berlaku_SIM, 'profile-sim', 'sim-status-icon', 'sim-warning');
+                checkDocumentStatus(data.Masa_Berlaku_STNK, 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
+                checkDocumentStatus(data.Masa_Berlaku_BPJS, 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning');
             }
         }
 
@@ -938,19 +1317,21 @@
             const name = firstEntry.Nama_Rider || "Rider";
             document.getElementById('display-rider-name').innerText = name;
             
+            // Cek apakah profil sudah dirender untuk mencegah repaint berulang
             if (!profileCached) {
                 document.getElementById('profile-name').innerText = name;
                 document.getElementById('profile-id').innerText = `ID: ${firstEntry.UID}`;
-                document.getElementById('profile-motor').innerText = firstEntry.Jenis_Motor || "-";
-                document.getElementById('profile-plat').innerText = firstEntry.Plat_Nomor || "-";
                 
+                // Cek cache docs sebelum fetch
+                const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
+                if (cachedDocs) {
+                    updateDocsUI(JSON.parse(cachedDocs));
+                }
+
                 const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=ff8c00&color=fff`;
                 document.getElementById('avatar-home').src = avatarUrl;
                 document.getElementById('profile-img').src = avatarUrl;
 
-                checkDocumentStatus(firstEntry.SIM_C, 'profile-sim', 'sim-status-icon', 'sim-warning');
-                checkDocumentStatus(firstEntry.STNK, 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
-                checkDocumentStatus(firstEntry.BPJS, 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning');
                 profileCached = true;
             }
             
@@ -959,6 +1340,8 @@
 
         function processData() {
             const todayKey = getJakartaDateString();
+            // Optimasi filter: loop sekali saja untuk berbagai keperluan jika data sangat besar
+            // Tapi untuk ratusan baris, filter JS native sudah sangat cepat
             const todayData = rawData.filter(item => parseSheetDate(item.Tanggal) === todayKey);
             let tNet = 0, tTrips = 0, tGrossPure = 0, tExtraOngkir = 0;
             
@@ -990,8 +1373,8 @@
             
             for(let i=0; i<7; i++) {
                 const d = new Date(startOfCurrentWeek); d.setDate(d.getDate() + i);
-                const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-                const parts = formatter.formatToParts(d);
+                // Gunakan formatter global
+                const parts = DATE_FORMATTER.formatToParts(d);
                 const key = `${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`;
                 currentWeekKeys.push(key);
                 chartLabels.push(`${dayNames[i]} ${parts.find(p => p.type === 'day').value}`);
@@ -1069,8 +1452,9 @@
             const lastWeekKeys = [];
             for(let i=0; i<7; i++) {
                 const d = new Date(startOfLastWeek); d.setDate(d.getDate() + i);
-                const f = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-                const p = f.formatToParts(d); lastWeekKeys.push(`${p.find(pt => pt.type === 'month').value}-${p.find(pt => pt.type === 'day').value}-${p.find(pt => pt.type === 'year').value}`);
+                const parts = DATE_FORMATTER.formatToParts(d);
+                const key = `${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`;
+                lastWeekKeys.push(key);
             }
             let prevWAdm = 0, prevWTrips = 0, prevWGross = 0, prevWExtra = 0;
             lastWeekKeys.forEach(key => {
@@ -1151,6 +1535,8 @@
             }
             
             let html = '';
+            // Gunakan reverse() langsung jika data tidak perlu di-sort lagi (asumsi data server sudah urut)
+            // Atau sort sekali di luar loop
             const sortedData = [...data].reverse();
             
             sortedData.forEach(item => {
@@ -1241,8 +1627,8 @@
                 const weekKeys = [];
                 for(let j=0; j<7; j++) {
                     const d = new Date(start); d.setDate(d.getDate() + j);
-                    const f = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-                    const p = f.formatToParts(d); weekKeys.push(`${p.find(pt => pt.type === 'month').value}-${p.find(pt => pt.type === 'day').value}-${p.find(pt => pt.type === 'year').value}`);
+                    const parts = DATE_FORMATTER.formatToParts(d);
+                    weekKeys.push(`${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`);
                 }
                 
                 let weekTrips = 0;
@@ -1304,8 +1690,48 @@
             document.getElementById('monthly-weekly-detail-overlay').classList.remove('active');
         }
 
+        // --- UPDATE NOTA PREVIEW FUNCTION ---
+        function updateNotaPreview() {
+            const customer = document.getElementById('nota-customer').value || "...";
+            const itemsListContainer = document.getElementById('nota-items-list');
+            const totalPriceEl = document.getElementById('nota-preview-total');
+            const riderName = document.getElementById('profile-name').innerText;
+            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
+
+            // Update Header Info
+            document.getElementById('nota-preview-customer').innerText = customer;
+            document.getElementById('nota-preview-rider').innerText = riderName;
+            document.getElementById('nota-preview-date').innerText = dateStr;
+
+            // Render Items List
+            if (notaItems.length === 0) {
+                itemsListContainer.innerHTML = `<div class="text-center text-gray-400 italic text-xs py-4">- Belum ada item ditambahkan -</div>`;
+                totalPriceEl.innerText = "Rp 0";
+                return;
+            }
+
+            let html = '';
+            let grandTotal = 0;
+
+            notaItems.forEach(item => {
+                grandTotal += item.price;
+                html += `
+                    <div class="flex justify-between items-start border-b border-dashed border-gray-400 pb-1 mb-1">
+                        <div>
+                            <span class="font-bold text-black">${item.name}</span>
+                            <div class="text-xs text-gray-500">x${item.qty}</div>
+                        </div>
+                        <div class="font-bold text-black">Rp ${item.price.toLocaleString('id-ID')}</div>
+                    </div>
+                `;
+            });
+
+            itemsListContainer.innerHTML = html;
+            totalPriceEl.innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
+        }
+
         function switchPage(page) {
-            const pages = ['home', 'weekly', 'monthly', 'profile'];
+            const pages = ['home', 'weekly', 'monthly', 'profile', 'nota']; // Tambah 'nota'
             pages.forEach(p => { 
                 const el = document.getElementById(`page-${p}`); 
                 if(el) el.classList.toggle('hidden-page', p !== page); 
@@ -1313,6 +1739,12 @@
             
             document.querySelectorAll('.nav-btn').forEach(b => {
                 const isActive = b.id === `nav-${page}`;
+                // Special style for nav-nota (center icon)
+                if (b.id === 'nav-nota') {
+                    // Jika aktif, mungkin beri border warna lain atau efek scale
+                    return; 
+                }
+
                 b.classList.toggle('text-orange-600', isActive);
                 b.classList.toggle('text-gray-400', !isActive);
                 const s = b.querySelector('span'); 
@@ -1323,6 +1755,9 @@
             });
 
             requestAnimationFrame(() => {
+                if (page === 'nota') {
+                    updateNotaPreview(); // Inisialisasi preview saat buka halaman nota
+                }
                 if (page === 'weekly') { 
                     renderWeeklyHistoryList(); 
                     hideDailyDetail(); 
