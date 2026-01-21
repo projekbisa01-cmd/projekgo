@@ -488,6 +488,14 @@
                                 <p id="weekly-adm-label" class="text-[10px] opacity-70">Adm. (20%)</p>
                                 <p id="weekly-adm-total" class="font-bold text-sm mb-1">Rp 0</p>
                                 
+                                <div id="weekly-installment-info" class="hidden mt-2 border-t border-white/20 pt-2">
+                                    <div class="flex justify-between items-center text-red-100">
+                                        <p class="text-[10px] font-bold uppercase mr-2"><i class="fa-solid fa-tag mr-1"></i>Cicilan:</p>
+                                        <p id="weekly-installment-val" class="font-bold text-xs">- Rp 0</p>
+                                    </div>
+                                    <p id="weekly-installment-remaining" class="text-[8px] opacity-70 mt-0.5 italic text-right">Sisa Hutang: Rp 0</p>
+                                </div>
+
                                 <div class="bg-black/10 p-2 rounded-xl mt-2 space-y-1">
                                     <p id="weekly-adm-percent-badge" class="text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block">ADM --%</p>
                                     <div class="flex flex-col space-y-0.5">
@@ -518,7 +526,7 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <div class="flex items-center space-x-2">
-                                <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">ADM Minggu Lalu</p>
+                                <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Tagihan ADM Minggu Lalu</p>
                                 <p id="prev-weekly-period" class="text-[9px] text-gray-400 font-normal">(-)</p>
                             </div>
                             <h3 id="prev-weekly-adm" class="text-lg font-bold text-red-500">Rp 0</h3>
@@ -533,6 +541,9 @@
                                     <div class="flex space-x-2 text-[8px] text-gray-500">
                                         <span>Kotor: <b id="prev-weekly-gross" class="text-gray-700">Rp 0</b></span>
                                         <span>Tambahan: <b id="prev-weekly-extra" class="text-blue-500">Rp 0</b></span>
+                                    </div>
+                                    <div id="prev-weekly-installment-row" class="hidden text-[8px] text-red-500 font-bold border-t border-dashed border-gray-200 pt-1 mt-1">
+                                        + Cicilan: Rp <span id="prev-weekly-installment-val">0</span>
                                     </div>
                                  </div>
                             </div>
@@ -960,6 +971,36 @@
         
         const ADM_RATE_FIXED_PRO = 0.16;
         const PARTIME_UIDS = ['UID326', 'UID339', 'UID347']; // Daftar UID Rider Partime
+        
+        // --- DATA CICILAN RIDER (DATABASE STATIS) ---
+        // Tanggal mulai acuan penghitungan cicilan (Hari ini: 21 Jan 2026, Start of Week: 19 Jan 2026)
+        const INSTALLMENT_START_DATE = new Date('2026-01-19'); 
+        
+        const RIDER_INSTALLMENTS = {
+            'UID113': { weekly: 5000, total_remaining: 110000 },
+            'UID379': { weekly: 15000, total_remaining: 225000 },
+            'UID556': { weekly: 5000, total_remaining: 110000 },
+            'UID109': { weekly: 5000, total_remaining: 85000 },
+            'UID117': { weekly: 5000, total_remaining: 85000 },
+            'UID122': { weekly: 14000, total_remaining: 386000 },
+            'UID135': { weekly: 5000, total_remaining: 25000 },
+            'UID146': { weekly: 5000, total_remaining: 85000 }, // Asumsi 5000 karena tidak disebut
+            'UID164': { weekly: 5000, total_remaining: 105000 },
+            'UID174': { weekly: 5000, total_remaining: 85000 },
+            'UID203': { weekly: 5000, total_remaining: 40000 },
+            'UID214': { weekly: 5000, total_remaining: 125000 },
+            'UID226': { weekly: 5000, total_remaining: 125000 },
+            'UID232': { weekly: 5000, total_remaining: 150000 },
+            'UID247': { weekly: 5000, total_remaining: 140000 },
+            'UID256': { weekly: 5000, total_remaining: 150000 },
+            'UID267': { weekly: 5000, total_remaining: 170000 },
+            'UID275': { weekly: 5000, total_remaining: 120000 },
+            'UID303': { weekly: 5000, total_remaining: 150000 },
+            'UID315': { weekly: 5000, total_remaining: 155000 },
+            'UID326': { weekly: 5000, total_remaining: 45000 },
+            'UID347': { weekly: 5000, total_remaining: 140000 }
+        };
+
         let currentUserUID = "";
         let rawData = [];
         let dailyIncomeTarget = 100000;
@@ -1117,6 +1158,36 @@
                 const d = new Date(timeInput); if (!isNaN(d.getTime())) return d.toLocaleTimeString('id-ID', TIME_FORMATTER_OPTS).replace('.', ':');
             }
             return String(timeInput).trim();
+        }
+
+        // --- NEW: FUNGSI HITUNG CICILAN BERJALAN ---
+        function getInstallmentInfo(uid) {
+            const uidKey = String(uid).trim().toUpperCase();
+            // Normalisasi key di object RIDER_INSTALLMENTS untuk berjaga-jaga
+            const normalizedData = {};
+            Object.keys(RIDER_INSTALLMENTS).forEach(k => {
+                normalizedData[k.trim().toUpperCase().replace(/\s/g, '')] = RIDER_INSTALLMENTS[k];
+            });
+            
+            const config = normalizedData[uidKey.replace(/\s/g, '')];
+            if (!config) return null;
+
+            // Hitung selisih minggu dari Start Date
+            const now = new Date();
+            const diffTime = Math.max(0, now - INSTALLMENT_START_DATE);
+            const diffWeeks = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7));
+
+            // Sisa hutang saat ini = Total Awal - (Minggu Berjalan * Nominal)
+            let currentRemaining = config.total_remaining - (config.weekly * diffWeeks);
+            
+            // Jika sudah lunas (<= 0), kembalikan null atau status lunas
+            if (currentRemaining <= 0) return { weekly: 0, remaining: 0, is_paid_off: true };
+
+            return {
+                weekly: config.weekly,
+                remaining: currentRemaining,
+                is_paid_off: false
+            };
         }
 
         window.onload = function() {
@@ -1288,6 +1359,25 @@
             const todayData = rawData.filter(item => parseSheetDate(item.Tanggal) === todayKey);
             let tNet = 0, tTrips = 0, tGrossPure = 0, tExtraOngkir = 0;
             
+            // --- Cek Cicilan Rider ---
+            const installmentData = getInstallmentInfo(currentUserUID);
+            let weeklyInstallmentAmount = 0;
+            let weeklyInstallmentRemaining = 0;
+            if (installmentData && !installmentData.is_paid_off) {
+                weeklyInstallmentAmount = installmentData.weekly;
+                weeklyInstallmentRemaining = installmentData.remaining;
+            }
+
+            // Update UI Cicilan di Laporan Mingguan
+            const instBox = document.getElementById('weekly-installment-info');
+            if (weeklyInstallmentAmount > 0) {
+                instBox.classList.remove('hidden');
+                document.getElementById('weekly-installment-val').innerText = `- Rp ${weeklyInstallmentAmount.toLocaleString('id-ID')}`;
+                document.getElementById('weekly-installment-remaining').innerText = `Sisa Hutang: Rp ${weeklyInstallmentRemaining.toLocaleString('id-ID')}`;
+            } else {
+                instBox.classList.add('hidden');
+            }
+
             todayData.forEach(curr => {
                 if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
                     const k = (Number(curr.Nominal_Kotor) || 0) * 1000;
@@ -1375,6 +1465,12 @@
                 finalChartNetto.push(Math.round(dNet));
             });
 
+            // --- Apply Installment Deduction to Weekly Net Total ---
+            if (weeklyInstallmentAmount > 0) {
+                wNet -= weeklyInstallmentAmount;
+                // Note: We don't deduct from wAdm here because wAdm is what they pay based on orders, installment is EXTRA.
+            }
+
             document.getElementById('weekly-gross-pure-val').innerText = `Rp ${Math.round(wGrossPure).toLocaleString('id-ID')}`;
             document.getElementById('weekly-extra-val').innerText = `Rp ${Math.round(wExtraTotal).toLocaleString('id-ID')}`;
             estProAdmVal.innerText = `Rp ${Math.round(wGrossTotalForEst * 0.16).toLocaleString('id-ID')}`;
@@ -1388,7 +1484,7 @@
             
             if (!document.getElementById('page-weekly').classList.contains('hidden-page')) { updateWeeklyChart(chartLabels, finalChartNetto); }
 
-            // --- PERHITUNGAN ADM MINGGU LALU (DIPERBAIKI) ---
+            // --- PERHITUNGAN ADM MINGGU LALU ---
             const startOfLastWeek = new Date(startOfCurrentWeek); startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
             const lastWeekKeys = [];
             for(let i=0; i<7; i++) {
@@ -1415,17 +1511,17 @@
                 });
             });
 
-            // 2. Tentukan Rate Minggu Lalu berdasarkan Total Order ATAU Status Partime
+            // 2. Tentukan Rate Minggu Lalu
             let prevWeekRate;
             let prevWeekLevel = "";
             let prevLevelClass = "";
 
             if (isPartime) {
-                prevWeekRate = 0.16; // Partime fixed 16%
+                prevWeekRate = 0.16;
                 prevWeekLevel = "Parttime";
                 prevLevelClass = "bg-blue-500 text-white border-blue-600";
             } else if (prevWTrips >= 90) {
-                prevWeekRate = 0.16; // Regular logic
+                prevWeekRate = 0.16;
                 prevWeekLevel = "Pro";
                 prevLevelClass = "bg-yellow-400 text-gray-900 border-yellow-500";
             } else {
@@ -1436,20 +1532,31 @@
             
             prevWAdm = prevWGross * prevWeekRate;
 
+            // --- Check Installment for Previous Week Logic ---
+            // Simpelnya: Jika minggu ini ada cicilan, minggu lalu kemungkinan juga ada (kecuali baru mulai). 
+            // Kita gunakan data cicilan current untuk ditampilkan sebagai tagihan tambahan.
+            // *NOTE: Ini asumsi bahwa cicilan berlaku continuous.
+            const prevInstallmentRow = document.getElementById('prev-weekly-installment-row');
+            if (weeklyInstallmentAmount > 0) {
+                prevWAdm += weeklyInstallmentAmount;
+                prevInstallmentRow.classList.remove('hidden');
+                document.getElementById('prev-weekly-installment-val').innerText = weeklyInstallmentAmount.toLocaleString('id-ID');
+            } else {
+                prevInstallmentRow.classList.add('hidden');
+            }
+
             document.getElementById('prev-weekly-adm').innerText = `Rp ${Math.round(prevWAdm).toLocaleString('id-ID')}`;
             document.getElementById('prev-weekly-order').innerText = `${prevWTrips} Selesai`;
             document.getElementById('prev-weekly-days').innerText = `${prevWDays.size} Hari`;
             document.getElementById('prev-weekly-gross').innerText = `Rp ${Math.round(prevWGross).toLocaleString('id-ID')}`;
             document.getElementById('prev-weekly-extra').innerText = `Rp ${Math.round(prevWExtra).toLocaleString('id-ID')}`;
             
-            // 3. Update Badge Persen ADM
             const prevBadge = document.getElementById('prev-weekly-rate-badge');
             if(prevBadge) {
                 prevBadge.innerText = `ADM ${Math.round(prevWeekRate * 100)}%`;
                 prevBadge.className = `text-[8px] font-extrabold px-2 py-0.5 rounded-md uppercase border ${prevLevelClass}`;
             }
 
-            // 3.5. Update Badge Level Rider Minggu Lalu
             const prevLevelBadge = document.getElementById('prev-weekly-level-badge');
             if(prevLevelBadge) {
                 prevLevelBadge.innerText = `Rider ${prevWeekLevel}`;
@@ -1457,14 +1564,11 @@
                 prevLevelBadge.classList.remove('hidden');
             }
 
-            // 4. Update Periode Minggu Lalu
             const endOfLastWeek = new Date(startOfLastWeek);
             endOfLastWeek.setDate(startOfLastWeek.getDate() + 6);
             const prevPeriodStr = `${startOfLastWeek.toLocaleDateString('id-ID', {day:'numeric', month:'short'})} - ${endOfLastWeek.toLocaleDateString('id-ID', {day:'numeric', month:'short'})}`;
             const prevPeriodEl = document.getElementById('prev-weekly-period');
             if(prevPeriodEl) prevPeriodEl.innerText = `(${prevPeriodStr})`;
-
-            // --- END PERHITUNGAN MINGGU LALU ---
 
             const cM = now.getMonth() + 1; const cY = now.getFullYear();
             let mNetTotal = 0, mTripsTotal = 0;
