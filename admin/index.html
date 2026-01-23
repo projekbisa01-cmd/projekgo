@@ -7,8 +7,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Admin Panel - Rider Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Tambahkan Chart.js -->
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js Data Labels Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
@@ -288,10 +290,10 @@
 
             <!-- HALAMAN 3: TARGET (UPDATED CHART) -->
             <div id="tab-target" class="tab-content space-y-6">
-                <!-- CHART SECTION (NEW) -->
+                <!-- CHART SECTION (UPDATED) -->
                 <div class="bg-white p-4 rounded-3xl card-shadow border border-gray-100">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-bold text-gray-800 text-sm border-l-4 border-orange-500 pl-2">Grafik Performa Bulanan</h3>
+                        <h3 class="font-bold text-gray-800 text-sm border-l-4 border-orange-500 pl-2">Grafik Rata-rata Trip</h3>
                         <span class="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold">Jun '24 - Des '26</span>
                     </div>
                     <!-- Container Scrollable untuk Chart -->
@@ -608,56 +610,72 @@
             const ctx = document.getElementById('performanceChart');
             if (!ctx) return;
             
-            // Konfigurasi Bulan: Jun 2024 - Des 2026
+            // Register DataLabels Plugin
+            Chart.register(ChartDataLabels);
+
+            // Konfigurasi Bulan: Jun 2024 - Sekarang
             const labels = [];
             const dataValues = [];
             const bgColors = [];
             const borderColors = [];
             
+            const historicalAverages = [
+                171, 168, 170, 182, 205, 232, 239, 241, 250, 241, 313, 318, // Jun 24 - May 25
+                318, 306, 320, 335, 357, 383, 392  // Jun 25 - Dec 25
+            ];
+
             const startYear = 2024;
             const startMonth = 5; // Juni (0-indexed)
-            const endYear = 2026;
-            const endMonth = 11; // Desember
-
+            
+            // Hapus endYear statis, kita gunakan waktu sekarang sebagai batas
             let currentY = startYear;
             let currentM = startMonth;
+            let dataIndex = 0;
 
-            // Simulasi Data Historis (Ganti dengan data real jika ada)
-            let simValue = 8500; // Start value
-
-            // Get Current Date (Context: Jan 2026 based on system prompt)
             const now = new Date();
-            // Force system date for demo logic consistency with prompt
-            // Assuming "This Month" is the live one.
             const liveYear = now.getFullYear();
             const liveMonth = now.getMonth();
-
-            while (currentY < endYear || (currentY === endYear && currentM <= endMonth)) {
+            const dayOfMonth = now.getDate();
+            
+            let liveAverage = 0;
+            if(dayOfMonth > 0) {
+                liveAverage = Math.round(currentMonthlyTrips / dayOfMonth);
+            }
+            
+            // Loop berhenti jika tahun > tahun sekarang ATAU (tahun = tahun sekarang DAN bulan > bulan sekarang)
+            // Artinya: Tampilkan sampai bulan ini saja.
+            while (currentY < liveYear || (currentY === liveYear && currentM <= liveMonth)) {
                 const monthName = new Date(currentY, currentM).toLocaleString('id-ID', { month: 'short' });
                 const label = `${monthName} '${String(currentY).slice(-2)}`;
                 labels.push(label);
 
-                // Determine Logic based on time
-                // 1. Past
-                if (currentY < liveYear || (currentY === liveYear && currentM < liveMonth)) {
-                    simValue = Math.round(simValue * 1.05); // 5% growth simulation
-                    dataValues.push(simValue);
-                    bgColors.push('rgba(203, 213, 225, 0.6)'); // Gray
-                    borderColors.push('rgba(203, 213, 225, 1)');
+                // 1. Data Historis
+                if (dataIndex < historicalAverages.length) {
+                    // Cek agar data historis tidak menimpa data live jika kita sudah masuk bulan yg ada di history (sangat jarang terjadi kecuali hardcode berlebih)
+                    // Tapi karena kita punya live logic terpisah, prioritas:
+                    // Jika bulan loop == bulan live -> Pakai Live Data
+                    // Jika tidak -> Pakai History
+                    
+                    if (currentY === liveYear && currentM === liveMonth) {
+                         // Ini kondisi khusus jika data historis overlap dengan bulan ini (misal Desember 2025 sudah lewat tapi kita masih di Des 2025)
+                         // Untuk kasus umum prompt ini, kita pakai logika standard:
+                         dataValues.push(liveAverage); 
+                         bgColors.push('rgba(249, 115, 22, 0.8)'); // Orange (Live)
+                         borderColors.push('rgba(249, 115, 22, 1)');
+                    } else {
+                        dataValues.push(historicalAverages[dataIndex]);
+                        bgColors.push('rgba(59, 130, 246, 0.8)'); // Tailwind Blue-500
+                        borderColors.push('rgba(59, 130, 246, 1)');
+                    }
+                    dataIndex++;
                 } 
-                // 2. Live (Current Month)
+                // 2. Bulan Ini (Live) - Jika data historis habis tapi loop masih jalan (artinya kita di bulan baru yg belum ada di array history)
                 else if (currentY === liveYear && currentM === liveMonth) {
-                    dataValues.push(currentMonthlyTrips); // Real-time value
-                    bgColors.push('rgba(249, 115, 22, 0.8)'); // Orange
+                    dataValues.push(liveAverage); 
+                    bgColors.push('rgba(249, 115, 22, 0.8)'); // Orange (Live)
                     borderColors.push('rgba(249, 115, 22, 1)');
                 }
-                // 3. Future
-                else {
-                    simValue = Math.round(simValue * 1.05); // Projection
-                    dataValues.push(simValue);
-                    bgColors.push('rgba(255, 255, 255, 0.2)'); // Transparent
-                    borderColors.push('rgba(203, 213, 225, 1)'); // Gray border
-                }
+                // 3. Masa Depan -> TIDAK DITAMPILKAN (Loop condition mencegah masuk sini)
 
                 currentM++;
                 if (currentM > 11) {
@@ -675,7 +693,7 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'Total Trip',
+                        label: 'Rata-rata Trip/Hari',
                         data: dataValues,
                         backgroundColor: bgColors,
                         borderColor: borderColors,
@@ -686,14 +704,41 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    layout: {
+                        padding: {
+                            top: 20 // Add space for labels
+                        }
+                    },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return context.parsed.y + ' Trip';
+                                    return context.parsed.y + ' Trip/Hari';
                                 }
                             }
+                        },
+                        // DataLabels Configuration
+                        datalabels: {
+                            anchor: 'end',
+                            align: 'top',
+                            offset: 4,
+                            font: {
+                                weight: 'bold',
+                                size: 10
+                            },
+                            color: function(context) {
+                                const index = context.dataIndex;
+                                const value = context.dataset.data[index];
+                                const prevValue = index > 0 ? context.dataset.data[index - 1] : 0;
+                                
+                                // Color logic: Red if decreased, else darker text
+                                if (index > 0 && value < prevValue) {
+                                    return '#ef4444'; // Red-500
+                                }
+                                return '#1f2937'; // Gray-800
+                            },
+                            formatter: Math.round
                         }
                     },
                     scales: {
@@ -717,20 +762,22 @@
             const now = new Date();
             const liveYear = now.getFullYear();
             const liveMonth = now.getMonth();
+            const dayOfMonth = now.getDate();
             
-            // Cari index bulan ini
-            // Logic label generator sama dengan initChart
+            let liveAverage = 0;
+            if(dayOfMonth > 0) {
+                liveAverage = Math.round(currentMonthlyTrips / dayOfMonth);
+            }
+            
             const startYear = 2024;
             const startMonth = 5;
-            
-            // Hitung index: (Diff Years * 12) + (Diff Months)
             const yearDiff = liveYear - startYear;
             const monthDiff = liveMonth - startMonth;
             const index = (yearDiff * 12) + monthDiff;
 
+            // Pastikan index ada dalam jangkauan data (karena sekarang kita memotong masa depan)
             if (index >= 0 && index < chartInstance.data.datasets[0].data.length) {
-                // Update nilai bulan ini dengan data real-time
-                chartInstance.data.datasets[0].data[index] = currentMonthlyTrips;
+                chartInstance.data.datasets[0].data[index] = liveAverage;
                 chartInstance.update();
             }
         }
@@ -812,7 +859,6 @@
             const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
             dateTitle.innerText = `${d} ${months[parseInt(m)-1]} ${y}`;
 
-            // Master Rider List
             const masterRiderMap = {};
             allData.forEach(row => {
                 const uid = String(row.UID || '').trim();
@@ -826,7 +872,6 @@
                 }
             });
 
-            // Daily Stats
             const dailyStats = {};
             let totalTripDay = 0;
             let totalGrossDay = 0;
@@ -853,7 +898,6 @@
                 totalExtraDay += tambahan;
             });
 
-            // Merge
             const finalRiderList = Object.values(masterRiderMap).map(rider => {
                 const stats = dailyStats[rider.uid] || { trips: 0, gross: 0, extra: 0 };
                 return {
@@ -1188,8 +1232,12 @@
                         };
                     }
                     if (isSelesai && dateKey === todayKey) ridersMap[uid].tripsToday++;
-                    if (row.Status_Onbid !== undefined) {
-                        ridersMap[uid].onBid = (String(row.Status_Onbid).toLowerCase() === 'on');
+                    
+                    // MODIFIKASI: Hanya cek status onbid jika tanggal = hari ini
+                    if (dateKey === todayKey && row.Status_Onbid) {
+                        const status = String(row.Status_Onbid).toLowerCase().trim();
+                        if (status === 'on') ridersMap[uid].onBid = true;
+                        else if (status === 'off') ridersMap[uid].onBid = false;
                     }
                 }
             });
@@ -1219,6 +1267,48 @@
             renderRiderStatus(ridersMap);
             renderDailyTab(); 
             updateChartLive();
+        }
+
+        function renderRiderStatus(ridersMap) {
+            const tableBody = document.getElementById('rider-list-table');
+            const noRiderMsg = document.getElementById('no-rider-msg');
+            if(!tableBody) return;
+            tableBody.innerHTML = '';
+            const onBidRiders = Object.values(ridersMap).filter(r => r.onBid);
+            
+            const countEl = document.getElementById('onbid-count');
+            if(countEl) countEl.innerText = onBidRiders.length;
+
+            if (onBidRiders.length === 0) {
+                noRiderMsg.classList.remove('hidden');
+                noRiderMsg.classList.add('flex');
+            } else {
+                noRiderMsg.classList.add('hidden');
+                noRiderMsg.classList.remove('flex');
+                
+                onBidRiders.forEach(rider => {
+                    const div = document.createElement('div');
+                    div.className = "p-4 flex items-center justify-between hover:bg-gray-50 transition-colors";
+                    div.innerHTML = `
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shadow-sm border border-orange-200">${rider.name.charAt(0)}</div>
+                            <div>
+                                <p class="text-sm font-bold text-gray-800">${rider.name}</p>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 font-mono">${rider.plat}</span>
+                                    <span class="text-[10px] text-gray-400">• ${rider.motor}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <span class="block text-xs font-bold text-gray-800">${rider.tripsToday} Trip</span>
+                            <span class="inline-flex items-center text-[9px] font-bold text-green-600">
+                                <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 animate-pulse"></span>ON
+                            </span>
+                        </div>`;
+                    tableBody.appendChild(div);
+                });
+            }
         }
 
         window.onload = function() {
