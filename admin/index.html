@@ -131,6 +131,25 @@
             background: #cbd5e1; 
             border-radius: 10px;
         }
+        
+        /* Table Styles for Performance */
+        .perf-table th {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: #94a3b8;
+            padding: 8px 4px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .perf-table td {
+            font-size: 11px;
+            padding: 8px 4px;
+            color: #334155;
+            border-bottom: 1px solid #f8fafc;
+        }
+        .perf-table tr:last-child td {
+            border-bottom: none;
+        }
     </style>
 </head>
 <body class="min-h-screen bg-gray-100">
@@ -420,6 +439,7 @@
 
             <!-- HALAMAN 4: RIDER ON-BID -->
             <div id="tab-onbid" class="tab-content space-y-6">
+                <!-- Status On-Bid Card -->
                 <div class="bg-gray-800 rounded-3xl p-6 text-white card-shadow relative overflow-hidden">
                     <div class="absolute right-0 top-0 w-32 h-32 bg-white opacity-5 rounded-full -mr-10 -mt-10"></div>
                     <div class="relative z-10 flex justify-between items-end">
@@ -434,6 +454,7 @@
                     </div>
                 </div>
 
+                <!-- Table On-Bid -->
                 <div class="bg-white rounded-2xl card-shadow border border-gray-100 min-h-[300px]">
                     <div class="p-4 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
                         <h3 class="font-bold text-gray-800 text-sm">Daftar Rider</h3>
@@ -444,6 +465,11 @@
                         <i class="fa-solid fa-bicycle text-gray-300 text-4xl mb-3"></i>
                         <p class="text-gray-400 text-sm">Tidak ada rider aktif.</p>
                     </div>
+                </div>
+
+                <!-- 3-Month Performance Tables Container -->
+                <div id="monthly-performance-container" class="space-y-6">
+                    <!-- Konten Tabel Bulanan Akan Di-generate di sini via JS -->
                 </div>
             </div>
         </main>
@@ -651,14 +677,7 @@
 
                 // 1. Data Historis
                 if (dataIndex < historicalAverages.length) {
-                    // Cek agar data historis tidak menimpa data live jika kita sudah masuk bulan yg ada di history (sangat jarang terjadi kecuali hardcode berlebih)
-                    // Tapi karena kita punya live logic terpisah, prioritas:
-                    // Jika bulan loop == bulan live -> Pakai Live Data
-                    // Jika tidak -> Pakai History
-                    
                     if (currentY === liveYear && currentM === liveMonth) {
-                         // Ini kondisi khusus jika data historis overlap dengan bulan ini (misal Desember 2025 sudah lewat tapi kita masih di Des 2025)
-                         // Untuk kasus umum prompt ini, kita pakai logika standard:
                          dataValues.push(liveAverage); 
                          bgColors.push('rgba(249, 115, 22, 0.8)'); // Orange (Live)
                          borderColors.push('rgba(249, 115, 22, 1)');
@@ -669,7 +688,7 @@
                     }
                     dataIndex++;
                 } 
-                // 2. Bulan Ini (Live) - Jika data historis habis tapi loop masih jalan (artinya kita di bulan baru yg belum ada di array history)
+                // 2. Bulan Ini (Live) - Jika data historis habis tapi loop masih jalan
                 else if (currentY === liveYear && currentM === liveMonth) {
                     dataValues.push(liveAverage); 
                     bgColors.push('rgba(249, 115, 22, 0.8)'); // Orange (Live)
@@ -732,7 +751,6 @@
                                 const value = context.dataset.data[index];
                                 const prevValue = index > 0 ? context.dataset.data[index - 1] : 0;
                                 
-                                // Color logic: Red if decreased, else darker text
                                 if (index > 0 && value < prevValue) {
                                     return '#ef4444'; // Red-500
                                 }
@@ -775,7 +793,6 @@
             const monthDiff = liveMonth - startMonth;
             const index = (yearDiff * 12) + monthDiff;
 
-            // Pastikan index ada dalam jangkauan data (karena sekarang kita memotong masa depan)
             if (index >= 0 && index < chartInstance.data.datasets[0].data.length) {
                 chartInstance.data.datasets[0].data[index] = liveAverage;
                 chartInstance.update();
@@ -1144,6 +1161,161 @@
             }
         }
 
+        // --- NEW: LOGIKA TABEL PERFORMA 3 BULAN ---
+        function renderThreeMonthPerformance() {
+            const container = document.getElementById('monthly-performance-container');
+            if(!container) return;
+            container.innerHTML = '';
+
+            const now = new Date();
+            const currentDayOfMonth = now.getDate();
+            const currentMonthIdx = now.getMonth();
+            const currentYear = now.getFullYear();
+
+            // Kita ambil 3 bulan terakhir: [Bulan Ini, Bulan-1, Bulan-2]
+            const targetMonths = [];
+            for (let i = 0; i < 3; i++) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                // Hitung jumlah hari dalam bulan tersebut
+                const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+                
+                // Tentukan pembagi untuk rata-rata
+                // Jika bulan lampau, dibagi total hari bulan itu.
+                // Jika bulan berjalan, dibagi tanggal hari ini (running days).
+                let divider = daysInMonth;
+                if (d.getMonth() === currentMonthIdx && d.getFullYear() === currentYear) {
+                    divider = currentDayOfMonth;
+                    if(divider === 0) divider = 1; // Safety check
+                }
+
+                targetMonths.push({
+                    monthIdx: d.getMonth(), // 0-11
+                    year: d.getFullYear(),
+                    name: d.toLocaleString('id-ID', { month: 'long', year: 'numeric' }),
+                    daysInMonth: daysInMonth,
+                    divider: divider
+                });
+            }
+
+            // Proses data untuk setiap bulan
+            targetMonths.forEach(target => {
+                const monthStats = {}; // uid -> { name, w1, w2, w3, w4, total }
+
+                // Durasi hari untuk setiap periode (Display Only)
+                const p1Days = 7;
+                const p2Days = 7;
+                const p3Days = 7;
+                const p4Days = target.daysInMonth - 21; 
+
+                allData.forEach(row => {
+                    const status = String(row.Status || '').trim().toLowerCase();
+                    if(status !== 'selesai') return;
+
+                    const dateKey = parseToJKTKey(row.Tanggal);
+                    const [mStr, dStr, yStr] = dateKey.split('-');
+                    const rowM = parseInt(mStr) - 1; // 0-11
+                    const rowD = parseInt(dStr);
+                    const rowY = parseInt(yStr);
+
+                    if (rowM === target.monthIdx && rowY === target.year) {
+                        const uid = String(row.UID || '').trim();
+                        const riderName = row.Nama_Rider || 'Tanpa Nama';
+                        
+                        if(!monthStats[uid]) {
+                            monthStats[uid] = { name: riderName, w1:0, w2:0, w3:0, w4:0, total:0 };
+                        }
+
+                        // Tentukan Periode (1-7, 8-14, 15-21, 22+)
+                        if(rowD <= 7) monthStats[uid].w1++;
+                        else if(rowD <= 14) monthStats[uid].w2++;
+                        else if(rowD <= 21) monthStats[uid].w3++;
+                        else monthStats[uid].w4++;
+                        
+                        monthStats[uid].total++;
+                    }
+                });
+
+                // Convert ke array dan sort
+                const sortedRiders = Object.values(monthStats).sort((a,b) => b.total - a.total);
+
+                // Buat Elemen HTML
+                const wrapper = document.createElement('div');
+                wrapper.className = "bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden";
+                
+                const hasData = sortedRiders.length > 0;
+                
+                let tableRows = '';
+                if(hasData) {
+                    sortedRiders.forEach((r, idx) => {
+                        // Highlight top 3
+                        let rankClass = "text-gray-500";
+                        if(idx === 0) rankClass = "text-yellow-500";
+                        else if(idx === 1) rankClass = "text-gray-400";
+                        else if(idx === 2) rankClass = "text-orange-700";
+
+                        // Hitung Rata-rata Harian
+                        const avg = r.total / target.divider;
+                        let avgHtml = `<span class="font-bold text-gray-700">${avg.toFixed(1)}</span>`;
+                        
+                        // Jika rata-rata < 15, beri label merah
+                        if(avg < 15) {
+                            avgHtml = `<span class="inline-block bg-red-100 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-[10px] font-bold">${avg.toFixed(1)}</span>`;
+                        } else {
+                            // Opsional: Hijau jika performa bagus (>20 misal)
+                            // avgHtml = `<span class="text-green-600 font-bold">${avg.toFixed(1)}</span>`;
+                        }
+
+                        tableRows += `
+                            <tr>
+                                <td class="font-bold text-xs truncate max-w-[100px]">
+                                    <span class="mr-1 text-[9px] ${rankClass}"><i class="fa-solid fa-trophy"></i></span>
+                                    ${r.name}
+                                </td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w1}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w2}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w3}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w4}</td>
+                                <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle">${r.total}</td>
+                                <td class="text-center align-middle py-2 bg-gray-50 border-l border-gray-100">${avgHtml}</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    tableRows = `<tr><td colspan="7" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk periode ini.</td></tr>`;
+                }
+
+                wrapper.innerHTML = `
+                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                        <h3 class="font-bold text-gray-700 text-sm">Performa Rider</h3>
+                        <div class="flex items-center space-x-2">
+                             <span class="text-[9px] text-gray-400 font-mono hidden md:inline">Div: ${target.divider} hari</span>
+                             <span class="text-[10px] font-bold text-white bg-blue-500 px-2 py-1 rounded shadow-sm">${target.name}</span>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left perf-table">
+                            <thead>
+                                <tr class="bg-white text-[9px]">
+                                    <th class="pl-4 py-3">Nama</th>
+                                    <th class="text-center py-3">1-7<br><span class="text-[8px] text-gray-400 font-normal">(${p1Days}hr)</span></th>
+                                    <th class="text-center py-3">8-14<br><span class="text-[8px] text-gray-400 font-normal">(${p2Days}hr)</span></th>
+                                    <th class="text-center py-3">15-21<br><span class="text-[8px] text-gray-400 font-normal">(${p3Days}hr)</span></th>
+                                    <th class="text-center py-3">22-End<br><span class="text-[8px] text-gray-400 font-normal">(${p4Days}hr)</span></th>
+                                    <th class="text-center bg-gray-50 py-3">Total</th>
+                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Avg/Hr</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                ${tableRows}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                container.appendChild(wrapper);
+            });
+        }
+
         function processAnalytics() {
             const todayKey = getJKTDate();
             const now = new Date();
@@ -1233,7 +1405,6 @@
                     }
                     if (isSelesai && dateKey === todayKey) ridersMap[uid].tripsToday++;
                     
-                    // MODIFIKASI: Hanya cek status onbid jika tanggal = hari ini
                     if (dateKey === todayKey && row.Status_Onbid) {
                         const status = String(row.Status_Onbid).toLowerCase().trim();
                         if (status === 'on') ridersMap[uid].onBid = true;
@@ -1267,6 +1438,9 @@
             renderRiderStatus(ridersMap);
             renderDailyTab(); 
             updateChartLive();
+            
+            // PANGGIL FUNGSI TABEL PERFORMA 3 BULAN
+            renderThreeMonthPerformance();
         }
 
         function renderRiderStatus(ridersMap) {
