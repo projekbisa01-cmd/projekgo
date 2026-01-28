@@ -467,6 +467,11 @@
                     </div>
                 </div>
 
+                <!-- NEW: TABEL MINGGUAN RIDER (4 MINGGU) -->
+                <div id="weekly-rider-performance-container" class="mb-6">
+                     <!-- Isi akan digenerate via JS -->
+                </div>
+
                 <!-- 3-Month Performance Tables Container -->
                 <div id="monthly-performance-container" class="space-y-6">
                     <!-- Konten Tabel Bulanan Akan Di-generate di sini via JS -->
@@ -1161,6 +1166,137 @@
             }
         }
 
+        // --- NEW: LOGIKA TABEL MINGGUAN PER RIDER (4 MINGGU TERAKHIR) ---
+        function renderWeeklyRiderPerformance() {
+            const container = document.getElementById('weekly-rider-performance-container');
+            if(!container) return;
+            container.innerHTML = '';
+
+            const now = new Date();
+            
+            // 1. Tentukan Range 4 Minggu Terakhir (Senin - Minggu)
+            const getMonday = (d) => {
+                const day = d.getDay(), diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                return new Date(d.setDate(diff));
+            };
+            
+            // Clone now untuk mendapatkan Senin minggu ini
+            const currentWeekStart = getMonday(new Date(now));
+            currentWeekStart.setHours(0,0,0,0);
+
+            const weeks = [];
+            // Loop 4 minggu ke belakang (3, 2, 1, 0 minggu yang lalu)
+            // Urutan: Minggu terlama (kiri) -> Minggu terbaru (kanan)
+            for(let i=3; i>=0; i--) { 
+                const start = new Date(currentWeekStart);
+                start.setDate(start.getDate() - (i * 7));
+                
+                const end = new Date(start);
+                end.setDate(end.getDate() + 6);
+                
+                // Format Label: "25/12"
+                const formatD = (d) => `${d.getDate()}/${d.getMonth()+1}`;
+                
+                weeks.push({ 
+                    start: start, 
+                    end: end, 
+                    label: `${formatD(start)}-${formatD(end)}` 
+                });
+            }
+
+            // 2. Proses Data
+            const riderStats = {}; // uid -> [countWeek1, countWeek2, countWeek3, countWeek4]
+
+            allData.forEach(row => {
+                const status = String(row.Status || '').trim().toLowerCase();
+                if (status !== 'selesai') return;
+
+                const dateKey = parseToJKTKey(row.Tanggal);
+                const rowDate = new Date(dateKey);
+                rowDate.setHours(0,0,0,0);
+
+                const uid = String(row.UID || '').trim();
+                const name = row.Nama_Rider || 'Tanpa Nama';
+
+                if (!riderStats[uid]) {
+                    riderStats[uid] = { name: name, counts: [0,0,0,0], total: 0 };
+                }
+
+                // Cek masuk minggu ke berapa
+                weeks.forEach((week, idx) => {
+                    if (rowDate >= week.start && rowDate <= week.end) {
+                        riderStats[uid].counts[idx]++;
+                        riderStats[uid].total++;
+                    }
+                });
+            });
+
+            // 3. Convert ke Array & Sort by Total
+            const sortedRiders = Object.values(riderStats).filter(r => r.total > 0).sort((a,b) => b.total - a.total);
+
+            // 4. Render HTML
+            const headerCols = weeks.map((w, i) => `
+                <th class="text-center py-3 ${i===3 ? 'text-orange-600 bg-orange-50/50' : ''}">
+                    ${w.label}<br>
+                    <span class="text-[8px] text-gray-400 font-normal">W${i+1}</span>
+                </th>
+            `).join('');
+
+            let tableRows = '';
+            if (sortedRiders.length === 0) {
+                tableRows = `<tr><td colspan="6" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk 4 minggu terakhir.</td></tr>`;
+            } else {
+                sortedRiders.forEach((r, idx) => {
+                    let rankIcon = '';
+                    if(idx===0) rankIcon = '<i class="fa-solid fa-trophy text-yellow-500 mr-1"></i>';
+                    
+                    const cols = r.counts.map((c, i) => `
+                        <td class="text-center align-middle py-2 font-mono text-[11px] ${c===0 ? 'text-gray-300' : 'text-gray-600'} ${i===3 ? 'bg-orange-50/30' : ''}">
+                            ${c}
+                        </td>
+                    `).join('');
+
+                    tableRows += `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="pl-4 py-2 font-bold text-xs truncate max-w-[120px] border-r border-gray-50">
+                                ${rankIcon}${r.name}
+                            </td>
+                            ${cols}
+                            <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle border-l border-gray-100">
+                                ${r.total}
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+
+            container.innerHTML = `
+                <div class="bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden">
+                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-gray-700 text-sm">Performa Mingguan Rider</h3>
+                            <p class="text-[10px] text-gray-400">Total Trip per Minggu (Rolling 4 Weeks)</p>
+                        </div>
+                        <span class="text-[10px] bg-green-100 text-green-600 px-2 py-1 rounded font-bold">Live</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left perf-table">
+                            <thead>
+                                <tr class="bg-white text-[9px]">
+                                    <th class="pl-4 py-3 min-w-[100px]">Nama Rider</th>
+                                    ${headerCols}
+                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                ${tableRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
         // --- NEW: LOGIKA TABEL PERFORMA 3 BULAN ---
         function renderThreeMonthPerformance() {
             const container = document.getElementById('monthly-performance-container');
@@ -1439,8 +1575,9 @@
             renderDailyTab(); 
             updateChartLive();
             
-            // PANGGIL FUNGSI TABEL PERFORMA 3 BULAN
-            renderThreeMonthPerformance();
+            // Generate Tabel
+            renderWeeklyRiderPerformance(); // NEW
+            renderThreeMonthPerformance();  // EXISTING
         }
 
         function renderRiderStatus(ridersMap) {
