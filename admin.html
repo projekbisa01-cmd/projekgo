@@ -539,7 +539,7 @@
                 <div class="bg-white rounded-2xl card-shadow border border-gray-100 min-h-[300px]">
                     <div class="p-4 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
                         <h3 class="font-bold text-gray-800 text-sm">Daftar Rider</h3>
-                        <span id="total-rows" class="text-[10px] text-gray-400">0 Data</span>
+                        <span id="total-rows" class="text-[10px] text-gray-400">Menghubungkan...</span>
                     </div>
                     <div class="divide-y divide-gray-50" id="rider-list-table"></div>
                     <div id="no-rider-msg" class="p-10 text-center hidden flex flex-col items-center justify-center h-40">
@@ -550,7 +550,7 @@
 
                 <!-- NEW: TABEL MINGGUAN RIDER (4 MINGGU) -->
                 <div id="weekly-rider-performance-container" class="mb-6">
-                     <!-- Isi akan digenerate via JS -->
+                      <!-- Isi akan digenerate via JS -->
                 </div>
 
                 <!-- 3-Month Performance Tables Container -->
@@ -629,7 +629,10 @@
         const ADMIN_PWD_CORRECT = "Admin_projekgo";
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
         const ADM_RATE = 0.16;
-        let allData = [];
+        
+        // Expose global variable so module can access it for matching names/plates
+        window.allData = [];
+        
         let chartInstance = null;
         
         // State Global untuk Data
@@ -977,7 +980,8 @@
             dateTitle.innerText = `${d} ${months[parseInt(m)-1]} ${y}`;
 
             const masterRiderMap = {};
-            allData.forEach(row => {
+            // Using global window.allData
+            window.allData.forEach(row => {
                 const uid = String(row.UID || '').trim();
                 if (uid && !masterRiderMap[uid]) {
                     masterRiderMap[uid] = {
@@ -994,7 +998,7 @@
             let totalGrossDay = 0;
             let totalExtraDay = 0;
 
-            const dailyTransactions = allData.filter(row => {
+            const dailyTransactions = window.allData.filter(row => {
                 const rowDate = parseToJKTKey(row.Tanggal);
                 const status = String(row.Status || '').trim().toLowerCase();
                 return rowDate === dateKey && status === 'selesai';
@@ -1068,7 +1072,7 @@
                                             : `<div class="text-[9px] text-gray-300">-</div>`
                                         }
                                     </div>
-                                  `
+                                `
                             }
                         </div>
                     `;
@@ -1102,7 +1106,7 @@
                 let totalTrips = 0;
                 let totalAdm = 0;
 
-                allData.forEach(row => {
+                window.allData.forEach(row => {
                     const status = String(row.Status || '').trim().toLowerCase();
                     if(status !== 'selesai') return;
 
@@ -1160,7 +1164,7 @@
             let grandTotalGross = 0;
             let grandTotalNet = 0;
 
-            allData.forEach(row => {
+            window.allData.forEach(row => {
                 const status = String(row.Status || '').trim().toLowerCase();
                 if(status !== 'selesai') return;
 
@@ -1233,16 +1237,155 @@
             }
         }
 
-        // --- END NEW LOGIC ---
+        // --- NEW: LOGIKA TABEL PERFORMA 3 BULAN ---
+        function renderThreeMonthPerformance() {
+            const container = document.getElementById('monthly-performance-container');
+            if(!container) return;
+            container.innerHTML = '';
 
+            const now = new Date();
+            const currentDayOfMonth = now.getDate();
+            const currentMonthIdx = now.getMonth();
+            const currentYear = now.getFullYear();
+
+            const targetMonths = [];
+            for (let i = 0; i < 3; i++) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+                
+                let divider = daysInMonth;
+                if (d.getMonth() === currentMonthIdx && d.getFullYear() === currentYear) {
+                    divider = currentDayOfMonth;
+                    if(divider === 0) divider = 1; 
+                }
+
+                targetMonths.push({
+                    monthIdx: d.getMonth(), 
+                    year: d.getFullYear(),
+                    name: d.toLocaleString('id-ID', { month: 'long', year: 'numeric' }),
+                    daysInMonth: daysInMonth,
+                    divider: divider
+                });
+            }
+
+            targetMonths.forEach(target => {
+                const monthStats = {}; 
+                const p1Days = 7;
+                const p2Days = 7;
+                const p3Days = 7;
+                const p4Days = target.daysInMonth - 21; 
+
+                window.allData.forEach(row => {
+                    const status = String(row.Status || '').trim().toLowerCase();
+                    if(status !== 'selesai') return;
+
+                    const dateKey = parseToJKTKey(row.Tanggal);
+                    const [mStr, dStr, yStr] = dateKey.split('-');
+                    const rowM = parseInt(mStr) - 1; 
+                    const rowD = parseInt(dStr);
+                    const rowY = parseInt(yStr);
+
+                    if (rowM === target.monthIdx && rowY === target.year) {
+                        const uid = String(row.UID || '').trim();
+                        const riderName = row.Nama_Rider || 'Tanpa Nama';
+                        
+                        if(!monthStats[uid]) {
+                            monthStats[uid] = { name: riderName, w1:0, w2:0, w3:0, w4:0, total:0 };
+                        }
+
+                        if(rowD <= 7) monthStats[uid].w1++;
+                        else if(rowD <= 14) monthStats[uid].w2++;
+                        else if(rowD <= 21) monthStats[uid].w3++;
+                        else monthStats[uid].w4++;
+                        
+                        monthStats[uid].total++;
+                    }
+                });
+
+                const sortedRiders = Object.values(monthStats).sort((a,b) => b.total - a.total);
+                const wrapper = document.createElement('div');
+                wrapper.className = "bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden";
+                const hasData = sortedRiders.length > 0;
+                let tableRows = '';
+                if(hasData) {
+                    sortedRiders.forEach((r, idx) => {
+                        let rankClass = "text-gray-500";
+                        if(idx === 0) rankClass = "text-yellow-500";
+                        else if(idx === 1) rankClass = "text-gray-400";
+                        else if(idx === 2) rankClass = "text-orange-700";
+
+                        const avg = r.total / target.divider;
+                        let avgHtml = `<span class="font-bold text-gray-700">${avg.toFixed(1)}</span>`;
+                        
+                        if(avg < 15) {
+                            avgHtml = `<span class="inline-block bg-red-100 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-[10px] font-bold">${avg.toFixed(1)}</span>`;
+                        }
+
+                        tableRows += `
+                            <tr>
+                                <td class="font-bold text-xs truncate max-w-[100px]">
+                                    <span class="mr-1 text-[9px] ${rankClass}"><i class="fa-solid fa-trophy"></i></span>
+                                    ${r.name}
+                                </td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w1}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w2}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w3}</td>
+                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w4}</td>
+                                <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle">${r.total}</td>
+                                <td class="text-center align-middle py-2 bg-gray-50 border-l border-gray-100">${avgHtml}</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    tableRows = `<tr><td colspan="7" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk periode ini.</td></tr>`;
+                }
+
+                wrapper.innerHTML = `
+                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                        <h3 class="font-bold text-gray-700 text-sm">Performa Rider</h3>
+                        <div class="flex items-center space-x-2">
+                             <span class="text-[9px] text-gray-400 font-mono hidden md:inline">Div: ${target.divider} hari</span>
+                             <span class="text-[10px] font-bold text-white bg-blue-500 px-2 py-1 rounded shadow-sm">${target.name}</span>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left perf-table">
+                            <thead>
+                                <tr class="bg-white text-[9px]">
+                                    <th class="pl-4 py-3">Nama</th>
+                                    <th class="text-center py-3">1-7<br><span class="text-[8px] text-gray-400 font-normal">(${p1Days}hr)</span></th>
+                                    <th class="text-center py-3">8-14<br><span class="text-[8px] text-gray-400 font-normal">(${p2Days}hr)</span></th>
+                                    <th class="text-center py-3">15-21<br><span class="text-[8px] text-gray-400 font-normal">(${p3Days}hr)</span></th>
+                                    <th class="text-center py-3">22-End<br><span class="text-[8px] text-gray-400 font-normal">(${p4Days}hr)</span></th>
+                                    <th class="text-center bg-gray-50 py-3">Total</th>
+                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Avg/Hr</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                ${tableRows}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                container.appendChild(wrapper);
+            });
+        }
+
+        // --- NEW: MISSING FUNCTION RENDER DAILY TAB ---
         function renderDailyTab() {
             const container = document.getElementById('daily-history-list');
             if(!container) return;
             container.innerHTML = '';
-            if (historyDaily.length === 0) {
+            
+            // historyDaily is populated in processAnalytics
+            const hasData = historyDaily.some(d => d.trips > 0 || d.adm > 0);
+
+            if (!hasData) {
                 container.innerHTML = `<div class="text-center py-10 text-gray-400 text-sm">Belum ada riwayat data.</div>`;
                 return;
             }
+
             historyDaily.forEach(day => {
                 const [m, d, y] = day.date.split('-');
                 const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
@@ -1269,6 +1412,229 @@
                 `;
                 container.appendChild(card);
             });
+        }
+
+        function processAnalytics() {
+            const todayKey = getJKTDate();
+            const now = new Date();
+            const currM = now.getMonth() + 1;
+            const currY = now.getFullYear();
+
+            const getMonday = (d) => {
+                const day = d.getDay(), diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                return new Date(d.setDate(diff));
+            };
+            const currentMonday = getMonday(new Date(now));
+            currentMonday.setHours(0,0,0,0);
+
+            historyWeekly = [];
+            for (let i = 0; i < 4; i++) {
+                const start = new Date(currentMonday);
+                start.setDate(start.getDate() - (i * 7));
+                const end = new Date(start);
+                end.setDate(end.getDate() + 6);
+                historyWeekly.push({
+                    start: start,
+                    end: end,
+                    range: `${start.getDate()}/${start.getMonth()+1} - ${end.getDate()}/${end.getMonth()+1}`,
+                    adm: 0,
+                    trips: 0
+                });
+            }
+
+            historyDaily = [];
+            for (let i = 0; i < 30; i++) {
+                const d = new Date(now);
+                d.setDate(d.getDate() - i);
+                const mStr = String(d.getMonth() + 1).padStart(2, '0');
+                const dStr = String(d.getDate()).padStart(2, '0');
+                const yStr = d.getFullYear();
+                historyDaily.push({ date: `${mStr}-${dStr}-${yStr}`, adm: 0, trips: 0 });
+            }
+
+            let admDaily = 0, tripDaily = 0;
+            let admWeeklyCurr = 0, tripWeeklyCurr = 0;
+            let admMonthly = 0, tripMonthly = 0;
+
+            window.allData.forEach(row => {
+                const dateKey = parseToJKTKey(row.Tanggal);
+                const isSelesai = String(row.Status || '').trim().toLowerCase() === 'selesai';
+                const nominalKotor = (Number(row.Nominal_Kotor) || 0) * 1000;
+                const adm = nominalKotor * ADM_RATE;
+
+                if (isSelesai) {
+                    const rowDate = new Date(dateKey);
+                    if (dateKey === todayKey) { admDaily += adm; tripDaily++; }
+                    const foundDaily = historyDaily.find(h => h.date === dateKey);
+                    if (foundDaily) { foundDaily.adm += adm; foundDaily.trips++; }
+                    historyWeekly.forEach((week, index) => {
+                        const checkDate = new Date(dateKey);
+                        checkDate.setHours(0,0,0,0);
+                        if (checkDate >= week.start && checkDate <= week.end) {
+                            week.adm += adm;
+                            week.trips++;
+                            if(index === 0) { 
+                                admWeeklyCurr += adm;
+                                tripWeeklyCurr++;
+                            }
+                        }
+                    });
+                    const dParts = dateKey.split('-');
+                    if (dParts.length === 3) {
+                        if (parseInt(dParts[0]) === currM && parseInt(dParts[2]) === currY) { 
+                            admMonthly += adm; 
+                            tripMonthly++; 
+                        }
+                    }
+                }
+            });
+
+            const historyDailyFiltered = historyDaily.filter(h => h.trips > 0);
+            historyDaily = historyDailyFiltered; 
+
+            currentMonthlyTrips = tripMonthly; 
+            currentMonthlyRevenue = admMonthly;
+            currentWeeklyTrips = tripWeeklyCurr;
+            currentWeeklyRevenue = admWeeklyCurr;
+            
+            const elAdmDaily = document.getElementById('adm-daily');
+            if(elAdmDaily) elAdmDaily.innerText = `${Math.round(admDaily).toLocaleString('id-ID')}`;
+            const elTripsDaily = document.getElementById('trips-daily');
+            if(elTripsDaily) elTripsDaily.innerText = `${tripDaily} Trip`;
+            const elAdmWeekly = document.getElementById('adm-weekly');
+            if(elAdmWeekly) elAdmWeekly.innerText = `Rp ${Math.round(admWeeklyCurr).toLocaleString('id-ID')}`;
+            const elTripsWeekly = document.getElementById('trips-weekly');
+            if(elTripsWeekly) elTripsWeekly.innerText = `${tripWeeklyCurr} Trip`;
+            const elAdmMonthly = document.getElementById('adm-monthly');
+            if(elAdmMonthly) elAdmMonthly.innerText = `Rp ${Math.round(admMonthly).toLocaleString('id-ID')}`;
+            const elTripsMonthly = document.getElementById('trips-monthly');
+            if(elTripsMonthly) elTripsMonthly.innerText = `${tripMonthly} Trip`;
+            
+            generateTargetLogic(); 
+            renderDailyTab(); 
+            renderMonthlyTab(); // NEW: Render Monthly
+            updateChartLive();
+            
+            renderWeeklyRiderPerformance(); 
+            renderThreeMonthPerformance();  
+        }
+
+        function renderWeeklyRiderPerformance() {
+            const container = document.getElementById('weekly-rider-performance-container');
+            if(!container) return;
+            container.innerHTML = '';
+
+            const now = new Date();
+            
+            const getMonday = (d) => {
+                const day = d.getDay(), diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                return new Date(d.setDate(diff));
+            };
+            
+            const currentWeekStart = getMonday(new Date(now));
+            currentWeekStart.setHours(0,0,0,0);
+
+            const weeks = [];
+            for(let i=3; i>=0; i--) { 
+                const start = new Date(currentWeekStart);
+                start.setDate(start.getDate() - (i * 7));
+                const end = new Date(start);
+                end.setDate(end.getDate() + 6);
+                const formatD = (d) => `${d.getDate()}/${d.getMonth()+1}`;
+                weeks.push({ 
+                    start: start, 
+                    end: end, 
+                    label: `${formatD(start)}-${formatD(end)}` 
+                });
+            }
+
+            const riderStats = {}; 
+
+            window.allData.forEach(row => {
+                const status = String(row.Status || '').trim().toLowerCase();
+                if (status !== 'selesai') return;
+
+                const dateKey = parseToJKTKey(row.Tanggal);
+                const rowDate = new Date(dateKey);
+                rowDate.setHours(0,0,0,0);
+
+                const uid = String(row.UID || '').trim();
+                const name = row.Nama_Rider || 'Tanpa Nama';
+
+                if (!riderStats[uid]) {
+                    riderStats[uid] = { name: name, counts: [0,0,0,0], total: 0 };
+                }
+
+                weeks.forEach((week, idx) => {
+                    if (rowDate >= week.start && rowDate <= week.end) {
+                        riderStats[uid].counts[idx]++;
+                        riderStats[uid].total++;
+                    }
+                });
+            });
+
+            const sortedRiders = Object.values(riderStats).filter(r => r.total > 0).sort((a,b) => b.total - a.total);
+
+            const headerCols = weeks.map((w, i) => `
+                <th class="text-center py-3 ${i===3 ? 'text-orange-600 bg-orange-50/50' : ''}">
+                    ${w.label}<br>
+                    <span class="text-[8px] text-gray-400 font-normal">W${i+1}</span>
+                </th>
+            `).join('');
+
+            let tableRows = '';
+            if (sortedRiders.length === 0) {
+                tableRows = `<tr><td colspan="6" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk 4 minggu terakhir.</td></tr>`;
+            } else {
+                sortedRiders.forEach((r, idx) => {
+                    let rankIcon = '';
+                    if(idx===0) rankIcon = '<i class="fa-solid fa-trophy text-yellow-500 mr-1"></i>';
+                    
+                    const cols = r.counts.map((c, i) => `
+                        <td class="text-center align-middle py-2 font-mono text-[11px] ${c===0 ? 'text-gray-300' : 'text-gray-600'} ${i===3 ? 'bg-orange-50/30' : ''}">
+                            ${c}
+                        </td>
+                    `).join('');
+
+                    tableRows += `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="pl-4 py-2 font-bold text-xs truncate max-w-[120px] border-r border-gray-50">
+                                ${rankIcon}${r.name}
+                            </td>
+                            ${cols}
+                            <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle border-l border-gray-100">
+                                ${r.total}
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+
+            container.innerHTML = `
+                <div class="bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden">
+                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-gray-700 text-sm">Performa Mingguan Rider</h3>
+                            <p class="text-[10px] text-gray-400">Total Trip per Minggu (Rolling 4 Weeks)</p>
+                        </div>
+                        <span class="text-[10px] bg-green-100 text-green-600 px-2 py-1 rounded font-bold">Live</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left perf-table">
+                            <thead>
+                                <tr class="bg-white text-[9px]">
+                                    <th class="pl-4 py-3 min-w-[100px]">Nama Rider</th>
+                                    ${headerCols}
+                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                ${tableRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
         }
 
         function generateTargetLogic() {
@@ -1407,439 +1773,15 @@
 
             try {
                 const response = await fetch(SCRIPT_URL);
-                allData = await response.json();
+                window.allData = await response.json();
                 const totalEl = document.getElementById('total-rows');
-                if(totalEl) totalEl.innerText = allData.length + " Data";
+                if(totalEl) totalEl.innerText = "Terhubung: " + window.allData.length + " Record";
                 processAnalytics();
             } catch (error) {
                 console.error("Error fetch data:", error);
             } finally {
                 if(btn) btn.disabled = false;
                 if(icon) icon.classList.remove('refresh-spin');
-            }
-        }
-
-        // --- NEW: LOGIKA TABEL MINGGUAN PER RIDER (4 MINGGU TERAKHIR) ---
-        function renderWeeklyRiderPerformance() {
-            const container = document.getElementById('weekly-rider-performance-container');
-            if(!container) return;
-            container.innerHTML = '';
-
-            const now = new Date();
-            
-            const getMonday = (d) => {
-                const day = d.getDay(), diff = d.getDate() - day + (day === 0 ? -6 : 1);
-                return new Date(d.setDate(diff));
-            };
-            
-            const currentWeekStart = getMonday(new Date(now));
-            currentWeekStart.setHours(0,0,0,0);
-
-            const weeks = [];
-            for(let i=3; i>=0; i--) { 
-                const start = new Date(currentWeekStart);
-                start.setDate(start.getDate() - (i * 7));
-                const end = new Date(start);
-                end.setDate(end.getDate() + 6);
-                const formatD = (d) => `${d.getDate()}/${d.getMonth()+1}`;
-                weeks.push({ 
-                    start: start, 
-                    end: end, 
-                    label: `${formatD(start)}-${formatD(end)}` 
-                });
-            }
-
-            const riderStats = {}; 
-
-            allData.forEach(row => {
-                const status = String(row.Status || '').trim().toLowerCase();
-                if (status !== 'selesai') return;
-
-                const dateKey = parseToJKTKey(row.Tanggal);
-                const rowDate = new Date(dateKey);
-                rowDate.setHours(0,0,0,0);
-
-                const uid = String(row.UID || '').trim();
-                const name = row.Nama_Rider || 'Tanpa Nama';
-
-                if (!riderStats[uid]) {
-                    riderStats[uid] = { name: name, counts: [0,0,0,0], total: 0 };
-                }
-
-                weeks.forEach((week, idx) => {
-                    if (rowDate >= week.start && rowDate <= week.end) {
-                        riderStats[uid].counts[idx]++;
-                        riderStats[uid].total++;
-                    }
-                });
-            });
-
-            const sortedRiders = Object.values(riderStats).filter(r => r.total > 0).sort((a,b) => b.total - a.total);
-
-            const headerCols = weeks.map((w, i) => `
-                <th class="text-center py-3 ${i===3 ? 'text-orange-600 bg-orange-50/50' : ''}">
-                    ${w.label}<br>
-                    <span class="text-[8px] text-gray-400 font-normal">W${i+1}</span>
-                </th>
-            `).join('');
-
-            let tableRows = '';
-            if (sortedRiders.length === 0) {
-                tableRows = `<tr><td colspan="6" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk 4 minggu terakhir.</td></tr>`;
-            } else {
-                sortedRiders.forEach((r, idx) => {
-                    let rankIcon = '';
-                    if(idx===0) rankIcon = '<i class="fa-solid fa-trophy text-yellow-500 mr-1"></i>';
-                    
-                    const cols = r.counts.map((c, i) => `
-                        <td class="text-center align-middle py-2 font-mono text-[11px] ${c===0 ? 'text-gray-300' : 'text-gray-600'} ${i===3 ? 'bg-orange-50/30' : ''}">
-                            ${c}
-                        </td>
-                    `).join('');
-
-                    tableRows += `
-                        <tr class="hover:bg-gray-50 transition-colors">
-                            <td class="pl-4 py-2 font-bold text-xs truncate max-w-[120px] border-r border-gray-50">
-                                ${rankIcon}${r.name}
-                            </td>
-                            ${cols}
-                            <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle border-l border-gray-100">
-                                ${r.total}
-                            </td>
-                        </tr>
-                    `;
-                });
-            }
-
-            container.innerHTML = `
-                <div class="bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden">
-                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-                        <div>
-                            <h3 class="font-bold text-gray-700 text-sm">Performa Mingguan Rider</h3>
-                            <p class="text-[10px] text-gray-400">Total Trip per Minggu (Rolling 4 Weeks)</p>
-                        </div>
-                        <span class="text-[10px] bg-green-100 text-green-600 px-2 py-1 rounded font-bold">Live</span>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left perf-table">
-                            <thead>
-                                <tr class="bg-white text-[9px]">
-                                    <th class="pl-4 py-3 min-w-[100px]">Nama Rider</th>
-                                    ${headerCols}
-                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-50">
-                                ${tableRows}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-
-        // --- NEW: LOGIKA TABEL PERFORMA 3 BULAN ---
-        function renderThreeMonthPerformance() {
-            const container = document.getElementById('monthly-performance-container');
-            if(!container) return;
-            container.innerHTML = '';
-
-            const now = new Date();
-            const currentDayOfMonth = now.getDate();
-            const currentMonthIdx = now.getMonth();
-            const currentYear = now.getFullYear();
-
-            const targetMonths = [];
-            for (let i = 0; i < 3; i++) {
-                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-                const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-                
-                let divider = daysInMonth;
-                if (d.getMonth() === currentMonthIdx && d.getFullYear() === currentYear) {
-                    divider = currentDayOfMonth;
-                    if(divider === 0) divider = 1; 
-                }
-
-                targetMonths.push({
-                    monthIdx: d.getMonth(), 
-                    year: d.getFullYear(),
-                    name: d.toLocaleString('id-ID', { month: 'long', year: 'numeric' }),
-                    daysInMonth: daysInMonth,
-                    divider: divider
-                });
-            }
-
-            targetMonths.forEach(target => {
-                const monthStats = {}; 
-                const p1Days = 7;
-                const p2Days = 7;
-                const p3Days = 7;
-                const p4Days = target.daysInMonth - 21; 
-
-                allData.forEach(row => {
-                    const status = String(row.Status || '').trim().toLowerCase();
-                    if(status !== 'selesai') return;
-
-                    const dateKey = parseToJKTKey(row.Tanggal);
-                    const [mStr, dStr, yStr] = dateKey.split('-');
-                    const rowM = parseInt(mStr) - 1; 
-                    const rowD = parseInt(dStr);
-                    const rowY = parseInt(yStr);
-
-                    if (rowM === target.monthIdx && rowY === target.year) {
-                        const uid = String(row.UID || '').trim();
-                        const riderName = row.Nama_Rider || 'Tanpa Nama';
-                        
-                        if(!monthStats[uid]) {
-                            monthStats[uid] = { name: riderName, w1:0, w2:0, w3:0, w4:0, total:0 };
-                        }
-
-                        if(rowD <= 7) monthStats[uid].w1++;
-                        else if(rowD <= 14) monthStats[uid].w2++;
-                        else if(rowD <= 21) monthStats[uid].w3++;
-                        else monthStats[uid].w4++;
-                        
-                        monthStats[uid].total++;
-                    }
-                });
-
-                const sortedRiders = Object.values(monthStats).sort((a,b) => b.total - a.total);
-                const wrapper = document.createElement('div');
-                wrapper.className = "bg-white rounded-2xl card-shadow border border-gray-100 overflow-hidden";
-                const hasData = sortedRiders.length > 0;
-                let tableRows = '';
-                if(hasData) {
-                    sortedRiders.forEach((r, idx) => {
-                        let rankClass = "text-gray-500";
-                        if(idx === 0) rankClass = "text-yellow-500";
-                        else if(idx === 1) rankClass = "text-gray-400";
-                        else if(idx === 2) rankClass = "text-orange-700";
-
-                        const avg = r.total / target.divider;
-                        let avgHtml = `<span class="font-bold text-gray-700">${avg.toFixed(1)}</span>`;
-                        
-                        if(avg < 15) {
-                            avgHtml = `<span class="inline-block bg-red-100 text-red-600 border border-red-200 px-1.5 py-0.5 rounded text-[10px] font-bold">${avg.toFixed(1)}</span>`;
-                        }
-
-                        tableRows += `
-                            <tr>
-                                <td class="font-bold text-xs truncate max-w-[100px]">
-                                    <span class="mr-1 text-[9px] ${rankClass}"><i class="fa-solid fa-trophy"></i></span>
-                                    ${r.name}
-                                </td>
-                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w1}</td>
-                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w2}</td>
-                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w3}</td>
-                                <td class="text-center align-middle py-2 text-gray-500 font-mono text-[11px]">${r.w4}</td>
-                                <td class="text-center font-bold text-gray-800 bg-gray-50 align-middle">${r.total}</td>
-                                <td class="text-center align-middle py-2 bg-gray-50 border-l border-gray-100">${avgHtml}</td>
-                            </tr>
-                        `;
-                    });
-                } else {
-                    tableRows = `<tr><td colspan="7" class="text-center py-6 text-gray-400 text-xs italic">Belum ada data untuk periode ini.</td></tr>`;
-                }
-
-                wrapper.innerHTML = `
-                    <div class="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-                        <h3 class="font-bold text-gray-700 text-sm">Performa Rider</h3>
-                        <div class="flex items-center space-x-2">
-                             <span class="text-[9px] text-gray-400 font-mono hidden md:inline">Div: ${target.divider} hari</span>
-                             <span class="text-[10px] font-bold text-white bg-blue-500 px-2 py-1 rounded shadow-sm">${target.name}</span>
-                        </div>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left perf-table">
-                            <thead>
-                                <tr class="bg-white text-[9px]">
-                                    <th class="pl-4 py-3">Nama</th>
-                                    <th class="text-center py-3">1-7<br><span class="text-[8px] text-gray-400 font-normal">(${p1Days}hr)</span></th>
-                                    <th class="text-center py-3">8-14<br><span class="text-[8px] text-gray-400 font-normal">(${p2Days}hr)</span></th>
-                                    <th class="text-center py-3">15-21<br><span class="text-[8px] text-gray-400 font-normal">(${p3Days}hr)</span></th>
-                                    <th class="text-center py-3">22-End<br><span class="text-[8px] text-gray-400 font-normal">(${p4Days}hr)</span></th>
-                                    <th class="text-center bg-gray-50 py-3">Total</th>
-                                    <th class="text-center bg-gray-50 py-3 border-l border-gray-100">Avg/Hr</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-50">
-                                ${tableRows}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-
-                container.appendChild(wrapper);
-            });
-        }
-
-        function processAnalytics() {
-            const todayKey = getJKTDate();
-            const now = new Date();
-            const currM = now.getMonth() + 1;
-            const currY = now.getFullYear();
-
-            const getMonday = (d) => {
-                const day = d.getDay(), diff = d.getDate() - day + (day === 0 ? -6 : 1);
-                return new Date(d.setDate(diff));
-            };
-            const currentMonday = getMonday(new Date(now));
-            currentMonday.setHours(0,0,0,0);
-
-            historyWeekly = [];
-            for (let i = 0; i < 4; i++) {
-                const start = new Date(currentMonday);
-                start.setDate(start.getDate() - (i * 7));
-                const end = new Date(start);
-                end.setDate(end.getDate() + 6);
-                historyWeekly.push({
-                    start: start,
-                    end: end,
-                    range: `${start.getDate()}/${start.getMonth()+1} - ${end.getDate()}/${end.getMonth()+1}`,
-                    adm: 0,
-                    trips: 0
-                });
-            }
-
-            historyDaily = [];
-            for (let i = 0; i < 30; i++) {
-                const d = new Date(now);
-                d.setDate(d.getDate() - i);
-                const mStr = String(d.getMonth() + 1).padStart(2, '0');
-                const dStr = String(d.getDate()).padStart(2, '0');
-                const yStr = d.getFullYear();
-                historyDaily.push({ date: `${mStr}-${dStr}-${yStr}`, adm: 0, trips: 0 });
-            }
-
-            let admDaily = 0, tripDaily = 0;
-            let admWeeklyCurr = 0, tripWeeklyCurr = 0;
-            let admMonthly = 0, tripMonthly = 0;
-            const ridersMap = {};
-
-            allData.forEach(row => {
-                const dateKey = parseToJKTKey(row.Tanggal);
-                const isSelesai = String(row.Status || '').trim().toLowerCase() === 'selesai';
-                const nominalKotor = (Number(row.Nominal_Kotor) || 0) * 1000;
-                const adm = nominalKotor * ADM_RATE;
-
-                if (isSelesai) {
-                    const rowDate = new Date(dateKey);
-                    if (dateKey === todayKey) { admDaily += adm; tripDaily++; }
-                    const foundDaily = historyDaily.find(h => h.date === dateKey);
-                    if (foundDaily) { foundDaily.adm += adm; foundDaily.trips++; }
-                    historyWeekly.forEach((week, index) => {
-                        const checkDate = new Date(dateKey);
-                        checkDate.setHours(0,0,0,0);
-                        if (checkDate >= week.start && checkDate <= week.end) {
-                            week.adm += adm;
-                            week.trips++;
-                            if(index === 0) { 
-                                admWeeklyCurr += adm;
-                                tripWeeklyCurr++;
-                            }
-                        }
-                    });
-                    const dParts = dateKey.split('-');
-                    if (dParts.length === 3) {
-                        if (parseInt(dParts[0]) === currM && parseInt(dParts[2]) === currY) { 
-                            admMonthly += adm; 
-                            tripMonthly++; 
-                        }
-                    }
-                }
-
-                const uid = String(row.UID || '').trim();
-                if (uid) {
-                    if (!ridersMap[uid]) {
-                        ridersMap[uid] = {
-                            name: row.Nama_Rider || 'Tanpa Nama',
-                            uid: uid,
-                            motor: row.Jenis_Motor || '-',
-                            plat: row.Plat_Nomor || '-',
-                            onBid: false,
-                            tripsToday: 0
-                        };
-                    }
-                    if (isSelesai && dateKey === todayKey) ridersMap[uid].tripsToday++;
-                    
-                    if (dateKey === todayKey && row.Status_Onbid) {
-                        const status = String(row.Status_Onbid).toLowerCase().trim();
-                        if (status === 'on') ridersMap[uid].onBid = true;
-                        else if (status === 'off') ridersMap[uid].onBid = false;
-                    }
-                }
-            });
-
-            const historyDailyFiltered = historyDaily.filter(h => h.trips > 0);
-            historyDaily = historyDailyFiltered; 
-
-            currentMonthlyTrips = tripMonthly; 
-            currentMonthlyRevenue = admMonthly;
-            currentWeeklyTrips = tripWeeklyCurr;
-            currentWeeklyRevenue = admWeeklyCurr;
-            
-            const elAdmDaily = document.getElementById('adm-daily');
-            if(elAdmDaily) elAdmDaily.innerText = `${Math.round(admDaily).toLocaleString('id-ID')}`;
-            const elTripsDaily = document.getElementById('trips-daily');
-            if(elTripsDaily) elTripsDaily.innerText = `${tripDaily} Trip`;
-            const elAdmWeekly = document.getElementById('adm-weekly');
-            if(elAdmWeekly) elAdmWeekly.innerText = `Rp ${Math.round(admWeeklyCurr).toLocaleString('id-ID')}`;
-            const elTripsWeekly = document.getElementById('trips-weekly');
-            if(elTripsWeekly) elTripsWeekly.innerText = `${tripWeeklyCurr} Trip`;
-            const elAdmMonthly = document.getElementById('adm-monthly');
-            if(elAdmMonthly) elAdmMonthly.innerText = `Rp ${Math.round(admMonthly).toLocaleString('id-ID')}`;
-            const elTripsMonthly = document.getElementById('trips-monthly');
-            if(elTripsMonthly) elTripsMonthly.innerText = `${tripMonthly} Trip`;
-            
-            generateTargetLogic(); 
-            renderRiderStatus(ridersMap);
-            renderDailyTab(); 
-            renderMonthlyTab(); // NEW: Render Monthly
-            updateChartLive();
-            
-            renderWeeklyRiderPerformance(); 
-            renderThreeMonthPerformance();  
-        }
-
-        function renderRiderStatus(ridersMap) {
-            const tableBody = document.getElementById('rider-list-table');
-            const noRiderMsg = document.getElementById('no-rider-msg');
-            if(!tableBody) return;
-            tableBody.innerHTML = '';
-            const onBidRiders = Object.values(ridersMap).filter(r => r.onBid);
-            
-            const countEl = document.getElementById('onbid-count');
-            if(countEl) countEl.innerText = onBidRiders.length;
-
-            if (onBidRiders.length === 0) {
-                noRiderMsg.classList.remove('hidden');
-                noRiderMsg.classList.add('flex');
-            } else {
-                noRiderMsg.classList.add('hidden');
-                noRiderMsg.classList.remove('flex');
-                
-                onBidRiders.forEach(rider => {
-                    const div = document.createElement('div');
-                    div.className = "p-4 flex items-center justify-between hover:bg-gray-50 transition-colors";
-                    div.innerHTML = `
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shadow-sm border border-orange-200">${rider.name.charAt(0)}</div>
-                            <div>
-                                <p class="text-sm font-bold text-gray-800">${rider.name}</p>
-                                <div class="flex items-center space-x-2">
-                                    <span class="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 font-mono">${rider.plat}</span>
-                                    <span class="text-[10px] text-gray-400">• ${rider.motor}</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <span class="block text-xs font-bold text-gray-800">${rider.tripsToday} Trip</span>
-                            <span class="inline-flex items-center text-[9px] font-bold text-green-600">
-                                <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 animate-pulse"></span>ON
-                            </span>
-                        </div>`;
-                    tableBody.appendChild(div);
-                });
             }
         }
 
@@ -1856,6 +1798,127 @@
             if(input) input.value = customTargetValue > 0 ? customTargetValue : '';
         };
         setInterval(fetchAllData, 120000);
+    </script>
+
+    <!-- FIREBASE MODULE FOR REALTIME ON-BID -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, onSnapshot, query, where } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyD2pQtBHVqVQnpdit3iegueABydVMHbU_k",
+            authDomain: "projekgo-onbidrider.firebaseapp.com",
+            projectId: "projekgo-onbidrider",
+            storageBucket: "projekgo-onbidrider.firebasestorage.app",
+            messagingSenderId: "221289170209",
+            appId: "1:221289170209:web:f64f26eaee044620e0aa60"
+        };
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+
+            // Login Anonim
+            signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
+
+            // Listen to Rider Status Collection
+            // Path: artifacts/projekgo-onbidrider/public/data/rider_status
+            const statusCollection = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status');
+            
+            // Query hanya yang active/onbid (Opsional, atau ambil semua lalu filter di client)
+            const q = query(statusCollection); 
+
+            onSnapshot(q, (snapshot) => {
+                const activeRiders = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    // Cek status onbid
+                    if (data.status === 'ONBID' || data.is_active === true) {
+                        activeRiders.push(data);
+                    }
+                });
+
+                updateOnBidUI(activeRiders);
+            });
+
+        } catch (e) {
+            console.error("Firebase Init Failed:", e);
+        }
+
+        function updateOnBidUI(riders) {
+            const countEl = document.getElementById('onbid-count');
+            const tableEl = document.getElementById('rider-list-table');
+            const noMsgEl = document.getElementById('no-rider-msg');
+
+            if (countEl) countEl.innerText = riders.length;
+
+            if (riders.length === 0) {
+                if (tableEl) tableEl.innerHTML = '';
+                if (noMsgEl) {
+                    noMsgEl.classList.remove('hidden');
+                    noMsgEl.classList.add('flex');
+                }
+                return;
+            }
+
+            if (noMsgEl) {
+                noMsgEl.classList.add('hidden');
+                noMsgEl.classList.remove('flex');
+            }
+
+            if (tableEl) {
+                tableEl.innerHTML = '';
+                riders.forEach(r => {
+                    // Coba cari detail tambahan dari window.allData (Google Sheet Data)
+                    let extraInfo = "Data tidak ditemukan";
+                    let plateInfo = "-";
+                    
+                    if (window.allData && window.allData.length > 0) {
+                        const found = window.allData.find(d => String(d.UID).trim().toLowerCase() === String(r.uid).trim().toLowerCase());
+                        if (found) {
+                            extraInfo = found.Jenis_Motor || "Motor tidak diketahui";
+                            plateInfo = found.Plat_Nomor || "-";
+                        }
+                    }
+
+                    // Format Time Ago
+                    let timeAgo = "Baru saja";
+                    if (r.last_updated) {
+                        const seconds = Math.floor((new Date() - r.last_updated.toDate()) / 1000);
+                        if (seconds < 60) timeAgo = `${seconds} dtk yang lalu`;
+                        else if (seconds < 3600) timeAgo = `${Math.floor(seconds/60)} mnt yang lalu`;
+                        else timeAgo = `${Math.floor(seconds/3600)} jam yang lalu`;
+                    }
+
+                    const row = document.createElement('div');
+                    row.className = "p-4 flex items-center justify-between hover:bg-gray-50 transition-colors";
+                    row.innerHTML = `
+                        <div class="flex items-center space-x-3 overflow-hidden">
+                            <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shadow-sm border border-orange-200 uppercase">
+                                ${(r.nama || '?').charAt(0)}
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-bold text-gray-800 truncate">${r.nama || 'Tanpa Nama'}</p>
+                                <div class="flex items-center space-x-2 text-[10px] text-gray-500">
+                                    <span class="bg-gray-100 px-1.5 py-0.5 rounded font-mono text-gray-600">${plateInfo}</span>
+                                    <span class="truncate">• ${extraInfo}</span>
+                                </div>
+                                <p class="text-[9px] text-gray-400 mt-0.5">Update: ${timeAgo}</p>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <span class="inline-flex items-center px-2 py-1 rounded-full bg-green-50 border border-green-100 text-[10px] font-bold text-green-600">
+                                <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"></span>
+                                ON-BID
+                            </span>
+                        </div>
+                    `;
+                    tableEl.appendChild(row);
+                });
+            }
+        }
     </script>
 </body>
 </html>
