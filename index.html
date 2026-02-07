@@ -2049,11 +2049,31 @@
                 if (page === 'home') { processData(); }
             });
         }
+        
+        // --- MODIFIKASI FUNGSI TOGGLE ---
         async function toggleOnbid() {
-            const check = document.getElementById('onbid-toggle').checked; updateOnbidUI(check); localStorage.setItem('rider_onbid_status', check);
-            try { if (check) { const audio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); audio.volume = 0.5; audio.play(); } else { const audio = new Audio('https://www.myinstants.com/media/sounds/goofy-ahh-ringtone.mp3'); audio.volume = 0.5; audio.play(); } } catch (e) { playBeep(check ? 880 : 440, 0.1); }
+            const check = document.getElementById('onbid-toggle').checked; 
+            updateOnbidUI(check); 
+            localStorage.setItem('rider_onbid_status', check);
+            
+            // 1. Audio Effect
+            try { 
+                if (check) { const audio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); audio.volume = 0.5; audio.play(); } 
+                else { const audio = new Audio('https://www.myinstants.com/media/sounds/goofy-ahh-ringtone.mp3'); audio.volume = 0.5; audio.play(); } 
+            } catch (e) { playBeep(check ? 880 : 440, 0.1); }
+            
+            // 2. Google Script (Legacy)
             try { const url = `${SCRIPT_URL}?action=updateOnbid&uid=${encodeURIComponent(currentUserUID)}&status=${check ? "on" : "off"}`; fetch(url, { method: 'GET', mode: 'no-cors' }); } catch (e) { }
+
+            // 3. FIREBASE UPDATE (BARU)
+            if (typeof window.updateFirebaseStatus === 'function') {
+                let rName = document.getElementById('display-rider-name').innerText;
+                // Fallback jika nama belum termuat
+                if(rName === 'Memuat...' || !rName) rName = currentUserUID;
+                window.updateFirebaseStatus(currentUserUID, check, rName);
+            }
         }
+
         function updateOnbidUI(isActive) {
             const text = document.getElementById('onbid-text'); text.innerText = isActive ? "On-Bid" : "Off-Bid"; text.className = `text-[10px] font-bold ${isActive ? 'text-green-500' : 'text-gray-400'} mb-1 uppercase tracking-wider`;
             const indicator = document.getElementById('status-indicator'); if(indicator) indicator.className = `absolute bottom-0 right-0 w-3 h-3 ${isActive ? 'bg-green-500' : 'bg-gray-400'} border-2 border-white rounded-full`;
@@ -2070,6 +2090,79 @@
             const r = dailyIncomeTarget - net; document.getElementById('remaining-text').innerText = r > 0 ? `Sisa Rp ${Math.round(r).toLocaleString('id-ID')}` : 'Target Tercapai!';
         }
         function handleLogout() { localStorage.removeItem('rider_uid'); location.reload(); }
+    </script>
+
+    <!-- MODULE FIREBASE INTEGRATION -->
+    <script type="module">
+      import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+      import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+      import { getFirestore, doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+      const firebaseConfig = {
+          apiKey: "AIzaSyD2pQtBHVqVQnpdit3iegueABydVMHbU_k",
+          authDomain: "projekgo-onbidrider.firebaseapp.com",
+          projectId: "projekgo-onbidrider",
+          storageBucket: "projekgo-onbidrider.firebasestorage.app",
+          messagingSenderId: "221289170209",
+          appId: "1:221289170209:web:f64f26eaee044620e0aa60"
+      };
+
+      try {
+          const app = initializeApp(firebaseConfig);
+          const auth = getAuth(app);
+          const db = getFirestore(app);
+
+          // Monitor Auth State
+          onAuthStateChanged(auth, (user) => {
+              if (user) {
+                  console.log("Firebase Auth: Ready (Anonymous)");
+              }
+          });
+
+          // Login Anonim Otomatis
+          signInAnonymously(auth).catch((error) => {
+              console.error("Firebase Auth Error:", error);
+          });
+
+          // Expose function to window object so regular script can use it
+          window.updateFirebaseStatus = async (uid, isOn, name) => {
+              if(!uid) return;
+              
+              // Tunggu Auth jika belum siap
+              if (!auth.currentUser) {
+                  console.log("Firebase: Waiting for auth...");
+                  for(let i=0; i<5; i++) {
+                      await new Promise(r => setTimeout(r, 1000));
+                      if(auth.currentUser) break;
+                  }
+                  if(!auth.currentUser) {
+                      console.error("Firebase: Auth timeout. Cannot write data.");
+                      return;
+                  }
+              }
+
+              try {
+                  // Path: artifacts/{projectId}/public/data/rider_status/{uid}
+                  await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', uid), {
+                      uid: uid,
+                      nama: name,
+                      status: isOn ? "ONBID" : "OFFBID",
+                      is_active: isOn,
+                      last_updated: serverTimestamp(),
+                      lokasi: "Unknown" 
+                  }, { merge: true });
+                  console.log(`Firebase: Status updated to ${isOn ? "ON" : "OFF"} for ${uid}`);
+              } catch (e) {
+                  console.error("Firebase Update Failed:", e);
+                  // Hint untuk user tentang Rules
+                  if(e.code === 'permission-denied') {
+                      console.warn("HINT: Cek 'Firestore Database > Rules' di Firebase Console. Pastikan rule mengizinkan write.");
+                  }
+              }
+          };
+      } catch (e) {
+          console.error("Firebase Init Failed:", e);
+      }
     </script>
 </body>
 </html>
