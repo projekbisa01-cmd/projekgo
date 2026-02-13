@@ -2474,84 +2474,95 @@
         // --- FUNGSI BARU: RENDER TOP RIDERS (LEADERBOARD) ---
         function renderTopRiders() {
             const container = document.getElementById('leaderboard-container');
+            const periodLabel = document.getElementById('top-riders-period');
+            
             if (!container) return;
 
-            // 1. Tentukan Bulan Lalu
-            const now = new Date();
-            // Kurangi 1 bulan untuk mendapatkan bulan lalu
-            const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            const targetMonth = prevMonthDate.getMonth() + 1; // getMonth() returns 0-11, so +1
-            const targetYear = prevMonthDate.getFullYear();
-            
-            // Nama Bulan dalam Bahasa Indonesia
-            const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-            const prevMonthName = monthNames[prevMonthDate.getMonth()];
-
-            // Update Label Periode agar spesifik (Contoh: Periode Januari 2026)
-            const periodLabel = document.getElementById('top-riders-period');
-            if (periodLabel) {
-                periodLabel.innerText = `Periode ${prevMonthName} ${targetYear}`;
-            }
-
-            // 2. Hitung Statistik dari Data Global (allRiderData)
-            const riderStats = {};
-
-            // Jika allRiderData kosong (misal belum fetch), coba pakai rawData walau tidak akurat (fallback)
+            // Gunakan allRiderData jika ada, jika tidak fallback ke rawData
             const sourceData = (allRiderData && allRiderData.length > 0) ? allRiderData : rawData;
 
             if (sourceData.length === 0) {
-                container.innerHTML = `<div class="text-center py-10 text-gray-400 italic">Data belum tersedia.</div>`;
+                // UPDATE PESAN LOADING SESUAI REQUEST
+                container.innerHTML = `
+                    <div class="text-center py-10">
+                        <i class="fa-solid fa-cloud-arrow-down text-4xl text-blue-200 mb-4 animate-bounce"></i>
+                        <p class="text-xs font-bold text-gray-500 italic">tunggu yah..data sedang diunduh dari admin PROVELO TM</p>
+                    </div>`;
                 return;
             }
 
-            sourceData.forEach(item => {
-                // Parse Tanggal (Format sheet: m-d-y atau d/m/y tergantung locale, pakai fungsi parseSheetDate)
-                const dateStr = parseSheetDate(item.Tanggal); // format internal: m-d-y
-                if (!dateStr) return;
+            const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+            const now = new Date();
 
-                const parts = dateStr.split('-'); // [month, day, year]
-                if (parts.length !== 3) return;
+            // --- LOGIKA SMART: Cek Bulan Lalu, jika kosong -> Cek Bulan Ini ---
+            
+            // 1. Setup Target Awal (Bulan Lalu)
+            let targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            let targetMonth = targetDate.getMonth() + 1; 
+            let targetYear = targetDate.getFullYear();
+            let displayPeriod = `Periode ${monthNames[targetDate.getMonth()]} ${targetYear}`;
 
-                const m = parseInt(parts[0]);
-                const y = parseInt(parts[2]);
+            // Helper function untuk memfilter dan menghitung ranking
+            const getRankings = (tMonth, tYear) => {
+                const stats = {};
+                sourceData.forEach(item => {
+                    const dateStr = parseSheetDate(item.Tanggal); // Format internal: MM-DD-YYYY
+                    if (!dateStr) return;
 
-                // Filter hanya Bulan Lalu & Status Selesai
-                if (m === targetMonth && y === targetYear && String(item.Status || '').trim().toLowerCase() === 'selesai') {
-                    // Gunakan Nama Rider sebagai kunci grouping.
-                    // Normalisasi nama (trim) untuk menghindari duplikasi karena spasi
-                    const rawName = item.Nama_Rider || "Tanpa Nama";
-                    const cleanName = rawName.trim(); 
-                    
-                    if (!riderStats[cleanName]) {
-                        riderStats[cleanName] = { 
-                            name: cleanName, 
-                            trips: 0,
-                            income: 0 
-                        };
+                    const parts = dateStr.split('-'); 
+                    if (parts.length !== 3) return;
+
+                    const m = parseInt(parts[0]);
+                    const y = parseInt(parts[2]);
+
+                    // Filter: Bulan Sesuai & Status Selesai
+                    if (m === tMonth && y === tYear && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                        const rawName = item.Nama_Rider || "Tanpa Nama";
+                        const cleanName = rawName.trim(); 
+                        
+                        if (!stats[cleanName]) {
+                            stats[cleanName] = { name: cleanName, trips: 0 };
+                        }
+                        stats[cleanName].trips += 1;
                     }
-                    
-                    // Hitung Trip
-                    riderStats[cleanName].trips += 1;
-                    
-                    // Hitung Pendapatan Bersih (Estimasi kasar pakai rate 20% agar seragam, atau skip income jika privasi)
-                    // Kita tampilkan Total Trip saja sesuai request umum leaderboard driver
-                }
-            });
+                });
+                return Object.values(stats).sort((a, b) => b.trips - a.trips);
+            };
 
-            // 3. Konversi ke Array & Sort
-            const sortedRiders = Object.values(riderStats).sort((a, b) => b.trips - a.trips);
+            // Coba ambil data Bulan Lalu
+            let sortedRiders = getRankings(targetMonth, targetYear);
 
+            // 2. Jika Data Bulan Lalu Kosong, Switch ke Bulan Ini
+            if (sortedRiders.length === 0) {
+                targetDate = new Date(); // Reset ke Now (Bulan Ini)
+                targetMonth = targetDate.getMonth() + 1;
+                targetYear = targetDate.getFullYear();
+                displayPeriod = `Periode Berjalan ${monthNames[targetDate.getMonth()]} ${targetYear}`;
+                
+                // Ambil data Bulan Ini
+                sortedRiders = getRankings(targetMonth, targetYear);
+            }
+
+            // Update Label di Header
+            if (periodLabel) {
+                periodLabel.innerText = displayPeriod;
+            }
+
+            // 3. Jika Masih Kosong Juga
             if (sortedRiders.length === 0) {
                 container.innerHTML = `
                     <div class="text-center py-20">
-                        <i class="fa-solid fa-ghost text-4xl text-gray-200 mb-4"></i>
-                        <p class="text-sm font-bold text-gray-400">Belum ada data untuk bulan ${prevMonthName} ${targetYear}</p>
+                        <i class="fa-solid fa-calendar-xmark text-4xl text-gray-200 mb-4"></i>
+                        <p class="text-sm font-bold text-gray-400">Belum ada data trip di periode ini</p>
+                        <button onclick="manualRefresh()" class="mt-4 px-4 py-2 bg-orange-50 text-orange-600 rounded-full text-xs font-bold active:scale-95 transition-transform">
+                            <i class="fa-solid fa-rotate-right mr-1"></i> Coba Refresh Data
+                        </button>
                     </div>
                 `;
                 return;
             }
 
-            // 4. Pisahkan Top 10 dan Harapan
+            // 4. Render UI (Top 10 & Harapan)
             const top10 = sortedRiders.slice(0, 10);
             const harapan = sortedRiders.slice(10, 15);
 
