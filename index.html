@@ -2065,13 +2065,78 @@
         }
         function renderHistory(data, containerId, rateToUse) {
             const container = document.getElementById(containerId); 
-            if (!container) return; if (data.length === 0) { container.innerHTML = `<div class="p-8 text-center"><p class="text-[10px] text-gray-400 font-medium">Belum ada riwayat trip</p></div>`; return; }
-            let html = ''; const sortedData = [...data].reverse();
+            if (!container) return; 
+            if (data.length === 0) { 
+                container.innerHTML = `<div class="p-8 text-center"><p class="text-[10px] text-gray-400 font-medium">Belum ada riwayat trip</p></div>`; 
+                return; 
+            }
+            let html = ''; 
+            const sortedData = [...data].reverse();
             sortedData.forEach(item => {
                 const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai';
-                const kotor = (Number(item.Nominal_Kotor) || 0) * 1000; const tambahan = (Number(item.Tambahan) || 0) * 1000;
+                
+                // Parsing Angka
+                let rawValString = String(item.Nominal_Kotor || 0).replace(',', '.');
+                let rawVal = parseFloat(rawValString) || 0;
+
+                const kotor = Math.round(rawVal * 1000); 
+                const tambahan = Math.round((Number(item.Tambahan) || 0) * 1000);
+                
                 let netto = isDone ? (kotor * (1 - rateToUse)) + tambahan : 0;
-                html += `<div class="mb-2 pb-4 border-b border-dashed border-gray-300 last:border-0 last:pb-0 px-2"><div class="flex flex-col space-y-2"><div class="flex items-start justify-between"><div class="flex items-center space-x-3"><div class="w-10 h-10 ${isDone ? 'bg-white text-green-500 border border-green-200' : 'bg-white text-red-500 border border-red-200'} rounded-full flex items-center justify-center shadow-sm z-10"><i class="fa-solid ${isDone ? 'fa-check' : 'fa-xmark'}"></i></div><div><h4 class="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">${item.Keterangan || 'PERJALANAN'}</h4><p class="text-sm font-bold text-gray-800">${parseSheetTime(item.Jam)} WIB</p></div></div><div class="text-right"><p class="text-[10px] text-gray-400 font-medium mb-1">Pendapatan Bersih</p><p class="font-bold text-base ${isDone ? 'text-green-600' : 'text-gray-300'}">${isDone ? 'Rp ' + Math.round(netto).toLocaleString('id-ID') : 'Dibatalkan'}</p></div></div>${isDone ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold text-gray-600">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}</div></div>`;
+                
+                // LOGIKA DETEKSI SALAH INPUT
+                let isSuspicious = false;
+                if (isDone) {
+                    // Cek 1: Desimal aneh (bukan kelipatan 0.5) -> cth: 7.4
+                    if (Math.round(rawVal * 10) % 5 !== 0) { isSuspicious = true; }
+                    // Cek 2: Nilai dibawah 7 -> cth: 6.5
+                    if (rawVal < 7) { isSuspicious = true; }
+                }
+
+                // Styling text Pendapatan Bersih
+                const netClass = isDone 
+                    ? (isSuspicious ? 'text-red-600 font-extrabold' : 'text-green-600') 
+                    : 'text-gray-300';
+                
+                // UPDATE: Styling KHUSUS untuk Nominal Kotor
+                // Jika suspicious -> Background Merah, Teks Putih, Berdenyut
+                const kotorStyle = isSuspicious 
+                    ? 'bg-red-600 text-white animate-pulse px-2 py-0.5 rounded shadow-sm inline-block' 
+                    : 'text-gray-600';
+                
+                html += `<div class="mb-2 pb-4 border-b border-dashed border-gray-300 last:border-0 last:pb-0 px-2">
+                            <div class="flex flex-col space-y-2">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 ${isDone ? 'bg-white text-green-500 border border-green-200' : 'bg-white text-red-500 border border-red-200'} rounded-full flex items-center justify-center shadow-sm z-10">
+                                            <i class="fa-solid ${isDone ? 'fa-check' : 'fa-xmark'}"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">${item.Keterangan || 'PERJALANAN'}</h4>
+                                            <p class="text-sm font-bold text-gray-800">${parseSheetTime(item.Jam)} WIB</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-[10px] text-gray-400 font-medium mb-1">Pendapatan Bersih</p>
+                                        <p class="font-bold text-base ${netClass}">${isDone ? 'Rp ' + Math.round(netto).toLocaleString('id-ID') : 'Dibatalkan'}</p>
+                                    </div>
+                                </div>`;
+                
+                // Tambahkan Pesan Peringatan Jika Suspicious
+                if (isSuspicious) {
+                    html += `
+                        <div class="bg-red-50 border border-red-100 p-3 rounded-lg flex items-start gap-3 mt-1 animate-pulse relative overflow-hidden">
+                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500"></div>
+                            <div class="mt-0.5"><i class="fa-solid fa-triangle-exclamation text-red-500 text-xs"></i></div>
+                            <p class="text-[10px] text-red-600 leading-snug font-bold italic">
+                                "Sepertinya admin salah input, coba cek lagi ongkirnya sudah sesuai belum, dan konfirmasi admin yah, bahwa ongkirnya tolong disesuaikan"
+                            </p>
+                        </div>
+                    `;
+                }
+
+                // Terapkan style kotorStyle pada elemen Nominal Kotor
+                html += `${isDone ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}</div></div>`;
             });
             container.innerHTML = html;
         }
