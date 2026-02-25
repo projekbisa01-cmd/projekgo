@@ -2114,8 +2114,18 @@
             else { document.getElementById('onbid-toggle').checked = false; updateOnbidUI(false); }
             const urlParams = new URLSearchParams(window.location.search);
             const urlUID = urlParams.get('uid');
-            if (urlUID) { document.getElementById('uid-input').value = urlUID; handleLogin(); } 
-            else if (savedUID) { document.getElementById('uid-input').value = savedUID; handleLogin(); }
+            
+            // SET currentUserUID lebih awal agar bisa langsung dilisten
+            if (urlUID) { 
+                currentUserUID = urlUID.trim().toUpperCase();
+                document.getElementById('uid-input').value = currentUserUID; 
+                handleLogin(); 
+            } 
+            else if (savedUID) { 
+                currentUserUID = savedUID.trim().toUpperCase();
+                document.getElementById('uid-input').value = currentUserUID; 
+                handleLogin(); 
+            }
             initSwipe();
         }
 
@@ -2130,6 +2140,12 @@
             const uid = input.value.trim().toUpperCase();
             if (!uid) { errorMsg.innerText = "Silakan masukkan UID Anda."; errorMsg.classList.remove('hidden'); return; }
             errorMsg.classList.add('hidden'); currentUserUID = uid;
+            
+            // Trigger Listener secepat mungkin
+            if (typeof window.startSuspensionListener === 'function') {
+                window.startSuspensionListener(currentUserUID);
+            }
+            
             document.getElementById('login-page').style.display = 'none'; document.getElementById('loading-overlay').style.display = 'flex';
             await fetchData();
         }
@@ -2174,7 +2190,7 @@
                     } return;
                 }
                 
-                // PASTIKAN UID SAMA PERSIS DENGAN DATABASE (Mencegah salah baca di Firebase)
+                // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
                 currentUserUID = String(newData[0].UID).trim();
                 
                 if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
@@ -3271,6 +3287,12 @@
                   if (window.pendingSuspensionCheck) {
                       window.startSuspensionListener(window.pendingSuspensionCheck.uid, window.pendingSuspensionCheck.name);
                       window.pendingSuspensionCheck = null;
+                  } else {
+                      // Ambil dari local storage agar yang otomatis login langsung dilisten
+                      const savedUid = localStorage.getItem('rider_uid');
+                      if (savedUid) {
+                          window.startSuspensionListener(savedUid);
+                      }
                   }
               }
           });
@@ -3288,22 +3310,32 @@
           // NEW: SISTEM LISTENER PENANGGUHAN AKSES (KONTROL RIDER)
           // -------------------------------------------------------------
           let suspensionUnsubscribe = null;
+          let currentListeningUID = null; // Lacak UID agar tidak dobel listen
+          
           window.startSuspensionListener = (uid, riderName) => {
               if (!uid) return;
+              const cleanUid = String(uid).trim().toUpperCase();
               
               // Jika Auth belum ready, simpan dan tunda eksekusinya
               if (!isAuthReady) {
-                  window.pendingSuspensionCheck = { uid: uid, name: riderName };
+                  window.pendingSuspensionCheck = { uid: cleanUid, name: riderName };
                   return;
               }
               
-              // Hapus listener sebelumnya jika ada
+              // CEGAH DUPLIKASI LISTENER JIKA UID SAMA (Agar real-time tidak putus)
+              if (currentListeningUID === cleanUid && suspensionUnsubscribe) {
+                  return;
+              }
+
+              // Hapus listener sebelumnya jika ganti akun
               if (suspensionUnsubscribe) {
                   suspensionUnsubscribe();
               }
+              
+              currentListeningUID = cleanUid;
 
-              // UID yang di-passing dijamin sama persis bentuknya (huruf besarnya) dengan di Admin
-              const suspendDocRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'suspended_riders', String(uid).trim());
+              // UID yang di-passing dijamin sama persis bentuknya dengan di Admin
+              const suspendDocRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'suspended_riders', cleanUid);
               
               suspensionUnsubscribe = onSnapshot(suspendDocRef, (docSnap) => {
                   const overlay = document.getElementById('suspended-overlay');
@@ -3312,7 +3344,7 @@
                   if (docSnap.exists()) {
                       // JIKA RIDER ADA DI DAFTAR SUSPEND
                       const data = docSnap.data();
-                      const displayedName = data.nama || riderName || uid;
+                      const displayedName = data.nama || riderName || cleanUid;
                       
                       const nameEl = document.getElementById('suspended-name');
                       if(nameEl) nameEl.innerText = displayedName;
