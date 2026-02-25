@@ -331,6 +331,26 @@
 </head>
 <body class="pb-6"> 
 
+    <!-- POPUP SUSPENDED (KONTROL RIDER) - HARUS PALING ATAS -->
+    <div id="suspended-overlay" class="fixed inset-0 z-[9999] bg-gray-900/95 backdrop-blur-md hidden flex-col items-center justify-center p-6 text-center">
+        <div class="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl transform transition-all scale-100 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-2 bg-red-500"></div>
+            <div class="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center text-4xl mx-auto mb-5 border-4 border-white shadow-sm">
+                <i class="fa-solid fa-user-lock"></i>
+            </div>
+            <h2 class="text-xl font-black text-gray-800 mb-3">Akses Ditangguhkan</h2>
+            <div class="bg-red-50 text-red-600 text-[10px] p-2 rounded-lg font-bold uppercase tracking-wider mb-4 border border-red-100 inline-block">
+                Sistem Terkunci
+            </div>
+            <p class="text-sm text-gray-600 leading-relaxed mb-6 font-medium bg-gray-50 p-4 rounded-xl border border-gray-100">
+                "Setor ADM dulu ya om <strong id="suspended-name" class="text-orange-600"></strong>, jika sudah info ke admin, agar bisa mengakses aplikasi, dan jika belum orderan akan kami tangguhkan dulu."
+            </p>
+            <a href="https://wa.me/6281292802623?text=Halo%20Admin,%20saya%20sudah%20transfer%20ADM%20mingguan.%20Mohon%20dibuka%20akses%20aplikasi%20saya." target="_blank" class="w-full flex items-center justify-center py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-200 active:scale-95 transition-all">
+                <i class="fa-brands fa-whatsapp text-xl mr-2"></i> Info Admin (WhatsApp)
+            </a>
+        </div>
+    </div>
+
     <!-- POPUP TATA TERTIB (RULES) -->
     <div id="rules-modal">
         <div id="rules-content-box" class="relative overflow-hidden flex flex-col">
@@ -2106,7 +2126,8 @@
 
         async function handleLogin() {
             const input = document.getElementById('uid-input'); const errorMsg = document.getElementById('login-error-msg');
-            const uid = input.value.trim();
+            // PAKSA MENJADI HURUF BESAR SAAT LOGIN
+            const uid = input.value.trim().toUpperCase();
             if (!uid) { errorMsg.innerText = "Silakan masukkan UID Anda."; errorMsg.classList.remove('hidden'); return; }
             errorMsg.classList.add('hidden'); currentUserUID = uid;
             document.getElementById('login-page').style.display = 'none'; document.getElementById('loading-overlay').style.display = 'flex';
@@ -2152,6 +2173,10 @@
                         errorMsg.innerText = `ID ${currentUserUID} tidak ditemukan.`; errorMsg.classList.remove('hidden');
                     } return;
                 }
+                
+                // PASTIKAN UID SAMA PERSIS DENGAN DATABASE (Mencegah salah baca di Firebase)
+                currentUserUID = String(newData[0].UID).trim();
+                
                 if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
                 lastDataCount = newData.length; rawData = newData;
                 localStorage.setItem('rider_uid', currentUserUID); localStorage.setItem(cacheKey, JSON.stringify(rawData));
@@ -2291,6 +2316,19 @@
                 document.getElementById('avatar-home').src = avatarUrl; document.getElementById('profile-img').src = avatarUrl;
                 profileCached = true;
             }
+
+            // Memicu pengecekan penangguhan/kontrol rider jika modul Firebase sudah termuat
+            if (typeof window.startSuspensionListener === 'function') {
+                window.startSuspensionListener(currentUserUID, name);
+            } else {
+                // Beri jeda kecil jika Firebase module masih memuat
+                setTimeout(() => {
+                    if (typeof window.startSuspensionListener === 'function') {
+                        window.startSuspensionListener(currentUserUID, name);
+                    }
+                }, 1000);
+            }
+
             processData();
             checkAdmPaymentStatus();
         }
@@ -3178,6 +3216,9 @@
                 window.updateFirebaseStatus(currentUserUID, check, rName);
             }
         }
+        
+        // Ekspor fungsi agar dapat diakses dari modul firebase saat suspend
+        window.toggleOnbid = toggleOnbid;
 
         function updateOnbidUI(isActive) {
             const text = document.getElementById('onbid-text'); text.innerText = isActive ? "On-Bid" : "Off-Bid"; text.className = `text-[10px] font-bold ${isActive ? 'text-green-500' : 'text-gray-400'} mb-1 uppercase tracking-wider`;
@@ -3200,7 +3241,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
       const firebaseConfig = {
           apiKey: "AIzaSyD2pQtBHVqVQnpdit3iegueABydVMHbU_k",
@@ -3216,26 +3257,95 @@
           const auth = getAuth(app);
           const db = getFirestore(app);
 
+          // FLAG UNTUK MEMASTIKAN AUTH SELESAI DULU
+          let isAuthReady = false;
+
           onAuthStateChanged(auth, (user) => {
               if (user) { 
                   console.log("Firebase Auth: Ready (Anonymous)"); 
+                  isAuthReady = true;
                   // Cek notifikasi setelah login berhasil
                   window.checkUnreadAdminInfo();
+                  
+                  // Jalankan listener suspen yang tertunda jika ada
+                  if (window.pendingSuspensionCheck) {
+                      window.startSuspensionListener(window.pendingSuspensionCheck.uid, window.pendingSuspensionCheck.name);
+                      window.pendingSuspensionCheck = null;
+                  }
               }
           });
 
-          signInAnonymously(auth).catch((error) => { console.error("Firebase Auth Error:", error); });
+          const initAuth = async () => {
+              try {
+                  await signInAnonymously(auth);
+              } catch (error) {
+                  console.error("Firebase Auth Error:", error);
+              }
+          };
+          initAuth();
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER PENANGGUHAN AKSES (KONTROL RIDER)
+          // -------------------------------------------------------------
+          let suspensionUnsubscribe = null;
+          window.startSuspensionListener = (uid, riderName) => {
+              if (!uid) return;
+              
+              // Jika Auth belum ready, simpan dan tunda eksekusinya
+              if (!isAuthReady) {
+                  window.pendingSuspensionCheck = { uid: uid, name: riderName };
+                  return;
+              }
+              
+              // Hapus listener sebelumnya jika ada
+              if (suspensionUnsubscribe) {
+                  suspensionUnsubscribe();
+              }
+
+              // UID yang di-passing dijamin sama persis bentuknya (huruf besarnya) dengan di Admin
+              const suspendDocRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'suspended_riders', String(uid).trim());
+              
+              suspensionUnsubscribe = onSnapshot(suspendDocRef, (docSnap) => {
+                  const overlay = document.getElementById('suspended-overlay');
+                  if (!overlay) return;
+                  
+                  if (docSnap.exists()) {
+                      // JIKA RIDER ADA DI DAFTAR SUSPEND
+                      const data = docSnap.data();
+                      const displayedName = data.nama || riderName || uid;
+                      
+                      const nameEl = document.getElementById('suspended-name');
+                      if(nameEl) nameEl.innerText = displayedName;
+                      
+                      // Tampilkan overlay block
+                      overlay.classList.remove('hidden');
+                      overlay.classList.add('flex');
+                      
+                      // Matikan otomatis status ON-BID ke OFF-BID jika sedang menyala
+                      const toggle = document.getElementById('onbid-toggle');
+                      if (toggle && toggle.checked) {
+                          toggle.checked = false;
+                          // Panggil fungsi toggle yang sudah kita ekspos di window
+                          if(typeof window.toggleOnbid === 'function') {
+                              window.toggleOnbid();
+                          }
+                      }
+                  } else {
+                      // JIKA RIDER TIDAK DISUSPEND ATAU SUDAH DIBUKA ADMIN
+                      overlay.classList.add('hidden');
+                      overlay.classList.remove('flex');
+                  }
+              }, (error) => {
+                  console.error("Error checking suspension status:", error);
+              });
+          };
 
           // FUNGSI CEK NOTIFIKASI UNREAD
           window.checkUnreadAdminInfo = async () => {
               try {
-                  // Ambil snapshot koleksi hanya untuk menghitung jumlah (metadata size)
-                  // Note: Jika data sangat banyak, sebaiknya gunakan count() aggregation query, 
-                  // tapi untuk info admin yang jarang update, getDocs masih oke.
                   const querySnapshot = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_announcements'));
                   const totalDocs = querySnapshot.size;
                   
-                  // Ambil data yang terakhir dibaca dari LocalStorage
                   const lastReadCount = parseInt(localStorage.getItem('admin_info_last_read_count') || '0');
                   
                   const badge = document.getElementById('admin-info-badge');
@@ -3245,7 +3355,6 @@
                       if(badge) {
                           badge.innerText = unreadCount > 9 ? '9+' : unreadCount;
                           badge.classList.remove('hidden');
-                          // Efek animasi kecil agar menarik perhatian
                           badge.classList.add('animate-bounce');
                           setTimeout(() => badge.classList.remove('animate-bounce'), 2000);
                       }
@@ -3253,7 +3362,6 @@
                       if(badge) badge.classList.add('hidden');
                   }
                   
-                  // Simpan total saat ini di variabel window agar bisa diakses saat halaman dibuka
                   window.currentTotalAdminDocs = totalDocs;
                   
               } catch (e) {
@@ -3266,7 +3374,6 @@
               const container = document.getElementById('info-admin-container');
               if(!container) return;
               
-              // Tampilkan Skeleton/Loading jika kosong
               if(container.children.length === 0 || container.innerHTML.includes('Sedang mengambil')) {
                    container.innerHTML = `
                     <div class="text-center py-20 text-gray-400">
@@ -3276,7 +3383,6 @@
               }
 
               try {
-                  // Ambil data dari koleksi 'admin_announcements'
                   const querySnapshot = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_announcements'));
                   const docs = [];
                   querySnapshot.forEach((doc) => {
@@ -3288,7 +3394,6 @@
                       window.currentTotalAdminDocs = docs.length;
                   }
 
-                  // Sorting Client-Side (Terbaru diatas)
                   docs.sort((a, b) => {
                       const tA = a.created_at?.seconds || 0;
                       const tB = b.created_at?.seconds || 0;
@@ -3307,23 +3412,18 @@
 
                   let html = '';
                   docs.forEach(item => {
-                      // Format Tanggal
                       let dateStr = "";
                       if(item.created_at) {
                           const d = new Date(item.created_at.seconds * 1000);
                           dateStr = d.toLocaleDateString('id-ID', {day:'numeric', month:'short', year:'numeric'});
                       }
 
-                      // Encode data untuk dikirim ke fungsi detail
-                      // Kita tambahkan properti dateFormatted agar tidak perlu format ulang di detail
                       item.dateFormatted = dateStr;
                       const itemDataString = encodeURIComponent(JSON.stringify(item));
 
-                      // TAMPILAN LIST: KARTU RINGKAS (JUDUL + THUMBNAIL KECIL)
                       html += `
                           <div onclick="window.openAdminInfoDetail('${itemDataString}')" class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-3 flex gap-4 cursor-pointer hover:bg-gray-50 transition-all active:scale-98 group relative overflow-hidden">
                               
-                              <!-- Thumbnail Image (Kotak Kecil) -->
                               ${item.image_base64 ? 
                                 `<div class="w-20 h-20 flex-shrink-0 bg-gray-100 rounded-xl overflow-hidden border border-gray-100">
                                     <img src="${item.image_base64}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" loading="lazy">
@@ -3333,7 +3433,6 @@
                                  </div>`
                               }
                               
-                              <!-- Content Summary -->
                               <div class="flex-1 flex flex-col justify-center">
                                   <div class="flex justify-between items-start mb-1">
                                     <span class="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md uppercase tracking-wide border border-indigo-100">${item.category || 'INFO'}</span>
@@ -3345,7 +3444,6 @@
                                   </p>
                               </div>
                               
-                              <!-- Decorative Chevron -->
                               <div class="absolute right-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-300">
                                   <i class="fa-solid fa-chevron-right"></i>
                               </div>
@@ -3375,16 +3473,13 @@
                   
                   if(!modal || !content) return;
 
-                  // Format Paragraf (Ubah \n menjadi tag <br> atau <p>)
                   let formattedContent = '';
                   if(item.content) {
-                      // Escape HTML tags untuk keamanan, lalu ubah newline jadi <br>
                       const safeText = item.content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
                       formattedContent = safeText.replace(/\n/g, '<br>');
                   }
 
                   content.innerHTML = `
-                      <!-- Gambar Cover/Header -->
                       ${item.image_base64 ? 
                           `<div class="w-full h-56 bg-gray-100 relative">
                               <img src="${item.image_base64}" class="w-full h-full object-cover">
@@ -3393,23 +3488,19 @@
                       }
                       
                       <div class="p-6">
-                          <!-- Meta Info -->
                           <div class="flex items-center gap-2 mb-3">
                               <span class="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md uppercase tracking-widest border border-indigo-100">${item.category || 'INFO'}</span>
                               <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock mr-1"></i>${item.dateFormatted}</span>
                           </div>
                           
-                          <!-- Judul -->
                           <h2 class="text-2xl font-extrabold text-gray-800 leading-tight mb-6">${item.title || 'Tanpa Judul'}</h2>
                           
-                          <!-- Isi Konten -->
                           <div class="text-sm text-gray-700 leading-relaxed space-y-4">
                               ${formattedContent || '<p class="italic text-gray-400">Tidak ada deskripsi.</p>'}
                           </div>
                       </div>
                   `;
                   
-                  // Tampilkan modal dengan animasi fade in ringan
                   modal.classList.remove('hidden');
                   modal.classList.add('flex');
                   modal.style.animation = 'fadeIn 0.2s ease-out forwards';
@@ -3453,7 +3544,6 @@
                    return;
                }
 
-               // Limit to max 5 images per upload to prevent payload too large
                if (fileInput.files.length > 5) {
                    statusMsg.innerText = "Maksimal 5 foto per pengiriman!";
                    statusMsg.className = "text-center text-xs font-bold text-red-500 block";
@@ -3471,30 +3561,25 @@
                    const rName = document.getElementById('display-rider-name').innerText || "Rider";
                    const base64Images = [];
 
-                   // Compress all selected images
                    for (let i = 0; i < fileInput.files.length; i++) {
                        const file = fileInput.files[i];
-                       // Compress to max width 800px, 70% quality to keep size small
                        const compressedBase64 = await compressImage(file, 800, 0.7);
                        base64Images.push(compressedBase64);
                    }
 
-                   // Save to Firestore 'menu_uploads' collection
                    await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'menu_uploads'), {
                        rider_uid: currentUserUID,
                        rider_name: rName,
                        resto_name: restoName,
-                       images: base64Images, // Array of base64 strings
-                       status: 'pending', // pending, reviewed, accepted, rejected
+                       images: base64Images,
+                       status: 'pending',
                        created_at: serverTimestamp()
                    });
 
-                   // Success
                    statusMsg.innerText = "Yeay! Foto menu berhasil dikirim ke Admin.";
                    statusMsg.className = "text-center text-xs font-bold text-green-600 block";
                    playBeep(880, 0.1);
                    
-                   // Reset form after 2 seconds
                    setTimeout(() => {
                        resetMenuUploadForm();
                    }, 2000);
