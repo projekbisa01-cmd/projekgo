@@ -2466,8 +2466,32 @@
 
         // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
-            // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase)
-            rawData = [...firebaseData, ...appsScriptData];
+            // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase) dan cegah duplikasi
+            const seenMap = new Map();
+            const combined = [];
+            
+            // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
+            const allData = [...firebaseData, ...appsScriptData];
+            
+            allData.forEach(item => {
+                const dateKey = parseSheetDate(item.Tanggal);
+                
+                // Ambil jam dan menit saja (HH:MM) untuk mencegah duplikasi di menit yang sama
+                let timeKey = parseSheetTime(item.Jam);
+                if (timeKey && timeKey.length >= 5) {
+                    timeKey = timeKey.substring(0, 5); // Mengambil 5 karakter pertama (HH:MM)
+                }
+                
+                const uniqueKey = `${dateKey}_${timeKey}`;
+                
+                // Masukkan ke array gabungan jika belum ada order di tanggal & menit tersebut
+                if (!seenMap.has(uniqueKey)) {
+                    seenMap.set(uniqueKey, true);
+                    combined.push(item);
+                }
+            });
+
+            rawData = combined;
 
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
@@ -3706,15 +3730,16 @@
                       const orderDate = data.Tanggal || data.tanggal || todayStr;
                       
                       const parsedDate = parseSheetDate(orderDate) || todayStr;
+                      const status = String(data.Status || data.status || "").trim().toLowerCase();
                       
-                      // HANYA ambil hari ini
-                      if (parsedDate === todayStr) {
+                      // HANYA ambil hari ini DAN pastikan statusnya Selesai (Selesai DO)
+                      if (parsedDate === todayStr && status === 'selesai') {
                           todayOrders.push({
                               UID: cleanUid,
                               Nama_Rider: document.getElementById('display-rider-name').innerText || "Rider",
                               Tanggal: parsedDate,
                               Jam: data.Jam || data.jam || new Date().toLocaleTimeString('id-ID', {hour: '2-digit', minute: '2-digit', hour12: false}),
-                              Status: data.Status || data.status || "Selesai",
+                              Status: "Selesai",
                               // Perhatian: Pastikan di Aplikasi Admin, input nominal adalah spt di Sheet, cth: 15 (untuk 15.000)
                               Nominal_Kotor: data.Nominal_Kotor || data.nominal_kotor || 0,
                               Tambahan: data.Tambahan || data.tambahan || 0,
@@ -3875,14 +3900,14 @@
               const itemsListEl = document.getElementById('incoming-order-items');
               const btnAccept = document.getElementById('btn-accept-order');
 
-              // Hitung ongkir lengkap (+ tambahan jika ada)
-              const baseFee = parseInt(data.fee) || 0;
-              const extraFee = parseInt(data.tambahan) || 0;
+              // Hitung ongkir lengkap (tambahkan fallback huruf besar/kecil untuk antisipasi database admin)
+              const baseFee = parseInt(data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor) || 0;
+              const extraFee = parseInt(data.tambahan || data.Tambahan || data.extra || data.Extra) || 0;
               // Sengaja tidak ditotalkan sesuai permintaan agar rincian terlihat jelas
 
               if (extraFee > 0) {
-                  // Format: Rp Dasar + Rp Tambahan
-                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <br><span class="text-base text-blue-500">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
+                  // Format: Rp Dasar + Rp Tambahan (sejajar)
+                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <span class="text-[14px] text-blue-600 font-bold ml-1">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
                   if (feeDetailEl) feeDetailEl.innerHTML = ''; // Kosongkan totalnya
               } else {
                   feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
@@ -3965,9 +3990,9 @@
               const waLink = `https://wa.me/${data.customer_phone?.replace(/^0/, '62')}?text=Halo%20kak,%20saya%20Rider%20PROJEKGO%20sedang%20menuju%20lokasi%20untuk%20mengantar%20pesanan.`;
               document.getElementById('btn-wa-customer').href = waLink;
               
-              // Hitung ongkir (jangan ditotalkan)
-              const baseFee = parseInt(data.fee) || 0;
-              const extraFee = parseInt(data.tambahan) || 0;
+              // Hitung ongkir (jangan ditotalkan, tambahkan fallback huruf besar/kecil)
+              const baseFee = parseInt(data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor) || 0;
+              const extraFee = parseInt(data.tambahan || data.Tambahan || data.extra || data.Extra) || 0;
 
               // Simpan di global untuk dimasukkan ke report history
               window.currentActiveOrderBaseFee = baseFee / 1000;
@@ -3976,7 +4001,7 @@
               // Tampilkan ongkir dipisah (tidak ditotalkan) di UI
               const feeEl = document.getElementById('active-order-fee');
               if (extraFee > 0) {
-                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <span class="text-sm text-blue-500 block mt-1">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
+                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <br><span class="text-sm text-blue-500">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
               } else {
                   feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
               }
