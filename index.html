@@ -2399,25 +2399,35 @@
         async function fetchData(forceRefresh = false) {
             const errorMsg = document.getElementById('login-error-msg');
             const cacheKey = `rider_data_${currentUserUID}`;
+            let hasLoadedFromCache = false;
+
             if (forceRefresh) { localStorage.removeItem(`rider_docs_${currentUserUID}`); localStorage.removeItem(`rider_rating_${currentUserUID}`); }
+            
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
                     try {
                         const parsedCache = JSON.parse(cached);
                         if (parsedCache.length > 0) {
-                            rawData = parsedCache; if (lastDataCount === -1) lastDataCount = rawData.length;
+                            rawData = parsedCache; 
+                            appsScriptData = parsedCache; // FIX: Mencegah history cache terhapus/blank saat loading data realtime
+                            if (lastDataCount === -1) lastDataCount = rawData.length;
                             document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('main-app').classList.remove('hidden');
                             updateUI(); setTimeout(showWelcomePopup, 500);
                             const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
                             if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
                             const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                             if (cachedDocs) updateDocsUI(JSON.parse(cachedDocs));
+                            hasLoadedFromCache = true;
                         }
                     } catch (e) { }
                 }
             }
             try {
+                // Tampilkan indikator refresh memutar jika masuk via cache tanpa loading layar penuh
+                const refreshIcon = document.getElementById('refresh-icon');
+                if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.add('refreshing');
+
                 const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
                 if (!response.ok) throw new Error("Koneksi gagal.");
                 const data = await response.json();
@@ -2433,7 +2443,9 @@
                     if (rawData.length === 0) {
                         document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('login-page').style.display = 'flex';
                         errorMsg.innerText = `ID ${currentUserUID} tidak ditemukan.`; errorMsg.classList.remove('hidden');
-                    } return;
+                    }
+                    if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
+                    return;
                 }
                 
                 // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
@@ -2443,8 +2455,6 @@
                 lastDataCount = newData.length; 
                 
                 // --- HYBRID DATA LOGIC: PISAHKAN DATA SHEET ---
-                const todayStr = getJakartaDateString();
-                
                 // 1. Masukkan ke appsScriptData (Sesuai request: data hari ini dari Sheet TIDAK DIBUANG)
                 appsScriptData = newData; 
                 
@@ -2456,7 +2466,12 @@
                 // 3. Gabungkan dan Render
                 combineAndRenderData();
                 
+                if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
+                
             } catch (error) {
+                const refreshIcon = document.getElementById('refresh-icon');
+                if (refreshIcon) refreshIcon.classList.remove('refreshing');
+
                 if (rawData.length === 0) {
                     document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('login-page').style.display = 'flex';
                     errorMsg.innerText = "Gagal memuat data. Periksa koneksi Anda."; errorMsg.classList.remove('hidden');
@@ -2468,30 +2483,34 @@
         function combineAndRenderData() {
             // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase) dan cegah duplikasi
             const seenMap = new Map();
-            const combined = [];
             
             // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
             const allData = [...firebaseData, ...appsScriptData];
             
             allData.forEach(item => {
                 const dateKey = parseSheetDate(item.Tanggal);
+                const ketKey = String(item.Keterangan || "").trim().toLowerCase();
+                const uniqueKey = `${dateKey}_${ketKey}`;
                 
-                // Ambil jam dan menit saja (HH:MM) untuk mencegah duplikasi di menit yang sama
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey && timeKey.length >= 5) {
-                    timeKey = timeKey.substring(0, 5); // Mengambil 5 karakter pertama (HH:MM)
-                }
-                
-                const uniqueKey = `${dateKey}_${timeKey}`;
-                
-                // Masukkan ke array gabungan jika belum ada order di tanggal & menit tersebut
                 if (!seenMap.has(uniqueKey)) {
-                    seenMap.set(uniqueKey, true);
-                    combined.push(item);
+                    // Simpan sebagai objek baru agar bisa dimodifikasi
+                    seenMap.set(uniqueKey, { ...item });
+                } else {
+                    // JIKA DATA SHEET KETEMU DENGAN DATA FIREBASE (Keterangan Sama)
+                    const existing = seenMap.get(uniqueKey);
+                    
+                    if (!item.is_realtime && existing.is_realtime) {
+                        // Ambil Nominal dari data Admin (Sheet) untuk mengisi Firebase yang kosong
+                        existing.Nominal_Kotor = item.Nominal_Kotor || existing.Nominal_Kotor;
+                        existing.Tambahan = item.Tambahan || existing.Tambahan;
+                        
+                        // Opsional: Matikan badge LIVE karena data sudah disahkan Admin
+                        existing.is_realtime = false;
+                    }
                 }
             });
 
-            rawData = combined;
+            rawData = Array.from(seenMap.values());
 
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
@@ -2629,7 +2648,13 @@
                 const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                 if (cachedDocs) { updateDocsUI(JSON.parse(cachedDocs)); }
                 const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=ff8c00&color=fff`;
-                document.getElementById('avatar-home').src = avatarUrl; document.getElementById('profile-img').src = avatarUrl;
+                
+                // PERBAIKAN: Mencegah avatar default menimpa foto asli dari Firebase
+                if (!window.hasCustomProfilePhoto) {
+                    document.getElementById('avatar-home').src = avatarUrl; 
+                    document.getElementById('profile-img').src = avatarUrl;
+                }
+                
                 profileCached = true;
             }
 
@@ -2637,12 +2662,14 @@
             if (typeof window.startSuspensionListener === 'function') {
                 window.startSuspensionListener(currentUserUID, name);
                 window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
+                if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
             } else {
                 // Beri jeda kecil jika Firebase module masih memuat
                 setTimeout(() => {
                     if (typeof window.startSuspensionListener === 'function') {
                         window.startSuspensionListener(currentUserUID, name);
                         window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
+                        if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
                     }
                 }, 1000);
             }
@@ -2921,7 +2948,7 @@
                 
                 // LOGIKA DETEKSI SALAH INPUT
                 let isSuspicious = false;
-                if (isDone) {
+                if (isDone && kotor > 0) {
                     // Cek 1: Desimal aneh (bukan kelipatan 0.5) -> cth: 7.4
                     if (Math.round(rawVal * 10) % 5 !== 0) { isSuspicious = true; }
                     // Cek 2: Nilai dibawah 7 -> cth: 6.5
@@ -2933,8 +2960,11 @@
                     ? (isSuspicious ? 'text-red-600 font-extrabold' : 'text-green-600') 
                     : 'text-gray-300';
                 
+                // Tampilan khusus jika nominal masih kosong dari Firebase (menunggu admin)
+                const isWaitingAdmin = isDone && item.is_realtime && kotor === 0;
+                const netDisplay = isWaitingAdmin ? '<span class="text-[10px] text-orange-500 italic">Validasi Admin</span>' : 'Rp ' + Math.round(netto).toLocaleString('id-ID');
+                
                 // UPDATE: Styling KHUSUS untuk Nominal Kotor
-                // Jika suspicious -> Background Merah, Teks Putih, Berdenyut
                 const kotorStyle = isSuspicious 
                     ? 'bg-red-600 text-white animate-pulse px-2 py-0.5 rounded shadow-sm inline-block' 
                     : 'text-gray-600';
@@ -2950,13 +2980,16 @@
                                             <i class="fa-solid ${isDone ? 'fa-check' : 'fa-xmark'}"></i>
                                         </div>
                                         <div>
-                                            <h4 class="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">${item.Keterangan || 'PERJALANAN'} ${liveBadge}</h4>
+                                            <div class="flex items-center gap-1">
+                                                <h4 class="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest truncate max-w-[130px]" title="${item.List_Pesanan || item.Keterangan || 'PERJALANAN'}">${item.List_Pesanan || item.Keterangan || 'PERJALANAN'}</h4>
+                                                ${liveBadge}
+                                            </div>
                                             <p class="text-sm font-bold text-gray-800">${parseSheetTime(item.Jam)} WIB</p>
                                         </div>
                                     </div>
                                     <div class="text-right">
                                         <p class="text-[10px] text-gray-400 font-medium mb-1">Pendapatan Bersih</p>
-                                        <p class="font-bold text-base ${netClass}">${isDone ? 'Rp ' + Math.round(netto).toLocaleString('id-ID') : 'Dibatalkan'}</p>
+                                        <p class="font-bold text-base ${netClass}">${isDone ? netDisplay : 'Dibatalkan'}</p>
                                     </div>
                                 </div>`;
                 
@@ -2973,8 +3006,8 @@
                     `;
                 }
 
-                // Terapkan style kotorStyle pada elemen Nominal Kotor
-                html += `${isDone ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}</div></div>`;
+                // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
+                html += `${(isDone && !isWaitingAdmin) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}</div></div>`;
             });
             container.innerHTML = html;
         }
@@ -3662,6 +3695,9 @@
           const auth = getAuth(app);
           const db = getFirestore(app);
 
+          // PERBAIKAN: Gunakan appId yang diberikan sistem agar sinkron dengan Admin App
+          const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
+
           // FLAG UNTUK MEMASTIKAN AUTH SELESAI DULU
           let isAuthReady = false;
           let queuePending = false; // Penanda load radar queue jika auth belum siap
@@ -3678,6 +3714,7 @@
                       window.startSuspensionListener(window.pendingSuspensionCheck.uid, window.pendingSuspensionCheck.name);
                       window.startOrderListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.startDailyOrdersListener === 'function') window.startDailyOrdersListener(window.pendingSuspensionCheck.uid);
+                      if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(window.pendingSuspensionCheck.uid);
                       window.pendingSuspensionCheck = null;
                   } else {
                       // Ambil dari local storage agar yang otomatis login langsung dilisten
@@ -3686,6 +3723,7 @@
                           window.startSuspensionListener(savedUid);
                           window.startOrderListener(savedUid);
                           if (typeof window.startDailyOrdersListener === 'function') window.startDailyOrdersListener(savedUid);
+                          if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(savedUid);
                       }
                   }
 
@@ -3706,6 +3744,47 @@
               }
           };
           initAuth();
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER FOTO PROFIL RIDER REAL-TIME
+          // -------------------------------------------------------------
+          let profilePhotoUnsubscribe = null;
+
+          window.loadFotoProfilRider = (riderUid) => {
+              if (!riderUid || !isAuthReady) return;
+              const cleanUid = String(riderUid).trim().toUpperCase();
+
+              if (profilePhotoUnsubscribe) return; // Mencegah multiple listeners
+
+              // PERBAIKAN: Menggunakan firebaseConfig.projectId agar jalurnya pas di: 
+              // artifacts -> onbid-2f87a -> public -> data -> rider_profiles -> UID
+              const profileRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', cleanUid);
+              
+              profilePhotoUnsubscribe = onSnapshot(profileRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      
+                      // Cek apakah ada data foto base64
+                      if (data.foto_base64) {
+                          window.hasCustomProfilePhoto = true; // Tandai bahwa foto asli sudah didapat
+                          
+                          const imgHome = document.getElementById('avatar-home');
+                          const imgProfile = document.getElementById('profile-img');
+                          
+                          // Update gambar di header beranda
+                          if (imgHome) {
+                              imgHome.src = data.foto_base64;
+                          }
+                          // Update gambar di halaman profil
+                          if (imgProfile) {
+                              imgProfile.src = data.foto_base64;
+                          }
+                      }
+                  }
+              }, (error) => {
+                  console.error("Gagal memuat foto profil:", error);
+              });
+          };
 
           // -------------------------------------------------------------
           // NEW: SISTEM LISTENER PENDAPATAN HARIAN (HOT DATA FIREBASE)
@@ -3744,6 +3823,7 @@
                               Nominal_Kotor: data.Nominal_Kotor || data.nominal_kotor || 0,
                               Tambahan: data.Tambahan || data.tambahan || 0,
                               Keterangan: data.Keterangan || data.keterangan || "Order Aplikasi (Auto)",
+                              List_Pesanan: data["list pesanan"] || "", // Tarik data list pesanan untuk riwayat
                               is_realtime: true // Penanda unik untuk memunculkan badge berkedip "LIVE" di riwayat
                           });
                       }
@@ -3981,6 +4061,7 @@
 
           function showActiveOrderOverlay(data, docId) {
               window.currentActiveOrderId = docId;
+              window.currentActiveOrderItems = data.items || []; // Simpan list pesanan secara global
               const overlay = document.getElementById('active-order-overlay');
               
               // Set Info
@@ -4198,34 +4279,16 @@
                       await updateDoc(orderRef, {
                           status: 'completed',
                           finished_at: serverTimestamp(),
-                          proof_photo: finishPhotoBase64,
+                          // DIHAPUS: proof_photo tidak lagi diunggah ke Firestore agar hemat kuota & database tidak berat
                           proof_desc: desc
                       });
                       
                       // -------------------------------------------------------------
-                      // 2. AUTO-INJECT HOT DATA (FIREBASE) SAAT SELESAI
-                      // Hanya akan tereksekusi jika lolos dari validasi ketat di atas
+                      // 2. DIHAPUS: AUTO-INJECT HOT DATA (FIREBASE) SAAT SELESAI
+                      // Sesuai permintaan, Rider App TIDAK LAGI menyimpan data riwayat harian ke Firebase.
+                      // Semua data riwayat (Tanggal, Jam, Status, Keterangan) akan murni mengandalkan 
+                      // inputan dari Aplikasi Admin agar tidak dobel dan menghemat kuota.
                       // -------------------------------------------------------------
-                      const feeEl = document.getElementById('active-order-fee');
-                      let feeNumber = 0;
-                      if(feeEl) {
-                          const feeText = feeEl.innerText.replace(/[^\d]/g, '');
-                          feeNumber = parseInt(feeText) || 0;
-                      }
-                      
-                      // Gunakan nilai dari global jika ada (agar kotor dan tambahan terpisah saat report ke history)
-                      const nominalKotor = window.currentActiveOrderBaseFee !== undefined ? window.currentActiveOrderBaseFee : (feeNumber / 1000); 
-                      const tambahanVal = window.currentActiveOrderExtraFee !== undefined ? window.currentActiveOrderExtraFee : 0;
-                      
-                      const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', currentUserUID, 'daily_orders');
-                      await addDoc(dailyRef, {
-                          Tanggal: getJakartaDateString(), // Menggunakan format MM-DD-YYYY yang sudah terjamin konsisten
-                          Jam: new Date().toLocaleTimeString('id-ID', {hour: '2-digit', minute: '2-digit', hour12: false}),
-                          Nominal_Kotor: nominalKotor,
-                          Tambahan: tambahanVal,
-                          Status: 'Selesai',
-                          Keterangan: desc || 'Order via Aplikasi'
-                      });
                       
                       // 3. Cek posisi tombol On-Bid saat rider klik Selesai
                       const isToggleOn = document.getElementById('onbid-toggle').checked;
