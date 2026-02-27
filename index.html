@@ -2663,6 +2663,7 @@
                 window.startSuspensionListener(currentUserUID, name);
                 window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                 if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
+                if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID); // SINKRONISASI ONBID ADMIN
             } else {
                 // Beri jeda kecil jika Firebase module masih memuat
                 setTimeout(() => {
@@ -2670,6 +2671,7 @@
                         window.startSuspensionListener(currentUserUID, name);
                         window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                         if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
+                        if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID); // SINKRONISASI ONBID ADMIN
                     }
                 }, 1000);
             }
@@ -3715,6 +3717,7 @@
                       window.startOrderListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.startDailyOrdersListener === 'function') window.startDailyOrdersListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(window.pendingSuspensionCheck.uid);
+                      if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(window.pendingSuspensionCheck.uid);
                       window.pendingSuspensionCheck = null;
                   } else {
                       // Ambil dari local storage agar yang otomatis login langsung dilisten
@@ -3724,6 +3727,7 @@
                           window.startOrderListener(savedUid);
                           if (typeof window.startDailyOrdersListener === 'function') window.startDailyOrdersListener(savedUid);
                           if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(savedUid);
+                          if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(savedUid);
                       }
                   }
 
@@ -3783,6 +3787,47 @@
                   }
               }, (error) => {
                   console.error("Gagal memuat foto profil:", error);
+              });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER STATUS ONBID RIDER (SINKRONISASI DENGAN ADMIN)
+          // -------------------------------------------------------------
+          let myStatusUnsubscribe = null;
+
+          window.startMyStatusListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              const cleanUid = String(uid).trim().toUpperCase();
+
+              if (myStatusUnsubscribe) return; // Mencegah multiple listeners
+
+              const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', cleanUid);
+
+              myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      const toggle = document.getElementById('onbid-toggle');
+                      
+                      // Jika Admin mematikan On-Bid secara paksa dari panel (is_online = false)
+                      // Tapi toggle di aplikasi rider masih menyala (true)
+                      if (data.is_online === false && toggle && toggle.checked) {
+                          toggle.checked = false;
+                          updateOnbidUI(false);
+                          localStorage.setItem('rider_onbid_status', 'false');
+                          // Mainkan suara indikator mati
+                          try { playBeep(440, 0.1); } catch(e){}
+                      }
+                      
+                      // Sebaliknya: Jika Admin menghidupkan On-Bid secara paksa
+                      if (data.is_online === true && toggle && !toggle.checked) {
+                          toggle.checked = true;
+                          updateOnbidUI(true);
+                          localStorage.setItem('rider_onbid_status', 'true');
+                          try { playBeep(880, 0.1); } catch(e){}
+                      }
+                  }
+              }, (error) => {
+                  console.error("Gagal mendengarkan sinkronisasi status On-Bid:", error);
               });
           };
 
