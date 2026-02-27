@@ -505,6 +505,17 @@
                     </div>
                 </div>
 
+                <!-- NEW: RIWAYAT UPDATE FOTO -->
+                <div>
+                    <h3 class="font-bold text-gray-800 mb-3 px-1 text-sm border-l-4 border-blue-500 pl-2">Riwayat Update Foto Terakhir</h3>
+                    <div id="profile-upload-history" class="space-y-2 max-h-[250px] overflow-y-auto custom-scrollbar pr-1">
+                        <div class="text-center py-6 text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                            <i class="fa-solid fa-spinner fa-spin text-xl mb-2"></i>
+                            <p class="text-xs">Memuat riwayat...</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- NEW: TABEL MINGGUAN RIDER (4 MINGGU) -->
                 <div id="weekly-rider-performance-container" class="mb-6">
                       <!-- Isi akan digenerate via JS -->
@@ -2639,6 +2650,59 @@
                         container.innerHTML = html;
                     });
                 };
+
+                // 4. RIWAYAT UPDATE FOTO PROFIL
+                const profilesHistoryCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles');
+                onSnapshot(profilesHistoryCol, (snapshot) => {
+                    const container = document.getElementById('profile-upload-history');
+                    if (!container) return;
+
+                    const profiles = [];
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (data.updated_at) {
+                            profiles.push({ id: doc.id, ...data });
+                        }
+                    });
+
+                    if (profiles.length === 0) {
+                        container.innerHTML = `
+                            <div class="text-center py-6 text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                                <i class="fa-solid fa-images text-2xl mb-2 opacity-50"></i>
+                                <p class="text-xs">Belum ada riwayat update foto.</p>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    // Urutkan dari yang paling baru
+                    profiles.sort((a, b) => b.updated_at.seconds - a.updated_at.seconds);
+
+                    let html = '';
+                    // Tampilkan 10 update terakhir
+                    profiles.slice(0, 10).forEach(p => {
+                        const d = new Date(p.updated_at.seconds * 1000);
+                        const timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                        const dateStr = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+                        
+                        html += `
+                            <div class="bg-white p-3 rounded-2xl border border-blue-100 shadow-sm flex items-center justify-between hover:bg-blue-50 transition-colors">
+                                <div class="flex items-center space-x-3 overflow-hidden">
+                                    <img src="${p.foto_base64 || ''}" class="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0 cursor-pointer bg-gray-100" onclick="openImagePreview(this.src)" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(p.nama || 'Rider')}&background=e2e8f0&color=94a3b8'">
+                                    <div class="min-w-0 pr-2">
+                                        <h4 class="text-xs font-bold text-gray-800 truncate">${p.nama || p.uid}</h4>
+                                        <p class="text-[9px] text-green-600 mt-0.5 font-bold"><i class="fa-solid fa-check-circle mr-1"></i>Berhasil Diupload</p>
+                                    </div>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <p class="text-[9px] font-bold text-gray-500">${dateStr}</p>
+                                    <p class="text-[10px] font-bold text-blue-600">${timeStr} WIB</p>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                });
             }
 
             // SUSPEND FUNCTION
