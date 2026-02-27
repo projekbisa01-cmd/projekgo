@@ -1884,7 +1884,7 @@
                         <div class="text-center py-6"><p class="text-[10px] text-gray-400 font-medium">Belum ada penilaian pelanggan</p></div>
                     </div>
                 </div>
-                <button onclick="handleLogout()" class="w-full mt-4 py-4 bg-red-50 text-red-500 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest">Keluar Akun</button>
+                <button onclick="window.handleLogout()" class="w-full mt-4 py-4 bg-red-50 text-red-500 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest">Keluar Akun</button>
             </main>
         </div>
         
@@ -4023,7 +4023,6 @@
             document.getElementById('progress-text').innerText = `Rp ${Math.round(net).toLocaleString('id-ID')} / Rp ${dailyIncomeTarget.toLocaleString('id-ID')}`;
             const r = dailyIncomeTarget - net; document.getElementById('remaining-text').innerText = r > 0 ? `Sisa Rp ${Math.round(r).toLocaleString('id-ID')}` : 'Target Tercapai!';
         }
-        function handleLogout() { localStorage.removeItem('rider_uid'); location.reload(); }
     </script>
 
     <script type="module">
@@ -4145,6 +4144,23 @@
               }
           };
 
+          // FUNGSI LOGOUT GLOBAL YANG DISERTAI PENGHAPUSAN DEVICE LOCK
+          window.handleLogout = async (reason = null, clearServer = true) => {
+              const uid = localStorage.getItem('rider_uid');
+              if (uid && clearServer) {
+                  try {
+                      // Hapus ikatan perangkat di server sehingga UID bebas dipakai di HP lain
+                      const deviceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid);
+                      await setDoc(deviceRef, { device_id: null }, { merge: true });
+                  } catch (e) {
+                      console.error("Gagal melepas perangkat:", e);
+                  }
+              }
+              localStorage.removeItem('rider_uid');
+              if (reason && typeof reason === 'string') alert(reason);
+              location.reload();
+          };
+
           let deviceListenerUnsubscribe = null;
           window.startDeviceListener = (uid) => {
               if (!uid || !isAuthReady) return;
@@ -4160,7 +4176,8 @@
                       // Jika device_id di server berubah dan tidak sama dengan local device_id
                       if (data.device_id && data.device_id !== myDeviceId) {
                           if (typeof window.handleLogout === 'function') {
-                              window.handleLogout("Peringatan Keamanan:\nSesi Anda telah berakhir secara paksa karena akun ini baru saja login di perangkat lain oleh Admin.");
+                              // Parameter 'false' mencegah device_id Admin/HP lain ikut terhapus saat HP ini otomatis tertendang (logout paksa)
+                              window.handleLogout("Peringatan Keamanan:\nSesi Anda telah berakhir secara paksa karena akun ini baru saja login di perangkat lain oleh Admin.", false);
                           }
                       }
                   }
