@@ -2899,33 +2899,96 @@
             
             const btn = document.getElementById('login-btn');
             const originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa Keamanan...';
+            btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memverifikasi UID...';
             btn.disabled = true;
 
-            // Tunggu Firebase siap diinisialisasi
-            if (!window.isFirebaseReady) {
-                setTimeout(() => handleLogin(), 500);
-                return;
-            }
+            try {
+                let isUidValid = false;
+                let prefetchedData = null;
+                let prefetchedAll = null;
 
-            // Validasi Perangkat (Single Device Login)
-            if (typeof window.checkDeviceBinding === 'function') {
-                const status = await window.checkDeviceBinding(uid, getDeviceID());
-                
-                if (status === 'allowed') {
-                    proceedWithLogin(uid);
-                } else if (status === 'conflict') {
-                    document.getElementById('login-input-section').classList.add('hidden');
-                    document.getElementById('password-section').classList.remove('hidden');
+                // 1. Cek cache lokal untuk Auto-Login (Agar masuk instan jika sudah pernah login)
+                const cacheKey = `rider_data_${uid}`;
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    try {
+                        const parsedCache = JSON.parse(cached);
+                        if (parsedCache && parsedCache.length > 0) isUidValid = true;
+                    } catch(e) {}
+                }
+
+                // 2. Jika tidak ada cache (Login Manual Baru), Verifikasi ke Google Script
+                if (!isUidValid) {
+                    const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
+                    if (!response.ok) throw new Error("Koneksi gagal.");
+                    const data = await response.json();
+                    const items = Array.isArray(data) ? data : [];
+                    
+                    const uidLower = uid.toLowerCase();
+                    const newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
+                    
+                    if (newData.length > 0) {
+                        isUidValid = true;
+                        prefetchedData = newData;
+                        prefetchedAll = items;
+                    }
+                }
+
+                if (!isUidValid) {
+                    // UID TIDAK ADA DI DATABASE SCRIPT - TOLAK LANGSUNG SEBELUM MASUK FIREBASE
+                    errorMsg.innerText = `UID "${uid}" tidak terdaftar. Akses ditolak.`; 
+                    errorMsg.classList.remove('hidden');
                     btn.innerHTML = originalText;
                     btn.disabled = false;
+                    input.value = ''; // Kosongkan input agar user bisa ketik ulang
+                    localStorage.removeItem('rider_uid'); 
+                    return; // Stop proses disini
+                }
+
+                // 3. JIKA UID VALID, BARU LANJUTKAN KE FIREBASE UNTUK DEVICE BINDING
+                btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa Keamanan...';
+
+                // Tunggu Firebase siap diinisialisasi
+                if (!window.isFirebaseReady) {
+                    for(let i=0; i<10; i++) {
+                        await new Promise(r => setTimeout(r, 500));
+                        if(window.isFirebaseReady) break;
+                    }
+                    if(!window.isFirebaseReady) {
+                        errorMsg.innerText = "Sistem keamanan belum siap, coba lagi."; errorMsg.classList.remove('hidden');
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        return;
+                    }
+                }
+
+                // Validasi Perangkat (Single Device Login)
+                if (typeof window.checkDeviceBinding === 'function') {
+                    const status = await window.checkDeviceBinding(uid, getDeviceID());
+                    
+                    if (status === 'allowed') {
+                        if (prefetchedData) window.prefetchedRiderData = prefetchedData;
+                        if (prefetchedAll) window.prefetchedAllData = prefetchedAll;
+                        proceedWithLogin(uid);
+                    } else if (status === 'conflict') {
+                        document.getElementById('login-input-section').classList.add('hidden');
+                        document.getElementById('password-section').classList.remove('hidden');
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    } else {
+                        errorMsg.innerText = "Gagal memverifikasi keamanan perangkat."; errorMsg.classList.remove('hidden');
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }
                 } else {
-                    errorMsg.innerText = "Gagal memverifikasi keamanan. Periksa koneksi internet Anda."; errorMsg.classList.remove('hidden');
+                    errorMsg.innerText = "Sistem keamanan belum memuat, coba klik lagi."; errorMsg.classList.remove('hidden');
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 }
-            } else {
-                errorMsg.innerText = "Sistem keamanan belum memuat, coba klik lagi."; errorMsg.classList.remove('hidden');
+            } catch (error) {
+                console.error("Login Error:", error);
+                errorMsg.innerText = "Koneksi ke server gagal. Periksa jaringan Anda."; 
+                errorMsg.classList.remove('hidden');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
             }
@@ -3034,21 +3097,35 @@
                 const refreshIcon = document.getElementById('refresh-icon');
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.add('refreshing');
 
-                const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
-                if (!response.ok) throw new Error("Koneksi gagal.");
-                const data = await response.json();
-                const items = Array.isArray(data) ? data : [];
+                let items = [];
+                let newData = [];
+
+                // NEW: Gunakan data yang sudah di-fetch saat verifikasi login manual
+                if (window.prefetchedAllData && window.prefetchedRiderData && !forceRefresh) {
+                    items = window.prefetchedAllData;
+                    newData = window.prefetchedRiderData;
+                    window.prefetchedAllData = null;
+                    window.prefetchedRiderData = null;
+                } else {
+                    const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
+                    if (!response.ok) throw new Error("Koneksi gagal.");
+                    const data = await response.json();
+                    items = Array.isArray(data) ? data : [];
+                    
+                    const uidLower = String(currentUserUID).trim().toLowerCase();
+                    newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
+                }
                 
                 // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
                 allRiderData = items;
                 
-                const uidLower = String(currentUserUID).trim().toLowerCase();
-                const newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
-                
                 if (newData.length === 0) {
-                    if (rawData.length === 0) {
-                        document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('login-page').style.display = 'flex';
-                        errorMsg.innerText = `ID ${currentUserUID} tidak ditemukan.`; errorMsg.classList.remove('hidden');
+                    // JIKA SETELAH FETCH UID BENAR-BENAR TIDAK ADA (DIHAPUS ADMIN)
+                    if (typeof window.handleLogout === 'function') {
+                        window.handleLogout("Sesi berakhir: UID Anda tidak lagi terdaftar di sistem.");
+                    } else {
+                        localStorage.removeItem('rider_uid');
+                        location.reload();
                     }
                     if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
                     return;
