@@ -574,6 +574,25 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- NEW: PERINGATAN DOKUMEN KADALUARSA -->
+                <div class="mt-8 border-t border-gray-200 pt-6">
+                    <div class="flex justify-between items-center mb-4 px-1">
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-sm border-l-4 border-orange-500 pl-2">Kelengkapan & Dokumen</h3>
+                            <p class="text-[10px] text-gray-500 ml-3 mt-1">Rider dengan dokumen kadaluarsa/kosong</p>
+                        </div>
+                        <button onclick="loadExpiredDocs()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center">
+                            <i class="fa-solid fa-rotate mr-1"></i> Refresh
+                        </button>
+                    </div>
+                    <div id="expired-docs-container" class="space-y-3 min-h-[150px]">
+                        <div class="text-center py-10 text-gray-400">
+                            <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
+                            <p class="text-xs">Memeriksa dokumen rider...</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- SUBPAGES (HALAMAN PENUH TAMBAHAN) -->
@@ -840,6 +859,7 @@
     <script>
         const ADMIN_PWD_CORRECT = "Admin_projekgo";
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
+        const PROFILE_DOCS_URL = "https://script.google.com/macros/s/AKfycbx-L15ePYQPSFaTY6wvn4wfC0DtwqJNVzEVTAFoq-bw8eFEr_HNYxLMJTPPC6aHv9paNA/exec";
         const ADM_RATE = 0.16;
         
         // Expose global variable so module can access it for matching names/plates
@@ -2373,11 +2393,151 @@
                 processAnalytics();
                 populateSuspendRiderSelect(); // Populate dropdown saat data siap
                 window.populateProfileSelect(); // Populate form profil
+                loadExpiredDocs(); // NEW: Load data dokumen saat refresh data utama
             } catch (error) {
                 console.error("Error fetch data:", error);
             } finally {
                 if(btn) btn.disabled = false;
                 if(icon) icon.classList.remove('refresh-spin');
+            }
+        }
+
+        // --- NEW: LOGIKA CEK DOKUMEN KADALUARSA ---
+        function parseDocsDate(dateInput) {
+            if (!dateInput) return null;
+            try {
+                if (dateInput instanceof Date) return dateInput;
+                let str = String(dateInput).trim();
+                
+                // Format ISO atau standar YYYY-MM-DD
+                let d = new Date(str);
+                if (!isNaN(d.getTime())) return d;
+
+                // Excel serial number (format default dari Apps Script)
+                if (typeof dateInput === 'number' || !isNaN(Number(dateInput))) {
+                    let num = Number(dateInput);
+                    if(num > 20000) return new Date((num - 25569) * 86400 * 1000);
+                }
+
+                // Format Indonesia: DD/MM/YYYY atau DD-MM-YYYY
+                const parts = str.split(/[\/\-\.]/);
+                if (parts.length === 3) {
+                    let p0 = parseInt(parts[0], 10);
+                    let p1 = parseInt(parts[1], 10);
+                    let p2 = parseInt(parts[2], 10);
+                    
+                    let year = p2 > 1000 ? p2 : (p2 < 100 ? p2 + 2000 : p2);
+                    let month, day;
+                    
+                    // Deteksi penempatan bulan vs tanggal
+                    if (p1 > 12) { month = p0 - 1; day = p1; } 
+                    else { month = p1 - 1; day = p0; }
+                    
+                    d = new Date(year, month, day);
+                    if (!isNaN(d.getTime())) return d;
+                }
+            } catch (e) { }
+            return null;
+        }
+
+        async function loadExpiredDocs() {
+            const container = document.getElementById('expired-docs-container');
+            if(!container) return;
+            
+            try {
+                const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`);
+                if (!response.ok) throw new Error("Gagal mengambil data dokumen");
+                const rawJson = await response.json();
+                
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const expiredList = [];
+
+                rawJson.forEach(item => {
+                    const normalized = {}; 
+                    for (const key in item) { 
+                        normalized[key.toLowerCase().replace(/[\s_\.]/g, '')] = item[key]; 
+                    }
+                    
+                    const uid = normalized.uid || normalized.id || normalized.userid || '-';
+                    const name = normalized.namarider || normalized.nama || normalized.user || 'Tanpa Nama';
+                    if(uid === '-') return;
+
+                    const getVal = (keys) => { for (const key of keys) { if (normalized[key] !== undefined && normalized[key] !== "") return normalized[key]; } return null; };
+                    
+                    const simRaw = getVal(['masaberlakusimc','masaberlakusim','berlakusim','expsim','sim','tanggalsim']);
+                    const stnkRaw = getVal(['masaberlakustnk','berlakustnk','expstnk','stnk','tanggalstnk']);
+                    const bpjsRaw = getVal(['updatebpjsbpuketenagakerjaan','updatebpjsbpu','masaberlakubpjs','berlakubpjs','expbpjs','bpjs']);
+
+                    const simDate = parseDocsDate(simRaw);
+                    const stnkDate = parseDocsDate(stnkRaw);
+                    const bpjsDate = parseDocsDate(bpjsRaw);
+
+                    const issues = [];
+                    // Cek jika Kadaluarsa (< today) atau tidak ada isinya (!date)
+                    if(!simDate || simDate < today) issues.push({ name: 'SIM C', date: simDate, raw: simRaw });
+                    if(!stnkDate || stnkDate < today) issues.push({ name: 'STNK', date: stnkDate, raw: stnkRaw });
+                    if(!bpjsDate || bpjsDate < today) issues.push({ name: 'BPJS', date: bpjsDate, raw: bpjsRaw });
+
+                    if(issues.length > 0) {
+                        expiredList.push({ uid, name, issues });
+                    }
+                });
+
+                // Render UI
+                if(expiredList.length === 0) {
+                    container.innerHTML = `
+                        <div class="bg-green-50 border border-green-200 rounded-2xl p-6 text-center shadow-sm">
+                            <i class="fa-solid fa-shield-check text-green-500 text-3xl mb-2"></i>
+                            <p class="text-xs text-green-700 font-bold">Semua dokumen rider aman & aktif!</p>
+                        </div>`;
+                    return;
+                }
+
+                let html = '';
+                expiredList.sort((a,b) => a.name.localeCompare(b.name)).forEach(rider => {
+                    let issuesHtml = '';
+                    rider.issues.forEach(iss => {
+                        const isMissing = !iss.date;
+                        const dateText = isMissing ? 'Data Belum Diisi' : iss.date.toLocaleDateString('id-ID', {day:'numeric', month:'short', year:'numeric'});
+                        issuesHtml += `
+                            <div class="flex justify-between items-center bg-red-50/80 px-3 py-1.5 rounded-lg mt-1.5 border border-red-100">
+                                <span class="text-[10px] font-bold text-red-700 flex items-center"><i class="fa-solid ${isMissing ? 'fa-circle-question' : 'fa-clock'} mr-1.5 text-red-400"></i> ${iss.name}</span>
+                                <span class="text-[10px] font-bold text-red-600">${dateText}</span>
+                            </div>`;
+                    });
+
+                    // Link Template WA
+                    const waMsg = `Halo ${rider.name}, mengingatkan bahwa ada dokumen/kelengkapan berkendara Anda (SIM/STNK/BPJS) yang sudah kadaluarsa atau datanya belum diupdate di sistem. Mohon segera diperbarui ya agar operasional tetap aman, terima kasih.`;
+                    
+                    html += `
+                        <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-10 h-10 bg-red-100 text-red-500 rounded-xl flex items-center justify-center shrink-0 border border-red-200">
+                                        <i class="fa-solid fa-file-circle-exclamation text-lg"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="text-sm font-bold text-gray-800">${rider.name}</h4>
+                                        <p class="text-[9px] text-gray-400 uppercase tracking-widest mt-0.5">ID: ${rider.uid}</p>
+                                    </div>
+                                </div>
+                                <a href="https://wa.me/?text=${encodeURIComponent(waMsg)}" target="_blank" class="bg-green-50 hover:bg-green-100 text-green-600 w-8 h-8 rounded-full flex items-center justify-center transition-colors border border-green-200" title="Ingatkan via WhatsApp">
+                                    <i class="fa-brands fa-whatsapp text-sm"></i>
+                                </a>
+                            </div>
+                            <div class="pt-2 border-t border-gray-50">
+                                <p class="text-[9px] text-gray-400 uppercase font-bold mb-1">Status Kadaluarsa/Kosong:</p>
+                                ${issuesHtml}
+                            </div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+
+            } catch (error) {
+                console.error("Gagal load dokumen:", error);
+                container.innerHTML = `<div class="p-4 text-center text-red-500 text-xs bg-red-50 rounded-xl border border-red-100">Gagal memuat data dokumen. <button onclick="loadExpiredDocs()" class="underline font-bold mt-1 block w-full">Coba lagi</button></div>`;
             }
         }
 
