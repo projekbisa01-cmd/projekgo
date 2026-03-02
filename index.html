@@ -946,15 +946,19 @@
 
     <!-- KONTEN UTAMA APLIKASI -->
     <div id="main-app" class="hidden">
+        <!-- BANNER PERINGATAN DOKUMEN MATI -->
+        <div id="global-doc-warning" class="hidden bg-red-600 text-white text-[10px] font-medium p-2.5 text-left z-[60] shadow-md sticky top-0 flex items-center justify-center gap-3 leading-tight transition-all duration-300">
+            <i class="fa-solid fa-triangle-exclamation text-2xl animate-pulse shrink-0"></i>
+            <p>Dokumen berkendara kamu sepertinya belum di update, cek kelengkapan di profil kamu dan update kelengkapan <strong id="expired-doc-names" class="font-black tracking-wide underline uppercase"></strong> kamu dengan mengirimkan dokumen ke admin.</p>
+        </div>
+
         <!-- HALAMAN BERANDA -->
         <div id="page-home" class="page-container flex flex-col min-h-screen">
-            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 shrink-0">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center space-x-4">
-                        <!-- Profil di Pojok Kiri Atas (Clickable) -->
-                        <button onclick="switchPage('profile')" class="relative active:scale-95 transition-transform group flex-shrink-0">
-                            <img id="avatar-home" src="https://ui-avatars.com/api/?name=Rider+Pro&background=ff8c00&color=fff" alt="Profil" class="w-12 h-12 rounded-full border-2 border-orange-500 p-0.5" loading="lazy">
-                            <div id="status-indicator" class="absolute bottom-0 right-0 w-3 h-3 bg-gray-400 border-2 border-white rounded-full"></div>
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 shrink-0 transition-all duration-300">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center space-x-3">
+                        <button onclick="switchPage('profile')" class="relative w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center border-2 border-orange-200 active:scale-90 transition-all overflow-hidden shrink-0 shadow-sm">
+                            <img id="avatar-home" src="https://ui-avatars.com/api/?name=Rider&background=ff8c00&color=fff" class="w-full h-full object-cover">
                         </button>
                         <div class="flex flex-col justify-center">
                             <h1 class="text-[11px] text-gray-500 leading-none mb-1">Selamat bekerja,</h1>
@@ -985,7 +989,7 @@
 
             <main class="p-5 max-w-md mx-auto flex-1 flex flex-col w-full pb-24">
                 <!-- Badge Dompet & Riwayat (Dibuat Sticky dan Elegan) -->
-                <div class="sticky top-[96px] z-30 bg-[#f8fafc]/95 backdrop-blur-sm -mx-5 px-5 pt-2 pb-4 mb-2 shadow-sm border-b border-gray-100/50 transition-all">
+                <div id="home-sticky-badges" class="sticky top-[96px] z-30 bg-[#f8fafc]/95 backdrop-blur-sm -mx-5 px-5 pt-2 pb-4 mb-2 shadow-sm border-b border-gray-100/50 transition-all duration-300">
                     <div class="grid grid-cols-2 gap-4 shrink-0">
                         <!-- Dompet Badge (Dark Elegant) -->
                         <button onclick="openWallet()" class="flex flex-col justify-center bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 p-4 rounded-2xl shadow-lg shadow-slate-200 active:scale-95 transition-all w-full relative overflow-hidden group">
@@ -3310,11 +3314,74 @@
                 const motor = getVal(['jenismotor', 'motor', 'kendaraan', 'typemotor', 'tipekendaraan', 'merk']);
                 const plat = getVal(['platnomor', 'plat', 'nopolisi', 'nopol', 'platno', 'nomorpolisi']);
                 document.getElementById('profile-motor').innerText = motor || "-"; document.getElementById('profile-plat').innerText = plat || "-";
-                checkDocumentStatus(getVal(['masaberlakusimc','masaberlakusim','berlakusim','expsim','sim','tanggalsim']), 'profile-sim', 'sim-status-icon', 'sim-warning');
-                checkDocumentStatus(getVal(['masaberlakustnk','berlakustnk','expstnk','stnk','tanggalstnk']), 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
+                
+                const simDate = getVal(['masaberlakusimc','masaberlakusim','berlakusim','expsim','sim','tanggalsim']);
+                const stnkDate = getVal(['masaberlakustnk','berlakustnk','expstnk','stnk','tanggalstnk']);
+                
+                checkDocumentStatus(simDate, 'profile-sim', 'sim-status-icon', 'sim-warning');
+                checkDocumentStatus(stnkDate, 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
                 checkDocumentStatus(getVal(['updatebpjsbpuketenagakerjaan','updatebpjsbpu','masaberlakubpjs','berlakubpjs','expbpjs','bpjs']), 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning');
+
+                // CEK DOKUMEN MATI UNTUK BANNER PERINGATAN GLOBAL
+                const expiredDocs = [];
+                const isExpired = (dateStr) => {
+                    const parsed = parseSheetDate(dateStr);
+                    if (!parsed || parsed === "") return true; // Anggap mati/perlu update jika kosong
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const [m, d, y] = parsed.split('-').map(Number);
+                    const docDate = new Date(y, m-1, d); docDate.setHours(0,0,0,0);
+                    return docDate < today;
+                };
+
+                if (isExpired(simDate)) expiredDocs.push("SIM");
+                if (isExpired(stnkDate)) expiredDocs.push("STNK");
+
+                toggleDocWarning(expiredDocs);
             }
         }
+
+        function toggleDocWarning(expiredDocs) {
+            const banner = document.getElementById('global-doc-warning');
+            const docNames = document.getElementById('expired-doc-names');
+            if (!banner || !docNames) return;
+            
+            if (expiredDocs.length > 0) {
+                docNames.innerText = expiredDocs.join(' & ');
+                banner.classList.remove('hidden');
+                
+                // Beri sedikit jeda agar DOM ter-render untuk menghitung tinggi secara akurat
+                setTimeout(() => {
+                    const bannerHeight = banner.offsetHeight;
+                    // Turunkan header utama di semua halaman
+                    document.querySelectorAll('.page-container > header').forEach(h => {
+                        h.style.top = bannerHeight + 'px';
+                    });
+                    
+                    // Turunkan kotak sticky dompet di menu utama
+                    const stickyBadges = document.getElementById('home-sticky-badges');
+                    if (stickyBadges) stickyBadges.style.top = (96 + bannerHeight) + 'px';
+
+                    // Turunkan kotak sticky tanggal riwayat mingguan
+                    const stickyHistory = document.querySelector('.sticky-history-container');
+                    if (stickyHistory) {
+                        stickyHistory.style.top = (72 + bannerHeight) + 'px';
+                    }
+                }, 50);
+            } else {
+                banner.classList.add('hidden');
+                // Kembalikan semua ke posisi semula
+                document.querySelectorAll('.page-container > header').forEach(h => {
+                    h.style.top = '0px';
+                });
+                
+                const stickyBadges = document.getElementById('home-sticky-badges');
+                if (stickyBadges) stickyBadges.style.top = '96px';
+                
+                const stickyHistory = document.querySelector('.sticky-history-container');
+                if (stickyHistory) stickyHistory.style.top = '72px';
+            }
+        }
+
         function renderRatingUI(ratingData) {
             const list = document.getElementById('customer-feedback-list'); 
             const avgLabel = document.getElementById('profile-avg-rating'); 
@@ -3395,8 +3462,11 @@
                 
                 // PERBAIKAN: Mencegah avatar default menimpa foto asli dari Firebase
                 if (!window.hasCustomProfilePhoto) {
-                    document.getElementById('avatar-home').src = avatarUrl; 
-                    document.getElementById('profile-img').src = avatarUrl;
+                    const avatarHome = document.getElementById('avatar-home');
+                    if (avatarHome) avatarHome.src = avatarUrl; 
+                    
+                    const profileImg = document.getElementById('profile-img');
+                    if (profileImg) profileImg.src = avatarUrl;
                 }
                 
                 profileCached = true;
