@@ -310,17 +310,23 @@
         let newShiftRiders = [];
         let mainQueueRiders = [];
         let allGlobalOrders = [];
-        let allDailyOrders = []; // Array khusus penampung daily_orders (termasuk UID196 dkk)
-        let allRiders = []; // Memantau semua rider, termasuk yang sedang offline istirahat
+        let allDailyOrders = []; 
+        let allRiders = []; 
+        
+        // Mencegah duplikasi eksekusi watchdog
+        const processingTimeouts = new Set();
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 startRiderListener();
                 startGlobalOrdersListener();
-                startDailyOrdersListeners(); // Jalankan listener untuk rekap harian
+                startDailyOrdersListeners(); 
                 
-                // Interval untuk memeriksa rider yang istirahat / offbid lebih dari 1 jam
+                // Interval untuk memeriksa rider yang istirahat offbid lebih dari 1 jam
                 setInterval(checkOfflineRiders, 60 * 1000); 
+                
+                // Interval Watchdog: Cek setiap 30 detik apakah ada orderan nyangkut > 7 menit
+                setInterval(checkOrderTimeouts, 30 * 1000);
                 
                 const today = new Date();
                 const dd = String(today.getDate()).padStart(2, '0');
@@ -352,20 +358,125 @@
             }
         };
 
-        // FUNGSI WATCHDOG: Menurunkan jabatan rider jika mematikan toggle (offbid) lebih dari 1 jam
+        // FUNGSI BARU: Watchdog untuk orderan yang tidak direspon selama 7 menit
+        function checkOrderTimeouts() {
+            const now = Date.now();
+            const timeoutMs = 7 * 60 * 1000; // 7 Menit (waktu kadaluarsa order)
+
+            // Hanya saring order yang masih 'assigned' (Menunggu Konfirmasi Rider)
+            const assignedOrders = allGlobalOrders.filter(o => o.status === 'assigned');
+
+            assignedOrders.forEach(async (order) => {
+                // Pastikan order memiliki timestamp dan sedang tidak dalam proses pemindahan
+                if (order.created_at && order.created_at.seconds && !processingTimeouts.has(order.id)) {
+                    const orderTimeMs = order.created_at.seconds * 1000;
+                    
+                    if (now - orderTimeMs >= timeoutMs) {
+                        processingTimeouts.add(order.id);
+                        try {
+                            await handleOrderTimeout(order);
+                        } catch(e) {
+                            console.error("Error auto-reassigning:", e);
+                        } finally {
+                            // Hapus kunci sesaat setelah berhasil/gagal
+                            setTimeout(() => processingTimeouts.delete(order.id), 10000);
+                        }
+                    }
+                }
+            });
+        }
+
+        // FUNGSI BARU: Eksekusi otomatis pindah orderan
+        async function handleOrderTimeout(order) {
+            console.log(`Order ${order.id} timeout. Mencoba memindahkan dari Rider: ${order.rider_name}`);
+            
+            // 1. Matikan secara paksa toggle rider yang lama & keluarkan dari antrean utama
+            const oldRiderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', order.rider_uid);
+            await setDoc(oldRiderRef, { is_online: false, is_available: false, in_main_queue: false }, { merge: true });
+
+            // 2. Cari rider pengganti (Urutan Pertama di Antrean Utama)
+            const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            busyUids.add(order.rider_uid); // Tambahkan rider lama agar tidak terpilih lagi
+            
+            const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
+
+            // 3. Ubah status order lama menjadi 'canceled' agar popup di HP rider lama TERTUTUP
+            const oldOrderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
+            await updateDoc(oldOrderRef, { status: 'canceled', cancel_reason: 'timeout_7_menit' });
+
+            // 4. Hapus daily_order (catatan harian) milik rider lama agar tidak ganda
+            if (order.daily_order_id) {
+                const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id);
+                await deleteDoc(oldDailyRef).catch(e => console.log('Catatan harian lama sudah hilang'));
+            }
+
+            // Tunggu 3 detik agar aplikasi rider lama sempat membaca status 'canceled' dan mematikan popup, lalu hapus datanya
+            setTimeout(async () => {
+                await deleteDoc(oldOrderRef).catch(e => console.log('Order lama terhapus'));
+            }, 3000);
+
+            if (availableMainQueue.length > 0) {
+                const nextRider = availableMainQueue[0]; // Ambil rider paling atas
+                const nextRiderName = nextRider.name && String(nextRider.name).trim() !== '' ? nextRider.name : nextRider.uid;
+                
+                // 5. Buat daily_order baru untuk rider pengganti
+                const newDailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+                
+                const now = new Date();
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                const dd = String(now.getDate()).padStart(2, '0');
+                const yyyy = now.getFullYear();
+                const Tanggal = `${mm}-${dd}-${yyyy}`;
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const Jam = `${hours}:${minutes}`;
+
+                const detailsText = order.items ? order.items.map(i => i.name).join(' | ') : '';
+                
+                await setDoc(newDailyOrdersRef, {
+                    Tanggal: Tanggal,
+                    Jam: Jam,
+                    Nominal_Kotor: (order.fee || 0) / 1000,
+                    Tambahan: (order.tambahan || 0) / 1000,
+                    Status: "Selesai",
+                    Keterangan: detailsText,
+                    created_at: serverTimestamp()
+                });
+
+                // 6. BUAT DOKUMEN BARU untuk rider pengganti (Gunakan UID rider pengganti sebagai ID Dokumen)
+                const newOrderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', nextRider.uid);
+                await setDoc(newOrderRef, {
+                    rider_uid: nextRider.uid,
+                    rider_name: nextRiderName,
+                    customer_phone: order.customer_phone,
+                    fee: order.fee,
+                    tambahan: order.tambahan || 0,
+                    items: order.items || [],
+                    status: 'assigned',
+                    created_at: serverTimestamp(),
+                    daily_order_id: newDailyOrdersRef.id
+                });
+
+                // Berikan notifikasi ke Admin
+                window.showAlert('Alih Order Otomatis', `Rider ${order.rider_name} dinonaktifkan karena tidak merespon order selama 7 menit. Order otomatis dipindah ke ${nextRiderName}.`, 'info');
+            } else {
+                // Jika antrean kosong sama sekali
+                window.showAlert('Perhatian (Order Nyangkut)', `Rider ${order.rider_name} dinonaktifkan otomatis. Namun TIDAK ADA rider lain yang tersedia di antrean. Order dibatalkan otomatis!`, 'warning');
+            }
+        }
+
+
         function checkOfflineRiders() {
             const now = Date.now();
-            const oneHour = 60 * 60 * 1000; // 1 Jam dalam milidetik
+            const oneHour = 60 * 60 * 1000; 
             
             allRiders.forEach(data => {
                 const isOnline = data.is_online === true || data.is_online === 'true';
                 const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                 
-                // Jika rider sedang offbid dan masih tercatat di antrean utama
                 if (!isOnline && inMainQueue && data.last_updated && data.last_updated.seconds) {
                     const lastUpdateMs = data.last_updated.seconds * 1000;
                     if (now - lastUpdateMs > oneHour) {
-                        // Reset status antrean utama agar masuk ke "Rider Baru" saat onbid lagi
                         const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', data.uid);
                         updateDoc(ref, { in_main_queue: false }).catch(e => console.error(e));
                     }
@@ -373,7 +484,6 @@
             });
         }
 
-        // 1. LISTENER RADAR (SANGAT KETAT FILTER ONLINE)
         function startRiderListener() {
             const statusCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status');
             onSnapshot(statusCol, (snapshot) => {
@@ -383,15 +493,13 @@
                 
                 snapshot.forEach(docSnap => {
                     const data = docSnap.data();
-                    data.uid = docSnap.id; // Pastikan kita menyimpan UID
+                    data.uid = docSnap.id; 
                     allRiders.push(data);
                     
-                    // PENYESUAIAN: Antisipasi jika data boolean tersimpan sebagai string 'true' dari aplikasi Rider
                     const isOnline = data.is_online === true || data.is_online === 'true';
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    // FILTER KETAT: Jika rider Off-bid, dia diabaikan sepenuhnya oleh sistem Admin
                     if (isOnline && isAvailable) {
                         if (inMainQueue) {
                             mainQueueRiders.push(data);
@@ -401,7 +509,6 @@
                     }
                 });
 
-                // Periksa langsung setiap ada pembaruan data
                 checkOfflineRiders();
 
                 mainQueueRiders.sort((a, b) => {
@@ -429,7 +536,6 @@
             const container = document.getElementById('new-shift-queue-list');
             const btnPromote = document.getElementById('btn-promote-queue');
             
-            // FILTER: Sembunyikan rider yang sedang ada orderan aktif (assigned/processing)
             const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
             
@@ -475,7 +581,6 @@
             const container = document.getElementById('rider-queue-list');
             const countEl = document.getElementById('stat-online-riders');
             
-            // FILTER: Sembunyikan rider yang sedang memproses orderan
             const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
             const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
 
@@ -606,7 +711,6 @@
             document.querySelectorAll('.rider-card').forEach(el => el.classList.remove('selected'));
         };
 
-        // 2. GLOBAL ORDERS LISTENER
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
             onSnapshot(ordersCol, (snapshot) => {
@@ -615,24 +719,20 @@
                 renderActiveOrders();
                 renderHistoryOrders();
                 
-                // UPDATE: Render ulang UI Rider agar rider yang baru dapat orderan langsung hilang dari antrean
                 updateNewShiftUI();
                 updateMainQueueUI();
             });
         }
 
-        // LISTENER KHUSUS UNTUK MENARIK DATA "SELESAI" DARI SUBCOLLECTION DAILY_ORDERS (UID196 dkk)
         function startDailyOrdersListeners() {
             const uids = Object.keys(riderExcelCodes);
             uids.forEach(uid => {
                 const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'daily_orders');
                 onSnapshot(dailyRef, (snapshot) => {
-                    // Bersihkan data lama untuk UID ini agar tidak menumpuk saat update
                     allDailyOrders = allDailyOrders.filter(o => o.rider_uid !== uid);
                     
                     snapshot.forEach(docSnap => {
                         const data = docSnap.data();
-                        // Filter hanya Status Selesai / Completed
                         if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
                             allDailyOrders.push({
                                 id: docSnap.id,
@@ -642,7 +742,6 @@
                         }
                     });
                     
-                    // Trigger render ulang jika Admin sedang membuka tab Histori
                     if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                         renderHistoryOrders();
                     }
@@ -655,7 +754,6 @@
             const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing');
             document.getElementById('stat-active-orders').innerText = activeOrders.length;
 
-            // Update Notification Badge in Navbar
             const badge = document.getElementById('nav-badge-active');
             if (activeOrders.length > 0) {
                 badge.innerText = activeOrders.length;
@@ -680,7 +778,6 @@
 
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
                 const tamVal = parseInt(order.tambahan || 0);
-                // Tambahan dipisah dengan "+"
                 const tamStr = tamVal > 0 ? `<span class="text-[10px] text-emerald-500 font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
 
                 html += `
@@ -739,7 +836,6 @@
             
             if(!container) return;
 
-            // 1. Filter dari active_orders (berjaga-jaga jika ada yang nyangkut)
             const historyOrders = allGlobalOrders.filter(o => {
                 const stat = (o.status || '').toLowerCase();
                 if (stat !== 'completed' && stat !== 'selesai') return false;
@@ -753,14 +849,12 @@
                 return !dateVal || !timestamp;
             });
 
-            // Set untuk mencegah duplikasi jika order masih tumpang tindih antara active_order dan daily_order
             const existingDailyOrderIds = new Set(historyOrders.map(o => o.daily_order_id).filter(id => id));
 
-            // 2. Filter map dari tarikan subcollection daily_orders (UID196, dkk)
             const dailyOrdersMapped = allDailyOrders.filter(o => {
                 let localDateStr = '';
                 if (o.Tanggal) {
-                    const parts = o.Tanggal.split('-'); // Parsing MM-DD-YYYY ke YYYY-MM-DD
+                    const parts = o.Tanggal.split('-');
                     if (parts.length === 3) {
                         localDateStr = `${parts[2]}-${parts[0]}-${parts[1]}`;
                     }
@@ -770,25 +864,23 @@
                 }
                 return !dateVal || localDateStr === dateVal;
             }).map(o => {
-                // Cari nama asli rider dari data radar
                 const matchedRider = allRiders.find(r => r.uid === o.rider_uid);
                 const realName = matchedRider && matchedRider.name && String(matchedRider.name).trim() !== '' ? matchedRider.name : 'Rider';
 
                 return {
                     id: o.id,
                     rider_uid: o.rider_uid,
-                    rider_name: realName, // Gunakan nama asli
+                    rider_name: realName, 
                     fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000,
                     tambahan: (parseFloat(o.Tambahan) || 0) * 1000,
                     status: 'completed',
                     created_at: o.created_at,
                     finished_at: o.created_at, 
                     timeStr: o.Jam,
-                    is_daily_order: true // Flag Penanda
+                    is_daily_order: true 
                 };
             });
 
-            // 3. Gabungkan Semua Histori Selesai
             const finalHistoryOrders = [...historyOrders];
             dailyOrdersMapped.forEach(dOrder => {
                 if (!existingDailyOrderIds.has(dOrder.id)) {
@@ -816,7 +908,6 @@
                 return;
             }
 
-            // Urutkan berdasarkan waktu
             finalHistoryOrders.sort((a, b) => {
                 const timeA = a.finished_at ? a.finished_at.seconds : (a.created_at ? a.created_at.seconds : 0);
                 const timeB = b.finished_at ? b.finished_at.seconds : (b.created_at ? b.created_at.seconds : 0);
@@ -828,7 +919,6 @@
                 const timestamp = order.finished_at || order.created_at;
                 const timeStr = order.timeStr || (timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--');
                 
-                // Cek ulang untuk memastikan nama asli selalu tampil
                 let finalName = order.rider_name || 'Rider';
                 if (finalName === getRiderCode(order.rider_uid)) {
                    const matched = allRiders.find(r => r.uid === order.rider_uid);
@@ -879,7 +969,6 @@
                 return; 
             }
 
-            // Parsing Ongkir & Tambahan Pintar (Bisa tangkap "15", "15k", "15,5", "15000")
             const parseNominal = (rawStr) => {
                 let str = String(rawStr).toLowerCase().replace(',', '.');
                 let isK = str.includes('k');
@@ -902,7 +991,6 @@
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
-                // Generate format Tanggal: "MM-DD-YYYY" & Jam: "HH:mm"
                 const now = new Date();
                 const mm = String(now.getMonth() + 1).padStart(2, '0');
                 const dd = String(now.getDate()).padStart(2, '0');
@@ -915,12 +1003,10 @@
 
                 const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
                 
-                // 1. Persiapkan Referensi Dokumen
                 const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', riderUid);
                 const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
                 const dailyOrderId = dailyOrdersRef.id;
 
-                // 2. Simpan ke Active Orders (Untuk pantauan Admin & Notif awal Rider)
                 await setDoc(orderRef, {
                     rider_uid: riderUid,
                     rider_name: riderName,
@@ -933,7 +1019,6 @@
                     daily_order_id: dailyOrderId
                 });
 
-                // 3. Tembak langsung ke Daily Orders Rider (Pencatatan Selesai Otomatis di HP Rider)
                 await setDoc(dailyOrdersRef, {
                     Tanggal: Tanggal,
                     Jam: Jam,
@@ -970,28 +1055,24 @@
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;
 
-            // Priksa manawa pesenan lagi diproses (Rider OTW)
             const isProcessing = order.status === 'processing';
 
             window.showConfirm('Batalkan Order?', 'Yakin ingin membatalkan orderan ini dari antrean?', async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
-                    // Hapus dari active_orders
                     await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     
-                    // Hapus juga dari rekap harian rider (daily_orders)
                     if (order && order.rider_uid && order.daily_order_id) {
                         await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
                     }
 
-                    // Yen lagi diproses, balekake rider menyang urutan 1
                     if (isProcessing && order.rider_uid) {
                         const riderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', order.rider_uid);
                         await setDoc(riderRef, { 
                             in_main_queue: true, 
                             is_available: true, 
-                            last_drop_time: new Date(0) // Digawe taun 1970 supaya dadi sing paling cilik (urutan 1)
+                            last_drop_time: new Date(0) 
                         }, { merge: true });
                     }
                     
@@ -1004,12 +1085,10 @@
             });
         };
 
-        // FUNGSI EDIT ORDER (Berlaku untuk Pantauan & Histori Daily)
         window.openEditOrder = (id, isDaily = false) => {
             let order;
             
             if (isDaily) {
-                // Cari data di array daily_orders
                 order = allDailyOrders.find(o => o.id === id);
                 if(!order) return;
                 
@@ -1018,7 +1097,6 @@
                 document.getElementById('edit-fee').value = order.Nominal_Kotor || '';
                 document.getElementById('edit-tambahan').value = order.Tambahan || '';
             } else {
-                // Cari data di array active_orders (pantauan)
                 order = allGlobalOrders.find(o => o.id === id);
                 if(!order) return;
 
@@ -1053,7 +1131,6 @@
                 return;
             }
 
-            // Parsing Ongkir Pintar
             const parseNominal = (rawStr) => {
                 let str = String(rawStr).toLowerCase().replace(',', '.');
                 let isK = str.includes('k');
@@ -1081,14 +1158,12 @@
 
             try {
                 if (isDaily) {
-                    // Update spesifik ke subcollection daily_orders
                     await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id), {
                         Nominal_Kotor: savedKotor,
                         Tambahan: savedTambahan,
                         Keterangan: details.replace(/\n/g, ' | ')
                     });
                 } else {
-                    // Update ke active_orders (serta ke daily_orders jika masih bersangkutan)
                     const order = allGlobalOrders.find(o => o.id === id);
                     await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), {
                         customer_phone: phone,
@@ -1097,7 +1172,6 @@
                         tambahan: realTambahan
                     });
 
-                    // Update juga ke rekap harian rider agar sinkron
                     if (order && order.rider_uid && order.daily_order_id) {
                         await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id), {
                             Nominal_Kotor: savedKotor,
@@ -1116,21 +1190,17 @@
             }
         };
 
-        // FUNGSI HAPUS KHUSUS HISTORI (Tidak Mengubah Antrean Rider)
         window.deleteHistoryOrder = (id, riderUid, isDaily) => {
             window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus orderan ini secara permanen dari histori?', async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     if (isDaily) {
-                        // Jika dari subcollection daily_orders
                         await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
                     } else {
-                        // Jika dari active_orders
                         const order = allGlobalOrders.find(o => o.id === id);
                         await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                         
-                        // Hapus juga dari rekap harian rider (daily_orders)
                         if (order && order.rider_uid && order.daily_order_id) {
                             await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
                         }
