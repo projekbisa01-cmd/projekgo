@@ -786,6 +786,16 @@
         </div>
     </div>
 
+    <!-- POPUP ORDER TIMEOUT (LEWAT 7 MENIT) -->
+    <div id="order-timeout-popup" class="fixed inset-0 z-[99999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="order-timeout-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center">
+            <img src="https://i.ibb.co.com/p67VjhSG/Yey-Kamu-berhasil-menyelesaikan-orderan-1.png" alt="Peringatan Timeout Order" class="w-full h-auto rounded-xl mb-6 shadow-sm border border-gray-100">
+            <button onclick="closeOrderTimeoutPopup()" class="w-full py-4 bg-red-600 text-white font-bold rounded-2xl shadow-lg shadow-red-200 active:scale-95 transition-all text-sm uppercase tracking-widest">
+                OK
+            </button>
+        </div>
+    </div>
+
     <!-- POPUP DOMPET SAYA (BARU) -->
     <div id="wallet-modal" class="fixed inset-0 z-[250] flex items-end opacity-0 pointer-events-none transition-opacity duration-300">
         <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onclick="closeWallet()"></div>
@@ -2418,6 +2428,36 @@
                     popup.classList.add('hidden');
                     popup.classList.remove('flex');
                 }, 300); // Sesuaikan dengan durasi animasi
+            }
+        };
+
+        // FUNGSI BUKA TUTUP POPUP TIMEOUT ORDER (7 MENIT)
+        window.showOrderTimeoutPopup = () => {
+            const popup = document.getElementById('order-timeout-popup');
+            const content = document.getElementById('order-timeout-content');
+            if(popup && content) {
+                popup.classList.remove('hidden');
+                popup.classList.add('flex');
+                setTimeout(() => {
+                    popup.classList.remove('opacity-0');
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                }, 10);
+                try { playBeep(400, 0.3); } catch(e){} // Suara peringatan
+            }
+        };
+
+        window.closeOrderTimeoutPopup = () => {
+            const popup = document.getElementById('order-timeout-popup');
+            const content = document.getElementById('order-timeout-content');
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
             }
         };
 
@@ -5099,6 +5139,36 @@
                           showActiveOrderOverlay(data, docId);
                       } else if (data.status === "completed" && window.currentActiveOrderId === docId) {
                           hideActiveOrderOverlay();
+                      } else if (data.status === "canceled" && data.cancel_reason === "timeout_7_menit") {
+                          // LOGIKA KETIKA ORDERAN EXPIRED (LEWAT 7 MENIT)
+                          
+                          // 1. Matikan popup panggilan jika masih menyala di layar
+                          const incomingPopup = document.getElementById('incoming-order-popup');
+                          if (incomingPopup && !incomingPopup.classList.contains('hidden')) {
+                              incomingPopup.classList.add('hidden');
+                              incomingPopup.classList.remove('flex');
+                              
+                              if(window.incomingOrderAudio) {
+                                  window.incomingOrderAudio.pause();
+                                  window.incomingOrderAudio.currentTime = 0;
+                              }
+                              if ("vibrate" in navigator) navigator.vibrate(0);
+                              if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+                          }
+
+                          // 2. Paksa matikan tombol On-Bid
+                          const toggle = document.getElementById('onbid-toggle');
+                          if (toggle && toggle.checked) {
+                              toggle.checked = false;
+                              if (typeof window.toggleOnbid === 'function') {
+                                  window.toggleOnbid(); // Ini akan trigger updateOnbidUI & updateFirebaseStatus
+                              }
+                          }
+
+                          // 3. Tampilkan popup peringatan timeout
+                          if (typeof window.showOrderTimeoutPopup === 'function') {
+                              window.showOrderTimeoutPopup();
+                          }
                       }
                   } else {
                       // Jika dokumen tidak ada / dibatalkan/dihapus admin
