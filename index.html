@@ -1038,6 +1038,12 @@
             <main class="p-5 max-w-md mx-auto flex-1 flex flex-col w-full pb-24">
                 <!-- Badge Dompet & Riwayat (Dibuat Sticky dan Elegan) -->
                 <div id="home-sticky-badges" class="sticky top-[96px] z-30 bg-[#f8fafc]/95 backdrop-blur-sm -mx-5 px-5 pt-2 pb-4 mb-2 shadow-sm border-b border-gray-100/50 transition-all duration-300">
+                    <div class="flex justify-between items-center mb-2 px-1">
+                        <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ringkasan Hari Ini</span>
+                        <button onclick="window.togglePrivacyMode(event)" class="text-gray-400 hover:text-orange-500 transition-colors px-2 py-0.5 active:scale-90" title="Sembunyikan Saldo">
+                            <i class="fa-solid fa-eye text-orange-500" id="privacy-eye-icon"></i>
+                        </button>
+                    </div>
                     <div class="grid grid-cols-2 gap-4 shrink-0">
                         <!-- Dompet Badge (Dark Elegant) -->
                         <button onclick="openWallet()" class="flex flex-col justify-center bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 p-4 rounded-2xl shadow-lg shadow-slate-200 active:scale-95 transition-all w-full relative overflow-hidden group">
@@ -2120,6 +2126,54 @@
         
         let notaItems = [];
 
+        // --- FUNGSI PRIVASI DOMPET & RIWAYAT ---
+        window.isPrivacyMode = localStorage.getItem('rider_privacy_mode') === 'true';
+        window.currentTodayNet = 0;
+        window.currentTodayTrips = 0;
+        window.privacyTimer = null; // Tambahkan variabel untuk menyimpan timer
+
+        window.togglePrivacyMode = function(e) {
+            if(e) e.stopPropagation();
+            window.isPrivacyMode = !window.isPrivacyMode;
+            localStorage.setItem('rider_privacy_mode', window.isPrivacyMode);
+            window.updatePrivacyUI();
+            try { playBeep(window.isPrivacyMode ? 440 : 880, 0.1); } catch(err){}
+
+            // Bersihkan timer sebelumnya jika ada
+            if (window.privacyTimer) {
+                clearTimeout(window.privacyTimer);
+                window.privacyTimer = null;
+            }
+
+            // Jika mode privasi sedang TERBUKA (nilai terlihat), jalankan timer 10 detik
+            if (!window.isPrivacyMode) {
+                window.privacyTimer = setTimeout(() => {
+                    window.isPrivacyMode = true; // Kunci kembali
+                    localStorage.setItem('rider_privacy_mode', true);
+                    window.updatePrivacyUI();
+                    // Opsional: Bunyikan nada pelan saat terkunci otomatis
+                    try { playBeep(440, 0.1); } catch(err){} 
+                }, 10000); // 10.000 ms = 10 detik
+            }
+        };
+
+        window.updatePrivacyUI = function() {
+            const icon = document.getElementById('privacy-eye-icon');
+            if (icon) {
+                icon.className = window.isPrivacyMode ? 'fa-solid fa-eye-slash text-gray-400' : 'fa-solid fa-eye text-orange-500';
+            }
+
+            const badgeNet = document.getElementById('badge-net-earnings');
+            if (badgeNet) {
+                badgeNet.innerText = window.isPrivacyMode ? 'Rp ••••••' : `Rp ${window.currentTodayNet.toLocaleString('id-ID')}`;
+            }
+
+            const badgeTrips = document.getElementById('badge-today-trips');
+            if (badgeTrips) {
+                badgeTrips.innerText = window.isPrivacyMode ? '••• Trip' : `${window.currentTodayTrips} Trip`;
+            }
+        };
+
         // FUNGSI UTAMA TATA TERTIB
         function checkAndShowRules() {
             // DINONAKTIFKAN: Agar tidak ada pop-up tata tertib otomatis di awal
@@ -3047,6 +3101,9 @@
 
             try { window.history.pushState({page: 'home'}, '', '#home'); } catch (e) { console.warn("History API restricted via sandbox"); }
             
+            // Terapkan status privasi saat pertama kali web dimuat
+            if(typeof window.updatePrivacyUI === 'function') window.updatePrivacyUI();
+
             window.addEventListener('popstate', function(event) {
                 const homeIsActive = !document.getElementById('page-home').classList.contains('hidden-page');
                 if (homeIsActive) {
@@ -3677,13 +3734,10 @@
 
             document.getElementById('today-net-earnings').innerText = `Rp ${Math.round(tNet).toLocaleString('id-ID')}`;
             
-            // UPDATE BADGE DOMPET
-            const badgeNet = document.getElementById('badge-net-earnings');
-            if (badgeNet) badgeNet.innerText = `Rp ${Math.round(tNet).toLocaleString('id-ID')}`;
-            
-            // UPDATE BADGE RIWAYAT
-            const badgeTrips = document.getElementById('badge-today-trips');
-            if (badgeTrips) badgeTrips.innerText = `${tTrips} Trip`;
+            // UPDATE BADGE DOMPET & RIWAYAT VIA PRIVACY UI
+            window.currentTodayNet = Math.round(tNet);
+            window.currentTodayTrips = tTrips;
+            if (typeof window.updatePrivacyUI === 'function') window.updatePrivacyUI();
             
             document.getElementById('current-trips').innerText = `${tTrips} Trip`;
             document.getElementById('today-gross-pure').innerText = `Rp ${Math.round(tGrossPure).toLocaleString('id-ID')}`;
