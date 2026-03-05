@@ -1248,6 +1248,13 @@
                         </div>
                         <span class="text-sm font-bold text-gray-700">Top Rider</span>
                     </button>
+
+                    <button onclick="switchPage('transfer-history')" class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 card-shadow flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center">
+                        <div class="w-14 h-14 bg-indigo-50 text-indigo-500 rounded-2xl flex items-center justify-center text-2xl shadow-sm">
+                            <i class="fa-solid fa-money-bill-transfer"></i>
+                        </div>
+                        <span class="text-sm font-bold text-gray-700">Cek Transfer</span>
+                    </button>
                 </div>
                 
                 <div class="bg-indigo-50 p-5 rounded-3xl border border-indigo-100 flex items-center justify-between active:scale-95 transition-all cursor-pointer" onclick="switchPage('info-admin')">
@@ -1261,6 +1268,31 @@
                         </div>
                     </div>
                     <i class="fa-solid fa-chevron-right text-indigo-300"></i>
+                </div>
+            </main>
+        </div>
+
+        <!-- HALAMAN CEK TRANSFER -->
+        <div id="page-transfer-history" class="hidden-page page-container">
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 flex items-center gap-4">
+                <button onclick="switchPage('fitur')" class="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full text-gray-600 hover:bg-gray-200">
+                    <i class="fa-solid fa-arrow-left"></i>
+                </button>
+                <div>
+                    <h1 class="font-bold text-xl text-gray-800">Riwayat Transfer</h1>
+                    <p class="text-xs text-gray-500">Pengecekan catatan non-tunai</p>
+                </div>
+            </header>
+            <main class="p-5 max-w-md mx-auto min-h-screen bg-gray-50 space-y-4 pb-24">
+                <div class="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex items-start gap-3 shadow-sm">
+                    <i class="fa-solid fa-circle-info text-blue-500 mt-0.5 text-lg"></i>
+                    <p class="text-[11px] text-blue-800 leading-relaxed font-medium">
+                        Halaman ini membantu Anda mencocokkan riwayat mutasi bank dengan catatan di aplikasi (5 hari terakhir). Pastikan Anda sudah mengonfirmasi seluruh transferan ini kepada Admin.
+                    </p>
+                </div>
+                
+                <div id="transfer-history-list" class="space-y-3 mt-4">
+                    <!-- Konten akan di-render oleh JS -->
                 </div>
             </main>
         </div>
@@ -4277,7 +4309,46 @@
                 }
 
                 // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
-                html += `${(isDone && !isWaitingAdmin) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}</div></div>`;
+                html += `${(isDone && !isWaitingAdmin) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}`;
+
+                // NEW: Catatan Pembayaran Lokal (Tunai/Transfer)
+                if (isDone) {
+                    const safeName = (item.List_Pesanan || item.Keterangan || 'Orderan').replace(/['"\\]/g, '');
+                    const dateStr = parseSheetDate(item.Tanggal);
+                    const timeStr = parseSheetTime(item.Jam);
+                    const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
+                    const savedPaymentStr = localStorage.getItem(orderKey);
+                    let savedPayment = { type: '', nominal: '' };
+                    if (savedPaymentStr) {
+                        try { savedPayment = JSON.parse(savedPaymentStr); } catch(e){}
+                    }
+
+                    html += `
+                        <div class="mt-2 ml-14 bg-gray-50/80 p-2 rounded-xl border border-gray-100 flex flex-col gap-2 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[9px] font-bold text-gray-500"><i class="fa-solid fa-wallet text-orange-400 mr-1"></i>Catatan Pembayaran</span>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center gap-1 text-[9px] font-bold text-gray-600 cursor-pointer">
+                                        <input type="radio" name="pay_type_${orderKey}" value="Tunai" onchange="window.updatePaymentInfo('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" ${savedPayment.type === 'Tunai' ? 'checked' : ''} class="w-3 h-3 accent-orange-500">
+                                        Tunai
+                                    </label>
+                                    <label class="flex items-center gap-1 text-[9px] font-bold text-gray-600 cursor-pointer">
+                                        <input type="radio" name="pay_type_${orderKey}" value="Transfer" onchange="window.updatePaymentInfo('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" ${savedPayment.type === 'Transfer' ? 'checked' : ''} class="w-3 h-3 accent-orange-500">
+                                        Transfer
+                                    </label>
+                                </div>
+                            </div>
+                            <div id="pay_nominal_container_${orderKey}" class="${savedPayment.type === 'Transfer' ? 'block' : 'hidden'} mt-1 transition-all">
+                                <div class="relative">
+                                    <span class="absolute left-2.5 top-1.5 text-gray-400 text-[10px]">Rp</span>
+                                    <input type="text" id="pay_nominal_${orderKey}" value="${savedPayment.nominal ? savedPayment.nominal.toLocaleString('id-ID') : ''}" oninput="formatCurrencyInput(this); window.savePaymentNominal('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" placeholder="Nominal Transfer" class="w-full pl-7 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg text-[10px] font-bold text-gray-700 focus:outline-none focus:border-orange-500 transition-colors">
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += `</div></div>`;
             });
             container.innerHTML = html;
         }
@@ -4429,6 +4500,64 @@
             else { swipeBtn.classList.add('swipe-reset'); swipeBtn.style.left = '0px'; }
         }
         
+        // --- FUNGSI CATATAN PEMBAYARAN MANUAL ---
+        window.updatePaymentInfo = function(orderKey, type, orderName, dateStr, timeStr) {
+            const container = document.getElementById(`pay_nominal_container_${orderKey}`);
+            const input = document.getElementById(`pay_nominal_${orderKey}`);
+            
+            let saved = { type: type, nominal: '', timestamp: Date.now(), orderName: orderName, dateStr: dateStr, timeStr: timeStr };
+            
+            if (type === 'Transfer') {
+                container.classList.remove('hidden');
+                container.classList.add('block');
+                saved.nominal = parseInt((input.value || '').replace(/\./g, '')) || '';
+            } else {
+                container.classList.add('hidden');
+                container.classList.remove('block');
+                saved.nominal = '';
+            }
+            
+            localStorage.setItem(orderKey, JSON.stringify(saved));
+            window.cleanupOldPayments();
+        };
+
+        window.savePaymentNominal = function(orderKey, nominalStr, orderName, dateStr, timeStr) {
+            const nominal = parseInt((nominalStr || '').replace(/\./g, '')) || '';
+            const savedStr = localStorage.getItem(orderKey);
+            let saved = { type: 'Transfer', nominal: nominal, timestamp: Date.now(), orderName: orderName, dateStr: dateStr, timeStr: timeStr };
+            if (savedStr) {
+                try { 
+                    saved = JSON.parse(savedStr); 
+                    saved.nominal = nominal;
+                    saved.timestamp = Date.now();
+                    saved.orderName = orderName;
+                    saved.dateStr = dateStr;
+                    saved.timeStr = timeStr;
+                } catch(e){}
+            }
+            localStorage.setItem(orderKey, JSON.stringify(saved));
+        };
+
+        window.cleanupOldPayments = function() {
+            const now = Date.now();
+            const maxAge = 5 * 24 * 60 * 60 * 1000; // 5 hari
+            // Iterasi mundur untuk menghindari error saat menghapus item
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('pay_')) {
+                    try {
+                        const dataStr = localStorage.getItem(key);
+                        if (dataStr) {
+                            const data = JSON.parse(dataStr);
+                            if (data.timestamp && (now - data.timestamp > maxAge)) {
+                                localStorage.removeItem(key);
+                            }
+                        }
+                    } catch(e){}
+                }
+            }
+        };
+
         function switchPage(page, isHistoryEvent = false) {
              // Tampilkan Loading Overlay dengan Logo
             const loader = document.getElementById('loading-overlay');
@@ -4468,7 +4597,7 @@
             
             // Highlight navbar parent jika berada di sub-page
             let targetNav = page;
-            if (['nota', 'upload-menu', 'calculator', 'top-riders'].includes(page)) {
+            if (['nota', 'upload-menu', 'calculator', 'top-riders', 'transfer-history'].includes(page)) {
                 targetNav = 'fitur';
             }
 
@@ -4483,7 +4612,7 @@
 
             // Beri jeda 500ms agar efek loading terlihat
             setTimeout(() => {
-                const pages = ['home', 'weekly', 'monthly', 'profile', 'nota', 'upload-menu', 'info-admin', 'top-riders', 'calculator', 'installments', 'fitur']; 
+                const pages = ['home', 'weekly', 'monthly', 'profile', 'nota', 'upload-menu', 'info-admin', 'top-riders', 'calculator', 'installments', 'fitur', 'transfer-history']; 
                 pages.forEach(p => { const el = document.getElementById(`page-${p}`); if(el) el.classList.toggle('hidden-page', p !== page); });
                 
                 requestAnimationFrame(() => {
@@ -4504,6 +4633,7 @@
                     if (page === 'top-riders') { renderTopRiders(); } // RENDER LEADERBOARD
                     if (page === 'calculator') { initProfitCalculator(); } // INIT CALCULATOR
                     if (page === 'installments') { renderInstallmentsHistory(); } // RENDER INSTALLMENTS HISTORY
+                    if (page === 'transfer-history') { renderTransferHistory(); } // NEW RENDER TRANSFER HISTORY
 
                     // Sembunyikan loading setelah halaman selesai dirender
                     if (loader) loader.style.display = 'none';
@@ -4789,6 +4919,74 @@
                     </div>
                 ` + html; // Menaruh yang terbaru di atas
             }
+            container.innerHTML = html;
+        }
+
+        // --- FUNGSI RIWAYAT TRANSFERAN RIDER ---
+        function renderTransferHistory() {
+            const container = document.getElementById('transfer-history-list');
+            if (!container) return;
+
+            let historyData = [];
+            const now = Date.now();
+            const maxAge = 5 * 24 * 60 * 60 * 1000;
+
+            // Mengumpulkan data dari localStorage
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(`pay_${currentUserUID}_`)) {
+                    try {
+                        const dataStr = localStorage.getItem(key);
+                        if (dataStr) {
+                            const data = JSON.parse(dataStr);
+                            // Hanya ambil yang tipenya Transfer, nominal ada, dan belum kadaluarsa
+                            if (data.type === 'Transfer' && data.nominal && (now - data.timestamp <= maxAge)) {
+                                historyData.push({ key: key, ...data });
+                            }
+                        }
+                    } catch(e){}
+                }
+            }
+
+            // Urutkan dari yang paling baru
+            historyData.sort((a, b) => b.timestamp - a.timestamp);
+
+            if (historyData.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-10 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                        <i class="fa-solid fa-receipt text-4xl text-gray-200 mb-4"></i>
+                        <p class="text-sm font-bold text-gray-400">Belum ada catatan transfer</p>
+                        <p class="text-[10px] text-gray-400 mt-1">Data transfer akan otomatis terhapus setelah 5 hari</p>
+                    </div>`;
+                return;
+            }
+
+            let html = '';
+            historyData.forEach(item => {
+                const dateDisplay = item.dateStr || "Tanggal tidak diketahui";
+                const timeDisplay = item.timeStr ? `${item.timeStr} WIB` : "";
+                const nameDisplay = item.orderName || "Orderan (Data Lama)";
+
+                html += `
+                    <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-2 relative overflow-hidden transition-all hover:bg-gray-50">
+                        <div class="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
+                        <div class="flex justify-between items-start pl-2">
+                            <div class="pr-2">
+                                <h4 class="text-xs font-bold text-gray-800 line-clamp-2 leading-tight">${nameDisplay}</h4>
+                                <p class="text-[10px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${dateDisplay} ${timeDisplay}</p>
+                            </div>
+                            <span class="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 whitespace-nowrap shrink-0">
+                                Transfer
+                            </span>
+                        </div>
+                        <div class="pl-2 pt-2 border-t border-gray-50 flex justify-between items-center mt-1">
+                            <span class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Nominal Input</span>
+                            <span class="text-sm font-extrabold text-gray-800">Rp ${item.nominal.toLocaleString('id-ID')}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
             container.innerHTML = html;
         }
         
