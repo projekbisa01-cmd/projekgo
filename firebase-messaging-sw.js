@@ -1,8 +1,8 @@
 // Mengimpor library Firebase v9 (compat mode) khusus untuk Service Worker
-importScripts('[https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js](https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js)');
-importScripts('[https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging-compat.js](https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging-compat.js)');
+importScripts('https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging-compat.js');
 // Mengimpor Workbox untuk offline caching yang tangguh (Opsional)
-importScripts('[https://storage.googleapis.com/workbox-cdn/releases/6.5.3/workbox-sw.js](https://storage.googleapis.com/workbox-cdn/releases/6.5.3/workbox-sw.js)');
+importScripts('https://storage.googleapis.com/workbox-cdn/releases/6.5.3/workbox-sw.js');
 
 // 1. Inisialisasi Firebase
 const firebaseConfig = {
@@ -26,8 +26,8 @@ messaging.onBackgroundMessage(function(payload) {
   const notificationTitle = payload.notification?.title || 'Orderan Baru!';
   const notificationOptions = {
     body: payload.notification?.body || 'Segera buka aplikasi, ada tugas untukmu.',
-    icon: '[https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png](https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png)', // Icon Logo
-    badge: '[https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png](https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png)', // Icon kecil di status bar
+    icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon Logo
+    badge: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon kecil di status bar
     vibrate: [1000, 500, 1000, 500, 1000, 500, 2000], // Getaran keras
     requireInteraction: true, // Notifikasi TIDAK akan hilang sampai diklik
     data: payload.data
@@ -68,4 +68,3 @@ self.addEventListener('notificationclick', function(event) {
         })
     );
 });
-
