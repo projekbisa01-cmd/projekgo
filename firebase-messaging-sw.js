@@ -23,14 +23,22 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage(function(payload) {
   console.log('[firebase-messaging-sw.js] Menerima pesan di background ', payload);
   
-  const notificationTitle = payload.notification?.title || 'Orderan Baru!';
+  const notificationTitle = payload.notification?.title || 'Orderan Baru Masuk!';
+  
+  // PERUBAHAN PENTING ADA DI SINI: Menambahkan pengaturan prioritas agar menjadi Pop-up
   const notificationOptions = {
     body: payload.notification?.body || 'Segera buka aplikasi, ada tugas untukmu.',
     icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon Logo
     badge: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon kecil di status bar
     vibrate: [1000, 500, 1000, 500, 1000, 500, 2000], // Getaran keras
     requireInteraction: true, // Notifikasi TIDAK akan hilang sampai diklik
-    data: payload.data
+    data: payload.data,
+    
+    // Konfigurasi tambahan untuk memaksa Heads-up / Pop-up Banner
+    priority: 'high',         // Untuk browser standar
+    urgency: 'high',          // Standar Push API terbaru
+    renotify: true,           // Bunyi/getar ulang meskipun sudah ada notifikasi sebelumnya
+    tag: 'order-baru-' + Date.now() // Pastikan setiap notif dianggap baru agar selalu pop-up
   };
 
   self.registration.showNotification(notificationTitle, notificationOptions);
@@ -38,13 +46,10 @@ messaging.onBackgroundMessage(function(payload) {
 
 // 4. Konfigurasi Workbox (Membuat PWA Tahan Banting saat Susah Sinyal)
 if (workbox) {
-  // Cache gambar agar tidak perlu load ulang
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'image',
     new workbox.strategies.CacheFirst()
   );
-  
-  // Cache script & style
   workbox.routing.registerRoute(
     ({request}) => request.destination === 'script' || request.destination === 'style',
     new workbox.strategies.StaleWhileRevalidate()
@@ -63,7 +68,7 @@ self.addEventListener('notificationclick', function(event) {
                 }
             }
             if (clients.openWindow) {
-                return clients.openWindow('/'); // URL awal aplikasi Anda
+                return clients.openWindow('/'); // Kembali ke halaman utama aplikasi
             }
         })
     );
