@@ -3133,35 +3133,15 @@
             link.href = manifestUrl;
             document.head.appendChild(link);
 
-            // Inject Service Worker (DIPERBARUI: Menangani Notifikasi Agresif di Background)
+            // DIUBAH: Menggunakan file fisik firebase-messaging-sw.js untuk Push Notification
             if ('serviceWorker' in navigator) {
-                const swCode = `
-                    self.addEventListener('fetch', function(e) {});
-                    
-                    // Menangani klik pada Notifikasi (Membawa aplikasi ke depan/Fokus)
-                    self.addEventListener('notificationclick', function(event) {
-                        event.notification.close(); // Tutup notifikasi setelah diklik
-                        
-                        event.waitUntil(
-                            clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-                                // Cek apakah aplikasi sudah terbuka di tab/jendela
-                                for (var i = 0; i < clientList.length; i++) {
-                                    var client = clientList[i];
-                                    if (client.url && 'focus' in client) {
-                                        return client.focus(); // Fokuskan ke aplikasi
-                                    }
-                                }
-                                // Jika benar-benar tertutup, buka jendela baru
-                                if (clients.openWindow) {
-                                    return clients.openWindow('/');
-                                }
-                            })
-                        );
+                navigator.serviceWorker.register('/firebase-messaging-sw.js')
+                    .then((registration) => {
+                        console.log('Service Worker untuk FCM berhasil terdaftar:', registration.scope);
+                    })
+                    .catch((err) => {
+                        console.warn('Gagal mendaftar Service Worker. Ini normal jika di-run di preview lokal tanpa file fisik.', err);
                     });
-                `;
-                const swBlob = new Blob([swCode], {type: 'application/javascript'});
-                const swUrl = URL.createObjectURL(swBlob);
-                navigator.serviceWorker.register(swUrl).catch(err => console.log('SW Registration failed', err));
             }
 
             // Hentikan interval jika aplikasi sudah diinstall
@@ -4872,6 +4852,7 @@
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
       import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
 
       const firebaseConfig = {
           apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -4886,6 +4867,7 @@
           const app = initializeApp(firebaseConfig);
           const auth = getAuth(app);
           const db = getFirestore(app);
+          const messaging = getMessaging(app);
 
           // PERBAIKAN: Gunakan appId yang diberikan sistem agar sinkron dengan Admin App
           const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
@@ -4925,6 +4907,12 @@
                       }
                   }
 
+                  // Minta izin Push Notification dan simpan Token FCM
+                  const uidForFCM = window.pendingSuspensionCheck ? window.pendingSuspensionCheck.uid : localStorage.getItem('rider_uid');
+                  if (uidForFCM) {
+                      window.setupFCMToken(uidForFCM);
+                  }
+
                   // Menjalankan queue radar jika status ONBID = true
                   const savedOnbid = localStorage.getItem('rider_onbid_status');
                   if (savedOnbid === 'true' || queuePending) {
@@ -4961,6 +4949,64 @@
               }
           };
           initAuth();
+
+          // -------------------------------------------------------------
+          // NEW: SETUP FIREBASE CLOUD MESSAGING (FCM) TOKEN
+          // -------------------------------------------------------------
+          window.setupFCMToken = async (uid) => {
+              try {
+                  const permission = await Notification.requestPermission();
+                  if (permission === 'granted') {
+                      console.log("Izin Push Notification Diberikan.");
+                      
+                      // PENTING: GANTI DENGAN VAPID KEY DARI FIREBASE CONSOLE -> PROJECT SETTINGS -> CLOUD MESSAGING -> WEB CONFIGURATION
+                      const vapidKey = "GANTI_DENGAN_VAPID_KEY_FIREBASE_ANDA"; 
+                      
+                      try {
+                          const registration = await navigator.serviceWorker.ready;
+                          if (registration && vapidKey !== "GANTI_DENGAN_VAPID_KEY_FIREBASE_ANDA") {
+                              const currentToken = await getToken(messaging, { vapidKey: vapidKey, serviceWorkerRegistration: registration });
+                              if (currentToken) {
+                                  // Simpan token ke Firestore agar Admin bisa menembak notif ke HP ini
+                                  const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_fcm_tokens', uid);
+                                  await setDoc(tokenRef, {
+                                      token: currentToken,
+                                      device_id: getDeviceID(),
+                                      updated_at: serverTimestamp()
+                                  }, { merge: true });
+                                  console.log("FCM Token siap menerima notifikasi background.");
+                              }
+                          }
+                      } catch (err) {
+                          console.warn("FCM Token gagal dimuat. Pastikan file firebase-messaging-sw.js ada di server.", err);
+                      }
+                  }
+              } catch (e) {
+                  console.error("Gagal meminta izin notifikasi:", e);
+              }
+          };
+
+          // HANDLE NOTIFIKASI SAAT APLIKASI SEDANG TERBUKA DI LAYAR (FOREGROUND)
+          onMessage(messaging, (payload) => {
+              console.log("Pesan masuk (Foreground):", payload);
+              // Bunyikan nada
+              try { 
+                  if(window.incomingOrderAudio) {
+                      window.incomingOrderAudio.pause();
+                      window.incomingOrderAudio.currentTime = 0;
+                  }
+                  window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
+                  window.incomingOrderAudio.play();
+              } catch(e){}
+
+              // Tampilkan Pop-up Bawaan HP
+              if (Notification.permission === 'granted') {
+                  new Notification(payload.notification?.title || "Info Baru", {
+                      body: payload.notification?.body || "Cek aplikasi sekarang",
+                      icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png'
+                  });
+              }
+          });
 
           // -------------------------------------------------------------
           // NEW: SISTEM KEAMANAN DEVICE BINDING (SINGLE LOGIN)
