@@ -1250,9 +1250,7 @@
                     </button>
 
                     <button onclick="switchPage('transfer-history')" class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 card-shadow flex flex-col items-center justify-center gap-3 active:scale-95 transition-all text-center">
-                        <div class="w-14 h-14 bg-indigo-50 text-indigo-500 rounded-2xl flex items-center justify-center text-2xl shadow-sm">
-                            <i class="fa-solid fa-money-bill-transfer"></i>
-                        </div>
+                        <img src="https://i.ibb.co.com/qFJRynhg/initiate-money-transfer.jpg" class="w-14 h-14 rounded-2xl object-cover shadow-sm border border-gray-100" alt="Cek Transfer">
                         <span class="text-sm font-bold text-gray-700">Cek Transfer</span>
                     </button>
                 </div>
@@ -1291,8 +1289,16 @@
                     </p>
                 </div>
                 
-                <div id="transfer-history-list" class="space-y-3 mt-4">
-                    <!-- Konten akan di-render oleh JS -->
+                <div id="transfer-daily-list" class="space-y-3 mt-4">
+                    <!-- Konten List Hari akan di-render oleh JS -->
+                </div>
+
+                <div id="transfer-detail-view" class="hidden mt-4">
+                    <div class="flex items-center gap-3 mb-4">
+                        <button onclick="closeTransferDetail()" class="text-xs bg-white border border-gray-200 px-4 py-2 rounded-xl font-bold text-gray-700 active:scale-95 shadow-sm flex items-center"><i class="fa-solid fa-arrow-left mr-2"></i> Kembali</button>
+                        <h3 id="transfer-detail-date-title" class="font-bold text-gray-800 text-sm"></h3>
+                    </div>
+                    <div id="transfer-detail-items" class="space-y-3"></div>
                 </div>
             </main>
         </div>
@@ -4924,8 +4930,11 @@
 
         // --- FUNGSI RIWAYAT TRANSFERAN RIDER ---
         function renderTransferHistory() {
-            const container = document.getElementById('transfer-history-list');
-            if (!container) return;
+            const dailyListContainer = document.getElementById('transfer-daily-list');
+            if (!dailyListContainer) return;
+
+            // Pastikan view list aktif, detail tertutup
+            if(typeof closeTransferDetail === 'function') closeTransferDetail();
 
             let historyData = [];
             const now = Date.now();
@@ -4948,11 +4957,8 @@
                 }
             }
 
-            // Urutkan dari yang paling baru
-            historyData.sort((a, b) => b.timestamp - a.timestamp);
-
             if (historyData.length === 0) {
-                container.innerHTML = `
+                dailyListContainer.innerHTML = `
                     <div class="text-center py-10 bg-white rounded-3xl border border-gray-100 shadow-sm">
                         <i class="fa-solid fa-receipt text-4xl text-gray-200 mb-4"></i>
                         <p class="text-sm font-bold text-gray-400">Belum ada catatan transfer</p>
@@ -4961,11 +4967,87 @@
                 return;
             }
 
-            let html = '';
+            // Kelompokkan berdasarkan tanggal (dateStr)
+            const groupedData = {};
             historyData.forEach(item => {
-                const dateDisplay = item.dateStr || "Tanggal tidak diketahui";
+                const dStr = item.dateStr || "Tanggal tidak diketahui";
+                if (!groupedData[dStr]) {
+                    groupedData[dStr] = { items: [], totalNominal: 0, count: 0 };
+                }
+                groupedData[dStr].items.push(item);
+                groupedData[dStr].totalNominal += item.nominal;
+                groupedData[dStr].count += 1;
+            });
+
+            // Simpan ke global scope agar bisa diakses fungsi showTransferDetail
+            window.transferGroupedData = groupedData;
+
+            // Urutkan grup tanggal dari yang paling baru
+            const sortedDates = Object.keys(groupedData).sort((a, b) => {
+                const maxTimeA = Math.max(...groupedData[a].items.map(i => i.timestamp || 0));
+                const maxTimeB = Math.max(...groupedData[b].items.map(i => i.timestamp || 0));
+                return maxTimeB - maxTimeA;
+            });
+
+            let html = '';
+            sortedDates.forEach(dateKey => {
+                const group = groupedData[dateKey];
+                
+                // Parse tanggal untuk format Hari, Tanggal/Bulan/Tahun
+                let dayName = "";
+                let dateFormatted = dateKey;
+                try {
+                    const maxTime = Math.max(...group.items.map(i => i.timestamp || 0));
+                    if(maxTime > 0) {
+                        const dObj = new Date(maxTime);
+                        dayName = dObj.toLocaleDateString('id-ID', { weekday: 'long' });
+                        dateFormatted = dObj.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                    }
+                } catch(e){}
+
+                html += `
+                    <div onclick="showTransferDetail('${dateKey}', '${dayName}', '${dateFormatted}')" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between active:scale-95 transition-all cursor-pointer hover:bg-gray-50">
+                        <div class="flex items-center gap-3">
+                            <div class="w-12 h-12 bg-indigo-50 text-indigo-500 rounded-xl flex items-center justify-center border border-indigo-100">
+                                <i class="fa-regular fa-calendar-check text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-bold text-gray-800">${dayName ? dayName + ', ' : ''}${dateFormatted}</h4>
+                                <p class="text-[10px] text-gray-500 mt-0.5">${group.count} Transaksi</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-[9px] text-gray-400 font-bold uppercase tracking-widest">Total</p>
+                            <p class="text-sm font-extrabold text-indigo-600">Rp ${group.totalNominal.toLocaleString('id-ID')}</p>
+                        </div>
+                    </div>
+                `;
+            });
+
+            dailyListContainer.innerHTML = html;
+        }
+
+        window.showTransferDetail = function(dateKey, dayName, dateFormatted) {
+            const group = window.transferGroupedData[dateKey];
+            if (!group) return;
+
+            const dailyList = document.getElementById('transfer-daily-list');
+            const detailView = document.getElementById('transfer-detail-view');
+            const detailItems = document.getElementById('transfer-detail-items');
+            const detailTitle = document.getElementById('transfer-detail-date-title');
+
+            if (!dailyList || !detailView || !detailItems) return;
+
+            // Set Title
+            detailTitle.innerText = `Riwayat: ${dayName ? dayName + ', ' : ''}${dateFormatted}`;
+
+            // Sort item di dalam hari itu dari yang terbaru
+            const items = group.items.sort((a, b) => b.timestamp - a.timestamp);
+
+            let html = '';
+            items.forEach(item => {
                 const timeDisplay = item.timeStr ? `${item.timeStr} WIB` : "";
-                const nameDisplay = item.orderName || "Orderan (Data Lama)";
+                const nameDisplay = item.orderName || "Orderan";
 
                 html += `
                     <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-2 relative overflow-hidden transition-all hover:bg-gray-50">
@@ -4973,7 +5055,7 @@
                         <div class="flex justify-between items-start pl-2">
                             <div class="pr-2">
                                 <h4 class="text-xs font-bold text-gray-800 line-clamp-2 leading-tight">${nameDisplay}</h4>
-                                <p class="text-[10px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${dateDisplay} ${timeDisplay}</p>
+                                <p class="text-[10px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${timeDisplay}</p>
                             </div>
                             <span class="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 whitespace-nowrap shrink-0">
                                 Transfer
@@ -4987,7 +5069,21 @@
                 `;
             });
 
-            container.innerHTML = html;
+            detailItems.innerHTML = html;
+
+            // Animasi transisi
+            dailyList.classList.add('hidden');
+            detailView.classList.remove('hidden');
+            
+            // Scroll sedikit ke atas agar lebih enak dilihat
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        window.closeTransferDetail = function() {
+            const dailyList = document.getElementById('transfer-daily-list');
+            const detailView = document.getElementById('transfer-detail-view');
+            if(dailyList) dailyList.classList.remove('hidden');
+            if(detailView) detailView.classList.add('hidden');
         }
         
         // --- LOGIKA UPLOAD MENU ---
