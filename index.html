@@ -3133,9 +3133,32 @@
             link.href = manifestUrl;
             document.head.appendChild(link);
 
-            // Inject Service Worker (Dummy agar memenuhi syarat PWA browser)
+            // Inject Service Worker (DIPERBARUI: Menangani Notifikasi Agresif di Background)
             if ('serviceWorker' in navigator) {
-                const swCode = "self.addEventListener('fetch', function(e) {});";
+                const swCode = `
+                    self.addEventListener('fetch', function(e) {});
+                    
+                    // Menangani klik pada Notifikasi (Membawa aplikasi ke depan/Fokus)
+                    self.addEventListener('notificationclick', function(event) {
+                        event.notification.close(); // Tutup notifikasi setelah diklik
+                        
+                        event.waitUntil(
+                            clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
+                                // Cek apakah aplikasi sudah terbuka di tab/jendela
+                                for (var i = 0; i < clientList.length; i++) {
+                                    var client = clientList[i];
+                                    if (client.url && 'focus' in client) {
+                                        return client.focus(); // Fokuskan ke aplikasi
+                                    }
+                                }
+                                // Jika benar-benar tertutup, buka jendela baru
+                                if (clients.openWindow) {
+                                    return clients.openWindow('/');
+                                }
+                            })
+                        );
+                    });
+                `;
                 const swBlob = new Blob([swCode], {type: 'application/javascript'});
                 const swUrl = URL.createObjectURL(swBlob);
                 navigator.serviceWorker.register(swUrl).catch(err => console.log('SW Registration failed', err));
@@ -3300,6 +3323,15 @@
             const errorMsg = document.getElementById('login-error-msg');
             const uid = input.value.trim().toUpperCase();
             
+            // MEMINTA IZIN NOTIFIKASI SISTEM SAAT RIDER LOGIN
+            if ('Notification' in window) {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(function (permission) {
+                        if (permission === 'granted') console.log('Izin Notifikasi Diberikan');
+                    });
+                }
+            }
+
             if (!uid) { errorMsg.innerText = "Silakan masukkan UID Anda."; errorMsg.classList.remove('hidden'); return; }
             errorMsg.classList.add('hidden'); 
             
@@ -5364,7 +5396,23 @@
               popup.classList.remove('hidden');
               popup.classList.add('flex');
 
-              // Play Sound Notif Berulang & Getar
+              // --- SISTEM NOTIFIKASI AGRESIF (HEADS-UP, BACKGROUND, PERSISTENT) ---
+              if ('serviceWorker' in navigator && 'Notification' in window && Notification.permission === 'granted') {
+                  navigator.serviceWorker.ready.then(function(registration) {
+                      registration.showNotification('🔥 ORDERAN BARU MASUK! 🔥', {
+                          body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu! Klik untuk buka.`,
+                          icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon PROJEKGO
+                          badge: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png',
+                          vibrate: [1000, 500, 1000, 500, 1000, 500, 2000, 1000, 2000], // Getaran panjang & agresif
+                          requireInteraction: true, // PERSISTENT: Tidak hilang sampai diklik/diswipe
+                          renotify: true, // Akan bunyi lagi meskipun notif sebelumnya belum ditutup
+                          tag: 'order-masuk-' + docId, // Cegah duplikasi notifikasi ID yang sama
+                          silent: false // Pastikan bunyi bawaan HP menyala
+                      });
+                  });
+              }
+
+              // Play Sound Notif Berulang & Getar (Untuk saat App sedang dibuka / Foreground)
               try { 
                   if(window.incomingOrderAudio) {
                       window.incomingOrderAudio.pause();
@@ -5416,6 +5464,15 @@
                       }
                       if ("vibrate" in navigator) navigator.vibrate(0);
                       if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+
+                      // Tutup Notifikasi Sistem jika diterima
+                      if ('serviceWorker' in navigator) {
+                          navigator.serviceWorker.ready.then(registration => {
+                              registration.getNotifications({tag: 'order-masuk-' + docId}).then(notifications => {
+                                  notifications.forEach(notification => notification.close());
+                              });
+                          });
+                      }
 
                   } catch (e) {
                       console.error("Error menerima order:", e);
@@ -5470,55 +5527,42 @@
 
               // List Item
               const listEl = document.getElementById('active-order-items');
+              let copyText = `*PROJEKGO DELIVERY ORDER*\n`;
+              copyText += `Customer: ${data.customer_name || "Pelanggan"}\n`;
+              copyText += `----------------------\n*Daftar Pesanan:*\n`;
+
               if (data.items && Array.isArray(data.items) && data.items.length > 0) {
                   listEl.innerHTML = data.items.map(item => {
                       // Membersihkan simbol list bawaan jika ada (-, •), tapi BIARKAN angka
                       const cleanName = item.name.replace(/^[\-\•\·\s]+/, '');
-                      // Cek apakah kalimat diawali dengan angka, jika ya tambah strip, jika tidak biarkan polos
                       const isNumberFirst = /^\d/.test(cleanName);
                       const prefix = isNumberFirst ? '- ' : '';
+                      const indentClass = isNumberFirst ? 'ml-2 text-gray-600 font-medium text-xs leading-tight' : 'text-gray-800 font-bold text-xs mt-1 leading-tight';
                       
-                      // Tambahkan margin kiri (ml-3) jika itu list, jadikan judul hitam tebal jika bukan list
-                      const indentClass = isNumberFirst ? 'ml-3 text-gray-600 font-medium text-sm leading-tight' : 'text-gray-900 font-black text-sm mt-2 leading-tight';
+                      copyText += `${prefix}${cleanName}\n`;
                       
-                      return `
-                      <li class="pb-0.5 last:pb-0">
-                          <div class="${indentClass}">${prefix}${cleanName}</div>
-                      </li>
-                      `;
+                      return `<li class="pb-0.5"><div class="${indentClass}">${prefix}${cleanName}</div></li>`;
                   }).join('');
               } else {
-                  listEl.innerHTML = `<li class="text-gray-400 italic text-xs">- Pesanan dari admin (tanpa rincian item)</li>`;
+                  listEl.innerHTML = `<li class="text-gray-400 italic text-xs">- Pesanan dari admin</li>`;
+                  copyText += `- Pesanan dari admin\n`;
               }
 
-              // Logika Copy Pesanan
+              // Logika Tombol Copy
               const btnCopy = document.getElementById('btn-copy-order');
               if (btnCopy) {
-                  btnCopy.onclick = () => {
-                      let copyText = "*Detail Pesanan:*\n";
-                      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                          data.items.forEach(item => {
-                              // Membersihkan simbol list bawaan jika ada, BIARKAN angka
-                              const cleanName = item.name.replace(/^[\-\•\·\s]+/, '');
-                              
-                              // Berlaku juga untuk teks yang akan di-copy, menjorok dengan spasi jika list
-                              const isNumberFirst = /^\d/.test(cleanName);
-                              const prefix = isNumberFirst ? '  - ' : '';
-                              copyText += `${prefix}${cleanName}\n`;
-                          });
-                      } else {
-                          copyText += "- Pesanan dari admin\n";
-                      }
-                      
-                      copyText += `\n*Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
+                  const newBtnCopy = btnCopy.cloneNode(true);
+                  btnCopy.parentNode.replaceChild(newBtnCopy, btnCopy);
+                  
+                  newBtnCopy.addEventListener('click', () => {
+                      let finalCopyText = copyText;
+                      finalCopyText += `----------------------\n*Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
                       if (extraFee > 0) {
-                          copyText += ` + Rp ${extraFee.toLocaleString('id-ID')} (tambahan)`;
+                          finalCopyText += ` + Rp ${extraFee.toLocaleString('id-ID')} (tambahan)`;
                       }
                       
-                      // Menggunakan document.execCommand sebagai metode yang paling kompatibel untuk mobile/iframe
                       const textArea = document.createElement("textarea");
-                      textArea.value = copyText;
-                      // Hindari scroll layar saat textarea difokuskan
+                      textArea.value = finalCopyText;
                       textArea.style.position = "fixed";
                       textArea.style.top = "0";
                       textArea.style.left = "0";
@@ -5528,15 +5572,14 @@
                       textArea.select();
                       try {
                           document.execCommand('copy');
-                          // Feedback visual ke tombol copy
-                          btnCopy.innerHTML = '<i class="fa-solid fa-check text-green-500"></i>';
-                          setTimeout(() => { btnCopy.innerHTML = '<i class="fa-regular fa-copy"></i>'; }, 2000);
+                          newBtnCopy.innerHTML = '<i class="fa-solid fa-check text-green-500"></i>';
+                          setTimeout(() => { newBtnCopy.innerHTML = '<i class="fa-regular fa-copy"></i>'; }, 2000);
                       } catch (err) {
                           console.error('Gagal menyalin', err);
                           alert('Gagal menyalin pesanan ke clipboard.');
                       }
                       document.body.removeChild(textArea);
-                  };
+                  });
               }
 
               // Tampilkan Overlay (mengunci layar)
