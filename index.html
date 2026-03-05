@@ -3303,14 +3303,38 @@
             const urlParams = new URLSearchParams(window.location.search);
             const urlUID = urlParams.get('uid');
             
-            // SET nilai input, biarkan handleLogin mengeksekusi validasi keamanan perangkat
+            // --- PERBAIKAN: AUTO-LOGIN INSTAN (MEMOTONG WAKTU LOADING 5 DETIK) ---
             if (urlUID) { 
                 document.getElementById('uid-input').value = urlUID.trim().toUpperCase(); 
                 handleLogin(); 
             } 
             else if (savedUID) { 
-                document.getElementById('uid-input').value = savedUID.trim().toUpperCase(); 
-                handleLogin(); 
+                const cleanSavedUID = savedUID.trim().toUpperCase();
+                document.getElementById('uid-input').value = cleanSavedUID; 
+                
+                // Cek apakah data rider sudah ada di memori HP
+                const cacheKey = `rider_data_${cleanSavedUID}`;
+                const hasCache = localStorage.getItem(cacheKey);
+                
+                if (hasCache) {
+                    // JIKA ADA CACHE: Langsung tembak ke Dashboard (Hitungan Milidetik)
+                    currentUserUID = cleanSavedUID;
+                    document.getElementById('login-page').style.display = 'none';
+                    document.getElementById('loading-overlay').style.display = 'flex';
+                    
+                    // fetchData() akan mendeteksi cache dan langsung merender UI seketika
+                    fetchData();
+                    
+                    // Pengecekan keamanan ganda (Device Binding) dilakukan di background
+                    setTimeout(() => {
+                        if (typeof window.startDeviceListener === 'function' && window.isFirebaseReady) {
+                            window.startDeviceListener(currentUserUID);
+                        }
+                    }, 3000);
+                } else {
+                    // Jika memori HP kosong, baru lakukan verifikasi ke server
+                    handleLogin(); 
+                }
             }
             initSwipe();
         }
