@@ -190,8 +190,11 @@
             <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">Pilih tanggal untuk melihat semua orderan yang telah diselesaikan rider (DO). Gunakan data ini untuk direkap ke buku besar.</p>
             
             <div class="flex items-center gap-2">
-                <input type="date" id="history-date" onchange="renderHistoryOrders()" class="flex-1 bg-slate-50 border border-gray-200 rounded-xl p-3 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500">
-                <button onclick="renderHistoryOrders()" class="bg-slate-800 text-white p-3 rounded-xl hover:bg-slate-900 transition-colors">
+                <div class="flex-1 bg-slate-50 border border-gray-200 rounded-xl flex items-center px-3 focus-within:ring-2 focus-within:ring-sky-500 overflow-hidden shadow-inner">
+                    <span id="history-day-name" class="text-[13px] font-black text-sky-600 mr-1 shrink-0 hidden uppercase tracking-wide">Hari</span>
+                    <input type="date" id="history-date" onchange="updateDayName(); renderHistoryOrders()" class="w-full bg-transparent py-3 text-sm font-bold text-slate-700 focus:outline-none border-none cursor-pointer">
+                </div>
+                <button onclick="renderHistoryOrders()" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0">
                     <i class="fa-solid fa-magnifying-glass"></i>
                 </button>
             </div>
@@ -346,6 +349,7 @@
                 const mm = String(today.getMonth() + 1).padStart(2, '0');
                 const yyyy = today.getFullYear();
                 document.getElementById('history-date').value = yyyy + '-' + mm + '-' + dd;
+                if(typeof window.updateDayName === 'function') window.updateDayName();
             }
         });
         signInAnonymously(auth);
@@ -368,6 +372,20 @@
 
             if (page === 'history') {
                 renderHistoryOrders();
+            }
+        };
+
+        // FUNGSI BARU: Update Nama Hari di Input Tanggal
+        window.updateDayName = () => {
+            const dateVal = document.getElementById('history-date').value;
+            const dayEl = document.getElementById('history-day-name');
+            if(dateVal) {
+                const d = new Date(dateVal);
+                const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                dayEl.innerText = days[d.getDay()] + ',';
+                dayEl.classList.remove('hidden');
+            } else {
+                dayEl.classList.add('hidden');
             }
         };
 
@@ -403,9 +421,9 @@
         async function handleOrderTimeout(order) {
             console.log(`Order ${order.id} timeout. Mencoba memindahkan dari Rider: ${order.rider_name}`);
             
-            // 1. Matikan secara paksa toggle rider yang lama & keluarkan dari antrean utama
+            // 1. Matikan secara paksa toggle rider yang lama & keluarkan dari antrean utama, bersihkan riwayat lokasinya
             const oldRiderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', order.rider_uid);
-            await setDoc(oldRiderRef, { is_online: false, is_available: false, in_main_queue: false }, { merge: true });
+            await setDoc(oldRiderRef, { is_online: false, is_available: false, in_main_queue: false, last_drop_desc: "", proof_desc: "" }, { merge: true });
 
             // 2. Cari rider pengganti (Urutan Pertama di Antrean Utama)
             const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
@@ -672,7 +690,7 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', uid);
-                    await setDoc(ref, { is_online: false, is_available: false, in_main_queue: false }, { merge: true });
+                    await setDoc(ref, { is_online: false, is_available: false, in_main_queue: false, last_drop_desc: "", proof_desc: "" }, { merge: true });
                     window.showAlert('Berhasil', `${name} berhasil dikeluarkan.`, 'success');
                     if (document.getElementById('selected-rider-uid').value === uid) window.clearSelection();
                 } catch (error) {
@@ -694,7 +712,7 @@
                 try {
                     const promises = availableNewShift.map(rider => {
                         const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', rider.uid);
-                        return setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp() }, { merge: true });
+                        return setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "", proof_desc: "" }, { merge: true });
                     });
                     await Promise.all(promises);
                     window.showAlert('Berhasil', 'Rider masuk ke Antrean Radar.', 'success');
@@ -712,7 +730,7 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', uid);
-                    await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp() }, { merge: true });
+                    await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "", proof_desc: "" }, { merge: true });
                     window.showAlert('Berhasil', `${name} masuk ke Antrean Radar.`, 'success');
                 } catch (error) {
                     window.showAlert('Gagal', 'Terjadi kesalahan.', 'error');
@@ -1112,7 +1130,9 @@
                         await setDoc(riderRef, { 
                             in_main_queue: true, 
                             is_available: true, 
-                            last_drop_time: new Date(0) 
+                            last_drop_time: new Date(0),
+                            last_drop_desc: "",
+                            proof_desc: ""
                         }, { merge: true });
                     }
                     
