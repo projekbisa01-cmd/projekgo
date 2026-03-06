@@ -2269,10 +2269,10 @@
         ];
 
         let currentUserUID = "";
-        let appsScriptData = []; // NEW: Wadah data riwayat dari Spreadsheet (H-1 dst)
-        let firebaseData = [];   // NEW: Wadah data live harian dari Firebase (Hari ini)
+        let appsScriptData = []; // Tidak lagi dipakai untuk riwayat
+        let firebaseData = [];   // Sumber tunggal untuk data riwayat (Firebase)
         let rawData = [];
-        let allRiderData = []; // NEW: Menyimpan data seluruh rider untuk leaderboard
+        let allRiderData = []; // Tetap menyimpan data seluruh rider untuk leaderboard
         let dailyIncomeTarget = 100000;
         let currentWeeklyAdmRate = 0.16; // Fix 16% untuk semua rider
         let weeklyChartInstance = null;
@@ -3232,6 +3232,8 @@
                 let d = new Date(str); if (!isNaN(d.getTime())) return formatDateToInternal(d);
             } catch (e) { } return "";
         }
+        window.parseSheetDate = parseSheetDate;
+
         function formatDateToInternal(d) {
             try {
                 const parts = DATE_FORMATTER.formatToParts(d);
@@ -3672,6 +3674,7 @@
             if (typeof window.startSuspensionListener === 'function') window.startSuspensionListener(currentUserUID);
             if (typeof window.startOrderListener === 'function') window.startOrderListener(currentUserUID);
             if (typeof window.startDeviceListener === 'function') window.startDeviceListener(currentUserUID);
+            if (typeof window.cleanupOldOrders === 'function') window.cleanupOldOrders(currentUserUID);
             
             document.getElementById('login-page').style.display = 'none'; 
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -3747,7 +3750,6 @@
                         const parsedCache = JSON.parse(cached);
                         if (parsedCache.length > 0) {
                             rawData = parsedCache; 
-                            appsScriptData = parsedCache; // FIX: Mencegah history cache terhapus/blank saat loading data realtime
                             if (lastDataCount === -1) lastDataCount = rawData.length;
                             document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('main-app').classList.remove('hidden');
                             updateUI(); setTimeout(showWelcomePopup, 500);
@@ -3768,7 +3770,7 @@
                 let items = [];
                 let newData = [];
 
-                // NEW: Gunakan data yang sudah di-fetch saat verifikasi login manual
+                // Gunakan data yang sudah di-fetch saat verifikasi login manual
                 if (window.prefetchedAllData && window.prefetchedRiderData && !forceRefresh) {
                     items = window.prefetchedAllData;
                     newData = window.prefetchedRiderData;
@@ -3784,10 +3786,14 @@
                     newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
                 }
                 
-                // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
+                // SIMPAN DATA GLOBAL UNTUK LEADERBOARD (TETAP DARI SHEET)
                 allRiderData = items;
                 
-                if (newData.length === 0) {
+                if (newData.length > 0) {
+                    window.currentRiderName = newData[0].Nama_Rider || "Rider";
+                }
+
+                if (newData.length === 0 && !window.currentRiderName) {
                     // JIKA SETELAH FETCH UID BENAR-BENAR TIDAK ADA (DIHAPUS ADMIN)
                     if (typeof window.handleLogout === 'function') {
                         window.handleLogout("Sesi berakhir: UID Anda tidak lagi terdaftar di sistem.");
@@ -3800,22 +3806,14 @@
                 }
                 
                 // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
-                currentUserUID = String(newData[0].UID).trim();
+                currentUserUID = String(newData[0]?.UID || currentUserUID).trim();
                 
-                if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
-                lastDataCount = newData.length; 
+                // LOGIKA SPREADSHEET (appsScriptData) UNTUK PENDAPATAN RESMI DILEPAS DARI SINI
                 
-                // --- HYBRID DATA LOGIC: PISAHKAN DATA SHEET ---
-                // 1. Masukkan ke appsScriptData (Sesuai request: data hari ini dari Sheet TIDAK DIBUANG)
-                appsScriptData = newData; 
-                
-                // 2. Jika module Firebase sudah siap, panggil listener khusus order hari ini
+                // Panggil listener khusus order Firebase (yg sekarang jadi SATU-SATUNYA sumber utama)
                 if (typeof window.startDailyOrdersListener === 'function') {
                     window.startDailyOrdersListener(currentUserUID);
                 }
-                
-                // 3. Gabungkan dan Render
-                combineAndRenderData();
                 
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
                 
@@ -3830,60 +3828,15 @@
             }
         }
 
-        // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
+        // --- FUNGSI BARU: PENGGABUNG DATA (SEKARANG 100% FIREBASE) ---
         function combineAndRenderData() {
-            const seenMap = new Map();
-            const todayKey = getJakartaDateString();
+            // Karena sekarang data riwayat dan pendapatan FULL dari Firebase,
+            // kita tidak lagi menggabungkan (merge) dengan data Sheet.
+            rawData = [...firebaseData];
             
-            // Kumpulan Kunci/ID data Firebase untuk proteksi "Live Delete"
-            const validLiveKeys = new Set();
-            
-            // 1. Prioritaskan Data Firebase (Realtime Master)
-            firebaseData.forEach(item => {
-                const dateKey = parseSheetDate(item.Tanggal);
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); 
-                
-                const uniqueKey = `${dateKey}_${timeKey}`;
-                
-                seenMap.set(uniqueKey, { ...item });
-                validLiveKeys.add(uniqueKey); // Tandai bahwa orderan ini sah & masih ada di Firebase
-            });
-            
-            // 2. Masukkan data Sheet (Backup / Data Lampau)
-            appsScriptData.forEach(item => {
-                const dateKey = parseSheetDate(item.Tanggal);
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
-                
-                const uniqueKey = `${dateKey}_${timeKey}`;
-                
-                // ==========================================
-                // 🔥 LOGIKA SUPER CEPAT (ANTI GHOST DATA) 🔥
-                // Jika ini adalah data Hari Ini, tapi TIDAK ADA di validLiveKeys (Firebase),
-                // Itu artinya Admin baru saja MENGHAPUSNYA secara live dari Firebase!
-                // Maka abaikan data backup dari sheet ini agar langsung hilang di layar Rider.
-                // ==========================================
-                if (dateKey === todayKey && !validLiveKeys.has(uniqueKey)) {
-                    return; // SKIP / BUANG DATA INI
-                }
-                
-                if (!seenMap.has(uniqueKey)) {
-                    seenMap.set(uniqueKey, { ...item });
-                } else {
-                    // Jika data ada di Firebase & Sheet, ambil Nominal yang sudah disahkan Admin di Sheet
-                    const existing = seenMap.get(uniqueKey);
-                    
-                    if (!item.is_realtime && existing.is_realtime) {
-                        existing.Nominal_Kotor = item.Nominal_Kotor || existing.Nominal_Kotor;
-                        existing.Tambahan = item.Tambahan || existing.Tambahan;
-                        existing.Keterangan = item.Keterangan || existing.Keterangan;
-                        existing.is_realtime = false;
-                    }
-                }
-            });
-
-            rawData = Array.from(seenMap.values());
+            // Peringatan Suara jika ada order baru divalidasi admin
+            if (lastDataCount !== -1 && rawData.length > lastDataCount) playNotificationVoice();
+            lastDataCount = rawData.length; 
 
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
@@ -3892,7 +3845,6 @@
                 updateUI(); 
                 
                 // 🔥 LOGIKA AUTO-REFRESH DAFTAR ORDERAN 🔥
-                // Memaksa daftar riwayat yang sedang terbuka untuk berkedip/update detik itu juga
                 if (window.currentOpenDetailDate) {
                     const detailContainer = document.getElementById('daily-detail-container');
                     if (detailContainer && !detailContainer.classList.contains('hidden')) {
@@ -3900,7 +3852,12 @@
                     }
                 }
                 
-                if (rawData[0] && rawData[0].Nama_Rider) muatRatingRider(rawData[0].Nama_Rider);
+                if (window.currentRiderName) {
+                    muatRatingRider(window.currentRiderName);
+                } else if (rawData[0] && rawData[0].Nama_Rider) {
+                    muatRatingRider(rawData[0].Nama_Rider);
+                }
+
                 document.getElementById('loading-overlay').style.display = 'none'; 
                 document.getElementById('main-app').classList.remove('hidden');
                 fetchVehicleAndDocsData(currentUserUID); 
@@ -4138,14 +4095,13 @@
         }
 
         function updateUI() {
-            if (rawData.length === 0) return;
-            const firstEntry = rawData[0];
-            const name = firstEntry.Nama_Rider || "Rider";
+            // Hapus blokir jika rawData kosong agar UI tetap ter-render meski belum ada order
+            const name = window.currentRiderName || (rawData.length > 0 ? rawData[0].Nama_Rider : "Rider");
             document.getElementById('display-rider-name').innerText = name;
             
             if (!profileCached) {
                 document.getElementById('profile-name').innerText = name;
-                document.getElementById('profile-id').innerText = `ID: ${firstEntry.UID}`;
+                document.getElementById('profile-id').innerText = `ID: ${currentUserUID}`;
                 const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                 if (cachedDocs) { updateDocsUI(JSON.parse(cachedDocs)); }
                 const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=ff8c00&color=fff`;
@@ -4472,9 +4428,6 @@
                     ? 'bg-red-600 text-white animate-pulse px-2 py-0.5 rounded shadow-sm inline-block' 
                     : 'text-gray-600';
                 
-                // NEW: Tambahkan Badge Live jika data berasal dari Firebase (Hari Ini)
-                const liveBadge = item.is_realtime ? `<span class="ml-2 text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded animate-pulse font-bold shadow-sm">LIVE</span>` : '';
-                
                 html += `<div class="mb-2 pb-4 border-b border-dashed border-gray-300 last:border-0 last:pb-0 px-2">
                             <div class="flex flex-col space-y-2">
                                 <div class="flex items-start justify-between">
@@ -4485,7 +4438,6 @@
                                         <div>
                                             <div class="flex items-center gap-1">
                                                 <h4 class="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest truncate max-w-[130px]" title="${item.List_Pesanan || item.Keterangan || 'PERJALANAN'}">${item.List_Pesanan || item.Keterangan || 'PERJALANAN'}</h4>
-                                                ${liveBadge}
                                             </div>
                                             <p class="text-sm font-bold text-gray-800">${parseSheetTime(item.Jam)} WIB</p>
                                         </div>
@@ -5461,7 +5413,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
 
       const firebaseConfig = {
@@ -5521,6 +5473,7 @@
                           if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(savedUid);
                           if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(savedUid);
                           if (typeof window.startDeviceListener === 'function') window.startDeviceListener(savedUid);
+                          if (typeof window.cleanupOldOrders === 'function') window.cleanupOldOrders(savedUid);
                       }
                   }
 
@@ -5811,7 +5764,7 @@
               const dailyOrdersRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', cleanUid, 'daily_orders');
 
               dailyOrdersUnsubscribe = onSnapshot(dailyOrdersRef, (snapshot) => {
-                  let todayOrders = [];
+                  let allFirebaseOrders = [];
                   const todayStr = getJakartaDateString(); // Format MM-DD-YYYY internal aplikasi
 
                   snapshot.forEach(doc => {
@@ -5831,11 +5784,11 @@
                       }
                       const finalJam = window.parseSheetTime(rawJam);
                       
-                      // Ambil SEMUA riwayat order dengan status Selesai untuk masuk ke kontainer Daftar Order Selesai
+                      // Ambil SEMUA riwayat order dengan status Selesai untuk masuk ke kontainer Daftar Order
                       if (status === 'selesai' || status === 'completed') {
-                          todayOrders.push({
+                          allFirebaseOrders.push({
                               UID: cleanUid,
-                              Nama_Rider: document.getElementById('display-rider-name').innerText || "Rider",
+                              Nama_Rider: window.currentRiderName || document.getElementById('display-rider-name').innerText || "Rider",
                               Tanggal: parsedDate,
                               Jam: finalJam,
                               Status: "Selesai",
@@ -5844,13 +5797,13 @@
                               Tambahan: data.Tambahan || data.tambahan || data.extra || data.Extra || 0,
                               Keterangan: data.Keterangan || data.keterangan || "Order Aplikasi (Auto)",
                               List_Pesanan: data["list pesanan"] || data.List_Pesanan || (Array.isArray(data.items) ? data.items.map(i => i.name).join(', ') : ""), // Tarik data list pesanan untuk riwayat
-                              is_realtime: true // Penanda unik untuk memunculkan badge berkedip "LIVE" di riwayat
+                              is_realtime: true // Tetap dijaga format datanya
                           });
                       }
                   });
 
                   // Sortir berdasarkan tanggal dan jam terbaru
-                  todayOrders.sort((a, b) => {
+                  allFirebaseOrders.sort((a, b) => {
                       const jamA = a.Jam === "-" ? "00:00" : a.Jam;
                       const jamB = b.Jam === "-" ? "00:00" : b.Jam;
                       const dateA = new Date(`${a.Tanggal.replace(/-/g, '/')} ${jamA}`);
@@ -5858,15 +5811,72 @@
                       return dateB - dateA;
                   });
 
-                  firebaseData = todayOrders;
+                  firebaseData = allFirebaseOrders;
                   
-                  // Panggil fungsi penggabung di luar modul untuk merender ulang UI
+                  // Panggil fungsi penggabung (yang sekarang hanya merender Firebase) untuk merender ulang UI
                   if (typeof window.combineAndRenderData === 'function') {
                       window.combineAndRenderData();
                   }
               }, (error) => {
                   console.error("Gagal mendengarkan order harian Firebase:", error);
               });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM PEMBERSIH DATA LAMA (> 45 HARI) UNTUK HEMAT RUANG
+          // -------------------------------------------------------------
+          window.cleanupOldOrders = async (uid) => {
+              if (!uid) return;
+              const cleanUid = String(uid).trim().toUpperCase();
+              
+              // Jalankan maksimal 1x sehari per rider agar tidak membebani database
+              const cacheKey = `last_cleanup_${cleanUid}`;
+              const lastRun = localStorage.getItem(cacheKey);
+              const todayStr = new Date().toDateString();
+              
+              if (lastRun === todayStr) return;
+
+              try {
+                  const dailyOrdersRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', cleanUid, 'daily_orders');
+                  const snapshot = await getDocs(dailyOrdersRef);
+                  
+                  const cutoffDate = new Date();
+                  cutoffDate.setDate(cutoffDate.getDate() - 45); // Batas 45 hari
+                  
+                  const deletePromises = [];
+                  
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      let orderDate = null;
+                      
+                      // Ambil tanggal order
+                      if (data.created_at && typeof data.created_at.toDate === 'function') {
+                          orderDate = data.created_at.toDate();
+                      } else if (data.Tanggal || data.tanggal) {
+                          const parsed = window.parseSheetDate(data.Tanggal || data.tanggal);
+                          if (parsed) {
+                              const parts = parsed.split('-'); // Format internal MM-DD-YYYY
+                              if(parts.length === 3) {
+                                  orderDate = new Date(parts[2], parts[0]-1, parts[1]);
+                              }
+                          }
+                      }
+                      
+                      // Jika data valid dan umurnya lebih tua dari 45 hari, hapus!
+                      if (orderDate && orderDate < cutoffDate) {
+                          deletePromises.push(deleteDoc(docSnap.ref));
+                      }
+                  });
+                  
+                  if (deletePromises.length > 0) {
+                      await Promise.all(deletePromises);
+                      console.log(`[PEMBERSIHAN OTOMATIS] ${deletePromises.length} data order (>45 hari) berhasil dihapus.`);
+                  }
+                  
+                  localStorage.setItem(cacheKey, todayStr);
+              } catch (e) {
+                  console.error("Gagal membersihkan data lama:", e);
+              }
           };
 
           // -------------------------------------------------------------
