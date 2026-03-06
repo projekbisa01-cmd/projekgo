@@ -886,6 +886,23 @@
         </div>
     </div>
 
+    <!-- POPUP PERINGATAN ORDER TERLALU CEPAT (< 10 MENIT) -->
+    <div id="fast-completion-warning-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="fast-completion-warning-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-red-600 animate-pulse"></div>
+            <div class="w-20 h-20 bg-red-50 text-red-600 rounded-full flex items-center justify-center text-4xl mb-4 shadow-inner border-4 border-white">
+                <i class="fa-solid fa-stopwatch animate-pulse"></i>
+            </div>
+            <h2 class="text-2xl font-black text-red-600 mb-3 leading-tight tracking-tight uppercase">TERLALU CEPAT!</h2>
+            <p class="text-gray-700 font-bold text-sm leading-relaxed mb-6 bg-red-50 p-4 rounded-xl border border-red-100 italic">
+                "Pastikan orderan kamu sudah sampai, jika belum jangan onbid lagi yah, karena bisa terdeteksi <span class="text-red-600 font-black uppercase">CURANG</span>."
+            </p>
+            <button onclick="closeFastCompletionWarning()" class="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                <i class="fa-solid fa-check"></i> Mengerti
+            </button>
+        </div>
+    </div>
+
     <!-- POPUP DOMPET SAYA (BARU) -->
     <div id="wallet-modal" class="fixed inset-0 z-[250] flex items-end opacity-0 pointer-events-none transition-opacity duration-300">
         <div class="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onclick="closeWallet()"></div>
@@ -2645,6 +2662,41 @@
             }
         };
 
+        // FUNGSI BUKA TUTUP POPUP PERINGATAN ORDER CEPAT (< 10 MENIT)
+        window.showFastCompletionWarning = () => {
+            const popup = document.getElementById('fast-completion-warning-popup');
+            const content = document.getElementById('fast-completion-warning-content');
+            if(popup && content) {
+                popup.classList.remove('hidden');
+                popup.classList.add('flex');
+                setTimeout(() => {
+                    popup.classList.remove('opacity-0');
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                }, 10);
+                try { playBeep(400, 0.4); } catch(e){} // Suara peringatan panjang
+            }
+        };
+
+        window.closeFastCompletionWarning = () => {
+            const popup = document.getElementById('fast-completion-warning-popup');
+            const content = document.getElementById('fast-completion-warning-content');
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                    
+                    // Lanjut tampilkan popup rincian pendapatan sukses
+                    if (typeof window.showOrderSuccessPopup === 'function') {
+                        window.showOrderSuccessPopup();
+                    }
+                }, 300);
+            }
+        };
+
         function showWelcomePopup() {
             // Tampilkan popup peringatan pembayaran ADM setiap hari Rabu
             const today = new Date();
@@ -3756,35 +3808,52 @@
 
         // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
-            // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase) dan cegah duplikasi
             const seenMap = new Map();
+            const todayKey = getJakartaDateString();
             
-            // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
-            const allData = [...firebaseData, ...appsScriptData];
+            // Kumpulan Kunci/ID data Firebase untuk proteksi "Live Delete"
+            const validLiveKeys = new Set();
             
-            allData.forEach(item => {
+            // 1. Prioritaskan Data Firebase (Realtime Master)
+            firebaseData.forEach(item => {
                 const dateKey = parseSheetDate(item.Tanggal);
-                
-                // MENGGUNAKAN KOMBINASI TANGGAL + JAM SEBAGAI KUNCI UNIK
                 let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); // Normalisasi jam (ubah . jadi :)
+                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); 
                 
                 const uniqueKey = `${dateKey}_${timeKey}`;
                 
+                seenMap.set(uniqueKey, { ...item });
+                validLiveKeys.add(uniqueKey); // Tandai bahwa orderan ini sah & masih ada di Firebase
+            });
+            
+            // 2. Masukkan data Sheet (Backup / Data Lampau)
+            appsScriptData.forEach(item => {
+                const dateKey = parseSheetDate(item.Tanggal);
+                let timeKey = parseSheetTime(item.Jam);
+                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
+                
+                const uniqueKey = `${dateKey}_${timeKey}`;
+                
+                // ==========================================
+                // 🔥 LOGIKA SUPER CEPAT (ANTI GHOST DATA) 🔥
+                // Jika ini adalah data Hari Ini, tapi TIDAK ADA di validLiveKeys (Firebase),
+                // Itu artinya Admin baru saja MENGHAPUSNYA secara live dari Firebase!
+                // Maka abaikan data backup dari sheet ini agar langsung hilang di layar Rider.
+                // ==========================================
+                if (dateKey === todayKey && !validLiveKeys.has(uniqueKey)) {
+                    return; // SKIP / BUANG DATA INI
+                }
+                
                 if (!seenMap.has(uniqueKey)) {
-                    // Simpan sebagai objek baru agar bisa dimodifikasi
                     seenMap.set(uniqueKey, { ...item });
                 } else {
-                    // JIKA DATA SHEET KETEMU DENGAN DATA FIREBASE (Waktu Sama)
+                    // Jika data ada di Firebase & Sheet, ambil Nominal yang sudah disahkan Admin di Sheet
                     const existing = seenMap.get(uniqueKey);
                     
                     if (!item.is_realtime && existing.is_realtime) {
-                        // Ambil Nominal dari data Admin (Sheet) untuk mengisi Firebase yang kosong
                         existing.Nominal_Kotor = item.Nominal_Kotor || existing.Nominal_Kotor;
                         existing.Tambahan = item.Tambahan || existing.Tambahan;
-                        existing.Keterangan = item.Keterangan || existing.Keterangan; // Timpa keterangan pakai versi admin
-                        
-                        // Opsional: Matikan badge LIVE karena data sudah disahkan Admin
+                        existing.Keterangan = item.Keterangan || existing.Keterangan;
                         existing.is_realtime = false;
                     }
                 }
@@ -3797,6 +3866,16 @@
             
             requestAnimationFrame(() => {
                 updateUI(); 
+                
+                // 🔥 LOGIKA AUTO-REFRESH DAFTAR ORDERAN 🔥
+                // Memaksa daftar riwayat yang sedang terbuka untuk berkedip/update detik itu juga
+                if (window.currentOpenDetailDate) {
+                    const detailContainer = document.getElementById('daily-detail-container');
+                    if (detailContainer && !detailContainer.classList.contains('hidden')) {
+                        showDailyDetail(window.currentOpenDetailDate);
+                    }
+                }
+                
                 if (rawData[0] && rawData[0].Nama_Rider) muatRatingRider(rawData[0].Nama_Rider);
                 document.getElementById('loading-overlay').style.display = 'none'; 
                 document.getElementById('main-app').classList.remove('hidden');
@@ -4470,6 +4549,7 @@
             container.innerHTML = html; return firstKey;
         }
         function showDailyDetail(dateKey) {
+            window.currentOpenDetailDate = dateKey; // Menyimpan status tanggal yang sedang dibuka
             const container = document.getElementById('daily-detail-container'); const list = document.getElementById('daily-detail-list'); const label = document.getElementById('detail-date-label');
             if (!container || !list) return;
             document.querySelectorAll('.day-card').forEach(el => { el.classList.remove('border-orange-500', 'ring-1', 'ring-orange-500', 'bg-orange-50'); el.classList.add('border-gray-100', 'bg-white'); });
@@ -4480,7 +4560,10 @@
             label.innerText = `Detail Order: ${dO.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })}`;
             renderHistory(filteredData, 'daily-detail-list', ADM_RATE_FIXED_PRO); container.classList.remove('hidden'); 
         }
-        function hideDailyDetail() { document.getElementById('daily-detail-container').classList.add('hidden'); }
+        function hideDailyDetail() { 
+            window.currentOpenDetailDate = null; // Membersihkan status saat ditutup
+            document.getElementById('daily-detail-container').classList.add('hidden'); 
+        }
         function renderMonthlyWeeklyList(currentRate) {
             const container = document.getElementById('monthly-weekly-list'); if(!container) return;
             const now = new Date(); const startOfCurrentWeek = getStartOfWeek(now); let html = '';
@@ -6066,6 +6149,13 @@
               window.currentActiveCustomerName = data.customer_name || "Pelanggan";
               window.currentActiveCustomerPhone = data.customer_phone || "";
               
+              // Simpan waktu accept untuk deteksi penyelesaian terlalu cepat (< 10 menit)
+              if (data.accepted_at) {
+                  window.currentOrderAcceptedTime = data.accepted_at.seconds * 1000;
+              } else {
+                  window.currentOrderAcceptedTime = Date.now();
+              }
+              
               const overlay = document.getElementById('active-order-overlay');
               
               // Set Info
@@ -6295,8 +6385,14 @@
                           last_drop_desc: desc 
                       }, { merge: true });
                       
+                      // Cek durasi penyelesaian (10 menit = 600000 ms)
+                      const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
+                      const isFastCompletion = duration < 600000;
+
                       // UI Reset dilakukan otomatis via listener
-                      if (typeof window.showOrderSuccessPopup === 'function') {
+                      if (isFastCompletion && typeof window.showFastCompletionWarning === 'function') {
+                          window.showFastCompletionWarning();
+                      } else if (typeof window.showOrderSuccessPopup === 'function') {
                           window.showOrderSuccessPopup();
                       } else {
                           playBeep(880, 0.1);
