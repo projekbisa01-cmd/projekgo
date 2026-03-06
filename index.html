@@ -835,8 +835,26 @@
 
     <!-- POPUP ORDER SELESAI (BARU) -->
     <div id="order-success-popup" class="fixed inset-0 z-[99999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
-        <div id="order-success-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center">
-            <img src="https://i.ibb.co.com/Fq4mChrg/Yey-Kamu-berhasil-menyelesaikan-orderan.png" alt="Berhasil Menyelesaikan Orderan" class="w-full h-auto rounded-xl mb-6 shadow-sm border border-gray-100">
+        <div id="order-success-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center w-full">
+            <img src="https://i.ibb.co.com/Fq4mChrg/Yey-Kamu-berhasil-menyelesaikan-orderan.png" alt="Berhasil Menyelesaikan Orderan" class="w-full h-auto rounded-xl mb-4 shadow-sm border border-gray-100">
+            
+            <!-- Rincian Pendapatan Masuk -->
+            <div class="w-full bg-orange-50 rounded-2xl p-4 mb-5 border border-orange-100 shadow-inner text-left">
+                <p class="text-[10px] text-orange-500 font-bold uppercase tracking-wider mb-3 text-center border-b border-orange-200/50 pb-2">Pendapatan Order Ini</p>
+                <div class="flex justify-between items-center mb-1.5">
+                    <span class="text-xs text-gray-500 font-bold">Bersih (Kotor - ADM):</span>
+                    <span id="success-net-fee" class="text-sm font-extrabold text-gray-800">Rp 0</span>
+                </div>
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-xs text-gray-500 font-bold">Tambahan:</span>
+                    <span id="success-extra-fee" class="text-sm font-extrabold text-blue-600">Rp 0</span>
+                </div>
+                <div class="flex justify-between items-center pt-2 border-t border-orange-200/50">
+                    <span class="text-sm font-black text-gray-800">Total Masuk:</span>
+                    <span id="success-total-fee" class="text-xl font-black text-green-600">Rp 0</span>
+                </div>
+            </div>
+
             <button onclick="closeOrderSuccessPopup()" class="w-full py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-all text-sm uppercase tracking-widest">
                 OK
             </button>
@@ -2523,6 +2541,23 @@
         window.showOrderSuccessPopup = () => {
             const popup = document.getElementById('order-success-popup');
             const content = document.getElementById('order-success-content');
+            
+            // --- NEW: Kalkulasi dan Update Nilai Pendapatan ---
+            const baseFee = (window.currentActiveOrderBaseFee || 0) * 1000;
+            const extraFee = (window.currentActiveOrderExtraFee || 0) * 1000;
+            const admRate = typeof ADM_RATE_FIXED_PRO !== 'undefined' ? ADM_RATE_FIXED_PRO : 0.16;
+            const netFee = baseFee * (1 - admRate);
+            const totalMasuk = netFee + extraFee;
+
+            const netEl = document.getElementById('success-net-fee');
+            const extraEl = document.getElementById('success-extra-fee');
+            const totalEl = document.getElementById('success-total-fee');
+            
+            if (netEl) netEl.innerText = `Rp ${Math.round(netFee).toLocaleString('id-ID')}`;
+            if (extraEl) extraEl.innerText = `+ Rp ${Math.round(extraFee).toLocaleString('id-ID')}`;
+            if (totalEl) totalEl.innerText = `Rp ${Math.round(totalMasuk).toLocaleString('id-ID')}`;
+            // ------------------------------------------------
+
             if(popup && content) {
                 popup.classList.remove('hidden');
                 popup.classList.add('flex');
@@ -5261,6 +5296,11 @@
                         playBeep(check ? 880 : 440, 0.1); 
                     });
                 }
+                
+                // Pemanasan API Getar (Warm-up) agar browser Android mengizinkan getaran untuk orderan masuk nantinya
+                if ("vibrate" in navigator) {
+                    navigator.vibrate(50);
+                }
             } catch (e) { playBeep(check ? 880 : 440, 0.1); }
             
             try { const url = `${SCRIPT_URL}?action=updateOnbid&uid=${encodeURIComponent(currentUserUID)}&status=${check ? "on" : "off"}`; fetch(url, { method: 'GET', mode: 'no-cors' }); } catch (e) { }
@@ -5820,7 +5860,10 @@
                                   window.incomingOrderAudio.currentTime = 0;
                               }
                               if ("vibrate" in navigator) navigator.vibrate(0);
-                              if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+                              if (window.vibrateInterval) {
+                                  clearInterval(window.vibrateInterval);
+                                  window.vibrateInterval = null;
+                              }
                           }
 
                           // 2. Paksa matikan tombol On-Bid
@@ -5860,7 +5903,10 @@
                           }
                           // Matikan getaran jika ada
                           if ("vibrate" in navigator) navigator.vibrate(0);
-                          if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+                          if (window.vibrateInterval) {
+                              clearInterval(window.vibrateInterval);
+                              window.vibrateInterval = null;
+                          }
 
                           wasActive = true;
                       }
@@ -5942,7 +5988,10 @@
                   
                   // Reset getaran sebelumnya
                   if ("vibrate" in navigator) navigator.vibrate(0);
-                  if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+                  if (window.vibrateInterval) {
+                      clearInterval(window.vibrateInterval);
+                      window.vibrateInterval = null;
+                  }
 
                   window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
                   window.incomingOrderAudio.loop = true;
@@ -5955,7 +6004,8 @@
                   if ("vibrate" in navigator) {
                       navigator.vibrate([500, 300, 500, 300, 500]);
                       window.vibrateInterval = setInterval(() => {
-                          navigator.vibrate([500, 300, 500, 300, 500]);
+                          // Panggil ulang vibrate di dalam interval agar terus bergetar
+                          if ("vibrate" in navigator) navigator.vibrate([500, 300, 500, 300, 500]);
                       }, 2500); // Ulangi pola setiap 2.5 detik
                   }
               } catch(e){}
@@ -5984,7 +6034,10 @@
                           window.incomingOrderAudio.currentTime = 0;
                       }
                       if ("vibrate" in navigator) navigator.vibrate(0);
-                      if (window.vibrateInterval) clearInterval(window.vibrateInterval);
+                      if (window.vibrateInterval) {
+                          clearInterval(window.vibrateInterval);
+                          window.vibrateInterval = null;
+                      }
 
                       // Tutup Notifikasi Sistem jika diterima
                       if ('serviceWorker' in navigator) {
