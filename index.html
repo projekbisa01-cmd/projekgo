@@ -3240,35 +3240,11 @@
         }
         function parseSheetTime(timeInput) {
             if (!timeInput) return "-";
-            
-            // Handle explicit string format "HH:MM" or "HH.MM"
-            if (typeof timeInput === 'string') {
-                let str = timeInput.trim().replace(/\./g, ':');
-                if (/^\d{1,2}:\d{2}/.test(str)) {
-                    let parts = str.split(':');
-                    return `${parts[0].padStart(2, '0')}:${parts[1].substring(0, 2)}`;
-                }
-            }
-            
-            // Handle Excel fractional time (e.g., 0.604166666666667 for 14:30)
-            if (typeof timeInput === 'number' && timeInput > 0 && timeInput < 1) {
-                const totalSeconds = Math.round(timeInput * 86400);
-                const hours = Math.floor(totalSeconds / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-            }
-            
-            // Handle Date Object or Timestamp string
             if (timeInput instanceof Date || !isNaN(Date.parse(timeInput))) {
-                const d = new Date(timeInput); 
-                if (!isNaN(d.getTime())) {
-                    return d.toLocaleTimeString('id-ID', TIME_FORMATTER_OPTS).replace(/\./g, ':').substring(0, 5);
-                }
+                const d = new Date(timeInput); if (!isNaN(d.getTime())) return d.toLocaleTimeString('id-ID', TIME_FORMATTER_OPTS).replace('.', ':');
             }
-            
-            return String(timeInput).trim().replace(/\./g, ':').substring(0, 5);
+            return String(timeInput).trim();
         }
-        window.parseSheetTime = parseSheetTime;
 
         function getInstallmentInfo(uid, referenceDate) {
             if (!referenceDate) referenceDate = new Date();
@@ -5821,23 +5797,13 @@
                       const parsedDate = parseSheetDate(orderDate) || todayStr;
                       const status = String(data.Status || data.status || "").trim().toLowerCase();
                       
-                      // LOGIKA JAM AKURAT (Sinkronisasi dengan Admin)
-                      let rawJam = data.Jam || data.jam || data.Waktu || data.waktu;
-                      if (!rawJam) {
-                          if (data.finished_at && typeof data.finished_at.toDate === 'function') rawJam = data.finished_at.toDate();
-                          else if (data.accepted_at && typeof data.accepted_at.toDate === 'function') rawJam = data.accepted_at.toDate();
-                          else if (data.created_at && typeof data.created_at.toDate === 'function') rawJam = data.created_at.toDate();
-                          else rawJam = "-"; // Mencegah fallback ke waktu lokal rider yang berubah-ubah
-                      }
-                      const finalJam = window.parseSheetTime(rawJam);
-                      
                       // Ambil SEMUA riwayat order dengan status Selesai untuk masuk ke kontainer Daftar Order Selesai
                       if (status === 'selesai' || status === 'completed') {
                           todayOrders.push({
                               UID: cleanUid,
                               Nama_Rider: document.getElementById('display-rider-name').innerText || "Rider",
                               Tanggal: parsedDate,
-                              Jam: finalJam,
+                              Jam: data.Jam || data.jam || new Date().toLocaleTimeString('id-ID', {hour: '2-digit', minute: '2-digit', hour12: false}),
                               Status: "Selesai",
                               // Perhatian: Pastikan di Aplikasi Admin, input nominal adalah spt di Sheet, cth: 15 (untuk 15.000)
                               Nominal_Kotor: data.Nominal_Kotor || data.nominal_kotor || data.fee || data.Fee || 0,
@@ -5851,10 +5817,8 @@
 
                   // Sortir berdasarkan tanggal dan jam terbaru
                   todayOrders.sort((a, b) => {
-                      const jamA = a.Jam === "-" ? "00:00" : a.Jam;
-                      const jamB = b.Jam === "-" ? "00:00" : b.Jam;
-                      const dateA = new Date(`${a.Tanggal.replace(/-/g, '/')} ${jamA}`);
-                      const dateB = new Date(`${b.Tanggal.replace(/-/g, '/')} ${jamB}`);
+                      const dateA = new Date(`${a.Tanggal.replace(/-/g, '/')} ${a.Jam}`);
+                      const dateB = new Date(`${b.Tanggal.replace(/-/g, '/')} ${b.Jam}`);
                       return dateB - dateA;
                   });
 
