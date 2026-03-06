@@ -3808,52 +3808,35 @@
 
         // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
+            // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase) dan cegah duplikasi
             const seenMap = new Map();
-            const todayKey = getJakartaDateString();
             
-            // Kumpulan Kunci/ID data Firebase untuk proteksi "Live Delete"
-            const validLiveKeys = new Set();
+            // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
+            const allData = [...firebaseData, ...appsScriptData];
             
-            // 1. Prioritaskan Data Firebase (Realtime Master)
-            firebaseData.forEach(item => {
+            allData.forEach(item => {
                 const dateKey = parseSheetDate(item.Tanggal);
+                
+                // MENGGUNAKAN KOMBINASI TANGGAL + JAM SEBAGAI KUNCI UNIK
                 let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); 
+                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); // Normalisasi jam (ubah . jadi :)
                 
                 const uniqueKey = `${dateKey}_${timeKey}`;
-                
-                seenMap.set(uniqueKey, { ...item });
-                validLiveKeys.add(uniqueKey); // Tandai bahwa orderan ini sah & masih ada di Firebase
-            });
-            
-            // 2. Masukkan data Sheet (Backup / Data Lampau)
-            appsScriptData.forEach(item => {
-                const dateKey = parseSheetDate(item.Tanggal);
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
-                
-                const uniqueKey = `${dateKey}_${timeKey}`;
-                
-                // ==========================================
-                // 🔥 LOGIKA SUPER CEPAT (ANTI GHOST DATA) 🔥
-                // Jika ini adalah data Hari Ini, tapi TIDAK ADA di validLiveKeys (Firebase),
-                // Itu artinya Admin baru saja MENGHAPUSNYA secara live dari Firebase!
-                // Maka abaikan data backup dari sheet ini agar langsung hilang di layar Rider.
-                // ==========================================
-                if (dateKey === todayKey && !validLiveKeys.has(uniqueKey)) {
-                    return; // SKIP / BUANG DATA INI
-                }
                 
                 if (!seenMap.has(uniqueKey)) {
+                    // Simpan sebagai objek baru agar bisa dimodifikasi
                     seenMap.set(uniqueKey, { ...item });
                 } else {
-                    // Jika data ada di Firebase & Sheet, ambil Nominal yang sudah disahkan Admin di Sheet
+                    // JIKA DATA SHEET KETEMU DENGAN DATA FIREBASE (Waktu Sama)
                     const existing = seenMap.get(uniqueKey);
                     
                     if (!item.is_realtime && existing.is_realtime) {
+                        // Ambil Nominal dari data Admin (Sheet) untuk mengisi Firebase yang kosong
                         existing.Nominal_Kotor = item.Nominal_Kotor || existing.Nominal_Kotor;
                         existing.Tambahan = item.Tambahan || existing.Tambahan;
-                        existing.Keterangan = item.Keterangan || existing.Keterangan;
+                        existing.Keterangan = item.Keterangan || existing.Keterangan; // Timpa keterangan pakai versi admin
+                        
+                        // Opsional: Matikan badge LIVE karena data sudah disahkan Admin
                         existing.is_realtime = false;
                     }
                 }
@@ -3866,16 +3849,6 @@
             
             requestAnimationFrame(() => {
                 updateUI(); 
-                
-                // 🔥 LOGIKA AUTO-REFRESH DAFTAR ORDERAN 🔥
-                // Memaksa daftar riwayat yang sedang terbuka untuk berkedip/update detik itu juga
-                if (window.currentOpenDetailDate) {
-                    const detailContainer = document.getElementById('daily-detail-container');
-                    if (detailContainer && !detailContainer.classList.contains('hidden')) {
-                        showDailyDetail(window.currentOpenDetailDate);
-                    }
-                }
-                
                 if (rawData[0] && rawData[0].Nama_Rider) muatRatingRider(rawData[0].Nama_Rider);
                 document.getElementById('loading-overlay').style.display = 'none'; 
                 document.getElementById('main-app').classList.remove('hidden');
@@ -4549,7 +4522,6 @@
             container.innerHTML = html; return firstKey;
         }
         function showDailyDetail(dateKey) {
-            window.currentOpenDetailDate = dateKey; // Menyimpan status tanggal yang sedang dibuka
             const container = document.getElementById('daily-detail-container'); const list = document.getElementById('daily-detail-list'); const label = document.getElementById('detail-date-label');
             if (!container || !list) return;
             document.querySelectorAll('.day-card').forEach(el => { el.classList.remove('border-orange-500', 'ring-1', 'ring-orange-500', 'bg-orange-50'); el.classList.add('border-gray-100', 'bg-white'); });
@@ -4560,10 +4532,7 @@
             label.innerText = `Detail Order: ${dO.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })}`;
             renderHistory(filteredData, 'daily-detail-list', ADM_RATE_FIXED_PRO); container.classList.remove('hidden'); 
         }
-        function hideDailyDetail() { 
-            window.currentOpenDetailDate = null; // Membersihkan status saat ditutup
-            document.getElementById('daily-detail-container').classList.add('hidden'); 
-        }
+        function hideDailyDetail() { document.getElementById('daily-detail-container').classList.add('hidden'); }
         function renderMonthlyWeeklyList(currentRate) {
             const container = document.getElementById('monthly-weekly-list'); if(!container) return;
             const now = new Date(); const startOfCurrentWeek = getStartOfWeek(now); let html = '';
