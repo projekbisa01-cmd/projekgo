@@ -402,6 +402,7 @@
         let allDailyOrders = []; 
         let allRiders = []; 
         window.currentHistoryData = []; // Variabel untuk menyimpan data history saat ini agar bisa diekspor
+        window.hideActiveBadge = false; // Status untuk menyembunyikan badge notifikasi
         
         // Mencegah duplikasi eksekusi watchdog
         const processingTimeouts = new Set();
@@ -447,6 +448,13 @@
                     pageEl.classList.add('hidden-page');
                 }
             });
+
+            if (page === 'active') {
+                // Sembunyikan badge ketika tab Pantauan dibuka
+                window.hideActiveBadge = true;
+                const badge = document.getElementById('nav-badge-active');
+                if (badge) badge.classList.add('hidden');
+            }
 
             if (page === 'history') {
                 renderHistoryOrders();
@@ -879,8 +887,26 @@
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
             onSnapshot(ordersCol, (snapshot) => {
-                allGlobalOrders = [];
-                snapshot.forEach(docSnap => allGlobalOrders.push({ id: docSnap.id, ...docSnap.data() }));
+                const newGlobalOrders = [];
+                let hasNewOrder = false;
+
+                snapshot.forEach(docSnap => {
+                    const data = { id: docSnap.id, ...docSnap.data() };
+                    newGlobalOrders.push(data);
+
+                    // Deteksi jika ada orderan baru yang belum ada di daftar sebelumnya
+                    if ((data.status === 'assigned' || data.status === 'processing') && !allGlobalOrders.find(o => o.id === data.id)) {
+                        hasNewOrder = true;
+                    }
+                });
+
+                allGlobalOrders = newGlobalOrders;
+
+                // Jika ada orderan baru dan posisi tidak di tab Pantauan, munculkan kembali notifikasinya
+                if (hasNewOrder && document.getElementById('page-active').classList.contains('hidden-page')) {
+                    window.hideActiveBadge = false;
+                }
+
                 renderActiveOrders();
                 renderHistoryOrders();
                 
@@ -921,7 +947,13 @@
             document.getElementById('stat-active-orders').innerText = activeOrders.length;
 
             const badge = document.getElementById('nav-badge-active');
-            if (activeOrders.length > 0) {
+            const isOnActivePage = !document.getElementById('page-active').classList.contains('hidden-page');
+
+            if (isOnActivePage) {
+                window.hideActiveBadge = true;
+            }
+
+            if (activeOrders.length > 0 && !window.hideActiveBadge) {
                 badge.innerText = activeOrders.length;
                 badge.classList.remove('hidden');
             } else {
