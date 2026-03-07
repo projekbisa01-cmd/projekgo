@@ -889,7 +889,7 @@
         };
 
         window.promoteToMainQueue = async () => {
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
 
             if (availableNewShift.length === 0) return;
@@ -1003,38 +1003,6 @@
             });
         }
 
-        // FUNGSI BARU: Fitur Paksa Selesai & Nyambi
-        window.forceNyambi = (orderId, riderUid) => {
-            window.showConfirm('Paksa Selesai & Nyambi', 'Orderan ini akan DIPAKSA SELESAI dan masuk histori. Rider akan diletakkan di URUTAN PERTAMA Antrean Radar. Lanjutkan?', async () => {
-                const loader = document.getElementById('loading-overlay');
-                loader.classList.remove('hidden'); loader.classList.add('flex');
-                try {
-                    // 1. Ubah status order menjadi completed
-                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId), { 
-                        status: 'completed',
-                        finished_at: serverTimestamp()
-                    });
-                    
-                    // 2. Taruh rider di urutan teratas (gunakan epoch time agar jadi yang paling lama menunggu)
-                    await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', riderUid), { 
-                        in_main_queue: true,
-                        is_online: true,
-                        is_available: true,
-                        last_drop_time: new Date(0), // Set ke 1 Jan 1970, pasti ranking 1
-                        last_drop_desc: "Prioritas Nyambi",
-                        proof_desc: "Prioritas Nyambi"
-                    }, { merge: true });
-
-                    window.showAlert('Berhasil', 'Order diselesaikan. Rider sekarang berada di urutan pertama antrean.', 'success');
-                } catch(e) {
-                    console.error(e);
-                    window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memproses Nyambi.', 'error');
-                } finally {
-                    loader.classList.add('hidden'); loader.classList.remove('flex');
-                }
-            });
-        };
-
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
             const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing');
@@ -1109,10 +1077,9 @@
                         </div>
                         
                         <!-- Panel Tombol Ditata Menggunakan Flex Agar Responsif dan Rapi -->
-                        <div class="grid ${!isProcessing ? 'grid-cols-4' : 'grid-cols-3'} gap-2 ml-1 mt-1">
+                        <div class="grid ${!isProcessing ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
                             <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
                             ${!isProcessing ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
-                            <button onclick="window.forceNyambi('${order.id}', '${order.rider_uid}')" class="py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-600 border-purple-200 text-[9px] font-black rounded-lg uppercase transition-all border"><i class="fa-solid fa-layer-group"></i> Nyambi</button>
                             <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>
@@ -1703,7 +1670,6 @@
                     tambahan: tamParsed.real,
                     items: items,
                     status: 'assigned',
-                    is_nyambi: false,
                     created_at: serverTimestamp(),
                     daily_order_id: dailyOrderId
                 });
