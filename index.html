@@ -451,6 +451,14 @@
                 </div>
             </div>
             <h2 class="text-2xl font-black text-gray-800 mb-2">Orderan Baru!</h2>
+            
+            <!-- TAMBAHAN: Nama Pelanggan di Popup Orderan -->
+            <div class="mb-3">
+                <span id="incoming-customer-name" class="inline-flex items-center gap-1 bg-orange-50 text-orange-600 text-xs font-bold px-3 py-1 rounded-full border border-orange-100 shadow-sm">
+                    <i class="fa-solid fa-user"></i> Memuat...
+                </span>
+            </div>
+
             <p class="text-gray-500 text-sm mb-4 leading-relaxed">Admin telah menugaskan orderan untukmu. Segera ambil dan bersiap jalan!</p>
             
             <div class="bg-gray-50 rounded-2xl p-4 mb-4 border border-gray-100 text-left max-h-32 overflow-y-auto custom-scrollbar">
@@ -4436,6 +4444,9 @@
                 // NEW: Tambahkan Badge Live jika data berasal dari Firebase (Hari Ini)
                 const liveBadge = item.is_realtime ? `<span class="ml-2 text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded animate-pulse font-bold shadow-sm">LIVE</span>` : '';
                 
+                // NEW: Tampilan Nama Pelanggan (Jika ada)
+                const customerDisplay = item.Customer_Name ? `<p class="text-[10px] font-bold text-orange-600 mt-1 flex items-center gap-1"><i class="fa-solid fa-user text-[9px]"></i> ${item.Customer_Name}</p>` : '';
+
                 html += `<div class="mb-2 pb-4 border-b border-dashed border-gray-300 last:border-0 last:pb-0 px-2">
                             <div class="flex flex-col space-y-2">
                                 <div class="flex items-start justify-between">
@@ -4449,6 +4460,7 @@
                                                 ${liveBadge}
                                             </div>
                                             <p class="text-sm font-bold text-gray-800">${parseSheetTime(item.Jam)} WIB</p>
+                                            ${customerDisplay}
                                         </div>
                                     </div>
                                     <div class="text-right">
@@ -5994,6 +6006,11 @@
               const feeDetailEl = document.getElementById('incoming-order-fee-detail');
               const itemsListEl = document.getElementById('incoming-order-items');
               const btnAccept = document.getElementById('btn-accept-order');
+              const customerNameEl = document.getElementById('incoming-customer-name');
+
+              if (customerNameEl) {
+                  customerNameEl.innerHTML = `<i class="fa-solid fa-user"></i> ${data.customer_name || data.Customer_Name || 'Pelanggan'}`;
+              }
 
               // Hitung ongkir lengkap (tambahkan fallback huruf besar/kecil untuk antisipasi database admin)
               const baseFee = parseInt(data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor) || 0;
@@ -6173,7 +6190,7 @@
               // List Item
               const listEl = document.getElementById('active-order-items');
               let copyText = `*PROJEKGO DELIVERY ORDER*\n`;
-              copyText += `Admin I: ${data.customer_name || "081292802623"}\n`;
+              copyText += `Admin CS: 081292802623\n`;
               copyText += `----------------------\n*Daftar Pesanan:*\n`;
 
               if (data.items && Array.isArray(data.items) && data.items.length > 0) {
@@ -6399,22 +6416,25 @@
                   queuePending = true;
                   return;
               }
-              if (queueUnsubscribe) return;
               
-              const statusCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status');
-              
-              queueUnsubscribe = onSnapshot(statusCol, (snapshot) => {
+              if (queueUnsubscribe) return; // Mencegah multiple listeners
+
+              const statusRef = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status');
+
+              queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
                   let onlineRiders = [];
                   let myStatus = null;
                   
                   snapshot.forEach(doc => {
                       const data = doc.data();
-                      if (String(data.uid || '').trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) {
-                          myStatus = data;
-                      }
-                      // Tampilkan HANYA rider yang On-Bid, Sedang Tersedia, DAN sudah masuk antrean utama
-                      if (data.is_online && data.is_available && data.in_main_queue) {
+                      // Rider masuk antrean utama jika online dan in_main_queue = true
+                      if (data.is_online && data.in_main_queue) {
                           onlineRiders.push(data);
+                      }
+                      
+                      // Simpan status diri sendiri
+                      if (String(data.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) {
+                          myStatus = data;
                       }
                   });
                   
