@@ -624,6 +624,47 @@
             });
         }
 
+        // FUNGSI BARU: Auto Promote Rider yang sudah ada riwayat order hari ini
+        function autoPromoteReturningRiders() {
+            const now = new Date();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const yyyy = now.getFullYear();
+            const todayStr = `${mm}-${dd}-${yyyy}`;
+
+            newShiftRiders.forEach(async (rider) => {
+                const hasOrderToday = allDailyOrders.some(order => {
+                    if (order.rider_uid !== rider.uid) return false;
+                    
+                    let isToday = false;
+                    if (order.Tanggal === todayStr) {
+                        isToday = true;
+                    } else if (order.created_at && order.created_at.seconds) {
+                        const d = new Date(order.created_at.seconds * 1000);
+                        if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
+                            isToday = true;
+                        }
+                    }
+                    return isToday;
+                });
+
+                if (hasOrderToday) {
+                    console.log(`[Auto-Promote] Rider ${rider.uid} punya riwayat hari ini. Otomatis masuk antrean radar.`);
+                    try {
+                        const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', rider.uid);
+                        await setDoc(ref, { 
+                            in_main_queue: true, 
+                            last_drop_time: serverTimestamp(), 
+                            last_drop_desc: "Auto (Onbid Ulang)", 
+                            proof_desc: "Auto (Onbid Ulang)" 
+                        }, { merge: true });
+                    } catch (e) {
+                        console.error("[Auto-Promote] Gagal memindahkan rider:", e);
+                    }
+                }
+            });
+        }
+
         function checkOfflineRiders() {
             const now = Date.now();
             const oneHour = 60 * 60 * 1000; 
@@ -684,6 +725,9 @@
                 updateNewShiftUI();
                 updateMainQueueUI();
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
+                
+                // Cek dan pindahkan otomatis jika ada rider yang sudah punya riwayat hari ini
+                autoPromoteReturningRiders();
             }, (error) => {
                 console.error("Error Firebase:", error);
                 document.getElementById('rider-queue-list').innerHTML = `<p class="text-xs text-red-500 font-bold text-center py-4"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Koneksi Database Ditolak / Error.</p>`;
@@ -937,6 +981,9 @@
                     if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                         renderHistoryOrders();
                     }
+                    
+                    // Cek auto promote, barangkali histori baru saja di-load dan rider sedang di antrean shift baru
+                    autoPromoteReturningRiders();
                 });
             });
         }
