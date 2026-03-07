@@ -3450,44 +3450,22 @@
             // Terapkan status privasi saat pertama kali web dimuat
             if(typeof window.updatePrivacyUI === 'function') window.updatePrivacyUI();
 
-            window.addEventListener('popstate', function(event) {
-                const homeIsActive = !document.getElementById('page-home').classList.contains('hidden-page');
-                if (homeIsActive) {
-                    try { window.history.pushState({page: 'home'}, '', '#home'); } catch (e) {}
-                } else {
-                    switchPage('home', true); 
-                }
-            });
-
             const savedUID = localStorage.getItem('rider_uid');
             const savedTarget = localStorage.getItem('rider_target_income');
             if (savedTarget) dailyIncomeTarget = Number(savedTarget);
             
-            // MODIFIKASI: Selalu matikan On-Bid saat pertama kali aplikasi dibuka
+            // PERBAIKAN: Ingat status On-Bid terakhir (jangan dimatikan otomatis)
+            const savedOnbidStatus = localStorage.getItem('rider_onbid_status') === 'true';
             const onbidToggle = document.getElementById('onbid-toggle');
             if (onbidToggle) {
-                onbidToggle.checked = false;
-                updateOnbidUI(false);
-                // Jika awal buka sudah tidak ada koneksi, langsung kunci
-                if (!navigator.onLine) onbidToggle.disabled = true;
+                onbidToggle.checked = savedOnbidStatus;
+                updateOnbidUI(savedOnbidStatus);
             }
-            localStorage.setItem('rider_onbid_status', 'false');
 
             // DETEKSI SINYAL PUTUS (OFFLINE)
             window.addEventListener('offline', () => {
                 if (onbidToggle) {
-                    if (onbidToggle.checked) {
-                        onbidToggle.checked = false;
-                        updateOnbidUI(false);
-                        localStorage.setItem('rider_onbid_status', 'false');
-                        // Sinkronisasi ke admin jika fungsi sudah siap (meski offline, dicache firebase)
-                        if (typeof window.updateFirebaseStatus === 'function' && currentUserUID) {
-                            let rName = document.getElementById('display-rider-name').innerText;
-                            window.updateFirebaseStatus(currentUserUID, false, rName);
-                        }
-                        alert("Koneksi Internet Terputus!\n\nStatus On-Bid Anda otomatis dimatikan karena sistem kehilangan sinyal dengan Admin.");
-                    }
-                    onbidToggle.disabled = true; // Kunci tombol
+                    // HANYA UBAH TEKS INDIKATOR, JANGAN MATIKAN TOGGLE
                     const text = document.getElementById('onbid-text');
                     if (text) {
                         text.innerText = "TIDAK ADA SINYAL";
@@ -3499,8 +3477,12 @@
             // DETEKSI SINYAL KEMBALI (ONLINE)
             window.addEventListener('online', () => {
                 if (onbidToggle) {
-                    onbidToggle.disabled = false; // Buka kunci tombol
                     updateOnbidUI(onbidToggle.checked); // Kembalikan UI normal
+                    // Sinkronisasikan status ke Firebase saat online kembali jika toggle sedang nyala
+                    if (onbidToggle.checked && typeof window.updateFirebaseStatus === 'function' && currentUserUID) {
+                        let rName = document.getElementById('display-rider-name').innerText;
+                        window.updateFirebaseStatus(currentUserUID, true, rName);
+                    }
                 }
             });
 
@@ -5369,11 +5351,9 @@
         }
 
         async function toggleOnbid() {
-            // Validasi lapis kedua jika rider memaksa klik saat tidak ada sinyal
+            // Validasi lapis kedua jika rider memaksa klik saat tidak ada sinyal (Hanya berikan peringatan, jangan matikan paksa)
             if (!navigator.onLine) {
-                alert("Sistem Menolak: Tidak ada koneksi internet! Gagal mengaktifkan On-Bid karena tidak ada sinyal dengan Admin.");
-                document.getElementById('onbid-toggle').checked = false;
-                return;
+                alert("Peringatan: Kamu sedang Offline! Status On-Bid akan tersinkronisasi otomatis saat sinyal kembali.");
             }
             
             const check = document.getElementById('onbid-toggle').checked; 
