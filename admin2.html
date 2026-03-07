@@ -279,9 +279,14 @@
         <section>
             <div class="flex justify-between items-center mb-3 px-1 mt-4 border-b border-gray-200 pb-2">
                 <h2 class="font-black text-slate-800 text-[11px] uppercase tracking-tight">Daftar Order Selesai</h2>
-                <button onclick="exportToCSV()" class="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg text-[9px] font-black shadow-sm hover:bg-emerald-500 hover:text-white transition-colors flex items-center gap-1.5 uppercase tracking-wider">
-                    <i class="fa-solid fa-file-excel"></i> Simpan ke Rekap
-                </button>
+                <div class="flex gap-2">
+                    <button onclick="scrollToBookmark()" class="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2.5 py-1 rounded-lg text-[9px] font-black shadow-sm hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-1.5 uppercase tracking-wider">
+                        <i class="fa-solid fa-location-crosshairs"></i> Lanjut
+                    </button>
+                    <button onclick="exportToCSV()" class="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg text-[9px] font-black shadow-sm hover:bg-emerald-500 hover:text-white transition-colors flex items-center gap-1.5 uppercase tracking-wider">
+                        <i class="fa-solid fa-file-excel"></i> Rekap
+                    </button>
+                </div>
             </div>
             <div id="history-orders-list" class="space-y-3 pb-6">
                 <!-- Injected via JS -->
@@ -475,7 +480,7 @@
             }
         };
 
-        // FUNGSI BARU: Watchdog untuk orderan yang tidak direspon selama 7 menit
+        // Watchdog untuk orderan yang tidak direspon selama 7 menit
         function checkOrderTimeouts() {
             const now = Date.now();
             const timeoutMs = 7 * 60 * 1000; // 7 Menit (waktu kadaluarsa order)
@@ -503,7 +508,7 @@
             });
         }
 
-        // FUNGSI BARU: Eksekusi otomatis pindah orderan
+        // Eksekusi otomatis pindah orderan
         async function handleOrderTimeout(order) {
             console.log(`Order ${order.id} timeout. Mencoba memindahkan dari Rider: ${order.rider_name}`);
             
@@ -512,7 +517,8 @@
             await setDoc(oldRiderRef, { is_online: false, is_available: false, in_main_queue: false, last_drop_desc: "", proof_desc: "" }, { merge: true });
 
             // 2. Cari rider pengganti (Urutan Pertama di Antrean Utama)
-            const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            // KECUALIKAN rider yang status is_nyambi === true agar mereka tetap bisa mengambil order
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
             busyUids.add(order.rider_uid); // Tambahkan rider lama agar tidak terpilih lagi
             
             const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
@@ -560,8 +566,8 @@
                     created_at: serverTimestamp()
                 });
 
-                // 6. BUAT DOKUMEN BARU untuk rider pengganti (Gunakan UID rider pengganti sebagai ID Dokumen)
-                const newOrderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', nextRider.uid);
+                // 6. BUAT DOKUMEN BARU untuk rider pengganti
+                const newOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
                 await setDoc(newOrderRef, {
                     rider_uid: nextRider.uid,
                     rider_name: nextRiderName,
@@ -570,6 +576,7 @@
                     tambahan: order.tambahan || 0,
                     items: order.items || [],
                     status: 'assigned',
+                    is_nyambi: false,
                     created_at: serverTimestamp(),
                     daily_order_id: newDailyOrdersRef.id
                 });
@@ -582,7 +589,7 @@
             }
         }
 
-        // FUNGSI BARU: Pembersihan Otomatis Data Lebih Dari 45 Hari
+        // Pembersihan Otomatis Data Lebih Dari 45 Hari
         function autoCleanUpOldData() {
             const now = Date.now();
             const threshold = 45 * 24 * 60 * 60 * 1000; // 45 Hari dalam milidetik
@@ -624,7 +631,7 @@
             });
         }
 
-        // FUNGSI BARU: Auto Promote Rider yang sudah ada riwayat order hari ini
+        // Auto Promote Rider yang sudah ada riwayat order hari ini
         function autoPromoteReturningRiders() {
             const now = new Date();
             const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -739,7 +746,8 @@
             const container = document.getElementById('new-shift-queue-list');
             const btnPromote = document.getElementById('btn-promote-queue');
             
-            const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            // KECUALIKAN rider yang ordernya ditandai NYAMBI (is_nyambi === true)
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
             
             if (availableNewShift.length === 0) {
@@ -784,7 +792,8 @@
             const container = document.getElementById('rider-queue-list');
             const countEl = document.getElementById('stat-online-riders');
             
-            const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            // KECUALIKAN rider yang ordernya ditandai NYAMBI (is_nyambi === true)
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
             const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
 
             if(countEl) countEl.innerText = availableMainQueue.length;
@@ -874,7 +883,7 @@
         };
 
         window.promoteToMainQueue = async () => {
-            const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
 
             if (availableNewShift.length === 0) return;
@@ -988,6 +997,25 @@
             });
         }
 
+        // FUNGSI BARU: Fitur Toggle Nyambi
+        window.toggleNyambi = (id, currentNyambi) => {
+            const newState = !currentNyambi;
+            const msg = newState ? 'Tandai order ini sebagai PENDING/NYAMBI? Rider akan dimasukkan kembali ke Antrean Radar Utama untuk menerima order tambahan.' : 'Matikan mode Nyambi? Status rider akan kembali difokuskan hanya pada orderan ini.';
+            
+            window.showConfirm('Mode Nyambi', msg, async () => {
+                const loader = document.getElementById('loading-overlay');
+                loader.classList.remove('hidden'); loader.classList.add('flex');
+                try {
+                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { is_nyambi: newState });
+                    window.showAlert('Berhasil', newState ? 'Mode Nyambi Aktif. Rider siap menerima orderan lain di radar.' : 'Mode Nyambi dinonaktifkan.', 'success');
+                } catch(e) {
+                    window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memperbarui status Nyambi.', 'error');
+                } finally {
+                    loader.classList.add('hidden'); loader.classList.remove('flex');
+                }
+            });
+        };
+
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
             const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing');
@@ -1017,8 +1045,13 @@
             
             activeOrders.forEach(order => {
                 const isProcessing = order.status === 'processing';
-                const statusColor = isProcessing ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200';
+                const isNyambi = order.is_nyambi === true; // Pengecekan status Nyambi
+                
+                // Tema Warna menyesuaikan apakah sedang nyambi atau normal
+                const statusColor = isNyambi ? 'text-purple-600 bg-purple-50 border-purple-200' : (isProcessing ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200');
                 const statusText = isProcessing ? 'Sedang Diproses Rider' : 'Menunggu Konfirmasi Rider';
+                const nyambiBadge = isNyambi ? `<span class="text-[8px] font-black text-purple-600 bg-purple-100 border-purple-200 px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max"><i class="fa-solid fa-layer-group mr-1"></i>NYAMBI</span>` : '';
+
                 const itemsText = order.items ? order.items.map(i => i.name).join(', ') : 'Order Biasa';
 
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
@@ -1034,13 +1067,14 @@
                 }
 
                 html += `
-                    <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-                        ${isProcessing ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>' : '<div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>'}
+                    <div class="bg-white rounded-2xl p-4 border ${isNyambi ? 'border-purple-200' : 'border-slate-200'} shadow-sm flex flex-col gap-3 relative overflow-hidden transition-colors">
+                        ${isNyambi ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-purple-500"></div>' : (isProcessing ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>' : '<div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>')}
                         
                         <div class="flex justify-between items-start pl-1">
                             <div class="flex flex-col gap-1.5 overflow-hidden">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
+                                    ${nyambiBadge}
                                     <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100" title="Waktu Order Diberikan">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
                                         <span class="text-[9px] font-black">${timeAssignedStr}</span>
@@ -1057,10 +1091,13 @@
                             <p class="text-xs font-bold text-slate-700">${order.rider_name}</p>
                             <p class="text-[9px] text-slate-500 mt-1 italic line-clamp-2">"${itemsText}"</p>
                         </div>
-                        <div class="grid ${!isProcessing ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
-                            <button onclick="window.openEditOrder('${order.id}')" class="py-2 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen mr-1"></i> Edit</button>
-                            ${!isProcessing ? `<button onclick="window.pingOrder('${order.id}')" class="py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell mr-1"></i> Up</button>` : ''}
-                            <button onclick="window.deleteOrder('${order.id}')" class="py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash mr-1"></i> Batal</button>
+                        
+                        <!-- Panel Tombol Ditata Menggunakan Flex Agar Responsif dan Rapi -->
+                        <div class="grid ${!isProcessing ? 'grid-cols-4' : 'grid-cols-3'} gap-2 ml-1 mt-1">
+                            <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                            ${!isProcessing ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
+                            <button onclick="window.toggleNyambi('${order.id}', ${isNyambi})" class="py-2.5 ${isNyambi ? 'bg-purple-500 hover:bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-purple-50 hover:bg-purple-100 text-purple-600 border-purple-200'} text-[9px] font-black rounded-lg uppercase transition-all border"><i class="fa-solid fa-layer-group"></i> Nyambi</button>
+                            <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>
                 `;
@@ -1095,7 +1132,7 @@
             
             if(!container) return;
 
-            // FUNGSI BARU: Mencegah orderan yang masih aktif (menunggu/diproses) tampil di riwayat
+            // Mencegah orderan yang masih aktif (menunggu/diproses) tampil di riwayat
             const activeDailyOrderIds = new Set(
                 allGlobalOrders
                     .filter(o => o.status === 'assigned' || o.status === 'processing')
@@ -1150,6 +1187,7 @@
                     timeStr: o.Jam,
                     tanggalStr: o.Tanggal,
                     keterangan: o.Keterangan || '',
+                    is_bookmarked: o.is_bookmarked === true,
                     is_daily_order: true 
                 };
             });
@@ -1213,8 +1251,25 @@
                 // Nama pelanggan sedikit diperbesar agar lebih proporsional
                 const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[11px] text-slate-500 mt-1 font-medium"><i class="fa-solid fa-user mr-1.5 text-slate-400"></i>${order.customer_name}</p>` : '';
 
+                // Logika tampilan untuk fitur batas terakhir (Bookmark Eksklusif)
+                const isBookmarked = order.is_bookmarked === true;
+                const cardClasses = isBookmarked 
+                    ? "bg-indigo-50/30 border-indigo-300 ring-2 ring-indigo-200" 
+                    : "bg-white border-gray-100 hover:bg-slate-50";
+                
+                const badgeHtml = isBookmarked 
+                    ? `<div class="absolute -top-2.5 -right-2 bg-indigo-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full shadow-sm border-2 border-white flex items-center gap-1 z-20"><i class="fa-solid fa-thumbtack"></i> BATAS TERAKHIR</div>` 
+                    : '';
+
+                const btnMarkColor = isBookmarked 
+                    ? "bg-indigo-500 text-white shadow-inner" 
+                    : "bg-slate-100 text-slate-400 hover:bg-indigo-500 hover:text-white";
+                
+                const btnMarkIcon = isBookmarked ? "fa-solid fa-thumbtack" : "fa-solid fa-thumbtack -rotate-45";
+
                 html += `
-                    <div class="bg-white rounded-xl p-3.5 border border-gray-100 shadow-sm flex justify-between items-center hover:bg-slate-50 transition-colors gap-3">
+                    <div ${isBookmarked ? 'id="bookmark-target"' : ''} class="rounded-xl p-3.5 border shadow-sm flex justify-between items-center transition-all gap-3 relative ${cardClasses}">
+                        ${badgeHtml}
                         <div class="flex items-center gap-3 w-full pr-1">
                             <!-- Layout Jam diperbesar dan ditata ke tengah vertikal -->
                             <div class="flex flex-col items-center justify-center shrink-0 w-12">
@@ -1236,9 +1291,12 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="flex flex-col items-end shrink-0 gap-2">
-                            <!-- Tombol edit & hapus disusun vertikal agar serasi dengan tinggi kartu yang baru -->
+                        <div class="flex flex-col items-end shrink-0 gap-2 relative z-10">
+                            <!-- Tombol aksi disusun vertikal -->
                             <div class="flex flex-col gap-1.5">
+                                <button onclick="window.toggleHistoryBookmark('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'}, ${isBookmarked})" class="w-8 h-8 ${btnMarkColor} rounded-xl flex items-center justify-center transition-colors shadow-sm" title="${isBookmarked ? 'Hapus Batas' : 'Jadikan Batas Terakhir'}">
+                                    <i class="${btnMarkIcon} text-xs"></i>
+                                </button>
                                 <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
                                     <i class="fa-solid fa-pen text-xs"></i>
                                 </button>
@@ -1253,7 +1311,7 @@
             container.innerHTML = html;
         };
 
-        // FUNGSI BARU: Export ke CSV
+        // Export ke CSV
         window.exportToCSV = () => {
             if (!window.currentHistoryData || window.currentHistoryData.length === 0) {
                 window.showAlert('Kosong', 'Tidak ada data untuk diekspor pada tanggal ini.', 'warning');
@@ -1379,6 +1437,63 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+        };
+
+        // Gulir (Scroll) ke kartu yang ditandai sebagai batas terakhir
+        window.scrollToBookmark = () => {
+            const target = document.getElementById('bookmark-target');
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Animasi flash singkat untuk menarik perhatian
+                target.classList.add('bg-indigo-100');
+                setTimeout(() => {
+                    target.classList.remove('bg-indigo-100');
+                }, 1500);
+            } else {
+                window.showAlert('Info', 'Belum ada data yang ditandai sebagai batas rekap.', 'info');
+            }
+        };
+
+        // Tandai Data Sebagai Batas Terakhir Rekap (Eksklusif: 1 data saja)
+        window.toggleHistoryBookmark = async (id, riderUid, isDaily, currentStatus) => {
+            const newState = !currentStatus;
+            
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden'); loader.classList.add('flex');
+
+            try {
+                // Jika akan dihidupkan, matikan dulu bookmark yang lama (jika ada)
+                if (newState) {
+                    const oldMark = window.currentHistoryData.find(o => o.is_bookmarked === true);
+                    if (oldMark && oldMark.id !== id) {
+                        if (oldMark.is_daily_order) {
+                            await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldMark.rider_uid, 'daily_orders', oldMark.id), { is_bookmarked: false });
+                        } else {
+                            await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', oldMark.id), { is_bookmarked: false });
+                            if (oldMark.daily_order_id) {
+                                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldMark.rider_uid, 'daily_orders', oldMark.daily_order_id), { is_bookmarked: false });
+                            }
+                        }
+                    }
+                }
+
+                // Eksekusi toggle untuk data yang diklik
+                if (isDaily) {
+                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id), { is_bookmarked: newState });
+                } else {
+                    const order = allGlobalOrders.find(o => o.id === id);
+                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { is_bookmarked: newState });
+                    
+                    if (order && order.rider_uid && order.daily_order_id) {
+                        await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id), { is_bookmarked: newState });
+                    }
+                }
+            } catch(e) { 
+                console.error(e);
+                window.showAlert('Gagal', 'Terjadi kesalahan saat menandai.', 'error'); 
+            } finally {
+                loader.classList.add('hidden'); loader.classList.remove('flex');
+            }
         };
 
         // BUKA-TUTUP FORM MANUAL
@@ -1558,7 +1673,8 @@
 
                 const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
                 
-                const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', riderUid);
+                // MENGGUNAKAN DYNAMIC ID UNTUK ORDER BARU MENCEGAH TIMPA DATA (SUPPORT NYAMBI)
+                const orderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
                 const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
                 const dailyOrderId = dailyOrdersRef.id;
 
@@ -1571,6 +1687,7 @@
                     tambahan: tamParsed.real,
                     items: items,
                     status: 'assigned',
+                    is_nyambi: false,
                     created_at: serverTimestamp(),
                     daily_order_id: dailyOrderId
                 });
