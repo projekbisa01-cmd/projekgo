@@ -1176,12 +1176,6 @@
             <p>Izin Notifikasi <strong class="font-black">DIBLOKIR!</strong> Kamu beresiko melewatkan orderan. Buka Pengaturan Situs di browser kamu lalu izinkan Notifikasi.</p>
         </div>
 
-        <!-- BANNER NYAMBI (BARU) -->
-        <div id="global-nyambi-warning" class="hidden bg-yellow-500 text-white text-[10px] font-medium p-2.5 text-center z-[58] shadow-md sticky top-0 flex items-center justify-center gap-3 leading-tight transition-all duration-300">
-            <i class="fa-solid fa-layer-group text-2xl animate-pulse shrink-0"></i>
-            <p>🚨 Jangan lupa kamu sedang <strong>NYAMBI 2 ORDERAN!</strong> Selesaikan orderan baru ini dulu.</p>
-        </div>
-
         <!-- HALAMAN BERANDA -->
         <div id="page-home" class="page-container flex flex-col min-h-screen">
             <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 shrink-0 transition-all duration-300">
@@ -3991,12 +3985,10 @@
         function updateStickyPositions() {
             const docWarning = document.getElementById('global-doc-warning');
             const notifWarning = document.getElementById('global-notif-warning');
-            const nyambiWarning = document.getElementById('global-nyambi-warning');
             
             let totalHeight = 0;
             if (docWarning && !docWarning.classList.contains('hidden')) totalHeight += docWarning.offsetHeight;
             if (notifWarning && !notifWarning.classList.contains('hidden')) totalHeight += notifWarning.offsetHeight;
-            if (nyambiWarning && !nyambiWarning.classList.contains('hidden')) totalHeight += nyambiWarning.offsetHeight;
             
             document.querySelectorAll('.page-container > header').forEach(h => {
                 h.style.top = totalHeight + 'px';
@@ -5621,20 +5613,6 @@
           let queuePending = false; // Penanda load radar queue jika auth belum siap
           window.isFirebaseReady = false; // Flag global untuk menahan UI login
           window.isFinishingOrder = false; // Flag status rider menekan Selesai
-          window.isCurrentlyShowingNyambi = false; // Flag UI sedang mode draft Nyambi
-
-          window.checkNyambiDraft = () => {
-              const draft = localStorage.getItem('draft_nyambi');
-              const banner = document.getElementById('global-nyambi-warning');
-              if (banner) {
-                  if (draft && !window.isCurrentlyShowingNyambi) {
-                      banner.classList.remove('hidden');
-                  } else {
-                      banner.classList.add('hidden');
-                  }
-                  if (typeof updateStickyPositions === 'function') updateStickyPositions();
-              }
-          };
 
           onAuthStateChanged(auth, (user) => {
               if (user) { 
@@ -5643,7 +5621,6 @@
                   window.isFirebaseReady = true;
                   // Cek notifikasi setelah login berhasil
                   window.checkUnreadAdminInfo();
-                  window.checkNyambiDraft();
                   
                   // CEK DAN MINTA IZIN NOTIFIKASI DENGAN CUSTOM UI
                   setTimeout(() => {
@@ -5857,13 +5834,6 @@
                           } else if (status === "processing") {
                               showActiveOrderOverlay(data, docId);
                           } else if (status === "completed" && window.currentActiveOrderId === docId) {
-                              if (!window.isFinishingOrder) {
-                                  // Admin mengubah order ke Selesai (Trigger Nyambi)
-                                  const nyambiData = { docId: docId, data: data };
-                                  localStorage.setItem('draft_nyambi', JSON.stringify(nyambiData));
-                                  window.checkNyambiDraft();
-                                  alert("Sistem: Admin mengaktifkan mode Nyambi! Orderan pertamamu disimpan sementara. Silakan tunggu orderan kedua masuk.");
-                              }
                               hideActiveOrderOverlay();
                           } else if (status === "canceled" && data.cancel_reason === "timeout_7_menit") {
                               // LOGIKA KETIKA ORDERAN EXPIRED (LEWAT 7 MENIT)
@@ -5900,16 +5870,6 @@
 
                   // Jika tidak ada order aktif untuk rider ini sama sekali
                   if (!hasActiveOrder) {
-                      // --- NEW: LOGIKA NYAMBI (DRAFT) ---
-                      const draftStr = localStorage.getItem('draft_nyambi');
-                      if (draftStr && !window.isCurrentlyShowingNyambi) {
-                          const draft = JSON.parse(draftStr);
-                          window.isCurrentlyShowingNyambi = true;
-                          showActiveOrderOverlay(draft.data, draft.docId);
-                          window.checkNyambiDraft(); // Sembunyikan banner karena sedang dikerjakan
-                          return; // Hentikan eksekusi hide normal
-                      }
-
                       let wasActive = false;
                       
                       if (window.currentActiveOrderId !== null) {
@@ -6115,7 +6075,7 @@
               
               // Set Info
               const activeHeader = document.querySelector('#active-order-overlay header h1');
-              if(activeHeader) activeHeader.innerText = window.isCurrentlyShowingNyambi ? "Tugas Nyambi (Orderan 1)" : "Tugas Berjalan";
+              if(activeHeader) activeHeader.innerText = "Tugas Berjalan";
 
               document.getElementById('active-customer-name').innerText = data.customer_name || "Pelanggan";
               document.getElementById('active-customer-phone').innerText = data.customer_phone || "-";
@@ -6369,93 +6329,36 @@
                   window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
                   
                   try {
-                      if (window.isCurrentlyShowingNyambi) {
-                          // --- FINISHING NYAMBI ORDER A (DRAFT) ---
-                          const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
-                          // Opsional update foto desc jika diperlukan, status sudah completed oleh Admin
-                          await updateDoc(orderRef, { proof_desc: desc });
+                      // 1. Update status order menjadi completed di koleksi Admin
+                      const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
+                      await updateDoc(orderRef, {
+                          status: 'completed',
+                          finished_at: serverTimestamp(),
+                          proof_desc: desc
+                      });
+                      
+                      const isToggleOn = document.getElementById('onbid-toggle').checked;
+                      const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', currentUserUID);
+                      await setDoc(statusRef, { 
+                          is_available: true,
+                          is_online: isToggleOn,
+                          in_main_queue: isToggleOn,
+                          last_drop_time: serverTimestamp(),
+                          last_drop_desc: desc 
+                      }, { merge: true });
+                      
+                      hideActiveOrderOverlay();
+                      
+                      const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
+                      const isFastCompletion = duration < 600000;
 
-                          localStorage.removeItem('draft_nyambi');
-                          window.isCurrentlyShowingNyambi = false;
-                          if (typeof window.checkNyambiDraft === 'function') window.checkNyambiDraft();
-
-                          // Kembalikan ke antrean (Main Queue) Radar
-                          const isToggleOn = document.getElementById('onbid-toggle').checked;
-                          const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', currentUserUID);
-                          await setDoc(statusRef, { 
-                              is_available: true,
-                              is_online: isToggleOn,
-                              in_main_queue: isToggleOn,
-                              last_drop_time: serverTimestamp(),
-                              last_drop_desc: desc 
-                          }, { merge: true });
-
-                          hideActiveOrderOverlay();
-                          if (typeof window.showOrderSuccessPopup === 'function') {
-                              window.showOrderSuccessPopup();
-                          } else {
-                              playBeep(880, 0.1);
-                              alert("Order Nyambi Selesai sepenuhnya!");
-                          }
+                      if (isFastCompletion && typeof window.showFastCompletionWarning === 'function') {
+                          window.showFastCompletionWarning();
+                      } else if (typeof window.showOrderSuccessPopup === 'function') {
+                          window.showOrderSuccessPopup();
                       } else {
-                          // --- FINISHING NORMAL ORDER / ORDER B ---
-                          // 1. Update status order menjadi completed di koleksi Admin
-                          const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
-                          await updateDoc(orderRef, {
-                              status: 'completed',
-                              finished_at: serverTimestamp(),
-                              proof_desc: desc
-                          });
-                          
-                          const draftStr = localStorage.getItem('draft_nyambi');
-                          
-                          if (draftStr) {
-                              // --- ADA DRAFT NYAMBI (ORDER A) ---
-                              // Update status rider tapi JANGAN masukkan ke antrean radar (in_main_queue)
-                              const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', currentUserUID);
-                              await setDoc(statusRef, { 
-                                  is_available: false, // Tahan agar tidak masuk radar
-                                  last_drop_time: serverTimestamp(),
-                                  last_drop_desc: desc 
-                              }, { merge: true });
-
-                              hideActiveOrderOverlay();
-                              if (typeof window.showOrderSuccessPopup === 'function') window.showOrderSuccessPopup();
-
-                              // Munculkan Order A (Draft Nyambi) kembali setelah jeda
-                              setTimeout(() => {
-                                  const draft = JSON.parse(draftStr);
-                                  window.isCurrentlyShowingNyambi = true;
-                                  showActiveOrderOverlay(draft.data, draft.docId);
-                                  if (typeof window.checkNyambiDraft === 'function') window.checkNyambiDraft();
-                              }, 2500); // Jeda agar popup sukses order B bisa dilihat sebentar
-                              
-                          } else {
-                              // --- NORMAL FLOW (TIDAK ADA NYAMBI) ---
-                              const isToggleOn = document.getElementById('onbid-toggle').checked;
-                              const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', currentUserUID);
-                              await setDoc(statusRef, { 
-                                  is_available: true,
-                                  is_online: isToggleOn,
-                                  in_main_queue: isToggleOn,
-                                  last_drop_time: serverTimestamp(),
-                                  last_drop_desc: desc 
-                              }, { merge: true });
-                              
-                              hideActiveOrderOverlay();
-                              
-                              const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
-                              const isFastCompletion = duration < 600000;
-
-                              if (isFastCompletion && typeof window.showFastCompletionWarning === 'function') {
-                                  window.showFastCompletionWarning();
-                              } else if (typeof window.showOrderSuccessPopup === 'function') {
-                                  window.showOrderSuccessPopup();
-                              } else {
-                                  playBeep(880, 0.1);
-                                  alert("Order Selesai! Cek menu Riwayat Hari Ini.");
-                              }
-                          }
+                          playBeep(880, 0.1);
+                          alert("Order Selesai! Cek menu Riwayat Hari Ini.");
                       }
                       
                   } catch (e) {
