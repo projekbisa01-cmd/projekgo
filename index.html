@@ -461,14 +461,33 @@
 
     <!-- 2. HALAMAN DETAIL ORDERAN (TERKUNCI) -->
     <div id="active-order-overlay" class="fixed inset-0 z-[9980] bg-gray-50 hidden flex-col">
-        <header class="p-6 bg-white border-b border-gray-100 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-orange-600 text-white rounded-full flex items-center justify-center shadow-md animate-pulse">
-                    <i class="fa-solid fa-location-crosshairs"></i>
+        <header class="p-5 bg-white border-b border-gray-100 flex flex-col sticky top-0 z-10 shadow-sm gap-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-orange-600 text-white rounded-full flex items-center justify-center shadow-md animate-pulse">
+                        <i class="fa-solid fa-location-crosshairs"></i>
+                    </div>
+                    <div>
+                        <h1 class="font-black text-gray-800 text-lg">Tugas Berjalan</h1>
+                        <p class="text-[10px] text-green-600 font-bold uppercase tracking-widest">Jangan di-close sebelum selesai</p>
+                    </div>
                 </div>
-                <div>
-                    <h1 class="font-black text-gray-800 text-lg">Tugas Berjalan</h1>
-                    <p class="text-[10px] text-green-600 font-bold uppercase tracking-widest">Jangan di-close sebelum selesai</p>
+            </div>
+            
+            <!-- INFO SISA ANTREAN ADMIN -->
+            <div class="bg-indigo-50 rounded-xl p-3 border border-indigo-100 flex items-center justify-between shadow-inner">
+                <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-users text-indigo-500 text-[10px]"></i>
+                    </div>
+                    <span class="text-[10px] font-bold text-indigo-800 uppercase tracking-widest leading-tight">Antrean Standby<br>di Admin</span>
+                </div>
+                <div class="bg-white px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm flex items-center gap-1.5">
+                    <span class="relative flex h-2 w-2">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                    </span>
+                    <span id="active-queue-count" class="text-sm font-black text-indigo-600">-- Rider</span>
                 </div>
             </div>
         </header>
@@ -5699,370 +5718,106 @@
           initAuth();
 
           // -------------------------------------------------------------
-          // SETUP FIREBASE CLOUD MESSAGING (FCM) TOKEN
-          // -------------------------------------------------------------
-          window.setupFCMToken = async (uid) => {
-              try {
-                  // PERBAIKAN 2: Cek apakah messaging berhasil dimuat
-                  if (!messaging) {
-                      console.warn("Messaging tidak aktif, abaikan pembuatan FCM Token.");
-                      return;
-                  }
-
-                  // Cek status izin, jangan minta pop-up natif di sini agar tidak balapan dengan custom UI kita
-                  if (Notification.permission === 'granted') {
-                      console.log("Izin Push Notification Diberikan.");
-                      
-                      // VAPID Key Anda sudah dimasukkan di sini:
-                      const vapidKey = "BIMnIN64HcrqqLlg9a0kDPcao9fmhHlGx6zaghIQ-ebg_y-EyZpe9V8H9FnjvF86mjIhdZfPQmMp_OxSnioFFJ4"; 
-                      
-                      try {
-                          const registration = await navigator.serviceWorker.ready;
-                          if (registration) {
-                              const currentToken = await getToken(messaging, { 
-                                  vapidKey: vapidKey, 
-                                  serviceWorkerRegistration: registration 
-                              });
-                              
-                              if (currentToken) {
-                                  // Simpan token ke Firestore di koleksi rider_fcm_tokens
-                                  const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_fcm_tokens', uid);
-                                  await setDoc(tokenRef, {
-                                      token: currentToken,
-                                      device_id: typeof getDeviceID === 'function' ? getDeviceID() : 'web-browser',
-                                      updated_at: serverTimestamp()
-                                  }, { merge: true });
-                                  console.log("FCM Token berhasil disimpan ke database!");
-                              }
-                          }
-                      } catch (err) {
-                          console.warn("FCM Token gagal dimuat. Pastikan file firebase-messaging-sw.js ada.", err);
-                      }
-                  } else {
-                      console.log("Izin Notifikasi ditolak oleh pengguna.");
-                  }
-              } catch (e) {
-                  console.error("Gagal meminta izin notifikasi:", e);
-              }
-          };
-          // HANDLE NOTIFIKASI SAAT APLIKASI SEDANG TERBUKA DI LAYAR (FOREGROUND)
-          // PERBAIKAN 3: Hanya jalankan onMessage jika messaging tersedia
-          if (messaging) {
-              onMessage(messaging, (payload) => {
-                  console.log("Pesan masuk (Foreground):", payload);
-                  // Bunyikan nada
-                  try { 
-                      if(window.incomingOrderAudio) {
-                          window.incomingOrderAudio.pause();
-                          window.incomingOrderAudio.currentTime = 0;
-                      }
-                      window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
-                      window.incomingOrderAudio.play();
-                  } catch(e){}
-
-                  // Tampilkan Pop-up Bawaan HP
-                  if (Notification.permission === 'granted') {
-                      new Notification(payload.notification?.title || "Info Baru", {
-                          body: payload.notification?.body || "Cek aplikasi sekarang",
-                          icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png'
-                      });
-                  }
-              });
-          }
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM KEAMANAN DEVICE BINDING (SINGLE LOGIN)
+          // NEW: SISTEM KEAMANAN (DEVICE BINDING & SINGLE LOGIN)
           // -------------------------------------------------------------
           window.checkDeviceBinding = async (uid, deviceId) => {
               try {
-                  const deviceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid);
-                  const docSnap = await getDoc(deviceRef);
+                  const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+                  const docSnap = await getDoc(docRef);
                   
                   if (docSnap.exists()) {
                       const data = docSnap.data();
-                      // Jika sudah ada device_id dan tidak sama dengan device yang mencoba login
-                      if (data.device_id && data.device_id !== deviceId) {
-                          return 'conflict';
+                      if (data.device_id === deviceId) {
+                          // Update waktu login terakhir di background
+                          updateDoc(docRef, { last_login: serverTimestamp() }).catch(e=>{});
+                          return 'allowed';
+                      } else {
+                          return 'conflict'; // Device berbeda, butuh pass admin
                       }
+                  } else {
+                      // Login pertama kali, daftarkan device id
+                      await setDoc(docRef, {
+                          device_id: deviceId,
+                          last_login: serverTimestamp()
+                      });
+                      return 'allowed';
                   }
-                  
-                  // Jika belum ada atau device sama, izinkan dan perbarui waktu login
-                  await setDoc(deviceRef, {
-                      device_id: deviceId,
-                      last_login: serverTimestamp()
-                  }, { merge: true });
-                  
-                  return 'allowed';
               } catch (e) {
-                  console.error("Device check error:", e);
-                  return 'error';
+                  console.error("Error security check:", e);
+                  // Jika internet bermasalah, tetap izinkan agar rider tidak terkunci
+                  return 'allowed'; 
               }
           };
 
           window.forceTakeoverDevice = async (uid, deviceId) => {
               try {
-                  const deviceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid);
-                  await setDoc(deviceRef, {
+                  const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+                  await setDoc(docRef, {
                       device_id: deviceId,
-                      last_login: serverTimestamp(),
-                      taken_over_at: serverTimestamp()
-                  }, { merge: true });
+                      last_login: serverTimestamp()
+                  });
                   return true;
               } catch (e) {
-                  console.error("Takeover error:", e);
+                  console.error("Error takeover device:", e);
                   return false;
               }
-          };
-
-          // FUNGSI LOGOUT GLOBAL YANG DISERTAI PENGHAPUSAN DEVICE LOCK
-          window.handleLogout = async (reason = null, clearServer = true) => {
-              const uid = localStorage.getItem('rider_uid');
-              if (uid && clearServer) {
-                  try {
-                      // Hapus ikatan perangkat di server sehingga UID bebas dipakai di HP lain
-                      const deviceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid);
-                      await setDoc(deviceRef, { device_id: null }, { merge: true });
-                  } catch (e) {
-                      console.error("Gagal melepas perangkat:", e);
-                  }
-              }
-              localStorage.removeItem('rider_uid');
-              if (reason && typeof reason === 'string') alert(reason);
-              location.reload();
           };
 
           let deviceListenerUnsubscribe = null;
           window.startDeviceListener = (uid) => {
               if (!uid || !isAuthReady) return;
-              const cleanUid = String(uid).trim().toUpperCase();
-              if (deviceListenerUnsubscribe) return;
+              if (deviceListenerUnsubscribe) deviceListenerUnsubscribe();
 
-              const myDeviceId = localStorage.getItem('projekgo_device_id');
-              const deviceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid);
-
-              deviceListenerUnsubscribe = onSnapshot(deviceRef, (docSnap) => {
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      // Jika device_id di server berubah dan tidak sama dengan local device_id
-                      if (data.device_id && data.device_id !== myDeviceId) {
-                          if (typeof window.handleLogout === 'function') {
-                              // Parameter 'false' mencegah device_id Admin/HP lain ikut terhapus saat HP ini otomatis tertendang (logout paksa)
-                              window.handleLogout("Peringatan Keamanan:\nSesi Anda telah berakhir secara paksa karena akun ini baru saja login di perangkat lain oleh Admin.", false);
-                          }
-                      }
-                  }
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER FOTO PROFIL RIDER REAL-TIME
-          // -------------------------------------------------------------
-          let profilePhotoUnsubscribe = null;
-
-          window.loadFotoProfilRider = (riderUid) => {
-              if (!riderUid || !isAuthReady) return;
-              const cleanUid = String(riderUid).trim().toUpperCase();
-
-              if (profilePhotoUnsubscribe) return; // Mencegah multiple listeners
-
-              // PERBAIKAN: Menggunakan firebaseConfig.projectId agar jalurnya pas di: 
-              // artifacts -> onbid-2f87a -> public -> data -> rider_profiles -> UID
-              const profileRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', cleanUid);
+              const currentDeviceId = getDeviceID();
+              const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
               
-              profilePhotoUnsubscribe = onSnapshot(profileRef, (docSnap) => {
+              deviceListenerUnsubscribe = onSnapshot(docRef, (docSnap) => {
                   if (docSnap.exists()) {
                       const data = docSnap.data();
-                      
-                      // Cek apakah ada data foto base64
-                      if (data.foto_base64) {
-                          window.hasCustomProfilePhoto = true; // Tandai bahwa foto asli sudah didapat
-                          
-                          const imgHome = document.getElementById('avatar-home');
-                          const imgProfile = document.getElementById('profile-img');
-                          
-                          // Update gambar di header beranda
-                          if (imgHome) {
-                              imgHome.src = data.foto_base64;
-                          }
-                          // Update gambar di halaman profil
-                          if (imgProfile) {
-                              imgProfile.src = data.foto_base64;
-                          }
+                      // Jika device_id di database berubah (ditake-over perangkat lain)
+                      if (data.device_id && data.device_id !== currentDeviceId) {
+                          alert("Akses dihentikan! Akun Anda baru saja diloginkan di perangkat lain.");
+                          localStorage.removeItem('rider_uid');
+                          location.reload();
                       }
                   }
               }, (error) => {
-                  console.error("Gagal memuat foto profil:", error);
+                  console.warn("Device listener error:", error);
               });
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER STATUS ONBID RIDER (SINKRONISASI DENGAN ADMIN)
+          // NEW: SISTEM LISTENER INFO ANTREAN AKTIF
           // -------------------------------------------------------------
-          let myStatusUnsubscribe = null;
+          let activeQueueCountUnsubscribe = null;
 
-          window.startMyStatusListener = (uid) => {
-              if (!uid || !isAuthReady) return;
-              const cleanUid = String(uid).trim().toUpperCase();
-
-              if (myStatusUnsubscribe) return; // Mencegah multiple listeners
-
-              const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', cleanUid);
-
-              myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      const toggle = document.getElementById('onbid-toggle');
-                      
-                      // Jika Admin mematikan On-Bid secara paksa dari panel (is_online = false)
-                      // Tapi toggle di aplikasi rider masih menyala (true)
-                      if (data.is_online === false && toggle && toggle.checked) {
-                          toggle.checked = false;
-                          updateOnbidUI(false);
-                          localStorage.setItem('rider_onbid_status', 'false');
-                          // Mainkan suara indikator mati
-                          try { playBeep(440, 0.1); } catch(e){}
-                      }
-                      
-                      // Sebaliknya: Jika Admin menghidupkan On-Bid secara paksa
-                      if (data.is_online === true && toggle && !toggle.checked) {
-                          toggle.checked = true;
-                          updateOnbidUI(true);
-                          localStorage.setItem('rider_onbid_status', 'true');
-                          try { playBeep(880, 0.1); } catch(e){}
-                      }
-                  }
-              }, (error) => {
-                  console.error("Gagal mendengarkan sinkronisasi status On-Bid:", error);
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER PENDAPATAN HARIAN (HOT DATA FIREBASE)
-          // -------------------------------------------------------------
-          let dailyOrdersUnsubscribe = null;
-
-          window.startDailyOrdersListener = (uid) => {
-              if (!uid || !isAuthReady) return;
-              const cleanUid = String(uid).trim().toUpperCase();
-
-              if (dailyOrdersUnsubscribe) return; // Mencegah multiple listeners
-
-              // Aturan Direktori: artifacts/{projectId}/users/{cleanUid}/daily_orders
-              const dailyOrdersRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', cleanUid, 'daily_orders');
-
-              dailyOrdersUnsubscribe = onSnapshot(dailyOrdersRef, (snapshot) => {
-                  let todayOrders = [];
-                  const todayStr = getJakartaDateString(); // Format MM-DD-YYYY internal aplikasi
-
+          window.startActiveQueueCountListener = () => {
+              if (activeQueueCountUnsubscribe) return;
+              
+              const statusRef = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status');
+              
+              activeQueueCountUnsubscribe = onSnapshot(statusRef, (snapshot) => {
+                  let count = 0;
                   snapshot.forEach(doc => {
                       const data = doc.data();
-                      const orderDate = data.Tanggal || data.tanggal || todayStr;
-                      
-                      const parsedDate = parseSheetDate(orderDate) || todayStr;
-                      const status = String(data.Status || data.status || "").trim().toLowerCase();
-                      
-                      // Ambil SEMUA riwayat order dengan status Selesai untuk masuk ke kontainer Daftar Order Selesai
-                      if (status === 'selesai' || status === 'completed') {
-                          todayOrders.push({
-                              UID: cleanUid,
-                              Nama_Rider: document.getElementById('display-rider-name').innerText || "Rider",
-                              Tanggal: parsedDate,
-                              Jam: data.Jam || data.jam || new Date().toLocaleTimeString('id-ID', {hour: '2-digit', minute: '2-digit', hour12: false}),
-                              Status: "Selesai",
-                              // Perhatian: Pastikan di Aplikasi Admin, input nominal adalah spt di Sheet, cth: 15 (untuk 15.000)
-                              Nominal_Kotor: data.Nominal_Kotor || data.nominal_kotor || data.fee || data.Fee || 0,
-                              Tambahan: data.Tambahan || data.tambahan || data.extra || data.Extra || 0,
-                              Keterangan: data.Keterangan || data.keterangan || "Order Aplikasi (Auto)",
-                              List_Pesanan: data["list pesanan"] || data.List_Pesanan || (Array.isArray(data.items) ? data.items.map(i => i.name).join(', ') : ""), // Tarik data list pesanan untuk riwayat
-                              Customer_Name: data.Nama_Pelanggan || data.customer_name || data.Customer_Name || data.Nama_Customer || data.Pelanggan || "Pelanggan", // Menarik data nama pelanggan
-                              is_realtime: true // Penanda unik untuk memunculkan badge berkedip "LIVE" di riwayat
-                          });
+                      if (data.is_online === true && data.is_available === true && data.in_main_queue === true) {
+                          count++;
                       }
                   });
-
-                  // Sortir berdasarkan tanggal dan jam terbaru
-                  todayOrders.sort((a, b) => {
-                      const dateA = new Date(`${a.Tanggal.replace(/-/g, '/')} ${a.Jam}`);
-                      const dateB = new Date(`${b.Tanggal.replace(/-/g, '/')} ${b.Jam}`);
-                      return dateB - dateA;
-                  });
-
-                  firebaseData = todayOrders;
-                  
-                  // Panggil fungsi penggabung di luar modul untuk merender ulang UI
-                  if (typeof window.combineAndRenderData === 'function') {
-                      window.combineAndRenderData();
+                  const countEl = document.getElementById('active-queue-count');
+                  if (countEl) {
+                      countEl.innerText = `${count} Rider`;
                   }
               }, (error) => {
-                  console.error("Gagal mendengarkan order harian Firebase:", error);
+                  console.error("Error fetching active queue count:", error);
               });
           };
 
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER PENANGGUHAN AKSES (KONTROL RIDER)
-          // -------------------------------------------------------------
-          let suspensionUnsubscribe = null;
-          let currentListeningUID = null; // Lacak UID agar tidak dobel listen
-          
-          window.startSuspensionListener = (uid, riderName) => {
-              if (!uid) return;
-              const cleanUid = String(uid).trim().toUpperCase();
-              
-              // Jika Auth belum ready, simpan dan tunda eksekusinya
-              if (!isAuthReady) {
-                  window.pendingSuspensionCheck = { uid: cleanUid, name: riderName };
-                  return;
+          window.stopActiveQueueCountListener = () => {
+              if (activeQueueCountUnsubscribe) {
+                  activeQueueCountUnsubscribe();
+                  activeQueueCountUnsubscribe = null;
               }
-              
-              // CEGAH DUPLIKASI LISTENER JIKA UID SAMA (Agar real-time tidak putus)
-              if (currentListeningUID === cleanUid && suspensionUnsubscribe) {
-                  return;
-              }
-
-              // Hapus listener sebelumnya jika ganti akun
-              if (suspensionUnsubscribe) {
-                  suspensionUnsubscribe();
-              }
-              
-              currentListeningUID = cleanUid;
-
-              // UID yang di-passing dijamin sama persis bentuknya dengan di Admin
-              // Diarahkan eksplisit ke: artifacts/onbid-2f87a/public/data/suspended_riders
-              const suspendDocRef = doc(db, 'artifacts', 'onbid-2f87a', 'public', 'data', 'suspended_riders', cleanUid);
-              
-              suspensionUnsubscribe = onSnapshot(suspendDocRef, (docSnap) => {
-                  const overlay = document.getElementById('suspended-overlay');
-                  if (!overlay) return;
-                  
-                  if (docSnap.exists()) {
-                      // JIKA RIDER ADA DI DAFTAR SUSPEND
-                      const data = docSnap.data();
-                      const displayedName = data.nama || riderName || cleanUid;
-                      
-                      const nameEl = document.getElementById('suspended-name');
-                      if(nameEl) nameEl.innerText = displayedName;
-                      
-                      // Tampilkan overlay block
-                      overlay.classList.remove('hidden');
-                      overlay.classList.add('flex');
-                      
-                      // Matikan otomatis status ON-BID ke OFF-BID jika sedang menyala
-                      const toggle = document.getElementById('onbid-toggle');
-                      if (toggle && toggle.checked) {
-                          toggle.checked = false;
-                          // Panggil fungsi toggle yang sudah kita ekspos di window (force exit = true)
-                          if(typeof window.toggleOnbid === 'function') {
-                              window.toggleOnbid(true);
-                          }
-                      }
-                  } else {
-                      // JIKA RIDER TIDAK DISUSPEND ATAU SUDAH DIBUKA ADMIN
-                      overlay.classList.add('hidden');
-                      overlay.classList.remove('flex');
-                  }
-              }, (error) => {
-                  console.error("Error checking suspension status:", error);
-              });
           };
 
           // -------------------------------------------------------------
@@ -6455,6 +6210,11 @@
               overlay.classList.remove('hidden');
               overlay.classList.add('flex');
               
+              // Start listener untuk info antrean
+              if (typeof window.startActiveQueueCountListener === 'function') {
+                  window.startActiveQueueCountListener();
+              }
+              
               // Pastikan status on-bid menyala (Opsional tapi berguna agar radar tetap online)
               const toggle = document.getElementById('onbid-toggle');
               if (toggle && !toggle.checked) {
@@ -6467,6 +6227,11 @@
               const overlay = document.getElementById('active-order-overlay');
               overlay.classList.add('hidden');
               overlay.classList.remove('flex');
+              
+              // Stop listener info antrean
+              if (typeof window.stopActiveQueueCountListener === 'function') {
+                  window.stopActiveQueueCountListener();
+              }
               
               // Reset Form Foto
               document.getElementById('finish-photo-preview').classList.add('hidden');
