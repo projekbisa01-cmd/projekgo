@@ -1095,6 +1095,14 @@
             
             if(!container) return;
 
+            // FUNGSI BARU: Mencegah orderan yang masih aktif (menunggu/diproses) tampil di riwayat
+            const activeDailyOrderIds = new Set(
+                allGlobalOrders
+                    .filter(o => o.status === 'assigned' || o.status === 'processing')
+                    .map(o => o.daily_order_id)
+                    .filter(id => id)
+            );
+
             const historyOrders = allGlobalOrders.filter(o => {
                 const stat = (o.status || '').toLowerCase();
                 if (stat !== 'completed' && stat !== 'selesai') return false;
@@ -1111,6 +1119,9 @@
             const existingDailyOrderIds = new Set(historyOrders.map(o => o.daily_order_id).filter(id => id));
 
             const dailyOrdersMapped = allDailyOrders.filter(o => {
+                // Sembunyikan orderan yang ID-nya masih ada di antrean aktif (belum selesai)
+                if (activeDailyOrderIds.has(o.id)) return false;
+
                 let localDateStr = '';
                 if (o.Tanggal) {
                     const parts = o.Tanggal.split('-');
@@ -1195,28 +1206,44 @@
                 
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
                 const tamVal = parseInt(order.tambahan || 0);
-                const tamStr = tamVal > 0 ? `<span class="text-[10px] text-emerald-500 font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
                 
-                const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[10px] text-slate-500 mt-0.5"><i class="fa-solid fa-user mr-1 text-[9px]"></i>${order.customer_name}</p>` : '';
+                // Ukuran font tambahan diperbesar dan diberi styling background (badge) warna netral/hitam
+                const tamStr = tamVal > 0 ? `<span class="text-xs text-slate-700 font-black bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 ml-1.5">+ Rp ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                
+                // Nama pelanggan sedikit diperbesar agar lebih proporsional
+                const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[11px] text-slate-500 mt-1 font-medium"><i class="fa-solid fa-user mr-1.5 text-slate-400"></i>${order.customer_name}</p>` : '';
 
                 html += `
-                    <div class="bg-white rounded-xl p-3 border border-gray-100 shadow-sm flex justify-between items-start hover:bg-slate-50 transition-colors gap-2">
-                        <div class="flex items-start gap-2.5 w-full pr-1">
-                            <span class="text-[10px] font-bold text-slate-400 w-11 shrink-0 mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${timeStr}</span>
-                            <div class="w-px bg-gray-200 self-stretch shrink-0 min-h-[30px]"></div>
-                            <div class="overflow-hidden">
-                                <span class="text-xs font-black text-slate-700 leading-snug pt-0.5 break-words">${displayRider}</span>
+                    <div class="bg-white rounded-xl p-3.5 border border-gray-100 shadow-sm flex justify-between items-center hover:bg-slate-50 transition-colors gap-3">
+                        <div class="flex items-center gap-3 w-full pr-1">
+                            <!-- Layout Jam diperbesar dan ditata ke tengah vertikal -->
+                            <div class="flex flex-col items-center justify-center shrink-0 w-12">
+                                <i class="fa-regular fa-clock text-slate-400 text-sm mb-0.5"></i>
+                                <span class="text-xs font-black text-slate-700">${timeStr}</span>
+                            </div>
+                            
+                            <div class="w-px bg-gray-200 self-stretch shrink-0 min-h-[45px]"></div>
+                            
+                            <div class="overflow-hidden flex flex-col justify-center">
+                                <!-- Nama rider diperbesar -->
+                                <span class="text-sm font-black text-slate-800 leading-tight break-words">${displayRider}</span>
                                 ${custName}
+                                
+                                <!-- Ongkir dan tambahan diletakkan di bawah nama rider -->
+                                <div class="flex items-center mt-1.5 flex-wrap gap-y-1">
+                                    <span class="text-sm font-black text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">Rp ${feeStr}</span>
+                                    ${tamStr}
+                                </div>
                             </div>
                         </div>
                         <div class="flex flex-col items-end shrink-0 gap-2">
-                            <p class="text-sm font-black text-sky-600 text-right whitespace-nowrap mt-0.5">Rp ${feeStr}${tamStr}</p>
-                            <div class="flex items-center gap-1.5">
-                                <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-7 h-7 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-lg flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
-                                    <i class="fa-solid fa-pen text-[10px]"></i>
+                            <!-- Tombol edit & hapus disusun vertikal agar serasi dengan tinggi kartu yang baru -->
+                            <div class="flex flex-col gap-1.5">
+                                <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
+                                    <i class="fa-solid fa-pen text-xs"></i>
                                 </button>
-                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'})" class="w-7 h-7 bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white rounded-lg flex items-center justify-center transition-colors shadow-sm" title="Hapus Riwayat">
-                                    <i class="fa-solid fa-trash text-[10px]"></i>
+                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Hapus Riwayat">
+                                    <i class="fa-solid fa-trash text-xs"></i>
                                 </button>
                             </div>
                         </div>
