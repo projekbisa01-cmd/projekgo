@@ -517,8 +517,7 @@
             await setDoc(oldRiderRef, { is_online: false, is_available: false, in_main_queue: false, last_drop_desc: "", proof_desc: "" }, { merge: true });
 
             // 2. Cari rider pengganti (Urutan Pertama di Antrean Utama)
-            // KECUALIKAN rider yang status is_nyambi === true agar mereka tetap bisa mengambil order
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             busyUids.add(order.rider_uid); // Tambahkan rider lama agar tidak terpilih lagi
             
             const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
@@ -706,12 +705,15 @@
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    if (isOnline && isAvailable) {
-                        if (inMainQueue) {
-                            mainQueueRiders.push(data);
-                        } else {
-                            newShiftRiders.push(data);
-                        }
+                    // LOGIKA BARU KUNCI ANTREAN:
+                    // Selama 'in_main_queue' bernilai true, dia akan SELALU muncul di antrean,
+                    // Tidak peduli is_online sedang false (hilang sinyal sesaat).
+                    if (inMainQueue) {
+                        mainQueueRiders.push(data);
+                    } 
+                    // Jika belum masuk antrean utama, dan dia baru menyalakan aplikasi (online & available)
+                    else if (isOnline && isAvailable) {
+                        newShiftRiders.push(data);
                     }
                 });
 
@@ -746,8 +748,8 @@
             const container = document.getElementById('new-shift-queue-list');
             const btnPromote = document.getElementById('btn-promote-queue');
             
-            // KECUALIKAN rider yang ordernya ditandai NYAMBI (is_nyambi === true)
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
+            // KECUALIKAN rider yang sedang sibuk
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
             
             if (availableNewShift.length === 0) {
@@ -792,8 +794,8 @@
             const container = document.getElementById('rider-queue-list');
             const countEl = document.getElementById('stat-online-riders');
             
-            // KECUALIKAN rider yang ordernya ditandai NYAMBI (is_nyambi === true)
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing') && !o.is_nyambi).map(o => o.rider_uid));
+            // KECUALIKAN rider yang sedang sibuk
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
 
             if(countEl) countEl.innerText = availableMainQueue.length;
@@ -813,6 +815,10 @@
                 const ketFoto = rider.last_drop_desc || rider.proof_desc || "Siap Menerima Order";
                 const displayName = rider.name && String(rider.name).trim() !== '' ? rider.name : rider.uid;
                 
+                // Cek Sinyal: Jika rider ada di antrean utama tapi is_online-nya false, berarti dia hilang sinyal
+                const isActuallyOnline = rider.is_online === true || rider.is_online === 'true';
+                const connectionWarning = !isActuallyOnline ? `<span class="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-200 ml-1.5 align-middle" title="Sinyal Rider Hilang / Aplikasi Tertutup"><i class="fa-solid fa-triangle-exclamation"></i> Sinyal Jelek</span>` : '';
+
                 // Menghitung & Format Waktu Onbid/Masuk Antrean
                 let timeOnbidStr = '--:--';
                 const timeRaw = rider.last_drop_time ? rider.last_drop_time.seconds : (rider.last_updated ? rider.last_updated.seconds : 0);
@@ -825,10 +831,10 @@
                     <div onclick="window.selectRider('${rider.uid}', '${displayName}')" 
                          class="rider-card cursor-pointer p-3 rounded-2xl border border-gray-100 bg-white hover:border-sky-300 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm relative group" 
                          id="rider-card-${rider.uid}">
-                        <div class="flex items-center gap-3 overflow-hidden pr-8">
+                        <div class="flex items-center gap-3 overflow-hidden pr-8 w-full">
                             <div class="w-8 h-8 rounded-full ${isFirst ? 'btn-primary text-white' : 'bg-slate-100 text-slate-500'} flex items-center justify-center font-black text-xs shrink-0">${index + 1}</div>
-                            <div class="overflow-hidden">
-                                <p class="font-black text-slate-800 text-[12px] leading-tight">${displayName}</p>
+                            <div class="overflow-hidden w-full">
+                                <p class="font-black text-slate-800 text-[12px] leading-tight truncate">${displayName} ${connectionWarning}</p>
                                 <div class="flex items-center gap-2 mt-1">
                                     <div class="flex items-center gap-1 shrink-0 bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 border border-slate-200/50">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
@@ -842,10 +848,10 @@
                             </div>
                         </div>
                         <div class="shrink-0 mr-6">
-                             ${isFirst ? '<i class="fa-solid fa-star text-sky-500 text-[10px]"></i>' : '<div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>'}
+                             ${isActuallyOnline ? (isFirst ? '<i class="fa-solid fa-star text-sky-500 text-[10px]"></i>' : '<div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>') : '<i class="fa-solid fa-link-slash text-amber-500 text-[10px]"></i>'}
                         </div>
                         
-                        <button onclick="event.stopPropagation(); window.forceOffline('${rider.uid}', '${displayName}')" class="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-red-50 text-red-400 opacity-0 group-hover:opacity-100 rounded-full flex items-center justify-center hover:bg-red-500 hover:text-white transition-all shadow-sm" title="Paksa Offline (Data Nyangkut)">
+                        <button onclick="event.stopPropagation(); window.forceOffline('${rider.uid}', '${displayName}')" class="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-red-50 text-red-400 opacity-0 group-hover:opacity-100 rounded-full flex items-center justify-center hover:bg-red-500 hover:text-white transition-all shadow-sm" title="Paksa Offline (Hapus dari Antrean)">
                             <i class="fa-solid fa-power-off text-[10px]"></i>
                         </button>
                     </div>
@@ -997,19 +1003,32 @@
             });
         }
 
-        // FUNGSI BARU: Fitur Toggle Nyambi
-        window.toggleNyambi = (id, currentNyambi) => {
-            const newState = !currentNyambi;
-            const msg = newState ? 'Tandai order ini sebagai PENDING/NYAMBI? Rider akan dimasukkan kembali ke Antrean Radar Utama untuk menerima order tambahan.' : 'Matikan mode Nyambi? Status rider akan kembali difokuskan hanya pada orderan ini.';
-            
-            window.showConfirm('Mode Nyambi', msg, async () => {
+        // FUNGSI BARU: Fitur Paksa Selesai & Nyambi
+        window.forceNyambi = (orderId, riderUid) => {
+            window.showConfirm('Paksa Selesai & Nyambi', 'Orderan ini akan DIPAKSA SELESAI dan masuk histori. Rider akan diletakkan di URUTAN PERTAMA Antrean Radar. Lanjutkan?', async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
-                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { is_nyambi: newState });
-                    window.showAlert('Berhasil', newState ? 'Mode Nyambi Aktif. Rider siap menerima orderan lain di radar.' : 'Mode Nyambi dinonaktifkan.', 'success');
+                    // 1. Ubah status order menjadi completed
+                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId), { 
+                        status: 'completed',
+                        finished_at: serverTimestamp()
+                    });
+                    
+                    // 2. Taruh rider di urutan teratas (gunakan epoch time agar jadi yang paling lama menunggu)
+                    await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', riderUid), { 
+                        in_main_queue: true,
+                        is_online: true,
+                        is_available: true,
+                        last_drop_time: new Date(0), // Set ke 1 Jan 1970, pasti ranking 1
+                        last_drop_desc: "Prioritas Nyambi",
+                        proof_desc: "Prioritas Nyambi"
+                    }, { merge: true });
+
+                    window.showAlert('Berhasil', 'Order diselesaikan. Rider sekarang berada di urutan pertama antrean.', 'success');
                 } catch(e) {
-                    window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memperbarui status Nyambi.', 'error');
+                    console.error(e);
+                    window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memproses Nyambi.', 'error');
                 } finally {
                     loader.classList.add('hidden'); loader.classList.remove('flex');
                 }
@@ -1045,12 +1064,10 @@
             
             activeOrders.forEach(order => {
                 const isProcessing = order.status === 'processing';
-                const isNyambi = order.is_nyambi === true; // Pengecekan status Nyambi
                 
-                // Tema Warna menyesuaikan apakah sedang nyambi atau normal
-                const statusColor = isNyambi ? 'text-purple-600 bg-purple-50 border-purple-200' : (isProcessing ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200');
+                // Tema Warna
+                const statusColor = isProcessing ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200';
                 const statusText = isProcessing ? 'Sedang Diproses Rider' : 'Menunggu Konfirmasi Rider';
-                const nyambiBadge = isNyambi ? `<span class="text-[8px] font-black text-purple-600 bg-purple-100 border-purple-200 px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max"><i class="fa-solid fa-layer-group mr-1"></i>NYAMBI</span>` : '';
 
                 const itemsText = order.items ? order.items.map(i => i.name).join(', ') : 'Order Biasa';
 
@@ -1067,14 +1084,13 @@
                 }
 
                 html += `
-                    <div class="bg-white rounded-2xl p-4 border ${isNyambi ? 'border-purple-200' : 'border-slate-200'} shadow-sm flex flex-col gap-3 relative overflow-hidden transition-colors">
-                        ${isNyambi ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-purple-500"></div>' : (isProcessing ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>' : '<div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>')}
+                    <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-colors">
+                        ${isProcessing ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>' : '<div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>'}
                         
                         <div class="flex justify-between items-start pl-1">
                             <div class="flex flex-col gap-1.5 overflow-hidden">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
-                                    ${nyambiBadge}
                                     <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100" title="Waktu Order Diberikan">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
                                         <span class="text-[9px] font-black">${timeAssignedStr}</span>
@@ -1096,7 +1112,7 @@
                         <div class="grid ${!isProcessing ? 'grid-cols-4' : 'grid-cols-3'} gap-2 ml-1 mt-1">
                             <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
                             ${!isProcessing ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
-                            <button onclick="window.toggleNyambi('${order.id}', ${isNyambi})" class="py-2.5 ${isNyambi ? 'bg-purple-500 hover:bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-purple-50 hover:bg-purple-100 text-purple-600 border-purple-200'} text-[9px] font-black rounded-lg uppercase transition-all border"><i class="fa-solid fa-layer-group"></i> Nyambi</button>
+                            <button onclick="window.forceNyambi('${order.id}', '${order.rider_uid}')" class="py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-600 border-purple-200 text-[9px] font-black rounded-lg uppercase transition-all border"><i class="fa-solid fa-layer-group"></i> Nyambi</button>
                             <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>
