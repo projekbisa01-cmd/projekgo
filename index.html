@@ -253,7 +253,7 @@
         }
 
         /* Styles untuk Swipe Button */
-        #swipe-btn { touch-action: none; will-change: left; }
+        #swipe-btn, #offbid-swipe-btn { touch-action: none; will-change: left; }
         .swipe-reset { transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .swipe-success { background-color: #22c55e !important; border-color: #22c55e !important; width: 100% !important; transition: all 0.3s ease; }
         
@@ -901,6 +901,37 @@
             </p>
             <button onclick="closeFastCompletionWarning()" class="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
                 <i class="fa-solid fa-check"></i> Mengerti
+            </button>
+        </div>
+    </div>
+
+    <!-- POPUP KONFIRMASI KELUAR ANTREAN (OFF-BID) -->
+    <div id="offbid-confirm-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="offbid-confirm-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-red-500"></div>
+            
+            <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center text-red-500 text-3xl mb-4 shadow-sm border border-red-100">
+                <i class="fa-solid fa-power-off"></i>
+            </div>
+            
+            <h3 class="text-xl font-black text-gray-800 mb-2">Istirahat / Keluar?</h3>
+            <p class="text-[11px] text-gray-600 mb-6 font-medium leading-relaxed bg-red-50 p-3 rounded-xl border border-red-100 italic">
+                Saat ini kamu di-jeda, namun masih berada di antrean. Geser untuk benar-benar menghapus posisimu dari radar.
+            </p>
+
+            <!-- SLIDER KONFIRMASI KELUAR -->
+            <div id="offbid-swipe-track" class="relative w-full h-12 bg-white rounded-full overflow-hidden select-none border border-red-200 shadow-inner mb-4">
+                <div class="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-red-400 pointer-events-none uppercase tracking-widest z-0 pl-8">
+                    Geser Keluar Antrean <i class="fa-solid fa-chevron-right ml-1"></i>
+                </div>
+                <div id="offbid-swipe-btn" class="absolute left-0 top-0 bottom-0 w-12 bg-red-500 rounded-full flex items-center justify-center text-white cursor-pointer shadow-md z-10 border border-red-400">
+                    <i class="fa-solid fa-angles-right"></i>
+                </div>
+            </div>
+
+            <!-- TOMBOL BATAL -->
+            <button onclick="cancelOffbid()" class="w-full py-4 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-2xl active:scale-95 transition-all text-[11px] uppercase tracking-widest border border-gray-200 flex items-center justify-center gap-2">
+                <i class="fa-solid fa-rotate-left"></i> Batal (Kembali Online)
             </button>
         </div>
     </div>
@@ -4656,6 +4687,120 @@
             else { swipeBtn.classList.add('swipe-reset'); swipeBtn.style.left = '0px'; }
         }
         
+        // --- LOGIKA POPUP DAN SWIPE OFF-BID ---
+        function showOffbidConfirmPopup() {
+            const popup = document.getElementById('offbid-confirm-popup');
+            const content = document.getElementById('offbid-confirm-content');
+            if(popup && content) {
+                popup.classList.remove('hidden');
+                popup.classList.add('flex');
+                setTimeout(() => {
+                    popup.classList.remove('opacity-0');
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                }, 10);
+            }
+            initOffbidSwipe();
+        }
+
+        function cancelOffbid() {
+            // Revert state ke ON UI
+            const toggle = document.getElementById('onbid-toggle');
+            if(toggle) {
+                toggle.checked = true;
+                updateOnbidUI(true);
+                localStorage.setItem('rider_onbid_status', 'true');
+            }
+
+            // Kembalikan ke Firestore is_online: true, is_available: true
+            if (typeof window.revertOffbidStatus === 'function') {
+                window.revertOffbidStatus();
+            }
+
+            closeOffbidConfirmPopup();
+        }
+
+        function closeOffbidConfirmPopup() {
+            const popup = document.getElementById('offbid-confirm-popup');
+            const content = document.getElementById('offbid-confirm-content');
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.remove('flex');
+                    popup.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+        let obSwipeBtn, obSwipeTrack;
+        let obIsDragging = false;
+        let obStartX = 0;
+        let obCurrentX = 0;
+
+        function initOffbidSwipe() {
+            obSwipeBtn = document.getElementById('offbid-swipe-btn');
+            obSwipeTrack = document.getElementById('offbid-swipe-track');
+            if(!obSwipeBtn || !obSwipeTrack) return;
+
+            obSwipeBtn.classList.remove('swipe-success');
+            obSwipeBtn.classList.add('swipe-reset');
+            obSwipeBtn.style.left = '0px';
+            obSwipeBtn.style.width = '3rem';
+            obSwipeBtn.innerHTML = '<i class="fa-solid fa-angles-right"></i>';
+
+            obSwipeBtn.removeEventListener('mousedown', startObDrag);
+            document.removeEventListener('mousemove', obDrag);
+            document.removeEventListener('mouseup', endObDrag);
+            obSwipeBtn.removeEventListener('touchstart', startObDrag);
+            document.removeEventListener('touchmove', obDrag);
+            document.removeEventListener('touchend', endObDrag);
+
+            obSwipeBtn.addEventListener('mousedown', startObDrag);
+            document.addEventListener('mousemove', obDrag);
+            document.addEventListener('mouseup', endObDrag);
+            obSwipeBtn.addEventListener('touchstart', startObDrag, {passive: false});
+            document.addEventListener('touchmove', obDrag, {passive: false});
+            document.addEventListener('touchend', endObDrag);
+        }
+
+        function startObDrag(e) {
+            if(e.target.closest('.swipe-success')) return;
+            obIsDragging = true;
+            obSwipeBtn.classList.remove('swipe-reset');
+            obStartX = (e.type === 'touchstart') ? e.touches[0].clientX : e.clientX;
+        }
+
+        function obDrag(e) {
+            if (!obIsDragging) return;
+            if(e.type === 'touchmove') e.preventDefault();
+            const x = (e.type === 'touchmove') ? e.touches[0].clientX : e.clientX;
+            const delta = x - obStartX;
+            const maxDist = obSwipeTrack.clientWidth - obSwipeBtn.clientWidth - 2;
+            obCurrentX = Math.max(0, Math.min(delta, maxDist));
+            obSwipeBtn.style.left = `${obCurrentX}px`;
+        }
+
+        function endObDrag(e) {
+            if (!obIsDragging) return;
+            obIsDragging = false;
+            const maxDist = obSwipeTrack.clientWidth - obSwipeBtn.clientWidth - 2;
+            if (obCurrentX >= maxDist * 0.9) {
+                obSwipeBtn.style.left = `${maxDist}px`;
+                obSwipeBtn.classList.add('swipe-success');
+                obSwipeBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                
+                // Trigger hapus antrean di Firebase
+                if (typeof window.confirmExitQueue === 'function') window.confirmExitQueue();
+                
+                setTimeout(() => { closeOffbidConfirmPopup(); }, 500);
+            } else {
+                obSwipeBtn.classList.add('swipe-reset');
+                obSwipeBtn.style.left = '0px';
+            }
+        }
+
         // --- FUNGSI CATATAN PEMBAYARAN MANUAL ---
         window.updatePaymentInfo = function(orderKey, type, orderName, dateStr, timeStr) {
             const container = document.getElementById(`pay_nominal_container_${orderKey}`);
@@ -5330,7 +5475,8 @@
             });
         }
 
-        async function toggleOnbid() {
+        async function toggleOnbid(isForced) {
+            const forceExit = (isForced === true);
             // Validasi lapis kedua jika rider memaksa klik saat tidak ada sinyal
             if (!navigator.onLine) {
                 alert("Sistem Menolak: Tidak ada koneksi internet! Gagal mengaktifkan On-Bid karena tidak ada sinyal dengan Admin.");
@@ -5367,6 +5513,17 @@
                 let rName = document.getElementById('display-rider-name').innerText;
                 if(rName === 'Memuat...' || !rName) rName = currentUserUID;
                 window.updateFirebaseStatus(currentUserUID, check, rName);
+            }
+
+            // TAMBAHAN LOGIKA POPUP OFFBID
+            if (!check) {
+                if (forceExit) {
+                    // Jika dimatikan paksa (misal oleh Suspend), langsung hapus dari antrean tanpa popup
+                    if (typeof window.confirmExitQueue === 'function') window.confirmExitQueue();
+                } else {
+                    // Munculkan konfirmasi keluar antrean
+                    showOffbidConfirmPopup();
+                }
             }
         }
         
@@ -5893,9 +6050,9 @@
                       const toggle = document.getElementById('onbid-toggle');
                       if (toggle && toggle.checked) {
                           toggle.checked = false;
-                          // Panggil fungsi toggle yang sudah kita ekspos di window
+                          // Panggil fungsi toggle yang sudah kita ekspos di window (force exit = true)
                           if(typeof window.toggleOnbid === 'function') {
-                              window.toggleOnbid();
+                              window.toggleOnbid(true);
                           }
                       }
                   } else {
@@ -6935,12 +7092,44 @@
                       }
                   } else {
                       dataToUpdate.is_available = false; // Matikan status dari antrean
-                      dataToUpdate.in_main_queue = false; // Keluar dari antrean juga
+                      // in_main_queue tidak diubah di sini (biarkan bernilai true).
+                      // Menunggu Rider mengkonfirmasi keluar antrean melalui popup slider.
                   }
 
                   await setDoc(statusRef, dataToUpdate, { merge: true });
               } catch (e) {
                   console.error("Gagal update status firebase:", e);
+              }
+          };
+
+          // FUNGSI UNTUK REVERT STATUS JIKA BATAL OFF-BID
+          window.revertOffbidStatus = async () => {
+              const uid = localStorage.getItem('rider_uid');
+              if(!uid) return;
+              try {
+                  const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', uid);
+                  await setDoc(statusRef, {
+                      is_online: true,
+                      is_available: true,
+                      last_updated: serverTimestamp()
+                  }, { merge: true });
+              } catch(e) {
+                  console.error("Gagal revert status:", e);
+              }
+          };
+
+          // FUNGSI UNTUK KONFIRMASI KELUAR ANTREAN
+          window.confirmExitQueue = async () => {
+              const uid = localStorage.getItem('rider_uid');
+              if(!uid) return;
+              try {
+                  const statusRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_status', uid);
+                  await setDoc(statusRef, {
+                      in_main_queue: false,
+                      last_updated: serverTimestamp()
+                  }, { merge: true });
+              } catch(e) {
+                  console.error("Gagal keluar antrean:", e);
               }
           };
 
