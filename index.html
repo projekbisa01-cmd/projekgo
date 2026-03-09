@@ -366,7 +366,7 @@
                 <p class="text-[11px] font-bold text-orange-800 mb-2 flex items-center gap-1"><i class="fa-solid fa-bolt text-orange-500"></i> Keuntungan Install & Download:</p>
                 <ul class="text-[10px] text-gray-700 space-y-2 list-none font-medium">
                     <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 mt-0.5"></i> Akses otomatis tanpa perlu link browser</li>
-                    <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 mt-0.5"></i> Sinyal radar (GPS) lebih gacor & stabil</li>
+                    <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 mt-0.5"></i> Sinyal radar lebih gacor & stabil</li>
                     <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 mt-0.5"></i> Hemat kuota internet hingga 50%</li>
                     <li class="flex items-start gap-2"><i class="fa-solid fa-check text-green-500 mt-0.5"></i> Aplikasi langsung tampil di layar utama HP</li>
                 </ul>
@@ -586,11 +586,11 @@
                     </button>
                 </div>
 
-                <!-- PERINGATAN GPS BARU -->
+                <!-- PERINGATAN BUKTI BARU (TANPA GPS) -->
                 <div class="bg-red-50 p-3 rounded-xl border border-red-100 flex items-start gap-2 shadow-inner">
-                    <i class="fa-solid fa-location-crosshairs text-red-500 mt-0.5 text-xs animate-pulse"></i>
+                    <i class="fa-solid fa-camera text-red-500 mt-0.5 text-xs animate-pulse"></i>
                     <p class="text-[9px] text-red-600 leading-relaxed font-bold italic">
-                        "Pastikan foto kamu dikirim setelah pesanan sudah diterima pelanggan dan sesuai dengan lokasi penerima, karena aplikasi dibekali dengan GPS akurat untuk memantau status lokasi, dan akan ke-suspend otomatis jika tidak sesuai."
+                        "Pastikan foto kamu dikirim setelah pesanan sudah diterima pelanggan. Foto bukti ini sangat penting untuk validasi sistem dan mencegah penangguhan (suspend) otomatis jika pesanan tidak sesuai."
                     </p>
                 </div>
 
@@ -3902,7 +3902,19 @@
         // Ekspos ke window agar bisa dipanggil dari dalam modul Firebase
         window.combineAndRenderData = combineAndRenderData;
 
-        setInterval(() => { if (currentUserUID) fetchData(false); }, 60000);
+        // Optimasi Baterai: Hanya fetch data berat dari Google Sheet jika aplikasi/layar sedang aktif
+        setInterval(() => { 
+            if (currentUserUID && !document.hidden) {
+                fetchData(false); 
+            }
+        }, 60000);
+
+        // Optimasi Baterai: Langsung refresh data ketika aplikasi dibuka kembali dari background
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && currentUserUID) {
+                fetchData(false);
+            }
+        });
 
         async function muatRatingRider(namaRider) {
             try {
@@ -5621,8 +5633,10 @@
                   // CEK DAN MINTA IZIN NOTIFIKASI DENGAN CUSTOM UI
                   setTimeout(() => {
                       updateNotificationUI();
-                      // Memaksa update UI tombol jika ada perubahan dari pengaturan browser
-                      setInterval(updateNotificationUI, 2000);
+                      // Optimasi Baterai: Mengganti setInterval 2 detik dengan Event Listener
+                      document.addEventListener("visibilitychange", () => {
+                          if (!document.hidden) updateNotificationUI();
+                      });
                   }, 2000); // Beri jeda 2 detik setelah login agar loading selesai
                   
                   // Jalankan listener suspen yang tertunda jika ada
@@ -5845,20 +5859,21 @@
                       let fDate = data.Tanggal || data.tanggal;
                       let fTime = data.Jam || data.jam;
                       
-                      if (!fDate || !fTime) {
-                          const ts = data.timestamp || data.finished_at || data.created_at || null;
-                          const dObj = (ts && ts.seconds) ? new Date(ts.seconds * 1000) : new Date();
-                          
-                          if (!fDate) {
-                              // FIX: Gunakan format YYYY-MM-DD agar fungsi parseSheetDate tidak terbalik saat tanggal <= 12
-                              const y = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric' });
-                              const m = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', month: '2-digit' });
-                              const d = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', day: '2-digit' });
-                              fDate = `${y}-${m}-${d}`;
-                          }
-                          if (!fTime) {
-                              fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
-                          }
+                      const ts = data.timestamp || data.finished_at || data.created_at || null;
+                      const dObj = (ts && ts.seconds) ? new Date(ts.seconds * 1000) : new Date();
+                      
+                      // KONVERSI FORMAT PASTI YYYY-MM-DD
+                      if (!fDate || !/^\d{4}-\d{2}-\d{2}$/.test(fDate)) {
+                          const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+                          const parts = formatter.formatToParts(dObj);
+                          const y = parts.find(p => p.type === 'year').value;
+                          const m = parts.find(p => p.type === 'month').value;
+                          const d = parts.find(p => p.type === 'day').value;
+                          fDate = `${y}-${m}-${d}`;
+                      }
+                      
+                      if (!fTime) {
+                          fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                       }
                       
                       // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
