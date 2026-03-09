@@ -2336,7 +2336,7 @@
 
         let currentUserUID = "";
         let appsScriptData = []; // NEW: Wadah data riwayat dari Spreadsheet (H-1 dst)
-        let firebaseData = [];   // NEW: Wadah data live harian dari Firebase (Hari ini)
+        window.firebaseData = []; // FIX: Pastikan scope global terbaca oleh module Firebase
         let rawData = [];
         let allRiderData = []; // NEW: Menyimpan data seluruh rider untuk leaderboard
         let dailyIncomeTarget = 100000;
@@ -3752,6 +3752,9 @@
 
             if (forceRefresh) { localStorage.removeItem(`rider_docs_${currentUserUID}`); localStorage.removeItem(`rider_rating_${currentUserUID}`); }
             
+            // Panggil fetch dokumen di awal (paralel) agar tidak menunggu data utama selesai, jadi 2x lipat lebih cepat
+            fetchVehicleAndDocsData(currentUserUID);
+            
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -3848,7 +3851,7 @@
             const seenMap = new Map();
             
             // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
-            const allData = [...firebaseData, ...appsScriptData];
+            const allData = [...window.firebaseData, ...appsScriptData];
             
             allData.forEach(item => {
                 const dateKey = parseSheetDate(item.Tanggal);
@@ -3857,7 +3860,9 @@
                 let timeKey = parseSheetTime(item.Jam);
                 if (timeKey) timeKey = timeKey.replace(/\./g, ':'); // Normalisasi jam (ubah . jadi :)
                 
-                const uniqueKey = `${dateKey}_${timeKey}`;
+                // Tambahkan inisial nama pelanggan ke key agar orderan di menit yang sama tidak saling tertimpa
+                const safeName = String(item.Nama_Pelanggan || item.Customer_Name || item.customer_name || "").substring(0, 3).toLowerCase();
+                const uniqueKey = `${dateKey}_${timeKey}_${safeName}`;
                 
                 if (!seenMap.has(uniqueKey)) {
                     // Simpan sebagai objek baru agar bisa dimodifikasi
@@ -3885,10 +3890,12 @@
             
             requestAnimationFrame(() => {
                 updateUI(); 
-                if (rawData[0] && rawData[0].Nama_Rider) muatRatingRider(rawData[0].Nama_Rider);
+                // Pastikan yang dipanggil untuk rating adalah data yang memiliki Nama Rider
+                const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
+                if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
+                
                 document.getElementById('loading-overlay').style.display = 'none'; 
                 document.getElementById('main-app').classList.remove('hidden');
-                fetchVehicleAndDocsData(currentUserUID); 
                 setTimeout(showWelcomePopup, 500);
             });
         }
@@ -4098,13 +4105,18 @@
 
         function updateUI() {
             if (rawData.length === 0) return;
-            const firstEntry = rawData[0];
-            const name = firstEntry.Nama_Rider || "Rider";
+            // Cari data valid yang berasal dari Sheet (karena data firebase mungkin ditaruh di atas dan tidak ada nama ridernya)
+            const validEntry = rawData.find(item => item.Nama_Rider && item.UID) || rawData[0];
+            const name = validEntry.Nama_Rider || "Rider";
+            const uid = validEntry.UID || currentUserUID;
+            
             document.getElementById('display-rider-name').innerText = name;
             
+            // Pindahkan ini ke luar profileCached agar nama profil selalu terupdate sempurna
+            document.getElementById('profile-name').innerText = name;
+            document.getElementById('profile-id').innerText = `ID: ${uid}`;
+            
             if (!profileCached) {
-                document.getElementById('profile-name').innerText = name;
-                document.getElementById('profile-id').innerText = `ID: ${firstEntry.UID}`;
                 const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                 if (cachedDocs) { updateDocsUI(JSON.parse(cachedDocs)); }
                 const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=ff8c00&color=fff`;
@@ -4368,6 +4380,12 @@
             document.getElementById('monthly-net-total').innerText = `Rp ${Math.round(mNetTotal).toLocaleString('id-ID')}`;
             document.getElementById('monthly-order-total').innerText = `${mTripsTotal} Trip`;
             renderMonthlyWeeklyList(currentWeeklyAdmRate);
+            
+            // FIX: Refresh detail list secara live jika sedang terbuka
+            if (window.activeDetailDateKey) {
+                const filteredData = rawData.filter(item => parseSheetDate(item.Tanggal) === window.activeDetailDateKey);
+                renderHistory(filteredData, 'daily-detail-list', ADM_RATE_FIXED_PRO);
+            }
         }
 
         function updateWeeklyChart(labels, data) {
@@ -4556,8 +4574,9 @@
             const p = dateKey.split('-'); const dO = new Date(p[2], p[0]-1, p[1]);
             label.innerText = `Detail Order: ${dO.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })}`;
             renderHistory(filteredData, 'daily-detail-list', ADM_RATE_FIXED_PRO); container.classList.remove('hidden'); 
+            window.activeDetailDateKey = dateKey; // FIX: Simpan dateKey aktif untuk Live Update
         }
-        function hideDailyDetail() { document.getElementById('daily-detail-container').classList.add('hidden'); }
+        function hideDailyDetail() { document.getElementById('daily-detail-container').classList.add('hidden'); window.activeDetailDateKey = null; }
         function renderMonthlyWeeklyList(currentRate) {
             const container = document.getElementById('monthly-weekly-list'); if(!container) return;
             const now = new Date(); const startOfCurrentWeek = getStartOfWeek(now); let html = '';
@@ -5813,7 +5832,7 @@
               if (!uid || !isAuthReady) return;
               if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
 
-              // PATH DATABASE: Mengambil riwayat harian spesifik milik rider ini
+              // PATH DATABASE: Mengambil riwayat orderan dari path artifacts/onbid-2f87a/users/{UID}/daily_orders
               const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', String(uid).trim(), 'daily_orders');
               
               dailyOrdersUnsubscribe = onSnapshot(dailyRef, (snapshot) => {
@@ -5821,23 +5840,52 @@
                   
                   snapshot.forEach(docSnap => {
                       const data = docSnap.data();
-                      // Mapping data Firestore agar formatnya cocok dengan format dari Google Sheet
+                      
+                      // PASTIKAN FORMAT JAM & TANGGAL TERISI AGAR TIDAK HILANG / SALING TIMPA DI DAFTAR
+                      let fDate = data.Tanggal || data.tanggal;
+                      let fTime = data.Jam || data.jam;
+                      
+                      if (!fDate || !fTime) {
+                          const ts = data.timestamp || data.finished_at || data.created_at || null;
+                          const dObj = (ts && ts.seconds) ? new Date(ts.seconds * 1000) : new Date();
+                          
+                          if (!fDate) {
+                              // FIX: Gunakan format YYYY-MM-DD agar fungsi parseSheetDate tidak terbalik saat tanggal <= 12
+                              const y = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric' });
+                              const m = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', month: '2-digit' });
+                              const d = dObj.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', day: '2-digit' });
+                              fDate = `${y}-${m}-${d}`;
+                          }
+                          if (!fTime) {
+                              fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                          }
+                      }
+                      
+                      // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
+                      let nKotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
+                      let nExtra = Number(data.Tambahan || data.extra || data.Extra || 0);
+                      if (nKotor > 500) nKotor = nKotor / 1000;
+                      if (nExtra > 500) nExtra = nExtra / 1000;
+
+                      // Mapping data Firestore dari path daily_orders agar formatnya sempurna saat di-render ke Riwayat Orderan
                       newFirebaseData.push({
                           id: docSnap.id,
                           is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
-                          Tanggal: data.Tanggal,
-                          Jam: data.Jam,
-                          Nama_Pelanggan: data.Nama_Pelanggan || data.customer_name || 'Pelanggan',
-                          Nominal_Kotor: data.Nominal_Kotor,
-                          Tambahan: data.Tambahan || 0,
-                          Status: data.Status || 'Selesai',
-                          Keterangan: data.Keterangan || '',
-                          List_Pesanan: data.Keterangan || ''
+                          Tanggal: fDate,
+                          Jam: fTime,
+                          Nama_Pelanggan: data.Nama_Pelanggan || data.customer_name || data.Customer_Name || 'Pelanggan',
+                          Nama_Rider: data.rider_name || data.Nama_Rider || document.getElementById('display-rider-name').innerText || 'Rider',
+                          UID: String(uid).trim(),
+                          Nominal_Kotor: nKotor,
+                          Tambahan: nExtra,
+                          Status: data.Status || data.status || 'Selesai',
+                          Keterangan: data.Keterangan || data.proof_desc || '',
+                          List_Pesanan: data.List_Pesanan || data.items_string || data.Keterangan || data.proof_desc || 'Orderan'
                       });
                   });
                   
                   // Perbarui variabel global dan jalankan ulang penggabung data
-                  firebaseData = newFirebaseData;
+                  window.firebaseData = newFirebaseData; // FIX: Akses variabel global secara eksplisit
                   if (typeof window.combineAndRenderData === 'function') {
                       window.combineAndRenderData();
                   }
