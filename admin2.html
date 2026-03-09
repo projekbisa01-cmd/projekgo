@@ -535,7 +535,7 @@
             const mm = String(now.getMonth() + 1).padStart(2, '0');
             const dd = String(now.getDate()).padStart(2, '0');
             const yyyy = now.getFullYear();
-            const todayStr = `${mm}-${dd}-${yyyy}`;
+            const todayStr = `${yyyy}-${mm}-${dd}`;
 
             newShiftRiders.forEach(async (rider) => {
                 const hasOrderToday = allDailyOrders.some(order => {
@@ -655,7 +655,8 @@
             let html = '';
             availableNewShift.forEach((rider) => {
                 const ketFoto = rider.last_drop_desc || rider.proof_desc || "Menunggu Verifikasi";
-                const displayName = rider.name && String(rider.name).trim() !== '' ? rider.name : rider.uid;
+                const realName = rider.nama || rider.name || rider.displayName;
+                const displayName = realName && String(realName).trim() !== '' ? realName : rider.uid;
                 
                 let timeAbsenStr = '--:--';
                 if (rider.last_updated && rider.last_updated.seconds) {
@@ -720,7 +721,8 @@
             availableMainQueue.forEach((rider, index) => {
                 const isFirst = index === 0;
                 const ketFoto = rider.last_drop_desc || rider.proof_desc || "Siap Menerima Order";
-                const displayName = rider.name && String(rider.name).trim() !== '' ? rider.name : rider.uid;
+                const realName = rider.nama || rider.name || rider.displayName;
+                const displayName = realName && String(realName).trim() !== '' ? realName : rider.uid;
                 
                 const isActuallyOnline = rider.is_online === true || rider.is_online === 'true';
                 const isAvailable = rider.is_available === true || rider.is_available === 'true';
@@ -778,10 +780,12 @@
             const isCurrentSelectedStillInMainQueue = availableMainQueue.find(r => r.uid === currentId);
             
             if (isCurrentSelectedStillInMainQueue) {
-                const selName = isCurrentSelectedStillInMainQueue.name && String(isCurrentSelectedStillInMainQueue.name).trim() !== '' ? isCurrentSelectedStillInMainQueue.name : currentId;
+                const rName = isCurrentSelectedStillInMainQueue.nama || isCurrentSelectedStillInMainQueue.name || isCurrentSelectedStillInMainQueue.displayName;
+                const selName = rName && String(rName).trim() !== '' ? rName : currentId;
                 window.selectRider(currentId, selName);
             } else if (availableMainQueue.length > 0) {
-                const firstRiderName = availableMainQueue[0].name && String(availableMainQueue[0].name).trim() !== '' ? availableMainQueue[0].name : availableMainQueue[0].uid;
+                const rName = availableMainQueue[0].nama || availableMainQueue[0].name || availableMainQueue[0].displayName;
+                const firstRiderName = rName && String(rName).trim() !== '' ? rName : availableMainQueue[0].uid;
                 window.selectRider(availableMainQueue[0].uid, firstRiderName);
             }
         }
@@ -895,13 +899,14 @@
                 }
 
                 const nextRider = availableMainQueue[0];
-                const nextRiderName = nextRider.name && String(nextRider.name).trim() !== '' ? nextRider.name : nextRider.uid;
+                const rName = nextRider.nama || nextRider.name || nextRider.displayName;
+                const nextRiderName = rName && String(rName).trim() !== '' ? rName : nextRider.uid;
 
                 const now = new Date();
                 const mm = String(now.getMonth() + 1).padStart(2, '0');
                 const dd = String(now.getDate()).padStart(2, '0');
                 const yyyy = now.getFullYear();
-                const Tanggal = `${mm}-${dd}-${yyyy}`;
+                const Tanggal = `${yyyy}-${mm}-${dd}`;
                 const hours = String(now.getHours()).padStart(2, '0');
                 const minutes = String(now.getMinutes()).padStart(2, '0');
                 const Jam = `${hours}:${minutes}`;
@@ -1176,7 +1181,11 @@
                 if (o.Tanggal) {
                     const parts = o.Tanggal.split('-');
                     if (parts.length === 3) {
-                        localDateStr = `${parts[2]}-${parts[0]}-${parts[1]}`;
+                        if (parts[0].length === 4) {
+                            localDateStr = o.Tanggal;
+                        } else {
+                            localDateStr = `${parts[2]}-${parts[0]}-${parts[1]}`;
+                        }
                     }
                 } else if (o.created_at && o.created_at.seconds) {
                     const d = new Date(o.created_at.seconds * 1000);
@@ -1185,7 +1194,8 @@
                 return !dateVal || localDateStr === dateVal;
             }).map(o => {
                 const matchedRider = allRiders.find(r => r.uid === o.rider_uid);
-                const realName = matchedRider && matchedRider.name && String(matchedRider.name).trim() !== '' ? matchedRider.name : 'Rider';
+                const realNameFromRider = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName) : null;
+                const realName = realNameFromRider && String(realNameFromRider).trim() !== '' ? realNameFromRider : 'Rider';
 
                 return {
                     id: o.id,
@@ -1246,10 +1256,10 @@
                 const timeStr = order.timeStr || (timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--');
                 
                 let finalName = order.rider_name || 'Rider';
-                if (finalName === getRiderCode(order.rider_uid)) {
+                if (finalName === getRiderCode(order.rider_uid) || finalName === 'Rider') {
                    const matched = allRiders.find(r => r.uid === order.rider_uid);
-                   if (matched && matched.name) finalName = matched.name;
-                   else finalName = 'Rider';
+                   const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
+                   if (rName) finalName = rName;
                 }
 
                 const displayRider = `${getRiderCode(order.rider_uid)} (${finalName})`;
@@ -1342,8 +1352,13 @@
                 } else if (order.tanggalStr) {
                     const parts = order.tanggalStr.split('-');
                     if(parts.length === 3) {
-                        tgl = `${parts[2]}-${parts[0]}-${parts[1]}`; 
-                        dayString = String(parts[1]).padStart(2, '0'); 
+                        if (parts[0].length === 4) {
+                            tgl = `${parts[0]}-${parts[1]}-${parts[2]}`; 
+                            dayString = String(parts[2]).padStart(2, '0');
+                        } else {
+                            tgl = `${parts[2]}-${parts[0]}-${parts[1]}`; 
+                            dayString = String(parts[1]).padStart(2, '0'); 
+                        }
                     }
                 } else {
                     tgl = document.getElementById('history-date').value || '-';
@@ -1381,10 +1396,10 @@
                 
                 let finalName = order.rider_name || 'Rider';
                 const rCode = getRiderCode(order.rider_uid);
-                if (finalName === rCode) {
+                if (finalName === rCode || finalName === 'Rider') {
                    const matched = allRiders.find(r => r.uid === order.rider_uid);
-                   if (matched && matched.name) finalName = matched.name;
-                   else finalName = 'Rider';
+                   const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
+                   if (rName) finalName = rName;
                 }
 
                 const fee = parseInt(order.fee || 0);
@@ -1504,14 +1519,15 @@
             let html = '<option value="">-- Pilih Rider --</option>';
             
             const sortedRiders = [...allRiders].sort((a,b) => {
-                const nameA = a.name || a.uid;
-                const nameB = b.name || b.uid;
+                const nameA = a.nama || a.name || a.displayName || a.uid;
+                const nameB = b.nama || b.name || b.displayName || b.uid;
                 return nameA.localeCompare(nameB);
             });
 
             sortedRiders.forEach(r => {
                 const rCode = getRiderCode(r.uid);
-                const rName = r.name && String(r.name).trim() !== '' ? r.name : 'Rider';
+                const realName = r.nama || r.name || r.displayName;
+                const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
                 html += `<option value="${r.uid}">${rCode} - ${rName}</option>`;
             });
 
@@ -1556,14 +1572,13 @@
                 let historyDate = document.getElementById('history-date').value;
                 let Tanggal;
                 if(historyDate) {
-                    const parts = historyDate.split('-');
-                    Tanggal = `${parts[1]}-${parts[2]}-${parts[0]}`; 
+                    Tanggal = historyDate; 
                 } else {
                     const now = new Date();
                     const mm = String(now.getMonth() + 1).padStart(2, '0');
                     const dd = String(now.getDate()).padStart(2, '0');
                     const yyyy = now.getFullYear();
-                    Tanggal = `${mm}-${dd}-${yyyy}`;
+                    Tanggal = `${yyyy}-${mm}-${dd}`;
                 }
 
                 const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
@@ -1641,7 +1656,7 @@
                 const mm = String(now.getMonth() + 1).padStart(2, '0');
                 const dd = String(now.getDate()).padStart(2, '0');
                 const yyyy = now.getFullYear();
-                const Tanggal = `${mm}-${dd}-${yyyy}`;
+                const Tanggal = `${yyyy}-${mm}-${dd}`;
                 
                 const hours = String(now.getHours()).padStart(2, '0');
                 const minutes = String(now.getMinutes()).padStart(2, '0');
