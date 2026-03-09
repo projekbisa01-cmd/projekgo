@@ -469,7 +469,7 @@
             
             <h2 class="text-2xl font-black text-red-600 mb-2 uppercase tracking-tight">Melewati Orderan!</h2>
             <p class="text-sm text-gray-700 font-bold leading-relaxed mb-6 bg-red-50 p-4 rounded-xl border border-red-100 italic">
-                Anda sekarang diposisi bawah antrian.
+                Waktu habis (60 Detik). Orderan dialihkan ke rider lain dan Anda dipindah ke posisi bawah antrean.
             </p>
             
             <button onclick="closeMissedOrderPopup()" class="w-full py-4 bg-gray-800 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest">
@@ -6097,8 +6097,7 @@
               if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
               
               window.isMissingOrder = false;
-              let timeLeft = 30;
-              let stage = 1;
+              let timeLeft = 60; // DIUBAH: Timer diatur tepat 60 detik
               
               const timerEl = document.getElementById('incoming-timer');
               const warningEl = document.getElementById('incoming-timer-warning');
@@ -6116,23 +6115,21 @@
                   timeLeft--;
                   if(timerEl) timerEl.innerText = timeLeft;
 
-                  if (timeLeft <= 0) {
-                      if (stage === 1) {
-                          // Masuk Tahap 2: Reset waktu dan munculkan teks peringatan
-                          stage = 2;
-                          timeLeft = 30;
-                          if(warningEl) warningEl.classList.remove('hidden');
-                          if(timerRing) {
-                              timerRing.classList.remove('border-orange-200', 'bg-orange-50');
-                              timerRing.classList.add('border-red-200', 'bg-red-50');
-                              if(timerEl) timerEl.classList.replace('text-orange-600', 'text-red-600');
-                          }
-                          try { playBeep(500, 0.4); } catch(e){}
-                      } else {
-                          // Waktu Habis Total: Batalkan otomatis
-                          clearInterval(window.incomingOrderTimer);
-                          window.handleMissedOrder(docId);
+                  // Tampilkan peringatan visual saat sisa waktu 15 detik
+                  if (timeLeft === 15) {
+                      if(warningEl) warningEl.classList.remove('hidden');
+                      if(timerRing) {
+                          timerRing.classList.remove('border-orange-200', 'bg-orange-50');
+                          timerRing.classList.add('border-red-200', 'bg-red-50');
+                          if(timerEl) timerEl.classList.replace('text-orange-600', 'text-red-600');
                       }
+                      try { playBeep(500, 0.4); } catch(e){}
+                  }
+
+                  if (timeLeft <= 0) {
+                      // Waktu Habis Total: Batalkan otomatis
+                      clearInterval(window.incomingOrderTimer);
+                      window.handleMissedOrder(docId);
                   }
               }, 1000);
           };
@@ -6184,18 +6181,20 @@
               try {
                   // 1. Update status order menjadi missed agar admin tahu dilewati
                   const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
-                  await updateDoc(orderRef, {
+                  const orderUpdateData = {
                       status: 'missed',
                       missed_by: currentUserUID,
                       missed_at: serverTimestamp()
-                  });
+                  };
+                  await updateDoc(orderRef, orderUpdateData);
 
                   // 2. Lempar posisi rider ke paling bawah antrean (Update last_drop_time)
                   const statusRef = doc(db, 'status_rider_aktif', String(currentUserUID).trim());
-                  await setDoc(statusRef, { 
+                  const riderStatusData = { 
                       last_drop_time: serverTimestamp(),
                       last_drop_desc: "Melewati orderan (Waktu Habis)"
-                  }, { merge: true });
+                  };
+                  await setDoc(statusRef, riderStatusData, { merge: true });
 
               } catch(e) { 
                   console.error("Gagal update data missed order", e); 
