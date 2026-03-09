@@ -5851,6 +5851,7 @@
           // -------------------------------------------------------------
           let activeOrderUnsubscribe = null;
           window.currentActiveOrderId = null;
+          window.currentIncomingOrderId = null; // Ditambahkan untuk melacak ID pop-up aktif
           let finishPhotoBase64 = null;
           
           window.incomingOrderTimer = null;
@@ -5917,7 +5918,9 @@
                           // Matikan timer jika admin membatalkan saat masih berdering
                           if (window.incomingOrderTimer) {
                               clearInterval(window.incomingOrderTimer);
+                              window.incomingOrderTimer = null;
                           }
+                          window.currentIncomingOrderId = null; // Reset track ID
                           wasActive = true;
                       }
 
@@ -5960,8 +5963,11 @@
                   if (feeDetailEl) feeDetailEl.innerHTML = '';
               }
 
-              // Mulai Timer 30 Detik x 2 Tahap
-              window.startIncomingOrderTimer(docId);
+              // Mencegah timer tereset jika docId masih sama (misal ada update data dari admin)
+              if (window.currentIncomingOrderId !== docId) {
+                  window.currentIncomingOrderId = docId;
+                  window.startIncomingOrderTimer(docId);
+              }
 
               // Render list pesanan di popup orderan masuk (Aman dari Array Object)
               if (itemsListEl) {
@@ -6046,7 +6052,9 @@
                   // Hentikan timer karena sudah diklik terima
                   if (window.incomingOrderTimer) {
                       clearInterval(window.incomingOrderTimer);
+                      window.incomingOrderTimer = null;
                   }
+                  window.currentIncomingOrderId = null; // Lepas ID karena sudah dikonfirmasi
                   
                   try {
                       const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
@@ -6097,13 +6105,16 @@
               if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
               
               window.isMissingOrder = false;
-              let timeLeft = 60; // DIUBAH: Timer diatur tepat 60 detik
+              
+              // Menggunakan performance.now() agar kebal terhadap lag di background browser dan sangat presisi
+              const DURATION = 60; 
+              const startTime = performance.now();
+              let lastBeepTime = 0;
               
               const timerEl = document.getElementById('incoming-timer');
               const warningEl = document.getElementById('incoming-timer-warning');
               const timerRing = document.getElementById('timer-ring');
               
-              if(timerEl) timerEl.innerText = timeLeft;
               if(warningEl) warningEl.classList.add('hidden');
               if(timerRing) {
                   timerRing.classList.remove('border-red-200', 'bg-red-50');
@@ -6111,27 +6122,42 @@
                   if(timerEl) timerEl.classList.replace('text-red-600', 'text-orange-600');
               }
 
-              window.incomingOrderTimer = setInterval(() => {
-                  timeLeft--;
+              const updateTimer = () => {
+                  const elapsed = (performance.now() - startTime) / 1000;
+                  let timeLeft = Math.ceil(DURATION - elapsed);
+
+                  // Jika telat terima data dan waktu sudah minus, pastikan tidak nembus negatif
+                  if (timeLeft < 0) timeLeft = 0;
+
                   if(timerEl) timerEl.innerText = timeLeft;
 
                   // Tampilkan peringatan visual saat sisa waktu 15 detik
-                  if (timeLeft === 15) {
+                  if (timeLeft <= 15 && timeLeft > 0) {
                       if(warningEl) warningEl.classList.remove('hidden');
                       if(timerRing) {
                           timerRing.classList.remove('border-orange-200', 'bg-orange-50');
                           timerRing.classList.add('border-red-200', 'bg-red-50');
                           if(timerEl) timerEl.classList.replace('text-orange-600', 'text-red-600');
                       }
-                      try { playBeep(500, 0.4); } catch(e){}
+                      
+                      // Trigger audio tiap detik pergantian pada 15 detik terakhir agar tak spam
+                      if (timeLeft !== lastBeepTime) {
+                          try { playBeep(500, 0.2); } catch(e){}
+                          lastBeepTime = timeLeft;
+                      }
                   }
 
                   if (timeLeft <= 0) {
                       // Waktu Habis Total: Batalkan otomatis
                       clearInterval(window.incomingOrderTimer);
+                      window.incomingOrderTimer = null;
+                      window.currentIncomingOrderId = null; // Lepaskan state ID timer saat ini
                       window.handleMissedOrder(docId);
                   }
-              }, 1000);
+              };
+
+              updateTimer(); // Panggil secara instan pada tick pertama
+              window.incomingOrderTimer = setInterval(updateTimer, 200); // Check per 200ms agar interval jauh lebih akurat
           };
 
           window.handleMissedOrder = async (docId) => {
