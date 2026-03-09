@@ -383,7 +383,8 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        // PERBAIKAN: Menambahkan runTransaction
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -415,6 +416,7 @@
         let allRiders = []; 
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
+        const processingMissedOrders = new Set(); // Mencegah looping eksekusi untuk orderan yang sama
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -868,6 +870,98 @@
             document.querySelectorAll('.rider-card').forEach(el => el.classList.remove('selected'));
         };
 
+        // FUNGSI BARU: Mengalihkan Otomatis Menggunakan Transaction untuk Mencegah Race Condition (Jika Rider Melewati Waktu)
+        window.autoReassignMissedOrder = async (order) => {
+            if (processingMissedOrders.has(order.id)) return;
+            processingMissedOrders.add(order.id);
+            
+            try {
+                // 1. Cari Rider Pengganti (Urutan Teratas yg available)
+                const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
+                const availableMainQueue = mainQueueRiders.filter(r => 
+                    (r.is_online === true || r.is_online === 'true') && 
+                    (r.is_available === true || r.is_available === 'true') && 
+                    !busyUids.has(r.uid) && 
+                    r.uid !== order.rider_uid &&
+                    r.uid !== order.missed_by
+                );
+
+                if (availableMainQueue.length === 0) {
+                    // Tidak ada rider pengganti, ubah status ke 'unassigned' agar berhenti me-loop
+                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id), {
+                        status: 'unassigned'
+                    });
+                    return;
+                }
+
+                const nextRider = availableMainQueue[0];
+                const nextRiderName = nextRider.name && String(nextRider.name).trim() !== '' ? nextRider.name : nextRider.uid;
+
+                const now = new Date();
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                const dd = String(now.getDate()).padStart(2, '0');
+                const yyyy = now.getFullYear();
+                const Tanggal = `${mm}-${dd}-${yyyy}`;
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const Jam = `${hours}:${minutes}`;
+
+                let detailKeterangan = "Orderan Biasa";
+                if (order.items && order.items.length > 0) {
+                    detailKeterangan = order.items.map(i => i.name).join(' | ');
+                }
+
+                const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
+                const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+
+                // Gunakan Transaction untuk mencegah Race Condition jika banyak Admin terbuka
+                await runTransaction(db, async (transaction) => {
+                    const orderDoc = await transaction.get(orderRef);
+                    if (!orderDoc.exists()) throw "Order tidak ditemukan";
+                    
+                    const currentData = orderDoc.data();
+                    if (currentData.status !== 'missed') throw "Sudah dialihkan oleh admin lain";
+
+                    // Hapus histori rider lama di dalam transaksi
+                    if (currentData.daily_order_id && currentData.rider_uid) {
+                        const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', currentData.rider_uid, 'daily_orders', currentData.daily_order_id);
+                        transaction.delete(oldDailyRef);
+                    }
+
+                    // Buat histori untuk rider baru
+                    transaction.set(newDailyOrderRef, {
+                        Tanggal: Tanggal,
+                        Jam: Jam,
+                        Nama_Pelanggan: currentData.customer_name || '-',
+                        Nominal_Kotor: (currentData.fee || 0) / 1000,
+                        Tambahan: (currentData.tambahan || 0) / 1000,
+                        Status: "Selesai",
+                        Keterangan: detailKeterangan,
+                        created_at: serverTimestamp()
+                    });
+
+                    // Update order aktif
+                    transaction.update(orderRef, {
+                        rider_uid: nextRider.uid,
+                        rider_name: nextRiderName,
+                        daily_order_id: newDailyOrderRef.id,
+                        status: 'assigned', 
+                        created_at: serverTimestamp(), // Waktu baru agar 60 detik rider baru full
+                        missed_by: null
+                    });
+                });
+
+                console.log(`Order berhasil dialihkan dari ${order.rider_uid} ke ${nextRider.uid}`);
+
+            } catch(e) {
+                if (e !== "Sudah dialihkan oleh admin lain") {
+                    console.error("Error auto-reassign order:", e);
+                }
+            } finally {
+                setTimeout(() => processingMissedOrders.delete(order.id), 5000);
+            }
+        };
+
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
             onSnapshot(ordersCol, (snapshot) => {
@@ -880,6 +974,11 @@
 
                     if ((data.status === 'assigned' || data.status === 'processing') && !allGlobalOrders.find(o => o.id === data.id)) {
                         hasNewOrder = true;
+                    }
+                    
+                    // PEMICU REASSIGN OTOMATIS: Jika aplikasi rider melewatkan orderan
+                    if (data.status === 'missed') {
+                        window.autoReassignMissedOrder(data);
                     }
                 });
 
@@ -927,7 +1026,8 @@
 
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
-            const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing');
+            // Modifikasi agar menampilkan juga orderan yang tidak ada pengambilnya ('unassigned' / 'missed')
+            const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing' || o.status === 'missed' || o.status === 'unassigned');
             document.getElementById('stat-active-orders').innerText = activeOrders.length;
 
             const badge = document.getElementById('nav-badge-active');
@@ -954,9 +1054,22 @@
             
             activeOrders.forEach(order => {
                 const isProcessing = order.status === 'processing';
+                const isMissed = order.status === 'missed' || order.status === 'unassigned';
                 
-                const statusColor = isProcessing ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200';
-                const statusText = isProcessing ? 'Sedang Diproses Rider' : 'Menunggu Konfirmasi Rider';
+                let statusColor, statusText, borderLeft;
+                if (isProcessing) {
+                    statusColor = 'text-emerald-600 bg-emerald-50 border-emerald-200';
+                    statusText = 'Sedang Diproses Rider';
+                    borderLeft = 'bg-emerald-500';
+                } else if (isMissed) {
+                    statusColor = 'text-rose-600 bg-rose-50 border-rose-200';
+                    statusText = order.status === 'unassigned' ? 'TIDAK ADA RIDER TERSEDIA' : 'DILEWATKAN (MENCARI RIDER...)';
+                    borderLeft = 'bg-rose-500';
+                } else {
+                    statusColor = 'text-amber-600 bg-amber-50 border-amber-200';
+                    statusText = 'Menunggu Konfirmasi Rider';
+                    borderLeft = 'bg-amber-400';
+                }
 
                 const itemsText = order.items ? order.items.map(i => i.name).join(', ') : 'Order Biasa';
 
@@ -973,7 +1086,7 @@
 
                 html += `
                     <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-colors">
-                        ${isProcessing ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>' : '<div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>'}
+                        <div class="absolute left-0 top-0 bottom-0 w-1 ${borderLeft}"></div>
                         
                         <div class="flex justify-between items-start pl-1">
                             <div class="flex flex-col gap-1.5 overflow-hidden">
@@ -991,14 +1104,14 @@
                             </div>
                         </div>
                         <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
-                            <p class="text-[9px] text-slate-500 font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas:</p>
-                            <p class="text-xs font-bold text-slate-700">${order.rider_name}</p>
+                            <p class="text-[9px] text-slate-500 font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas Terakhir:</p>
+                            <p class="text-xs font-bold text-slate-700">${order.rider_name || 'Tidak Ada'}</p>
                             <p class="text-[9px] text-slate-500 mt-1 italic line-clamp-2">"${itemsText}"</p>
                         </div>
                         
-                        <div class="grid ${!isProcessing ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
+                        <div class="grid ${!isProcessing && !isMissed ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
                             <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                            ${!isProcessing ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
+                            ${!isProcessing && !isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
                             <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>
@@ -1551,7 +1664,8 @@
                     status: 'assigned',
                     is_nyambi: false,
                     created_at: serverTimestamp(),
-                    daily_order_id: dailyOrderId
+                    daily_order_id: dailyOrderId,
+                    missed_by: null // Inisiasi nilai untuk mencegah error tracking missed order
                 });
 
                 await setDoc(dailyOrdersRef, {
