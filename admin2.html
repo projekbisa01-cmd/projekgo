@@ -415,8 +415,6 @@
         let allRiders = []; 
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
-        
-        const processingTimeouts = new Set();
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -425,7 +423,6 @@
                 startDailyOrdersListeners(); 
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
-                setInterval(checkOrderTimeouts, 30 * 1000);
                 setTimeout(autoCleanUpOldData, 15000);
                 setInterval(autoCleanUpOldData, 6 * 60 * 60 * 1000);
                 
@@ -491,109 +488,6 @@
                 dayEl.classList.add('hidden');
             }
         };
-
-        function checkOrderTimeouts() {
-            const now = Date.now();
-            const timeoutMs = 7 * 60 * 1000; 
-
-            const assignedOrders = allGlobalOrders.filter(o => o.status === 'assigned');
-
-            assignedOrders.forEach(async (order) => {
-                if (order.created_at && order.created_at.seconds && !processingTimeouts.has(order.id)) {
-                    const orderTimeMs = order.created_at.seconds * 1000;
-                    
-                    if (now - orderTimeMs >= timeoutMs) {
-                        processingTimeouts.add(order.id);
-                        try {
-                            await handleOrderTimeout(order);
-                        } catch(e) {
-                            console.error("Error auto-reassigning:", e);
-                        } finally {
-                            setTimeout(() => processingTimeouts.delete(order.id), 10000);
-                        }
-                    }
-                }
-            });
-        }
-
-        async function handleOrderTimeout(order) {
-            console.log(`Order ${order.id} timeout. Mencoba memindahkan dari Rider: ${order.rider_name}`);
-            
-            // PERBAIKAN 2: Tambahkan force_kill dan serverTimestamp() agar HP Rider sadar ada perubahan
-            const oldRiderRef = doc(db, 'status_rider_aktif', order.rider_uid);
-            await setDoc(oldRiderRef, { 
-                is_online: false, 
-                is_available: false, 
-                in_main_queue: false, 
-                force_kill: true, 
-                last_updated: serverTimestamp(),
-                last_drop_desc: "", 
-                proof_desc: "" 
-            }, { merge: true });
-
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
-            busyUids.add(order.rider_uid); 
-            
-            const availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
-
-            const oldOrderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-            await updateDoc(oldOrderRef, { status: 'canceled', cancel_reason: 'timeout_7_menit' });
-
-            if (order.daily_order_id) {
-                const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id);
-                await deleteDoc(oldDailyRef).catch(e => console.log('Catatan harian lama sudah hilang'));
-            }
-
-            setTimeout(async () => {
-                await deleteDoc(oldOrderRef).catch(e => console.log('Order lama terhapus'));
-            }, 3000);
-
-            if (availableMainQueue.length > 0) {
-                const nextRider = availableMainQueue[0]; 
-                const nextRiderName = nextRider.name && String(nextRider.name).trim() !== '' ? nextRider.name : nextRider.uid;
-                
-                const newDailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
-                
-                const now = new Date();
-                const mm = String(now.getMonth() + 1).padStart(2, '0');
-                const dd = String(now.getDate()).padStart(2, '0');
-                const yyyy = now.getFullYear();
-                const Tanggal = `${mm}-${dd}-${yyyy}`;
-                const hours = String(now.getHours()).padStart(2, '0');
-                const minutes = String(now.getMinutes()).padStart(2, '0');
-                const Jam = `${hours}:${minutes}`;
-
-                const detailsText = order.items ? order.items.map(i => i.name).join(' | ') : '';
-                
-                await setDoc(newDailyOrdersRef, {
-                    Tanggal: Tanggal,
-                    Jam: Jam,
-                    Nominal_Kotor: (order.fee || 0) / 1000,
-                    Tambahan: (order.tambahan || 0) / 1000,
-                    Status: "Selesai",
-                    Keterangan: detailsText,
-                    created_at: serverTimestamp()
-                });
-
-                const newOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
-                await setDoc(newOrderRef, {
-                    rider_uid: nextRider.uid,
-                    rider_name: nextRiderName,
-                    customer_phone: order.customer_phone,
-                    fee: order.fee,
-                    tambahan: order.tambahan || 0,
-                    items: order.items || [],
-                    status: 'assigned',
-                    is_nyambi: false,
-                    created_at: serverTimestamp(),
-                    daily_order_id: newDailyOrdersRef.id
-                });
-
-                window.showAlert('Alih Order Otomatis', `Rider ${order.rider_name} dinonaktifkan karena tidak merespon order selama 7 menit. Order otomatis dipindah ke ${nextRiderName}.`, 'info');
-            } else {
-                window.showAlert('Perhatian (Order Nyangkut)', `Rider ${order.rider_name} dinonaktifkan otomatis. Namun TIDAK ADA rider lain yang tersedia di antrean. Order dibatalkan otomatis!`, 'warning');
-            }
-        }
 
         function autoCleanUpOldData() {
             const now = Date.now();
