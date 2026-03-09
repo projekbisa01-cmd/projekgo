@@ -621,7 +621,7 @@
                 newShiftRiders.sort((a, b) => {
                     const timeA = a.last_updated ? a.last_updated.seconds : 0;
                     const timeB = b.last_updated ? b.last_updated.seconds : 0;
-                    return timeB - timeA;
+                    return timeA - timeB; // Ubah ke Ascending: yang absen duluan di atas, yang baru absen di bawah
                 });
 
                 updateNewShiftUI();
@@ -655,15 +655,27 @@
                 const ketFoto = rider.last_drop_desc || rider.proof_desc || "Menunggu Verifikasi";
                 const displayName = rider.name && String(rider.name).trim() !== '' ? rider.name : rider.uid;
                 
+                let timeAbsenStr = '--:--';
+                if (rider.last_updated && rider.last_updated.seconds) {
+                    const d = new Date(rider.last_updated.seconds * 1000);
+                    timeAbsenStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                }
+                
                 html += `
                     <div class="p-2.5 rounded-xl border border-indigo-200 bg-white/80 backdrop-blur-sm flex justify-between items-center shadow-sm relative group">
                         <div class="flex items-center gap-3 overflow-hidden pr-16">
                             <div class="w-7 h-7 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs shrink-0"><i class="fa-solid fa-user-clock"></i></div>
                             <div class="overflow-hidden">
                                 <p class="font-black text-slate-800 text-[11px] leading-tight">${displayName}</p>
-                                <div class="flex items-center gap-1 mt-0.5 opacity-80">
-                                    <i class="fa-solid fa-camera text-[8px] text-indigo-500"></i>
-                                    <p class="text-[9px] font-bold text-slate-500 uppercase truncate">${ketFoto}</p>
+                                <div class="flex items-center gap-1.5 mt-1">
+                                    <div class="flex items-center gap-1 shrink-0 bg-white px-1.5 py-0.5 rounded text-indigo-600 border border-indigo-100 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                                        <i class="fa-regular fa-clock text-[8px]"></i>
+                                        <span class="text-[9px] font-black">${timeAbsenStr}</span>
+                                    </div>
+                                    <div class="flex items-center gap-1 opacity-80 overflow-hidden">
+                                        <i class="fa-solid fa-camera text-[8px] text-indigo-500 shrink-0"></i>
+                                        <p class="text-[9px] font-bold text-slate-500 uppercase truncate">${ketFoto}</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -807,9 +819,12 @@
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
-                    const promises = availableNewShift.map(rider => {
+                    const now = new Date();
+                    const promises = availableNewShift.map((rider, index) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        return setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "", proof_desc: "" }, { merge: true });
+                        // Gunakan simulatedTime berjenjang agar urutan rider dipertahankan (rider paling akhir absen tetap di paling bawah)
+                        const simulatedTime = new Date(now.getTime() + (index * 1000));
+                        return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "", proof_desc: "" }, { merge: true });
                     });
                     await Promise.all(promises);
                     window.showAlert('Berhasil', 'Rider masuk ke Antrean Radar.', 'success');
