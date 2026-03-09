@@ -419,19 +419,20 @@
     <div id="incoming-order-popup" class="fixed inset-0 z-[99999] bg-gray-900/90 backdrop-blur-sm hidden flex-col items-center justify-center p-6 text-center">
         <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 text-center shadow-2xl transform scale-100 transition-transform relative overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-2 bg-orange-500"></div>
-            <div class="relative w-24 h-24 mx-auto mb-6">
-                <div class="absolute inset-0 bg-orange-400 rounded-full animate-ping opacity-50"></div>
-                <div class="relative w-24 h-24 bg-orange-500 rounded-full flex items-center justify-center text-white text-4xl shadow-lg border-4 border-white animate-ring-bell">
-                    <i class="fa-solid fa-bell"></i>
+            
+            <!-- TAMBAHAN: Timer Hitung Mundur -->
+            <div class="mb-4">
+                <div id="timer-ring" class="mx-auto flex items-center justify-center w-20 h-20 rounded-full border-[6px] border-orange-200 bg-orange-50 shadow-inner transition-colors duration-300">
+                    <span id="incoming-timer" class="text-3xl font-black text-orange-600 transition-colors duration-300">30</span>
+                </div>
+                <div id="incoming-timer-warning" class="hidden mt-3 bg-red-100 border border-red-200 p-3 rounded-xl shadow-inner">
+                    <p class="text-[11px] text-red-600 font-bold uppercase animate-pulse leading-tight">
+                        <i class="fa-solid fa-triangle-exclamation mr-1"></i> Kalau tidak di ambil, antrian Anda akan menuju paling bawah antrian!
+                    </p>
                 </div>
             </div>
-            <h2 class="text-2xl font-black text-gray-800 mb-2">Orderan Baru!</h2>
-            
-            <!-- TAMBAHAN: Nama Pelanggan di Popup Orderan -->
-            <div class="mb-3">
-                <span id="incoming-customer-name" class="inline-flex items-center gap-1 bg-orange-50 text-orange-600 text-xs font-bold px-3 py-1 rounded-full border border-orange-100 shadow-sm">
-                    <i class="fa-solid fa-user"></i> Memuat...
-                </span>
+
+            <div class="relative w-24 h-24 mx-auto mb-6 hidden" id="bell-icon-container">
             </div>
 
             <p class="text-gray-500 text-sm mb-4 leading-relaxed">Admin telah menugaskan orderan untukmu. Segera ambil dan bersiap jalan!</p>
@@ -455,6 +456,24 @@
 
             <button id="btn-accept-order" class="w-full py-5 orange-gradient text-white font-black rounded-2xl shadow-xl shadow-orange-200 active:scale-95 transition-all text-lg uppercase tracking-widest">
                 <i class="fa-solid fa-motorcycle mr-2"></i> Ok Gasspoll!
+            </button>
+        </div>
+    </div>
+
+    <!-- POPUP ORDER DILEWATI (MISSED ORDER) -->
+    <div id="missed-order-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="missed-order-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-red-600"></div>
+            
+            <img src="https://i.ibb.co.com/5XWf1BGD/Yey-Kamu-berhasil-menyelesaikan-orderan-1.png" alt="Order Dilewati" class="w-full h-auto rounded-xl mb-4 shadow-sm border border-gray-100">
+            
+            <h2 class="text-2xl font-black text-red-600 mb-2 uppercase tracking-tight">Melewati Orderan!</h2>
+            <p class="text-sm text-gray-700 font-bold leading-relaxed mb-6 bg-red-50 p-4 rounded-xl border border-red-100 italic">
+                Anda sekarang diposisi bawah antrian.
+            </p>
+            
+            <button onclick="closeMissedOrderPopup()" class="w-full py-4 bg-gray-800 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest">
+                OK, Mengerti
             </button>
         </div>
     </div>
@@ -4107,7 +4126,6 @@
                 window.startSuspensionListener(currentUserUID, name);
                 window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                 if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
-                if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID); // SINKRONISASI ONBID ADMIN
             } else {
                 // Beri jeda kecil jika Firebase module masih memuat
                 setTimeout(() => {
@@ -4115,7 +4133,6 @@
                         window.startSuspensionListener(currentUserUID, name);
                         window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                         if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
-                        if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID); // SINKRONISASI ONBID ADMIN
                     }
                 }, 1000);
             }
@@ -5731,6 +5748,7 @@
               if (!uid || !isAuthReady) return;
               if (suspensionUnsubscribe) return;
 
+              // PATH DATABASE: Menggunakan Koleksi Root 'status_rider_aktif' khusus untuk kontrol antrean/onbid
               const statusRef = doc(db, 'status_rider_aktif', String(uid).trim());
               suspensionUnsubscribe = onSnapshot(statusRef, (docSnap) => {
                   if (docSnap.exists()) {
@@ -5787,11 +5805,56 @@
           };
 
           // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER RIWAYAT HARIAN (DAILY ORDERS)
+          // -------------------------------------------------------------
+          let dailyOrdersUnsubscribe = null;
+          
+          window.startDailyOrdersListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
+
+              // PATH DATABASE: Mengambil riwayat harian spesifik milik rider ini
+              const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', String(uid).trim(), 'daily_orders');
+              
+              dailyOrdersUnsubscribe = onSnapshot(dailyRef, (snapshot) => {
+                  const newFirebaseData = [];
+                  
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      // Mapping data Firestore agar formatnya cocok dengan format dari Google Sheet
+                      newFirebaseData.push({
+                          id: docSnap.id,
+                          is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
+                          Tanggal: data.Tanggal,
+                          Jam: data.Jam,
+                          Nama_Pelanggan: data.Nama_Pelanggan || data.customer_name || 'Pelanggan',
+                          Nominal_Kotor: data.Nominal_Kotor,
+                          Tambahan: data.Tambahan || 0,
+                          Status: data.Status || 'Selesai',
+                          Keterangan: data.Keterangan || '',
+                          List_Pesanan: data.Keterangan || ''
+                      });
+                  });
+                  
+                  // Perbarui variabel global dan jalankan ulang penggabung data
+                  firebaseData = newFirebaseData;
+                  if (typeof window.combineAndRenderData === 'function') {
+                      window.combineAndRenderData();
+                  }
+              }, (error) => {
+                  console.error("Error fetching daily orders:", error);
+              });
+          };
+
+          // -------------------------------------------------------------
           // NEW: SISTEM LISTENER ORDER REAL-TIME (ACTIVE ORDERS)
           // -------------------------------------------------------------
           let activeOrderUnsubscribe = null;
           window.currentActiveOrderId = null;
           let finishPhotoBase64 = null;
+          
+          window.incomingOrderTimer = null;
+          window.isMissingOrder = false;
 
           window.startOrderListener = (uid) => {
               if (!uid || !isAuthReady) return;
@@ -5801,7 +5864,7 @@
                   activeOrderUnsubscribe();
               }
 
-              // MENDENGARKAN KOLEKSI PENUH LALU FILTER DI MEMORI (Sesuai Rule 2 & menghindari Mismatch Path)
+              // PATH DATABASE: Mengambil Orderan dari path spesifik Admin (artifacts/onbid-2f87a/public/data/active_orders)
               const ordersRef = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
 
               activeOrderUnsubscribe = onSnapshot(ordersRef, (snapshot) => {
@@ -5851,10 +5914,15 @@
                               clearInterval(window.vibrateInterval);
                               window.vibrateInterval = null;
                           }
+                          // Matikan timer jika admin membatalkan saat masih berdering
+                          if (window.incomingOrderTimer) {
+                              clearInterval(window.incomingOrderTimer);
+                          }
                           wasActive = true;
                       }
 
-                      if (wasActive) {
+                      // Mencegah alert "Order dibatalkan admin" muncul jika rider yang sengaja melewatkan
+                      if (wasActive && !window.isMissingOrder) {
                           try { playBeep(400, 0.2); } catch(e){}
                           alert("Mohon maaf orderan dibatalkan admin, tenang saja kamu masih dapat urutan pertama kok.");
                           window.currentActiveOrderId = null;
@@ -5891,6 +5959,9 @@
                   feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
                   if (feeDetailEl) feeDetailEl.innerHTML = '';
               }
+
+              // Mulai Timer 30 Detik x 2 Tahap
+              window.startIncomingOrderTimer(docId);
 
               // Render list pesanan di popup orderan masuk (Aman dari Array Object)
               if (itemsListEl) {
@@ -5972,6 +6043,11 @@
                   btnAccept.disabled = true;
                   btnAccept.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menerima...';
                   
+                  // Hentikan timer karena sudah diklik terima
+                  if (window.incomingOrderTimer) {
+                      clearInterval(window.incomingOrderTimer);
+                  }
+                  
                   try {
                       const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
                       await updateDoc(orderRef, {
@@ -6015,6 +6091,131 @@
                   }
               };
           }
+
+          // FUNGSI LOGIKA TIMER ORDERAN MASUK
+          window.startIncomingOrderTimer = (docId) => {
+              if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
+              
+              window.isMissingOrder = false;
+              let timeLeft = 30;
+              let stage = 1;
+              
+              const timerEl = document.getElementById('incoming-timer');
+              const warningEl = document.getElementById('incoming-timer-warning');
+              const timerRing = document.getElementById('timer-ring');
+              
+              if(timerEl) timerEl.innerText = timeLeft;
+              if(warningEl) warningEl.classList.add('hidden');
+              if(timerRing) {
+                  timerRing.classList.remove('border-red-200', 'bg-red-50');
+                  timerRing.classList.add('border-orange-200', 'bg-orange-50');
+                  if(timerEl) timerEl.classList.replace('text-red-600', 'text-orange-600');
+              }
+
+              window.incomingOrderTimer = setInterval(() => {
+                  timeLeft--;
+                  if(timerEl) timerEl.innerText = timeLeft;
+
+                  if (timeLeft <= 0) {
+                      if (stage === 1) {
+                          // Masuk Tahap 2: Reset waktu dan munculkan teks peringatan
+                          stage = 2;
+                          timeLeft = 30;
+                          if(warningEl) warningEl.classList.remove('hidden');
+                          if(timerRing) {
+                              timerRing.classList.remove('border-orange-200', 'bg-orange-50');
+                              timerRing.classList.add('border-red-200', 'bg-red-50');
+                              if(timerEl) timerEl.classList.replace('text-orange-600', 'text-red-600');
+                          }
+                          try { playBeep(500, 0.4); } catch(e){}
+                      } else {
+                          // Waktu Habis Total: Batalkan otomatis
+                          clearInterval(window.incomingOrderTimer);
+                          window.handleMissedOrder(docId);
+                      }
+                  }
+              }, 1000);
+          };
+
+          window.handleMissedOrder = async (docId) => {
+              window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
+
+              // Sembunyikan popup order masuk
+              const incomingPopup = document.getElementById('incoming-order-popup');
+              if(incomingPopup) {
+                  incomingPopup.classList.add('hidden');
+                  incomingPopup.classList.remove('flex');
+              }
+              
+              // Matikan audio dan getar
+              if(window.incomingOrderAudio) {
+                  window.incomingOrderAudio.pause();
+                  window.incomingOrderAudio.currentTime = 0;
+              }
+              if ("vibrate" in navigator) navigator.vibrate(0);
+              if (window.vibrateInterval) {
+                  clearInterval(window.vibrateInterval);
+                  window.vibrateInterval = null;
+              }
+
+              // Tutup Notifikasi Sistem
+              if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+                  navigator.serviceWorker.ready.then(registration => {
+                      registration.getNotifications({tag: 'order-masuk-' + docId}).then(notifications => {
+                          notifications.forEach(notification => notification.close());
+                      });
+                  });
+              }
+
+              // Tampilkan Popup Missed Order
+              const missedPopup = document.getElementById('missed-order-popup');
+              const missedContent = document.getElementById('missed-order-content');
+              if(missedPopup && missedContent) {
+                  missedPopup.classList.remove('hidden');
+                  missedPopup.classList.add('flex');
+                  setTimeout(() => {
+                      missedPopup.classList.remove('opacity-0');
+                      missedContent.classList.remove('scale-90');
+                      missedContent.classList.add('scale-100');
+                  }, 10);
+                  try { playBeep(300, 0.5); } catch(e){}
+              }
+
+              try {
+                  // 1. Update status order menjadi missed agar admin tahu dilewati
+                  const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
+                  await updateDoc(orderRef, {
+                      status: 'missed',
+                      missed_by: currentUserUID,
+                      missed_at: serverTimestamp()
+                  });
+
+                  // 2. Lempar posisi rider ke paling bawah antrean (Update last_drop_time)
+                  const statusRef = doc(db, 'status_rider_aktif', String(currentUserUID).trim());
+                  await setDoc(statusRef, { 
+                      last_drop_time: serverTimestamp(),
+                      last_drop_desc: "Melewati orderan (Waktu Habis)"
+                  }, { merge: true });
+
+              } catch(e) { 
+                  console.error("Gagal update data missed order", e); 
+              }
+          };
+
+          window.closeMissedOrderPopup = () => {
+              const popup = document.getElementById('missed-order-popup');
+              const content = document.getElementById('missed-order-content');
+              if(popup && content) {
+                  popup.classList.add('opacity-0');
+                  content.classList.remove('scale-100');
+                  content.classList.add('scale-90');
+                  setTimeout(() => {
+                      popup.classList.add('hidden');
+                      popup.classList.remove('flex');
+                      window.isMissingOrder = false; // Reset flag
+                  }, 300);
+              }
+          };
 
           function showActiveOrderOverlay(data, docId) {
               window.currentActiveOrderId = docId;
