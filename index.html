@@ -5963,12 +5963,6 @@
                   if (feeDetailEl) feeDetailEl.innerHTML = '';
               }
 
-              // Mencegah timer tereset jika docId masih sama (misal ada update data dari admin)
-              if (window.currentIncomingOrderId !== docId) {
-                  window.currentIncomingOrderId = docId;
-                  window.startIncomingOrderTimer(docId);
-              }
-
               // Render list pesanan di popup orderan masuk (Aman dari Array Object)
               if (itemsListEl) {
                   if (data.items && Array.isArray(data.items) && data.items.length > 0) {
@@ -5989,61 +5983,77 @@
               popup.classList.remove('hidden');
               popup.classList.add('flex');
 
-              // --- SISTEM NOTIFIKASI AGRESIF (HEADS-UP, BACKGROUND, PERSISTENT) ---
-              // PERBAIKAN 4: Tambahkan fallback notifikasi jika Service Worker gagal dimuat
-              if ('Notification' in window && Notification.permission === 'granted') {
-                  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                      navigator.serviceWorker.ready.then(function(registration) {
-                          registration.showNotification('🔥 ORDERAN BARU MASUK! 🔥', {
-                              body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu! Klik untuk buka.`,
-                              icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', // Icon PROJEKGO
-                              badge: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png',
-                              vibrate: [1000, 500, 1000, 500, 1000, 500, 2000, 1000, 2000], // Getaran panjang & agresif
-                              requireInteraction: true, // PERSISTENT: Tidak hilang sampai diklik/diswipe
-                              renotify: true, // Akan bunyi lagi meskipun notif sebelumnya belum ditutup
-                              tag: 'order-masuk-' + docId, // Cegah duplikasi notifikasi ID yang sama
-                              silent: false // Pastikan bunyi bawaan HP menyala
-                          });
-                      }).catch(() => {
-                          // Cadangan jika Service Worker error
-                          new Notification('🔥 ORDERAN BARU MASUK! 🔥', { body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu! Klik untuk buka.`});
-                      });
-                  } else {
-                      // Cadangan murni menggunakan API Web Notifikasi standar (Tanpa Service Worker)
-                      new Notification('🔥 ORDERAN BARU MASUK! 🔥', { body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu! Klik untuk buka.`});
-                  }
+              // --- PERBAIKAN LOGIKA TIMER, AUDIO, DAN NOTIFIKASI ---
+              const currentPingTime = data.last_ping ? data.last_ping.seconds : 0;
+              const isFirstTime = window.currentIncomingOrderId !== docId;
+              // Cek apakah admin menekan tombol "Up" (Ping baru masuk)
+              const isPinged = !isFirstTime && window.lastPingTime !== currentPingTime && currentPingTime > 0;
+
+              if (isFirstTime) {
+                  window.currentIncomingOrderId = docId;
+                  window.lastPingTime = currentPingTime;
+                  // Hanya panggil Timer saat Order ID ini benar-benar pertama kali muncul di layar saat ini
+                  window.startIncomingOrderTimer(docId);
+              } else if (isPinged) {
+                  // Perbarui catatan ping
+                  window.lastPingTime = currentPingTime;
               }
 
-              // Play Sound Notif Berulang & Getar (Untuk saat App sedang dibuka / Foreground)
-              try { 
-                  if(window.incomingOrderAudio) {
-                      window.incomingOrderAudio.pause();
-                      window.incomingOrderAudio.currentTime = 0;
-                  }
-                  
-                  // Reset getaran sebelumnya
-                  if ("vibrate" in navigator) navigator.vibrate(0);
-                  if (window.vibrateInterval) {
-                      clearInterval(window.vibrateInterval);
-                      window.vibrateInterval = null;
+              // JALANKAN AUDIO DAN NOTIFIKASI HANYA JIKA ORDER BARU ATAU DI-PING ADMIN
+              // Ini mencegah spam audio/notif ter-reset karena background sync firebase
+              if (isFirstTime || isPinged) {
+                  // --- SISTEM NOTIFIKASI AGRESIF ---
+                  if ('Notification' in window && Notification.permission === 'granted') {
+                      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                          navigator.serviceWorker.ready.then(function(registration) {
+                              registration.showNotification(isPinged ? '🔔 ADMIN MENGINGATKAN! 🔔' : '🔥 ORDERAN BARU MASUK! 🔥', {
+                                  body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu! Klik untuk buka.`,
+                                  icon: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png', 
+                                  badge: 'https://i.ibb.co.com/qLz5Xk4t/PROJEKITA-5.png',
+                                  vibrate: [1000, 500, 1000, 500, 1000, 500, 2000, 1000, 2000], 
+                                  requireInteraction: true, 
+                                  renotify: true, 
+                                  tag: 'order-masuk-' + docId, 
+                                  silent: false 
+                              });
+                          }).catch(() => {
+                              new Notification('🔥 ORDERAN MASUK! 🔥', { body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu!`});
+                          });
+                      } else {
+                          new Notification('🔥 ORDERAN MASUK! 🔥', { body: `Ada pesanan Rp ${baseFee.toLocaleString('id-ID')} menunggumu!`});
+                      }
                   }
 
-                  window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
-                  window.incomingOrderAudio.loop = true;
-                  const playPromise = window.incomingOrderAudio.play();
-                  if (playPromise !== undefined) {
-                      playPromise.catch(error => { console.warn("Audio play prevented:", error); });
-                  }
+                  // Play Sound Notif Berulang & Getar
+                  try { 
+                      if(window.incomingOrderAudio) {
+                          window.incomingOrderAudio.pause();
+                          window.incomingOrderAudio.currentTime = 0;
+                      }
+                      
+                      // Reset getaran sebelumnya
+                      if ("vibrate" in navigator) navigator.vibrate(0);
+                      if (window.vibrateInterval) {
+                          clearInterval(window.vibrateInterval);
+                          window.vibrateInterval = null;
+                      }
 
-                  // Mulai Getar Berulang (Pola: Getar 500ms, Jeda 300ms)
-                  if ("vibrate" in navigator) {
-                      navigator.vibrate([500, 300, 500, 300, 500]);
-                      window.vibrateInterval = setInterval(() => {
-                          // Panggil ulang vibrate di dalam interval agar terus bergetar
-                          if ("vibrate" in navigator) navigator.vibrate([500, 300, 500, 300, 500]);
-                      }, 2500); // Ulangi pola setiap 2.5 detik
-                  }
-              } catch(e){}
+                      window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
+                      window.incomingOrderAudio.loop = true;
+                      const playPromise = window.incomingOrderAudio.play();
+                      if (playPromise !== undefined) {
+                          playPromise.catch(error => { console.warn("Audio play prevented"); });
+                      }
+
+                      // Mulai Getar Berulang
+                      if ("vibrate" in navigator) {
+                          navigator.vibrate([500, 300, 500, 300, 500]);
+                          window.vibrateInterval = setInterval(() => {
+                              if ("vibrate" in navigator) navigator.vibrate([500, 300, 500, 300, 500]);
+                          }, 2500);
+                      }
+                  } catch(e){}
+              }
 
               btnAccept.onclick = async () => {
                   btnAccept.disabled = true;
@@ -6054,7 +6064,8 @@
                       clearInterval(window.incomingOrderTimer);
                       window.incomingOrderTimer = null;
                   }
-                  window.currentIncomingOrderId = null; // Lepas ID karena sudah dikonfirmasi
+                  window.currentIncomingOrderId = null; 
+                  localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori timer
                   
                   try {
                       const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
@@ -6063,7 +6074,7 @@
                           accepted_at: serverTimestamp()
                       });
                       
-                      // NEW: Set Rider jadi TIDAK TERSEDIA di antrean (Sembunyikan dari radar)
+                      // NEW: Set Rider jadi TIDAK TERSEDIA di antrean
                       const statusRef = doc(db, 'status_rider_aktif', String(currentUserUID).trim());
                       await setDoc(statusRef, { is_available: false }, { merge: true });
                       
@@ -6100,15 +6111,27 @@
               };
           }
 
-          // FUNGSI LOGIKA TIMER ORDERAN MASUK
+          // FUNGSI LOGIKA TIMER ORDERAN MASUK ANTI RESET
           window.startIncomingOrderTimer = (docId) => {
               if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
               
               window.isMissingOrder = false;
               
-              // Menggunakan performance.now() agar kebal terhadap lag di background browser dan sangat presisi
+              // MENGGUNAKAN LOCAL STORAGE: Menyimpan Waktu Mulai agar kebal saat aplikasi tertutup / ter-reload
               const DURATION = 60; 
-              const startTime = performance.now();
+              const orderStartKey = `order_start_${docId}`;
+              
+              // Ambil waktu dari memori (jika sebelumnya aplikasinya dimuat ulang/tutup notif)
+              let startTime = parseInt(localStorage.getItem(orderStartKey));
+              
+              if (!startTime) {
+                  // Jika belum pernah diset, ambil waktu sekarang dan simpan ke memori
+                  startTime = Date.now();
+                  localStorage.setItem(orderStartKey, startTime);
+              }
+
+              // Waktu Habis Sesungguhnya (Pasti dan Tak Terbantahkan)
+              const expireTimeMs = startTime + (DURATION * 1000);
               let lastBeepTime = 0;
               
               const timerEl = document.getElementById('incoming-timer');
@@ -6123,11 +6146,14 @@
               }
 
               const updateTimer = () => {
-                  const elapsed = (performance.now() - startTime) / 1000;
-                  let timeLeft = Math.ceil(DURATION - elapsed);
+                  const now = Date.now();
+                  // Kalkulasi presisi berdasarkan sisa waktu dari memori
+                  let timeLeft = Math.ceil((expireTimeMs - now) / 1000);
 
                   // Jika telat terima data dan waktu sudah minus, pastikan tidak nembus negatif
                   if (timeLeft < 0) timeLeft = 0;
+                  // Cegah error glitch > 60 jika jam sistem sedikit berbeda
+                  if (timeLeft > 60) timeLeft = 60;
 
                   if(timerEl) timerEl.innerText = timeLeft;
 
@@ -6151,7 +6177,8 @@
                       // Waktu Habis Total: Batalkan otomatis
                       clearInterval(window.incomingOrderTimer);
                       window.incomingOrderTimer = null;
-                      window.currentIncomingOrderId = null; // Lepaskan state ID timer saat ini
+                      window.currentIncomingOrderId = null; 
+                      localStorage.removeItem(orderStartKey); // Hapus memori waktu start jika waktu habis
                       window.handleMissedOrder(docId);
                   }
               };
@@ -6162,6 +6189,8 @@
 
           window.handleMissedOrder = async (docId) => {
               window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
+              
+              localStorage.removeItem(`order_start_${docId}`); // CLEAN UP TIMER DARI MEMORI
 
               // Sembunyikan popup order masuk
               const incomingPopup = document.getElementById('incoming-order-popup');
