@@ -2594,9 +2594,10 @@
                 }
                 playBeep(880, 0.1);
                 
-                // Lanjutkan ke Rules check
+                // Lanjutkan ke pengecekan Rabu dan Rules
                 setTimeout(() => {
-                    checkAndShowRules();
+                    showWelcomePopup(); // Cek popup Rabu setelah komitmen harian selesai
+                    checkAndShowRules(); // Jaga-jaga jika aturan tata tertib diaktifkan lagi
                 }, 500);
             }, 500);
         }
@@ -2734,13 +2735,24 @@
         };
 
         function showWelcomePopup() {
-            // Tampilkan popup peringatan pembayaran ADM setiap hari Rabu
-            const today = new Date();
-            if (today.getDay() === 3) { // 3 = Hari Rabu
-                // Gunakan sessionStorage agar hanya muncul sekali per sesi buka aplikasi
-                if (!sessionStorage.getItem('wednesday_popup_shown')) {
-                    openWednesdayPopup();
-                    sessionStorage.setItem('wednesday_popup_shown', 'true');
+            if (!currentUserUID) return;
+            
+            const todayStr = getJakartaDateString();
+            const commitKey = `rider_short_commit_date_${currentUserUID}`;
+            const hasCommittedToday = localStorage.getItem(commitKey) === todayStr;
+
+            if (!hasCommittedToday) {
+                // 1. Tampilkan Popup Gambar Harian (Komitmen Singkat) jika belum diklik hari ini
+                openShortCommitment();
+            } else {
+                // 2. Jika sudah komitmen harian, cek apakah hari ini Rabu untuk popup tagihan
+                const today = new Date();
+                if (today.getDay() === 3) { // 3 = Hari Rabu
+                    // Gunakan sessionStorage agar hanya muncul sekali per sesi buka aplikasi
+                    if (!sessionStorage.getItem('wednesday_popup_shown')) {
+                        openWednesdayPopup();
+                        sessionStorage.setItem('wednesday_popup_shown', 'true');
+                    }
                 }
             }
         }
@@ -3847,39 +3859,37 @@
 
         // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
-            // Gabungkan Riwayat (Sheet) dengan Hari Ini (Firebase) dan cegah duplikasi
             const seenMap = new Map();
+            const todayStr = getJakartaDateString();
             
-            // Prioritaskan data Firebase (agar badge LIVE tetap ada), lalu timpa/gabung dengan Sheet
-            const allData = [...window.firebaseData, ...appsScriptData];
-            
-            allData.forEach(item => {
+            // 1. PRIORITAS UTAMA: Data Spreadsheet (Sheet Admin)
+            appsScriptData.forEach(item => {
                 const dateKey = parseSheetDate(item.Tanggal);
-                
-                // MENGGUNAKAN KOMBINASI TANGGAL + JAM SEBAGAI KUNCI UNIK
                 let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':'); // Normalisasi jam (ubah . jadi :)
+                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
+                const safeName = String(item.Nama_Pelanggan || item.Customer_Name || item.customer_name || "").substring(0, 3).toLowerCase();
+                const uniqueKey = `${dateKey}_${timeKey}_${safeName}`;
                 
-                // Tambahkan inisial nama pelanggan ke key agar orderan di menit yang sama tidak saling tertimpa
+                // Pastikan data sheet yang sah tersimpan
+                seenMap.set(uniqueKey, { ...item, is_sheet: true, is_realtime: false });
+            });
+            
+            // 2. Data Firebase (Live Radar)
+            window.firebaseData.forEach(item => {
+                const dateKey = parseSheetDate(item.Tanggal);
+                let timeKey = parseSheetTime(item.Jam);
+                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
                 const safeName = String(item.Nama_Pelanggan || item.Customer_Name || item.customer_name || "").substring(0, 3).toLowerCase();
                 const uniqueKey = `${dateKey}_${timeKey}_${safeName}`;
                 
                 if (!seenMap.has(uniqueKey)) {
-                    // Simpan sebagai objek baru agar bisa dimodifikasi
-                    seenMap.set(uniqueKey, { ...item });
-                } else {
-                    // JIKA DATA SHEET KETEMU DENGAN DATA FIREBASE (Waktu Sama)
-                    const existing = seenMap.get(uniqueKey);
-                    
-                    if (!item.is_realtime && existing.is_realtime) {
-                        // Ambil Nominal dari data Admin (Sheet) untuk mengisi Firebase yang kosong
-                        existing.Nominal_Kotor = item.Nominal_Kotor || existing.Nominal_Kotor;
-                        existing.Tambahan = item.Tambahan || existing.Tambahan;
-                        existing.Keterangan = item.Keterangan || existing.Keterangan; // Timpa keterangan pakai versi admin
-                        
-                        // Opsional: Matikan badge LIVE karena data sudah disahkan Admin
-                        existing.is_realtime = false;
+                    let isLeftover = false;
+                    // Deteksi jika data live nyangkut dari hari sebelumnya (Admin telat input atau salah jam sehingga tidak sinkron)
+                    if (dateKey !== todayStr) {
+                        isLeftover = true;
+                        item.Status = 'Dobel'; // Ubah status agar tidak merusak/mendobelkan hitungan saldo
                     }
+                    seenMap.set(uniqueKey, { ...item, is_leftover_live: isLeftover });
                 }
             });
 
@@ -4437,7 +4447,7 @@
             });
 
             sortedData.forEach(item => {
-                const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai';
+                const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai' || item.is_leftover_live;
                 
                 // Parsing Angka
                 let rawValString = String(item.Nominal_Kotor || 0).replace(',', '.');
@@ -4464,7 +4474,11 @@
                 
                 // Tampilan khusus jika nominal masih kosong dari Firebase (menunggu admin)
                 const isWaitingAdmin = isDone && item.is_realtime && kotor === 0;
-                const netDisplay = isWaitingAdmin ? '<span class="text-[10px] text-orange-500 italic">Validasi Admin</span>' : 'Rp ' + Math.round(netto).toLocaleString('id-ID');
+                let netDisplay = isWaitingAdmin ? '<span class="text-[10px] text-orange-500 italic">Validasi Admin</span>' : 'Rp ' + Math.round(netto).toLocaleString('id-ID');
+                
+                if (item.is_leftover_live) {
+                    netDisplay = '<span class="text-[10px] text-red-600 italic font-bold border-b border-red-500 pb-0.5">Cek Admin</span>';
+                }
                 
                 // UPDATE: Styling KHUSUS untuk Nominal Kotor
                 const kotorStyle = isSuspicious 
@@ -4472,7 +4486,12 @@
                     : 'text-gray-600';
                 
                 // NEW: Tambahkan Badge Live jika data berasal dari Firebase (Hari Ini)
-                const liveBadge = item.is_realtime ? `<span class="ml-2 text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded animate-pulse font-bold shadow-sm">LIVE</span>` : '';
+                let liveBadge = '';
+                if (item.is_leftover_live) {
+                    liveBadge = `<span class="ml-2 text-[8px] bg-red-600 text-white px-1.5 py-0.5 rounded animate-pulse font-bold shadow-sm">ERROR LIVE</span>`;
+                } else if (item.is_realtime) {
+                    liveBadge = `<span class="ml-2 text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded animate-pulse font-bold shadow-sm">LIVE</span>`;
+                }
                 
                 // NEW: Pastikan Nama Pelanggan Selalu Tampil
                 const namaPelanggan = item.Nama_Pelanggan || item.Customer_Name || item.customer_name || item.Nama_Customer || item.Pelanggan || item.Customer || 'Pelanggan';
@@ -4500,8 +4519,18 @@
                                     </div>
                                 </div>`;
                 
-                // Tambahkan Pesan Peringatan Jika Suspicious
-                if (isSuspicious) {
+                // Tambahkan Pesan Peringatan Jika Suspicious Atau Error Live
+                if (item.is_leftover_live) {
+                    html += `
+                        <div class="bg-red-100 border border-red-300 p-3 rounded-lg flex items-start gap-3 mt-1 relative overflow-hidden shadow-sm">
+                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-600"></div>
+                            <div class="mt-0.5"><i class="fa-solid fa-triangle-exclamation text-red-600 text-xs"></i></div>
+                            <p class="text-[10px] text-red-700 leading-snug font-bold">
+                                "Sepertinya admin salah input, dimungkinkan dobel input. Data live ini belum terbuang. Abaikan pesanan ini jika riwayat aslinya sudah ada."
+                            </p>
+                        </div>
+                    `;
+                } else if (isSuspicious) {
                     html += `
                         <div class="bg-red-50 border border-red-100 p-3 rounded-lg flex items-start gap-3 mt-1 animate-pulse relative overflow-hidden">
                             <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500"></div>
@@ -4514,7 +4543,7 @@
                 }
 
                 // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
-                html += `${(isDone && !isWaitingAdmin) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}`;
+                html += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}`;
 
                 // NEW: Catatan Pembayaran Lokal (Tunai/Transfer)
                 if (isDone) {
@@ -5709,7 +5738,7 @@
           // -------------------------------------------------------------
           window.checkDeviceBinding = async (uid, deviceId) => {
               try {
-                  const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
                   const docSnap = await getDoc(docRef);
                   
                   if (docSnap.exists()) {
@@ -5738,7 +5767,7 @@
 
           window.forceTakeoverDevice = async (uid, deviceId) => {
               try {
-                  const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
                   await setDoc(docRef, {
                       device_id: deviceId,
                       last_login: serverTimestamp()
@@ -5756,7 +5785,7 @@
               if (deviceListenerUnsubscribe) deviceListenerUnsubscribe();
 
               const currentDeviceId = getDeviceID();
-              const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+              const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
               
               deviceListenerUnsubscribe = onSnapshot(docRef, (docSnap) => {
                   if (docSnap.exists()) {
@@ -5777,22 +5806,66 @@
           // NEW: SISTEM LISTENER KONTROL ADMIN (SUSPEND / FORCE KILL)
           // -------------------------------------------------------------
           let suspensionUnsubscribe = null;
+          let forceKillUnsubscribe = null;
+
           window.startSuspensionListener = (uid, name) => {
               if (!uid || !isAuthReady) return;
               if (suspensionUnsubscribe) return;
 
-              // PATH DATABASE: Menggunakan Koleksi Root 'status_rider_aktif' khusus untuk kontrol antrean/onbid
+              // 1. LOGIKA SUSPEND: Mengunci path PASTI ke (onbid-2f87a) sesuai instruksi agar tidak diubah sistem
+              const targetProjectId = firebaseConfig.projectId; 
+              const suspendRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'suspended_riders', String(uid).trim().toUpperCase());
+              
+              suspensionUnsubscribe = onSnapshot(suspendRef, (docSnap) => {
+                  const toggle = document.getElementById('onbid-toggle');
+                  const suspendedOverlay = document.getElementById('suspended-overlay');
+                  
+                  if (docSnap.exists()) {
+                      // Jika dokumen ada, berarti rider DITANGGUHKAN
+                      const data = docSnap.data() || {};
+                      if (suspendedOverlay) {
+                          suspendedOverlay.classList.remove('hidden');
+                          suspendedOverlay.classList.add('flex');
+                          const nameEl = document.getElementById('suspended-name');
+                          // Ambil nama dari dokumen, jika kosong fallback ke UI yang ada
+                          if (nameEl) nameEl.innerText = data.name || window.document.getElementById('display-rider-name').innerText || "Rider";
+                      }
+                      // Paksa mematikan tombol On-Bid jika disuspend
+                      if (toggle && toggle.checked) {
+                          toggle.checked = false;
+                          if (typeof window.updateOnbidUI === 'function') {
+                              window.updateOnbidUI(false);
+                          } else if (typeof updateOnbidUI === 'function') {
+                              updateOnbidUI(false);
+                          }
+                          localStorage.setItem('rider_onbid_status', 'false');
+                      }
+                  } else {
+                      // Jika dokumen TIDAK ADA (dihapus), berarti rider DIBUKA AKSESNYA (Unblock)
+                      if (suspendedOverlay) {
+                          suspendedOverlay.classList.add('hidden');
+                          suspendedOverlay.classList.remove('flex');
+                      }
+                  }
+              }, (error) => {
+                  console.warn("Suspension listener error:", error);
+              });
+
+              // 2. LOGIKA FORCE KILL: Path status_rider_aktif (Untuk dikeluarkan dari radar secara paksa)
               const statusRef = doc(db, 'status_rider_aktif', String(uid).trim());
-              suspensionUnsubscribe = onSnapshot(statusRef, (docSnap) => {
+              forceKillUnsubscribe = onSnapshot(statusRef, (docSnap) => {
                   if (docSnap.exists()) {
                       const data = docSnap.data();
-                      const toggle = document.getElementById('onbid-toggle');
-                      
                       // Jika admin menekan paksa offline (force_kill)
                       if (data.force_kill === true) {
+                          const toggle = document.getElementById('onbid-toggle');
                           if (toggle && toggle.checked) {
                               toggle.checked = false;
-                              window.updateOnbidUI(false);
+                              if (typeof window.updateOnbidUI === 'function') {
+                                  window.updateOnbidUI(false);
+                              } else if (typeof updateOnbidUI === 'function') {
+                                  updateOnbidUI(false);
+                              }
                               localStorage.setItem('rider_onbid_status', 'false');
                               alert("Sesi Anda diakhiri oleh Admin. Anda telah dikeluarkan dari antrean radar.");
                           }
@@ -5800,6 +5873,39 @@
                           updateDoc(statusRef, { force_kill: false }).catch(e => {});
                       }
                   }
+              });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: FUNGSI RENDER FOTO PROFIL RIDER
+          // -------------------------------------------------------------
+          let profilePhotoUnsubscribe = null;
+          
+          window.loadFotoProfilRider = (uid) => {
+              if (!uid || !isAuthReady) return;
+              if (profilePhotoUnsubscribe) return;
+
+              // PATH DATABASE: Mengunci path PASTI ke (onbid-2f87a) sesuai instruksi agar tidak diubah sistem
+              const targetProjectId = firebaseConfig.projectId; 
+              const photoRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', String(uid).trim().toUpperCase());
+              
+              profilePhotoUnsubscribe = onSnapshot(photoRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data() || {};
+                      // Sesuai catatan: foto disimpan dalam field foto_base64 (Base64 String)
+                      if (data.foto_base64 || data.photo_base64 || data.photo_url) {
+                          window.hasCustomProfilePhoto = true; // Flag agar foto tidak ditimpa kembali oleh inisial nama
+                          const photoSrc = data.foto_base64 || data.photo_base64 || data.photo_url;
+                          
+                          const avatarHome = document.getElementById('avatar-home');
+                          if (avatarHome) avatarHome.src = photoSrc; 
+                          
+                          const profileImg = document.getElementById('profile-img');
+                          if (profileImg) profileImg.src = photoSrc;
+                      }
+                  }
+              }, (error) => {
+                  console.warn("Profile photo listener error:", error);
               });
           };
 
@@ -5846,8 +5952,8 @@
               if (!uid || !isAuthReady) return;
               if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
 
-              // PATH DATABASE: Mengambil riwayat orderan dari path artifacts/onbid-2f87a/users/{UID}/daily_orders
-              const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', String(uid).trim(), 'daily_orders');
+              // PATH DATABASE: Mengambil riwayat orderan dari path artifacts/{appId}/users/{UID}/daily_orders
+              const dailyRef = collection(db, 'artifacts', appId, 'users', String(uid).trim(), 'daily_orders');
               
               dailyOrdersUnsubscribe = onSnapshot(dailyRef, (snapshot) => {
                   const newFirebaseData = [];
@@ -5928,8 +6034,8 @@
                   activeOrderUnsubscribe();
               }
 
-              // PATH DATABASE: Mengambil Orderan dari path spesifik Admin (artifacts/onbid-2f87a/public/data/active_orders)
-              const ordersRef = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+              // PATH DATABASE: Mengambil Orderan dari path spesifik Admin (artifacts/{appId}/public/data/active_orders)
+              const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
 
               activeOrderUnsubscribe = onSnapshot(ordersRef, (snapshot) => {
                   let hasActiveOrder = false;
@@ -6131,7 +6237,7 @@
                   localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori timer
                   
                   try {
-                      const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
+                      const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
                       await updateDoc(orderRef, {
                           status: 'processing',
                           accepted_at: serverTimestamp()
@@ -6298,7 +6404,7 @@
 
               try {
                   // 1. Update status order menjadi missed agar admin tahu dilewati
-                  const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', docId);
+                  const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
                   const orderUpdateData = {
                       status: 'missed',
                       missed_by: currentUserUID,
@@ -6608,7 +6714,7 @@
                   
                   try {
                       // 1. Update status order menjadi completed di koleksi Admin
-                      const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
+                      const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
                       await updateDoc(orderRef, {
                           status: 'completed',
                           finished_at: serverTimestamp(),
@@ -6764,7 +6870,7 @@
           // FUNGSI CEK NOTIFIKASI UNREAD
           window.checkUnreadAdminInfo = async () => {
               try {
-                  const querySnapshot = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_announcements'));
+                  const querySnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'admin_announcements'));
                   const totalDocs = querySnapshot.size;
                   
                   const lastReadCount = parseInt(localStorage.getItem('admin_info_last_read_count') || '0');
@@ -6804,7 +6910,7 @@
               }
 
               try {
-                  const querySnapshot = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_announcements'));
+                  const querySnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'admin_announcements'));
                   const docs = [];
                   querySnapshot.forEach((doc) => {
                       docs.push({ id: doc.id, ...doc.data() });
@@ -6988,7 +7094,7 @@
                        base64Images.push(compressedBase64);
                    }
 
-                   await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'menu_uploads'), {
+                   await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'menu_uploads'), {
                        rider_uid: currentUserUID,
                        rider_name: rName,
                        resto_name: restoName,
