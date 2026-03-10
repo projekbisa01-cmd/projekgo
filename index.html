@@ -3859,41 +3859,63 @@
 
         // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
-            const seenMap = new Map();
             const todayStr = getJakartaDateString();
+            const finalData = [];
             
+            // Helper untuk parsing jam ke menit (untuk perbandingan)
+            const timeToMinutes = (timeStr) => {
+                if (!timeStr) return 0;
+                const parts = String(timeStr).replace(/\./g, ':').split(':');
+                if (parts.length >= 2) return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+                return 0;
+            };
+
+            // Helper untuk standarisasi nominal (mencegah miss karena format ribuan/desimal)
+            const getNominal = (item) => {
+                let val = Number(item.Nominal_Kotor || item.fee || item.Fee || 0);
+                if (val > 500) val = val / 1000;
+                return Math.round(val * 1000);
+            };
+
             // 1. PRIORITAS UTAMA: Data Spreadsheet (Sheet Admin)
             appsScriptData.forEach(item => {
-                const dateKey = parseSheetDate(item.Tanggal);
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
-                const safeName = String(item.Nama_Pelanggan || item.Customer_Name || item.customer_name || "").substring(0, 3).toLowerCase();
-                const uniqueKey = `${dateKey}_${timeKey}_${safeName}`;
-                
-                // Pastikan data sheet yang sah tersimpan
-                seenMap.set(uniqueKey, { ...item, is_sheet: true, is_realtime: false });
+                finalData.push({ ...item, is_sheet: true, is_realtime: false });
             });
             
-            // 2. Data Firebase (Live Radar)
-            window.firebaseData.forEach(item => {
-                const dateKey = parseSheetDate(item.Tanggal);
-                let timeKey = parseSheetTime(item.Jam);
-                if (timeKey) timeKey = timeKey.replace(/\./g, ':');
-                const safeName = String(item.Nama_Pelanggan || item.Customer_Name || item.customer_name || "").substring(0, 3).toLowerCase();
-                const uniqueKey = `${dateKey}_${timeKey}_${safeName}`;
+            // 2. Data Firebase (Live Radar) - Cek dengan toleransi waktu
+            window.firebaseData.forEach(fbItem => {
+                const fbDate = parseSheetDate(fbItem.Tanggal);
+                const fbTimeMin = timeToMinutes(parseSheetTime(fbItem.Jam));
+                const fbNominal = getNominal(fbItem);
                 
-                if (!seenMap.has(uniqueKey)) {
-                    let isLeftover = false;
-                    // Deteksi jika data live nyangkut dari hari sebelumnya (Admin telat input atau salah jam sehingga tidak sinkron)
-                    if (dateKey !== todayStr) {
-                        isLeftover = true;
-                        item.Status = 'Dobel'; // Ubah status agar tidak merusak/mendobelkan hitungan saldo
+                let isMatched = false;
+
+                // Loop ke data sheet untuk mencari kecocokan
+                for (let i = 0; i < appsScriptData.length; i++) {
+                    const sheetItem = appsScriptData[i];
+                    const sheetDate = parseSheetDate(sheetItem.Tanggal);
+                    const sheetTimeMin = timeToMinutes(parseSheetTime(sheetItem.Jam));
+                    const sheetNominal = getNominal(sheetItem);
+
+                    // KONDISI MATCH: Tanggal Sama AND Nominal Sama AND Selisih waktu <= 2 Menit (mencakup kurang 2 menit/lebih 1 menit)
+                    if (sheetDate === fbDate && sheetNominal === fbNominal && Math.abs(sheetTimeMin - fbTimeMin) <= 2) {
+                        isMatched = true;
+                        break;
                     }
-                    seenMap.set(uniqueKey, { ...item, is_leftover_live: isLeftover });
+                }
+                
+                if (!isMatched) {
+                    let isLeftover = false;
+                    // Deteksi jika data live nyangkut dari hari sebelumnya (Admin telat input atau tidak sinkron)
+                    if (fbDate !== todayStr) {
+                        isLeftover = true;
+                        fbItem.Status = 'Dobel'; // Ubah status agar tidak merusak hitungan saldo
+                    }
+                    finalData.push({ ...fbItem, is_leftover_live: isLeftover, is_realtime: true });
                 }
             });
 
-            rawData = Array.from(seenMap.values());
+            rawData = finalData;
 
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
