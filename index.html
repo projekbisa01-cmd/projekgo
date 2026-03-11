@@ -3943,34 +3943,50 @@
                 return Math.round(val * 1000);
             };
 
-            // 1. PRIORITAS UTAMA: Data Spreadsheet (Sheet Admin)
-            appsScriptData.forEach(item => {
-                finalData.push({ ...item, is_sheet: true, is_realtime: false });
-            });
+            // Salin data sheet untuk melacak data yang belum tergabung dengan Firebase
+            let unmatchedSheetData = [...appsScriptData];
             
-            // 2. Data Firebase (Live Radar) - Cek dengan toleransi waktu
+            // 1. Prioritaskan pengecekan dari Data Firebase (Live Radar)
             window.firebaseData.forEach(fbItem => {
                 const fbDate = parseSheetDate(fbItem.Tanggal);
                 const fbTimeMin = timeToMinutes(parseSheetTime(fbItem.Jam));
                 const fbNominal = getNominal(fbItem);
                 
-                let isMatched = false;
+                let matchedIndex = -1;
 
                 // Loop ke data sheet untuk mencari kecocokan
-                for (let i = 0; i < appsScriptData.length; i++) {
-                    const sheetItem = appsScriptData[i];
+                for (let i = 0; i < unmatchedSheetData.length; i++) {
+                    const sheetItem = unmatchedSheetData[i];
                     const sheetDate = parseSheetDate(sheetItem.Tanggal);
                     const sheetTimeMin = timeToMinutes(parseSheetTime(sheetItem.Jam));
                     const sheetNominal = getNominal(sheetItem);
 
-                    // KONDISI MATCH: Tanggal Sama AND Nominal Sama AND Selisih waktu <= 2 Menit (mencakup kurang 2 menit/lebih 1 menit)
+                    // KONDISI MATCH: Tanggal Sama AND Nominal Sama AND Selisih waktu <= 2 Menit
                     if (sheetDate === fbDate && sheetNominal === fbNominal && Math.abs(sheetTimeMin - fbTimeMin) <= 2) {
-                        isMatched = true;
+                        matchedIndex = i;
                         break;
                     }
                 }
                 
-                if (!isMatched) {
+                if (matchedIndex !== -1) {
+                    // JIKA MATCH: Gabungkan data!
+                    const matchedSheetItem = unmatchedSheetData[matchedIndex];
+                    finalData.push({ 
+                        ...matchedSheetItem, // Jaga-jaga ambil properti dasar dari spreadsheet
+                        ...fbItem,           // Data Firebase menimpa nama pelanggan, rincian pesanan, dll
+                        Nominal_Kotor: matchedSheetItem.Nominal_Kotor, // Spreadsheet HANYA menimpa Ongkir
+                        Tambahan: matchedSheetItem.Tambahan,           // Spreadsheet HANYA menimpa Tambahan
+                        Tanggal: matchedSheetItem.Tanggal,             // Spreadsheet HANYA menimpa Tanggal
+                        Jam: matchedSheetItem.Jam,                     // Spreadsheet HANYA menimpa Jam
+                        Status: matchedSheetItem.Status || 'Selesai',  // Status ikut dari Spreadsheet
+                        is_sheet: true, 
+                        is_realtime: false 
+                    });
+                    
+                    // Hapus data sheet yang sudah termatch agar tidak dimasukkan lagi (mencegah dobel)
+                    unmatchedSheetData.splice(matchedIndex, 1);
+                } else {
+                    // JIKA TIDAK MATCH DENGAN SHEET (Masih murni live atau nyangkut)
                     let isLeftover = false;
                     // Deteksi jika data live nyangkut dari hari sebelumnya (Admin telat input atau tidak sinkron)
                     if (fbDate !== todayStr) {
@@ -3979,6 +3995,12 @@
                     }
                     finalData.push({ ...fbItem, is_leftover_live: isLeftover, is_realtime: true });
                 }
+            });
+
+            // 2. Masukkan sisa data Spreadsheet yang tidak memiliki kecocokan di Firebase
+            // (Contoh: order manual kemarin atau order yang dihapus di live tapi masih ada di sheet)
+            unmatchedSheetData.forEach(sheetItem => {
+                finalData.push({ ...sheetItem, is_sheet: true, is_realtime: false });
             });
 
             rawData = finalData;
@@ -6394,82 +6416,7 @@
               };
           }
 
-          // FUNGSI LOGIKA TIMER ORDERAN MASUK ANTI RESET
-          window.startIncomingOrderTimer = (docId) => {
-              if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
-              
-              window.isMissingOrder = false;
-              
-              // MENGGUNAKAN LOCAL STORAGE: Menyimpan Waktu Mulai agar kebal saat aplikasi tertutup / ter-reload
-              const DURATION = 60; 
-              const orderStartKey = `order_start_${docId}`;
-              
-              // Ambil waktu dari memori (jika sebelumnya aplikasinya dimuat ulang/tutup notif)
-              let startTime = parseInt(localStorage.getItem(orderStartKey));
-              
-              if (!startTime) {
-                  // Jika belum pernah diset, ambil waktu sekarang dan simpan ke memori
-                  startTime = Date.now();
-                  localStorage.setItem(orderStartKey, startTime);
-              }
-
-              // Waktu Habis Sesungguhnya (Pasti dan Tak Terbantahkan)
-              const expireTimeMs = startTime + (DURATION * 1000);
-              let lastBeepTime = 0;
-              
-              const timerEl = document.getElementById('incoming-timer');
-              const warningEl = document.getElementById('incoming-timer-warning');
-              const timerRing = document.getElementById('timer-ring');
-              
-              if(warningEl) warningEl.classList.add('hidden');
-              if(timerRing) {
-                  timerRing.classList.remove('border-red-200', 'bg-red-50');
-                  timerRing.classList.add('border-orange-200', 'bg-orange-50');
-                  if(timerEl) timerEl.classList.replace('text-red-600', 'text-orange-600');
-              }
-
-              const updateTimer = () => {
-                  const now = Date.now();
-                  // Kalkulasi presisi berdasarkan sisa waktu dari memori
-                  let timeLeft = Math.ceil((expireTimeMs - now) / 1000);
-
-                  // Jika telat terima data dan waktu sudah minus, pastikan tidak nembus negatif
-                  if (timeLeft < 0) timeLeft = 0;
-                  // Cegah error glitch > 60 jika jam sistem sedikit berbeda
-                  if (timeLeft > 60) timeLeft = 60;
-
-                  if(timerEl) timerEl.innerText = timeLeft;
-
-                  // Tampilkan peringatan visual saat sisa waktu 15 detik
-                  if (timeLeft <= 15 && timeLeft > 0) {
-                      if(warningEl) warningEl.classList.remove('hidden');
-                      if(timerRing) {
-                          timerRing.classList.remove('border-orange-200', 'bg-orange-50');
-                          timerRing.classList.add('border-red-200', 'bg-red-50');
-                          if(timerEl) timerEl.classList.replace('text-orange-600', 'text-red-600');
-                      }
-                      
-                      // Trigger audio tiap detik pergantian pada 15 detik terakhir agar tak spam
-                      if (timeLeft !== lastBeepTime) {
-                          try { playBeep(500, 0.2); } catch(e){}
-                          lastBeepTime = timeLeft;
-                      }
-                  }
-
-                  if (timeLeft <= 0) {
-                      // Waktu Habis Total: Batalkan otomatis
-                      clearInterval(window.incomingOrderTimer);
-                      window.incomingOrderTimer = null;
-                      window.currentIncomingOrderId = null; 
-                      localStorage.removeItem(orderStartKey); // Hapus memori waktu start jika waktu habis
-                      window.handleMissedOrder(docId);
-                  }
-              };
-
-              updateTimer(); // Panggil secara instan pada tick pertama
-              window.incomingOrderTimer = setInterval(updateTimer, 200); // Check per 200ms agar interval jauh lebih akurat
-          };
-
+          
           window.handleMissedOrder = async (docId) => {
               window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
               
