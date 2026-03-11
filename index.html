@@ -469,7 +469,7 @@
             
             <h2 class="text-2xl font-black text-red-600 mb-2 uppercase tracking-tight">Melewati Orderan!</h2>
             <p class="text-sm text-gray-700 font-bold leading-relaxed mb-6 bg-red-50 p-4 rounded-xl border border-red-100 italic">
-                Waktu habis (60 Detik). Orderan dialihkan ke rider lain dan Anda dipindah ke posisi bawah antrean.
+                Waktu habis (115 Detik). Orderan dialihkan ke rider lain dan Anda dipindah ke posisi bawah antrean.
             </p>
             
             <button onclick="closeMissedOrderPopup()" class="w-full py-4 bg-gray-800 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest">
@@ -6416,7 +6416,72 @@
               };
           }
 
-          
+          window.startIncomingOrderTimer = (docId) => {
+              if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
+
+              const totalDuration = 115; // 60 detik awal + 55 detik extra
+              const storageKey = `order_start_${docId}`;
+              let startTime = localStorage.getItem(storageKey);
+              
+              if (!startTime) {
+                  startTime = Date.now();
+                  localStorage.setItem(storageKey, startTime);
+              } else {
+                  startTime = parseInt(startTime);
+              }
+
+              const timerEl = document.getElementById('incoming-timer');
+              const ringEl = document.getElementById('timer-ring');
+              const warningEl = document.getElementById('incoming-timer-warning');
+
+              // Reset UI ke state awal (Aman)
+              if (warningEl) warningEl.classList.add('hidden');
+              if (ringEl) {
+                  ringEl.classList.remove('border-red-500', 'bg-red-50', 'animate-pulse');
+                  ringEl.classList.add('border-orange-200', 'bg-orange-50');
+              }
+              if (timerEl) {
+                  timerEl.classList.remove('text-red-600');
+                  timerEl.classList.add('text-orange-600');
+              }
+
+              window.incomingOrderTimer = setInterval(() => {
+                  const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                  const remaining = totalDuration - elapsedSeconds;
+
+                  if (remaining <= 0) {
+                      clearInterval(window.incomingOrderTimer);
+                      window.incomingOrderTimer = null;
+                      localStorage.removeItem(storageKey);
+                      if (timerEl) timerEl.innerText = "0";
+                      window.handleMissedOrder(docId);
+                      return;
+                  }
+
+                  if (remaining > 55) {
+                      // Fase 1: Countdown 60 detik pertama (Warna Orange)
+                      const displayVal = remaining - 55;
+                      if (timerEl) timerEl.innerText = displayVal;
+                  } else {
+                      // Fase 2: Countdown 55 detik tambahan (Warna Merah + Peringatan Muncul)
+                      if (timerEl) timerEl.innerText = remaining;
+                      
+                      if (warningEl && warningEl.classList.contains('hidden')) {
+                          warningEl.classList.remove('hidden');
+                          if (ringEl) {
+                              ringEl.classList.remove('border-orange-200', 'bg-orange-50');
+                              ringEl.classList.add('border-red-500', 'bg-red-50', 'animate-pulse');
+                          }
+                          if (timerEl) {
+                              timerEl.classList.remove('text-orange-600');
+                              timerEl.classList.add('text-red-600');
+                          }
+                          try { playBeep(500, 0.3); } catch(e) {} // Suara peringatan saat masuk extra time
+                      }
+                  }
+              }, 1000);
+          };
+
           window.handleMissedOrder = async (docId) => {
               window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
               
