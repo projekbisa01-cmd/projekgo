@@ -427,7 +427,7 @@
             </div>
 
             <div class="flex gap-2 mt-5">
-                <button onclick="document.getElementById('edit-modal').classList.add('hidden')" class="flex-1 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 font-black rounded-xl text-[10px] uppercase transition-colors">Batal</button>
+                <button onclick="document.getElementById('edit-modal').classList.add('hidden'); document.getElementById('edit-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 font-black rounded-xl text-[10px] uppercase transition-colors">Batal</button>
                 <button onclick="saveEditOrder()" class="flex-1 py-3 bg-sky-500 hover:bg-sky-600 text-white font-black rounded-xl text-[10px] uppercase shadow-md transition-colors flex items-center justify-center gap-1.5"><i class="fa-solid fa-floppy-disk"></i> Simpan</button>
             </div>
         </div>
@@ -626,9 +626,7 @@
             });
         }
 
-        const timeoutProcessing = new Set(); // Mencegah spam timeout
-
-        // FUNGSI BARU DIMODIFIKASI: Live Timer Normal (60s) + Extra Waktu (55s)
+        // FUNGSI BARU: Live Timer untuk menghitung detik orderan menunggu
         function startLiveTimers() {
             setInterval(() => {
                 const now = Date.now();
@@ -640,56 +638,28 @@
                             
                             const timerEl = document.getElementById(`timer-${order.id}`);
                             const cardEl = document.getElementById(`card-order-${order.id}`);
-                            const badgeEl = document.getElementById(`badge-status-${order.id}`);
                             
-                            // 1. UPDATE TEKS TIMER
                             if (timerEl) {
-                                if (elapsed <= 60) {
-                                    timerEl.innerText = `${elapsed}s / 60s`;
-                                    timerEl.classList.remove('text-rose-600', 'font-black', 'animate-pulse');
-                                    timerEl.classList.add('text-amber-600');
-                                } else {
-                                    const extra = elapsed - 60;
-                                    timerEl.innerText = `EXTRA ${extra}s / 55s`;
+                                timerEl.innerText = `${elapsed}s`;
+                                // Warnai detik jadi merah jika sudah di atas 10 detik
+                                if (elapsed > 10) {
                                     timerEl.classList.remove('text-amber-600');
-                                    timerEl.classList.add('text-rose-600', 'font-black', 'animate-pulse');
+                                    timerEl.classList.add('text-rose-600');
+                                } else {
+                                    timerEl.classList.add('text-amber-600');
+                                    timerEl.classList.remove('text-rose-600');
                                 }
                             }
                             
-                            // 2. UPDATE WARNA KARTU & BADGE (Fase Extra Waktu)
                             if (cardEl) {
-                                if (elapsed > 60 && elapsed <= 115) {
-                                    // KARTU MENYALA MERAH TANDA DARURAT PING WA
-                                    cardEl.classList.add('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.6)]', 'border-rose-400', 'bg-rose-50/30');
-                                    cardEl.classList.remove('border-slate-200', 'shadow-sm', 'bg-white');
-                                    
-                                    if (badgeEl && !badgeEl.innerText.includes('HUBUNGI RIDER')) {
-                                        badgeEl.innerText = 'HUBUNGI RIDER SEKARANG (WAKTU EXTRA)';
-                                        badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max transition-all bg-rose-600 text-white border-rose-700 animate-pulse';
-                                    }
-                                } else if (elapsed <= 60) {
-                                    // FASE NORMAL
-                                    cardEl.classList.remove('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.6)]', 'border-rose-400', 'bg-rose-50/30');
-                                    cardEl.classList.add('border-slate-200', 'shadow-sm', 'bg-white');
-                                    
-                                    if (badgeEl && badgeEl.innerText !== 'Menunggu Konfirmasi Rider') {
-                                        badgeEl.innerText = 'Menunggu Konfirmasi Rider';
-                                        badgeEl.className = 'text-[8px] font-black px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max transition-all text-amber-600 bg-amber-50 border-amber-200';
-                                    }
+                                // Jika orderan menggantung lebih dari 5 detik, buat KARTU MENYALA MENCOLOK (Glow)
+                                if (elapsed >= 5) {
+                                    cardEl.classList.add('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
+                                    cardEl.classList.remove('border-slate-200', 'shadow-sm');
+                                } else {
+                                    cardEl.classList.remove('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
+                                    cardEl.classList.add('border-slate-200', 'shadow-sm');
                                 }
-                            }
-
-                            // 3. AUTO-ALIHKAN JIKA TOTAL MELEWATI 115 DETIK (60 + 55)
-                            if (elapsed > 115 && !timeoutProcessing.has(order.id)) {
-                                timeoutProcessing.add(order.id);
-                                const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                                updateDoc(ref, {
-                                    status: 'missed',
-                                    missed_by: order.rider_uid
-                                }).catch(e => {
-                                    console.error(e);
-                                    timeoutProcessing.delete(order.id);
-                                });
                             }
                         }
                     }
@@ -1125,17 +1095,15 @@
             const order = allGlobalOrders.find(o => o.id === orderId);
             if (!order) return;
 
-            // Cari Rider Pengganti yang Tersedia (Nganggur)
-            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
+            // Cari Rider Pengganti yang Tersedia (Diizinkan alihkan ke siapa saja yang online di antrean)
             const availableMainQueue = mainQueueRiders.filter(r => 
                 (r.is_online === true || r.is_online === 'true') && 
                 (r.is_available === true || r.is_available === 'true') && 
-                !busyUids.has(r.uid) && 
                 r.uid !== order.rider_uid
             );
 
             if (availableMainQueue.length === 0) {
-                window.showAlert('Gagal', 'Tidak ada rider lain yang tersedia/nganggur di antrean radar saat ini.', 'warning');
+                window.showAlert('Gagal', 'Tidak ada rider lain yang tersedia di antrean radar saat ini.', 'warning');
                 return;
             }
 
@@ -1164,14 +1132,19 @@
             icon.innerHTML = '<i class="fa-solid fa-shuffle"></i>';
             
             document.getElementById('custom-modal-actions').innerHTML = `
-                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal-select-wrapper').classList.add('hidden');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex'); document.getElementById('custom-modal-select-wrapper').classList.add('hidden');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
                 <button id="modal-confirm-reassign-btn" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-paper-plane"></i> Alihkan</button>
             `;
+
+            // FIX: Menampilkan modal ke layar
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
 
             document.getElementById('modal-confirm-reassign-btn').onclick = async () => {
                 const selectedUid = select.value;
                 const nextRider = availableMainQueue.find(r => r.uid === selectedUid);
                 modal.classList.add('hidden');
+                modal.classList.remove('flex');
                 selectWrapper.classList.add('hidden');
                 
                 if(!nextRider) return;
@@ -1384,7 +1357,7 @@
                         <div class="flex justify-between items-start pl-1">
                             <div class="flex flex-col gap-1.5 overflow-hidden">
                                 <div class="flex items-center gap-2 flex-wrap">
-                                    <span id="badge-status-${order.id}" class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max transition-all">${statusText}</span>
+                                    <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
                                     <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100" title="Waktu Order Diberikan">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
                                         <span class="text-[9px] font-black text-black">${timeAssignedStr}</span>
@@ -1392,7 +1365,7 @@
                                     ${!isProcessing && !isMissed ? `
                                         <div class="flex items-center gap-1 bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-200" title="Waktu Menunggu Konfirmasi">
                                             <i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i>
-                                            <span id="timer-${order.id}" class="text-[9px] font-black">0s / 60s</span>
+                                            <span id="timer-${order.id}" class="text-[9px] font-black">0s</span>
                                         </div>
                                     ` : ''}
                                 </div>
@@ -2311,6 +2284,7 @@
 
             const loader = document.getElementById('loading-overlay');
             document.getElementById('edit-modal').classList.add('hidden');
+            document.getElementById('edit-modal').classList.remove('flex'); // FIX: Tutup modal dengan sempurna
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
@@ -2389,7 +2363,7 @@
             if (type === 'success') { icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-green-50 text-green-500 border-green-100'; icon.innerHTML = '<i class="fa-solid fa-check"></i>'; }
             else if (type === 'error' || type === 'warning') { icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-red-50 text-red-500 border-red-100'; icon.innerHTML = '<i class="fa-solid fa-xmark"></i>'; }
             else { icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-blue-50 text-blue-500 border-blue-100'; icon.innerHTML = '<i class="fa-solid fa-info"></i>'; }
-            document.getElementById('custom-modal-actions').innerHTML = `<button onclick="document.getElementById('custom-modal').classList.add('hidden')" class="w-full py-3 bg-slate-800 text-white font-black rounded-xl text-[10px] uppercase shadow-lg">Lanjutkan</button>`;
+            document.getElementById('custom-modal-actions').innerHTML = `<button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex');" class="w-full py-3 bg-slate-800 text-white font-black rounded-xl text-[10px] uppercase shadow-lg">Lanjutkan</button>`;
             modal.classList.remove('hidden'); modal.classList.add('flex');
         };
 
@@ -2407,10 +2381,14 @@
             icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-amber-50 text-amber-500 border-amber-100';
             icon.innerHTML = '<i class="fa-solid fa-question"></i>';
             document.getElementById('custom-modal-actions').innerHTML = `
-                <button onclick="document.getElementById('custom-modal').classList.add('hidden')" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
                 <button id="modal-confirm-btn" class="flex-1 py-3 bg-rose-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md">Ya, Eksekusi</button>
             `;
-            document.getElementById('modal-confirm-btn').onclick = () => { modal.classList.add('hidden'); onConfirm(); };
+            document.getElementById('modal-confirm-btn').onclick = () => { 
+                modal.classList.add('hidden'); 
+                modal.classList.remove('flex');
+                onConfirm(); 
+            };
             modal.classList.remove('hidden'); modal.classList.add('flex');
         };
 
