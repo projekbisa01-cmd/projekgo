@@ -55,6 +55,21 @@
         }
 
         .hidden-page { display: none !important; }
+
+        /* ANIMASI BERDETAK KHUSUS */
+        @keyframes berdetak {
+            0% { transform: scale(1); }
+            15% { transform: scale(1.08); }
+            30% { transform: scale(1); }
+            45% { transform: scale(1.08); }
+            60% { transform: scale(1); }
+            100% { transform: scale(1); }
+        }
+        .animate-berdetak {
+            animation: berdetak 1.5s infinite;
+            transform-origin: left center;
+            display: inline-block;
+        }
     </style>
 </head>
 <body class="pb-24">
@@ -119,17 +134,28 @@
                 </div>
             </div>
             
-            <div id="selected-rider-display" class="hidden mt-2 p-2.5 bg-slate-800 text-white rounded-xl shadow-md flex items-center justify-between border-l-4 border-sky-500 animate-in fade-in duration-300">
-                <div class="flex items-center gap-2 overflow-hidden">
-                    <i class="fa-solid fa-user-check text-sky-400 text-xs"></i>
-                    <p class="text-[10px] font-black truncate">Tujuan: <span id="display-name-text"></span></p>
+            <!-- KARTU TUJUAN ORDER (TELAH DIPERBARUI) -->
+            <div id="selected-rider-display" class="hidden mt-3 p-4 bg-blue-600 text-white rounded-[1.5rem] shadow-[0_4px_25px_rgba(37,99,235,0.4)] flex items-center justify-between border-2 border-blue-400 animate-in fade-in duration-300">
+                <div class="flex items-center gap-3 overflow-hidden w-full pr-2">
+                    <div class="w-11 h-11 rounded-full bg-blue-500 flex items-center justify-center shrink-0 shadow-inner border border-blue-400">
+                        <i class="fa-solid fa-paper-plane text-white text-base"></i>
+                    </div>
+                    <div class="flex flex-col w-full overflow-hidden">
+                        <p class="text-[10px] font-bold text-blue-200 uppercase tracking-widest mb-0.5">Tujuan Orderan:</p>
+                        <!-- NAMA RIDER DIPERBESAR 3x (text-3xl) & DIBERI ANIMASI BERDETAK -->
+                        <div class="overflow-hidden">
+                            <p id="display-name-text" class="text-3xl font-black text-white truncate animate-berdetak leading-tight"></p>
+                        </div>
+                    </div>
                 </div>
-                <button onclick="clearSelection()" class="text-[10px] text-white/50 hover:text-white"><i class="fa-solid fa-circle-xmark"></i></button>
+                <button onclick="clearSelection()" class="w-9 h-9 shrink-0 rounded-full bg-blue-700 text-blue-200 hover:bg-rose-500 hover:text-white flex items-center justify-center transition-colors shadow-sm border border-blue-500 hover:border-rose-400">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
             </div>
         </section>
 
         <!-- 3. INPUT PESANAN -->
-        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-4">
+        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-4 mt-4">
             <div>
                 <div class="flex justify-between items-center mb-1.5">
                     <label class="text-[9px] font-black text-black uppercase tracking-widest ml-1">No. WhatsApp</label>
@@ -442,7 +468,6 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        // PERBAIKAN: Menambahkan runTransaction
         import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
@@ -454,7 +479,6 @@
             appId: "1:223888282484:web:2fc05ed67ca1fab39e1221"
         };
 
-        // PERBAIKAN 1: Bypass Otentikasi Khusus Agar Admin Tidak Gagal Terhubung di Canvas
         let isCanvasConfig = false;
         if (typeof __firebase_config !== 'undefined') {
             try {
@@ -476,7 +500,7 @@
         let allRiderContacts = [];
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
-        const processingMissedOrders = new Set(); // Mencegah looping eksekusi untuk orderan yang sama
+        const processingMissedOrders = new Set(); 
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -484,7 +508,7 @@
                 startGlobalOrdersListener();
                 startDailyOrdersListeners(); 
                 startRiderContactsListener();
-                startLiveTimers(); // TAMBAHAN: Memulai penghitung waktu tunggu otomatis
+                startLiveTimers(); 
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
@@ -499,7 +523,6 @@
             }
         });
 
-        // EKSEKUSI OTENTIKASI YANG SUDAH DIBENAHI
         const initAuth = async () => {
             try {
                 if (isCanvasConfig && typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -553,9 +576,8 @@
             }
         };
 
-        window.riderStates = {}; // Menyimpan memori status terakhir rider
+        window.riderStates = {}; 
 
-        // Helper untuk ekstrak waktu mencegah error (NaN) saat data server masih tertunda
         function getTimestampMs(field) {
             if (!field) return 0;
             if (typeof field.toMillis === 'function') return field.toMillis();
@@ -611,7 +633,6 @@
                 const isAvailable = data.is_available === true || data.is_available === 'true';
                 const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                 
-                // Jika offline ATAU aplikasi dimatikan/istirahat, dan masih ada di antrean utama
                 if ((!isOnline || !isAvailable) && inMainQueue) {
                     let lastUpdateMs = getTimestampMs(data.last_updated);
                     if (lastUpdateMs > 0 && (now - lastUpdateMs > oneHour)) {
@@ -626,7 +647,6 @@
             });
         }
 
-        // FUNGSI BARU: Live Timer untuk menghitung detik orderan menunggu
         function startLiveTimers() {
             setInterval(() => {
                 const now = Date.now();
@@ -641,7 +661,6 @@
                             
                             if (timerEl) {
                                 timerEl.innerText = `${elapsed}s`;
-                                // Warnai detik jadi merah jika sudah di atas 10 detik
                                 if (elapsed > 10) {
                                     timerEl.classList.remove('text-amber-600');
                                     timerEl.classList.add('text-rose-600');
@@ -652,7 +671,6 @@
                             }
                             
                             if (cardEl) {
-                                // Jika orderan menggantung lebih dari 5 detik, buat KARTU MENYALA MENCOLOK (Glow)
                                 if (elapsed >= 5) {
                                     cardEl.classList.add('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
                                     cardEl.classList.remove('border-slate-200', 'shadow-sm');
@@ -671,7 +689,6 @@
             const statusCol = collection(db, 'status_rider_aktif');
             onSnapshot(statusCol, (snapshot) => {
                 
-                // 1. Deteksi Spesifik Perubahan State (Offline -> Online)
                 snapshot.docChanges().forEach((change) => {
                     const data = change.doc.data();
                     const uid = change.doc.id;
@@ -688,7 +705,6 @@
                     if (change.type === "modified") {
                         const wasActive = window.riderStates[uid];
                         
-                        // JIKA sebelumnya mati, SEKARANG hidup, dan MASIH di antrean utama (< 1 Jam) -> Lempar ke Bawah
                         if (wasActive === false && isNowActive === true && inMainQueue) {
                             console.log(`[Sistem] ${uid} kembali aktif, melempar ke posisi paling bawah antrean.`);
                             const ref = doc(db, 'status_rider_aktif', uid);
@@ -716,7 +732,6 @@
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    // Fallback re-sync memory
                     window.riderStates[uid] = isOnline && isAvailable;
 
                     if (inMainQueue) {
@@ -736,7 +751,6 @@
                     let timeB = getTimestampMs(b.last_drop_time);
                     if (timeB === 0) timeB = getTimestampMs(b.last_updated);
                     
-                    // Fallback jika proses server write belum selesai
                     if (timeA === 0) timeA = Date.now();
                     if (timeB === 0) timeB = Date.now();
 
@@ -913,7 +927,6 @@
             }
         }
 
-        // PERBAIKAN 2: Tambahkan force_kill agar HP Rider dipaksa mati
         window.forceOffline = (uid, name) => {
             window.showConfirm('Paksa Offline Rider?', `Yakin ingin mengeluarkan ${name} (ID: ${uid}) dari radar?`, async () => {
                 const loader = document.getElementById('loading-overlay');
@@ -951,7 +964,6 @@
                     const now = new Date();
                     const promises = availableNewShift.map((rider, index) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // Gunakan simulatedTime berjenjang agar urutan rider dipertahankan (rider paling akhir absen tetap di paling bawah)
                         const simulatedTime = new Date(now.getTime() + (index * 1000));
                         return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "", proof_desc: "" }, { merge: true });
                     });
@@ -997,13 +1009,11 @@
             document.querySelectorAll('.rider-card').forEach(el => el.classList.remove('selected'));
         };
 
-        // FUNGSI BARU: Mengalihkan Otomatis Menggunakan Transaction untuk Mencegah Race Condition (Jika Rider Melewati Waktu)
         window.autoReassignMissedOrder = async (order) => {
             if (processingMissedOrders.has(order.id)) return;
             processingMissedOrders.add(order.id);
             
             try {
-                // 1. Cari Rider Pengganti (Urutan Teratas yg available)
                 const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
                 const availableMainQueue = mainQueueRiders.filter(r => 
                     (r.is_online === true || r.is_online === 'true') && 
@@ -1014,7 +1024,6 @@
                 );
 
                 if (availableMainQueue.length === 0) {
-                    // Tidak ada rider pengganti, ubah status ke 'unassigned' agar berhenti me-loop
                     await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id), {
                         status: 'unassigned'
                     });
@@ -1042,7 +1051,6 @@
                 const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                 const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
 
-                // Gunakan Transaction untuk mencegah Race Condition jika banyak Admin terbuka
                 await runTransaction(db, async (transaction) => {
                     const orderDoc = await transaction.get(orderRef);
                     if (!orderDoc.exists()) throw "Order tidak ditemukan";
@@ -1050,13 +1058,11 @@
                     const currentData = orderDoc.data();
                     if (currentData.status !== 'missed') throw "Sudah dialihkan oleh admin lain";
 
-                    // Hapus histori rider lama di dalam transaksi
                     if (currentData.daily_order_id && currentData.rider_uid) {
                         const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', currentData.rider_uid, 'daily_orders', currentData.daily_order_id);
                         transaction.delete(oldDailyRef);
                     }
 
-                    // Buat histori untuk rider baru
                     transaction.set(newDailyOrderRef, {
                         Tanggal: Tanggal,
                         Jam: Jam,
@@ -1068,13 +1074,12 @@
                         created_at: serverTimestamp()
                     });
 
-                    // Update order aktif
                     transaction.update(orderRef, {
                         rider_uid: nextRider.uid,
                         rider_name: nextRiderName,
                         daily_order_id: newDailyOrderRef.id,
                         status: 'assigned', 
-                        created_at: serverTimestamp(), // Waktu baru agar 60 detik rider baru full
+                        created_at: serverTimestamp(), 
                         missed_by: null
                     });
                 });
@@ -1090,12 +1095,10 @@
             }
         };
 
-        // FUNGSI BARU DIMODIFIKASI: Alihkan Manual oleh Admin (Bisa Pilih Rider)
         window.manualReassignOrder = async (orderId) => {
             const order = allGlobalOrders.find(o => o.id === orderId);
             if (!order) return;
 
-            // Cari Rider Pengganti yang Tersedia (Diizinkan alihkan ke siapa saja yang online di antrean)
             const availableMainQueue = mainQueueRiders.filter(r => 
                 (r.is_online === true || r.is_online === 'true') && 
                 (r.is_available === true || r.is_available === 'true') && 
@@ -1107,7 +1110,6 @@
                 return;
             }
 
-            // Siapkan Opsi Dropdown
             let optionsHtml = '';
             availableMainQueue.forEach((r, idx) => {
                 const rCode = getRiderCode(r.uid);
@@ -1115,7 +1117,6 @@
                 optionsHtml += `<option value="${r.uid}">${idx + 1}. ${rCode} - ${rName}</option>`;
             });
 
-            // Tampilkan Modal Pilihan
             const modal = document.getElementById('custom-modal');
             const icon = document.getElementById('custom-modal-icon');
             const input = document.getElementById('custom-modal-input');
@@ -1136,7 +1137,6 @@
                 <button id="modal-confirm-reassign-btn" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-paper-plane"></i> Alihkan</button>
             `;
 
-            // FIX: Menampilkan modal ke layar
             modal.classList.remove('hidden');
             modal.classList.add('flex');
 
@@ -1179,13 +1179,11 @@
                         
                         const currentData = orderDoc.data();
 
-                        // Hapus histori rider lama
                         if (currentData.daily_order_id && currentData.rider_uid) {
                             const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', currentData.rider_uid, 'daily_orders', currentData.daily_order_id);
                             transaction.delete(oldDailyRef);
                         }
 
-                        // Buat histori untuk rider baru
                         transaction.set(newDailyOrderRef, {
                             Tanggal: Tanggal,
                             Jam: Jam,
@@ -1197,7 +1195,6 @@
                             created_at: serverTimestamp()
                         });
 
-                        // Update data utama
                         transaction.update(orderRef, {
                             rider_uid: nextRider.uid,
                             rider_name: nextRiderName,
@@ -1232,7 +1229,6 @@
                         hasNewOrder = true;
                     }
                     
-                    // PEMICU REASSIGN OTOMATIS: Jika aplikasi rider melewatkan orderan
                     if (data.status === 'missed') {
                         window.autoReassignMissedOrder(data);
                     }
@@ -1280,7 +1276,6 @@
 
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
-            // Modifikasi agar menampilkan juga orderan yang tidak ada pengambilnya ('unassigned' / 'missed')
             const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing' || o.status === 'missed' || o.status === 'unassigned');
             document.getElementById('stat-active-orders').innerText = activeOrders.length;
 
@@ -1338,7 +1333,6 @@
                     timeAssignedStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                 }
 
-                // Cek Kontak Rider untuk Link WA
                 let riderPhone = '';
                 const contact = allRiderContacts.find(c => c.uid === order.rider_uid);
                 if (contact && contact.phone) {
@@ -2120,7 +2114,6 @@
             
             document.getElementById('btn-cancel-contact').classList.remove('hidden');
             
-            // Scroll ke atas
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
 
@@ -2139,7 +2132,6 @@
                     allRiderContacts.push({ id: docSnap.id, ...docSnap.data() });
                 });
                 
-                // Urutkan berdasarkan nama
                 allRiderContacts.sort((a,b) => (a.name || '').localeCompare(b.name || ''));
                 
                 if (typeof window.renderRidersContactList === 'function') window.renderRidersContactList();
@@ -2156,7 +2148,6 @@
                 return;
             }
 
-            // Cari nama berdasarkan UID dari data allRiders
             const matchedRider = allRiders.find(r => r.uid === uid);
             let name = uid;
             if (matchedRider) {
@@ -2174,7 +2165,6 @@
                     });
                     window.showAlert('Berhasil', 'Kontak berhasil diupdate.', 'success');
                 } else {
-                    // Cek jika UID tersebut sudah punya data agar tidak ganda
                     const existing = allRiderContacts.find(c => c.uid === uid);
                     if (existing) {
                         await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_contacts', existing.id), {
@@ -2284,7 +2274,7 @@
 
             const loader = document.getElementById('loading-overlay');
             document.getElementById('edit-modal').classList.add('hidden');
-            document.getElementById('edit-modal').classList.remove('flex'); // FIX: Tutup modal dengan sempurna
+            document.getElementById('edit-modal').classList.remove('flex'); 
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
