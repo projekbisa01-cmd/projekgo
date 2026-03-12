@@ -3622,6 +3622,24 @@
             }
         };
 
+        // --- TAMBAHAN SCRIPT PENGINGAT STATUS ONBID ---
+        document.addEventListener("DOMContentLoaded", function() {
+            let toggleElement = document.getElementById("onbid-toggle"); 
+            let statusTersimpan = localStorage.getItem("rider_onbid_status");
+
+            if (statusTersimpan === "true") {
+                if(toggleElement) toggleElement.checked = true;
+                if (window.AndroidInterface) {
+                    window.AndroidInterface.updateOnBidStatus(true);
+                }
+            } else {
+                if(toggleElement) toggleElement.checked = false;
+                if (window.AndroidInterface) {
+                    window.AndroidInterface.updateOnBidStatus(false);
+                }
+            }
+        });
+
         window.onload = function() {
             initPWA(); // Inisialisasi Deteksi PWA
 
@@ -5775,11 +5793,14 @@
             
             const check = document.getElementById('onbid-toggle').checked; 
             updateOnbidUI(check); 
-            localStorage.setItem('rider_onbid_status', check);
-
-            // TAMBAHAN: UPDATE STATUS KE APLIKASI ANDROID (Notifikasi & Anti-Swipe)
-            if (window.AndroidInterface) {
-                window.AndroidInterface.updateOnBidStatus(check);
+            
+            // PERBARUI FUNGSI KLIK TOGGLE
+            if (check) {
+                localStorage.setItem('rider_onbid_status', 'true');
+                if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+            } else {
+                localStorage.setItem('rider_onbid_status', 'false');
+                if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
             }
             
             try { 
@@ -6360,6 +6381,17 @@
                           try { playBeep(400, 0.2); } catch(e){}
                           alert("Mohon maaf orderan dibatalkan admin, tenang saja kamu masih dapat urutan pertama kok.");
                           window.currentActiveOrderId = null;
+                          
+                          // PENEGASAN: Pastikan status on-bid tidak berubah dan Android Service tetap hidup saat dibatalkan
+                          const toggleEl = document.getElementById('onbid-toggle');
+                          if (toggleEl && toggleEl.checked) {
+                              localStorage.setItem('rider_onbid_status', 'true');
+                              if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+                              
+                              // Beritahu Firebase bahwa Rider kembali tersedia di antrean secara otomatis
+                              const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                              updateDoc(statusRef, { is_available: true }).catch(e=>{});
+                          }
                       }
                   }
               }, (error) => {
@@ -6927,7 +6959,7 @@ if (window.AndroidInterface) {
                       const isToggleOn = document.getElementById('onbid-toggle').checked;
                       const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
                       await setDoc(statusRef, { 
-                          is_available: true,
+                          is_available: true, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
                           is_online: isToggleOn,
                           in_main_queue: isToggleOn,
                           last_drop_time: serverTimestamp(),
@@ -6936,6 +6968,12 @@ if (window.AndroidInterface) {
                       
                       hideActiveOrderOverlay();
                       
+                      // PENEGASAN: Pastikan memori dan Android service tidak terputus setelah order selesai
+                      if (isToggleOn) {
+                          localStorage.setItem('rider_onbid_status', 'true');
+                          if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+                      }
+
                       const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
                       const isFastCompletion = duration < 600000;
 
