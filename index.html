@@ -466,18 +466,6 @@
     <div id="incoming-order-popup" class="fixed inset-0 z-[99999] bg-gray-900/90 backdrop-blur-sm hidden flex-col items-center justify-center p-6 text-center">
         <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 text-center shadow-2xl transform scale-100 transition-transform relative overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-2 bg-orange-500"></div>
-            
-            <!-- TAMBAHAN: Timer Hitung Mundur -->
-            <div class="mb-4">
-                <div id="timer-ring" class="mx-auto flex items-center justify-center w-20 h-20 rounded-full border-[6px] border-orange-200 bg-orange-50 shadow-inner transition-colors duration-300">
-                    <span id="incoming-timer" class="text-3xl font-black text-orange-600 transition-colors duration-300">60</span>
-                </div>
-                <div id="incoming-timer-warning" class="hidden mt-3 bg-red-100 border border-red-200 p-3 rounded-xl shadow-inner">
-                    <p class="text-[11px] text-red-600 font-bold uppercase animate-pulse leading-tight">
-                        <i class="fa-solid fa-triangle-exclamation mr-1"></i> Kalau tidak di ambil, antrian Anda akan menuju paling bawah antrian!
-                    </p>
-                </div>
-            </div>
 
             <div class="relative w-24 h-24 mx-auto mb-6 hidden" id="bell-icon-container">
             </div>
@@ -6303,7 +6291,6 @@
           window.currentIncomingOrderId = null; // Ditambahkan untuk melacak ID pop-up aktif
           let finishPhotoBase64 = null;
           
-          window.incomingOrderTimer = null;
           window.isMissingOrder = false;
 
           window.startOrderListener = (uid) => {
@@ -6363,11 +6350,6 @@
                           if (window.vibrateInterval) {
                               clearInterval(window.vibrateInterval);
                               window.vibrateInterval = null;
-                          }
-                          // Matikan timer jika admin membatalkan saat masih berdering
-                          if (window.incomingOrderTimer) {
-                              clearInterval(window.incomingOrderTimer);
-                              window.incomingOrderTimer = null;
                           }
                           window.currentIncomingOrderId = null; // Reset track ID
                           wasActive = true;
@@ -6440,8 +6422,6 @@
               if (isFirstTime) {
                   window.currentIncomingOrderId = docId;
                   window.lastPingTime = currentPingTime;
-                  // Hanya panggil Timer saat Order ID ini benar-benar pertama kali muncul di layar saat ini
-                  window.startIncomingOrderTimer(docId);
               } else if (isPinged) {
                   // Perbarui catatan ping
                   window.lastPingTime = currentPingTime;
@@ -6516,13 +6496,8 @@
                   btnAccept.disabled = true;
                   btnAccept.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menerima...';
                   
-                  // Hentikan timer karena sudah diklik terima
-                  if (window.incomingOrderTimer) {
-                      clearInterval(window.incomingOrderTimer);
-                      window.incomingOrderTimer = null;
-                  }
                   window.currentIncomingOrderId = null; 
-                  localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori timer
+                  localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori
                   
                   try {
                       const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
@@ -6567,92 +6542,6 @@
                   }
               };
           }
-
-          window.startIncomingOrderTimer = (docId) => {
-              if (window.incomingOrderTimer) clearInterval(window.incomingOrderTimer);
-
-              const totalDuration = 115; // 60 detik awal + 55 detik extra
-              const storageKey = `order_start_${docId}`;
-              let startTime = localStorage.getItem(storageKey);
-              
-              if (!startTime) {
-                  startTime = Date.now();
-                  localStorage.setItem(storageKey, startTime);
-              } else {
-                  startTime = parseInt(startTime);
-              }
-
-              const timerEl = document.getElementById('incoming-timer');
-              const ringEl = document.getElementById('timer-ring');
-              const warningEl = document.getElementById('incoming-timer-warning');
-
-              // Reset UI ke state awal saat timer baru dimulai (Fase 1)
-              if (warningEl) warningEl.classList.add('hidden');
-              if (ringEl) {
-                  ringEl.classList.remove('border-red-500', 'bg-red-50', 'animate-pulse');
-                  ringEl.classList.add('border-orange-200', 'bg-orange-50');
-              }
-              if (timerEl) {
-                  timerEl.classList.remove('text-red-600');
-                  timerEl.classList.add('text-orange-600');
-              }
-
-              window.incomingOrderTimer = setInterval(() => {
-                  const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-                  const remaining = totalDuration - elapsedSeconds;
-
-                  if (remaining <= 0) {
-                      clearInterval(window.incomingOrderTimer);
-                      window.incomingOrderTimer = null;
-                      localStorage.removeItem(storageKey);
-                      if (timerEl) timerEl.innerText = "0";
-                      
-                      // Pastikan UI kembali ke warna normal saat timer habis
-                      if (warningEl) warningEl.classList.add('hidden');
-                      if (ringEl) {
-                          ringEl.classList.remove('border-red-500', 'bg-red-50', 'animate-pulse');
-                          ringEl.classList.add('border-orange-200', 'bg-orange-50');
-                      }
-                      if (timerEl) {
-                          timerEl.classList.remove('text-red-600');
-                          timerEl.classList.add('text-orange-600');
-                      }
-                      
-                      window.handleMissedOrder(docId);
-                      return;
-                  }
-
-                  if (remaining > 55) {
-                      // Fase 1: Countdown 60 detik pertama (Warna Orange)
-                      const displayVal = remaining - 55;
-                      if (timerEl) {
-                          timerEl.innerText = displayVal;
-                          timerEl.classList.remove('text-red-600');
-                          timerEl.classList.add('text-orange-600');
-                      }
-                      if (ringEl) {
-                          ringEl.classList.remove('border-red-500', 'bg-red-50', 'animate-pulse');
-                          ringEl.classList.add('border-orange-200', 'bg-orange-50');
-                      }
-                      if (warningEl) warningEl.classList.add('hidden');
-                  } else {
-                      // Fase 2: Countdown 55 detik tambahan (Warna Merah + Peringatan Muncul)
-                      if (timerEl) {
-                          timerEl.innerText = remaining;
-                          timerEl.classList.remove('text-orange-600');
-                          timerEl.classList.add('text-red-600');
-                      }
-                      if (ringEl) {
-                          ringEl.classList.remove('border-orange-200', 'bg-orange-50');
-                          ringEl.classList.add('border-red-500', 'bg-red-50', 'animate-pulse');
-                      }
-                      if (warningEl && warningEl.classList.contains('hidden')) {
-                          warningEl.classList.remove('hidden');
-                          try { playBeep(500, 0.3); } catch(e) {} // Suara peringatan saat masuk fase merah
-                      }
-                  }
-              }, 1000);
-          };
 
           window.handleMissedOrder = async (docId) => {
               window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
