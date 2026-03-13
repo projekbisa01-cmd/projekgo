@@ -2328,19 +2328,30 @@
         window.pendingWaText = "";
 
         window.openWaSelector = function(phone, text) {
-            window.pendingWaPhone = phone || "";
-            window.pendingWaText = text || "";
-            
-            const modal = document.getElementById('wa-selector-modal');
-            const content = document.getElementById('wa-selector-content');
-            if(modal && content) {
-                modal.classList.remove('hidden');
-                modal.classList.add('flex');
-                setTimeout(() => {
-                    modal.classList.remove('opacity-0');
-                    content.classList.remove('scale-90');
-                    content.classList.add('scale-100');
-                }, 10);
+            // === LOGIKA PINTAR BARU: SERAHKAN KE APLIKASI ANDROID ===
+            // Cek apakah diakses dari Aplikasi Android dan jembatan openWhatsApp tersedia
+            if (window.AndroidInterface && window.AndroidInterface.openWhatsApp) {
+                
+                // Berikan perintah ke Java Android untuk mendeteksi & membuka WA
+                window.AndroidInterface.openWhatsApp(phone || "", text || "");
+                
+            } else {
+                // === FALLBACK (CADANGAN) ===
+                // Jika Rider membuka via browser biasa (bukan aplikasi), maka tetap munculkan Pop-up HTML
+                window.pendingWaPhone = phone || "";
+                window.pendingWaText = text || "";
+                
+                const modal = document.getElementById('wa-selector-modal');
+                const content = document.getElementById('wa-selector-content');
+                if(modal && content) {
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                    setTimeout(() => {
+                        modal.classList.remove('opacity-0');
+                        content.classList.remove('scale-90');
+                        content.classList.add('scale-100');
+                    }, 10);
+                }
             }
         };
 
@@ -3664,15 +3675,16 @@
             const savedTarget = localStorage.getItem('rider_target_income');
             if (savedTarget) dailyIncomeTarget = Number(savedTarget);
             
-            // MODIFIKASI: Selalu matikan On-Bid saat pertama kali aplikasi dibuka
+            // PERBAIKAN: Pertahankan status On-Bid dari localStorage agar tidak mati/terputus saat halaman direfresh
             const onbidToggle = document.getElementById('onbid-toggle');
+            const savedOnbidStatus = localStorage.getItem('rider_onbid_status') === 'true';
+            
             if (onbidToggle) {
-                onbidToggle.checked = false;
-                updateOnbidUI(false);
+                onbidToggle.checked = savedOnbidStatus;
+                updateOnbidUI(savedOnbidStatus); // Sinkronisasi otomatis UI Kontainer Radar dan Toggle
                 // Jika awal buka sudah tidak ada koneksi, langsung kunci
                 if (!navigator.onLine) onbidToggle.disabled = true;
             }
-            localStorage.setItem('rider_onbid_status', 'false');
 
             // DETEKSI SINYAL PUTUS (OFFLINE)
             window.addEventListener('offline', () => {
@@ -5883,7 +5895,7 @@
 
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-      import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+      import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
       import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
 
@@ -5974,6 +5986,10 @@
 
           const initAuth = async () => {
               try {
+                  // Memaksa Firebase mengingat sesi login selamanya di HP Rider
+                  await setPersistence(auth, browserLocalPersistence);
+                  
+                  // Jalankan proses login
                   await signInAnonymously(auth);
               } catch (error) {
                   console.error("Firebase Auth Error:", error);
