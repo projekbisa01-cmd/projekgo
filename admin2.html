@@ -704,8 +704,8 @@
                             console.log(`[Sistem] ${uid} kembali aktif, melempar ke posisi paling bawah antrean.`);
                             const ref = doc(db, 'status_rider_aktif', uid);
                             updateDoc(ref, {
-                                last_drop_time: serverTimestamp(),
-                                last_drop_desc: "Aktif Kembali"
+                                last_drop_time: serverTimestamp()
+                                // last_drop_desc tidak ditimpa agar keterangan lokasi dari rider tetap tampil
                             }).catch(e => console.error(e));
                         }
                         
@@ -786,7 +786,36 @@
             btnPromote.style.display = 'flex';
             let html = '';
             availableNewShift.forEach((rider) => {
-                const ketFoto = rider.last_drop_desc || rider.proof_desc || "Menunggu Verifikasi";
+                let ketLokasi = "Menunggu Verifikasi";
+
+                // 1. Cari proof_desc dari orderan terakhir di active_orders
+                let orderProofDesc = "";
+                const riderOrders = allGlobalOrders.filter(o => o.rider_uid === rider.uid && o.proof_desc);
+                if (riderOrders.length > 0) {
+                    riderOrders.sort((a, b) => {
+                        const timeA = getTimestampMs(a.updated_at) || getTimestampMs(a.finished_at) || getTimestampMs(a.created_at);
+                        const timeB = getTimestampMs(b.updated_at) || getTimestampMs(b.finished_at) || getTimestampMs(b.created_at);
+                        return timeB - timeA;
+                    });
+                    orderProofDesc = riderOrders[0].proof_desc;
+                }
+
+                // 2. Prioritas mutlak: Utamakan proof_desc tanpa peduli timestamp
+                if (rider.proof_desc && String(rider.proof_desc).trim() !== "") {
+                    ketLokasi = rider.proof_desc;
+                } else if (orderProofDesc && String(orderProofDesc).trim() !== "") {
+                    ketLokasi = orderProofDesc;
+                } else if (rider.location && String(rider.location).trim() !== "") {
+                    ketLokasi = rider.location;
+                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
+                    ketLokasi = rider.last_drop_desc;
+                }
+                
+                // 3. Cegah tulisan "aktif kembali" muncul di UI
+                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
+                    ketLokasi = "Menunggu Verifikasi";
+                }
+
                 const realName = rider.nama || rider.name || rider.displayName;
                 const displayName = realName && String(realName).trim() !== '' ? realName : rider.uid;
                 
@@ -802,14 +831,14 @@
                             <div class="w-7 h-7 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs shrink-0"><i class="fa-solid fa-user-clock"></i></div>
                             <div class="overflow-hidden">
                                 <p class="font-black text-black text-[11px] leading-tight">${displayName}</p>
+                                <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
+                                    <i class="fa-solid fa-location-dot text-[8px] text-rose-500 shrink-0"></i>
+                                    <p class="text-[9px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
+                                </div>
                                 <div class="flex items-center gap-1.5 mt-1">
                                     <div class="flex items-center gap-1 shrink-0 bg-white px-1.5 py-0.5 rounded text-indigo-600 border border-indigo-100 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
                                         <span class="text-[9px] font-black text-black">${timeAbsenStr}</span>
-                                    </div>
-                                    <div class="flex items-center gap-1 opacity-80 overflow-hidden">
-                                        <i class="fa-solid fa-camera text-[8px] text-indigo-500 shrink-0"></i>
-                                        <p class="text-[9px] font-bold text-black uppercase truncate">${ketFoto}</p>
                                     </div>
                                 </div>
                             </div>
@@ -852,7 +881,37 @@
             let html = '';
             availableMainQueue.forEach((rider, index) => {
                 const isFirst = index === 0;
-                const ketFoto = rider.last_drop_desc || rider.proof_desc || "Siap Menerima Order";
+                
+                let ketLokasi = "Posisi / Standby";
+
+                // 1. Cari proof_desc dari orderan terakhir di active_orders
+                let orderProofDesc = "";
+                const riderOrders = allGlobalOrders.filter(o => o.rider_uid === rider.uid && o.proof_desc);
+                if (riderOrders.length > 0) {
+                    riderOrders.sort((a, b) => {
+                        const timeA = getTimestampMs(a.updated_at) || getTimestampMs(a.finished_at) || getTimestampMs(a.created_at);
+                        const timeB = getTimestampMs(b.updated_at) || getTimestampMs(b.finished_at) || getTimestampMs(b.created_at);
+                        return timeB - timeA;
+                    });
+                    orderProofDesc = riderOrders[0].proof_desc;
+                }
+
+                // 2. Prioritas mutlak: Utamakan proof_desc
+                if (rider.proof_desc && String(rider.proof_desc).trim() !== "") {
+                    ketLokasi = rider.proof_desc;
+                } else if (orderProofDesc && String(orderProofDesc).trim() !== "") {
+                    ketLokasi = orderProofDesc;
+                } else if (rider.location && String(rider.location).trim() !== "") {
+                    ketLokasi = rider.location;
+                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
+                    ketLokasi = rider.last_drop_desc;
+                }
+                
+                // 3. Cegah tulisan "aktif kembali" muncul di UI
+                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
+                    ketLokasi = "Posisi / Standby";
+                }
+                
                 const realName = rider.nama || rider.name || rider.displayName;
                 const displayName = realName && String(realName).trim() !== '' ? realName : rider.uid;
                 
@@ -884,14 +943,16 @@
                             <div class="w-8 h-8 rounded-full ${rankBadgeClass} flex items-center justify-center font-black text-xs shrink-0">${index + 1}</div>
                             <div class="overflow-hidden w-full">
                                 <p class="font-black text-black text-[12px] leading-tight truncate">${displayName} ${statusBadge}</p>
+                                
+                                <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
+                                    <i class="fa-solid fa-location-dot text-[9px] text-rose-500 shrink-0"></i>
+                                    <p class="text-[9px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
+                                </div>
+
                                 <div class="flex items-center gap-2 mt-1">
                                     <div class="flex items-center gap-1 shrink-0 bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 border border-slate-200/50">
                                         <i class="fa-regular fa-clock text-[8px]"></i>
                                         <span class="text-[9px] font-black text-black">${timeOnbidStr}</span>
-                                    </div>
-                                    <div class="flex items-center gap-1 overflow-hidden opacity-70">
-                                        <i class="fa-solid fa-camera text-[8px] text-sky-500 shrink-0"></i>
-                                        <p class="text-[9px] font-bold text-black uppercase truncate">${ketFoto}</p>
                                     </div>
                                 </div>
                             </div>
@@ -960,7 +1021,7 @@
                     const promises = availableNewShift.map((rider, index) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
                         const simulatedTime = new Date(now.getTime() + (index * 1000));
-                        return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "", proof_desc: "" }, { merge: true });
+                        return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
                     });
                     await Promise.all(promises);
                     window.showAlert('Berhasil', 'Rider masuk ke Antrean Radar.', 'success');
@@ -978,7 +1039,7 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     const ref = doc(db, 'status_rider_aktif', uid);
-                    await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "", proof_desc: "" }, { merge: true });
+                    await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
                     window.showAlert('Berhasil', `${name} masuk ke Antrean Radar.`, 'success');
                 } catch (error) {
                     window.showAlert('Gagal', 'Terjadi kesalahan.', 'error');
