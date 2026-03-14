@@ -5958,6 +5958,7 @@
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
       import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
+      import { getStorage, ref, uploadString, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
       const firebaseConfig = {
           apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -5972,6 +5973,7 @@
           const app = initializeApp(firebaseConfig);
           const auth = getAuth(app);
           const db = getFirestore(app);
+          const storage = getStorage(app); // INISIALISASI STORAGE
           
           // PERBAIKAN 1: Lindungi inisialisasi Messaging agar tidak bikin crash seluruh aplikasi
           let messaging = null;
@@ -7027,13 +7029,34 @@ if (window.AndroidInterface) {
                   window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
                   
                   try {
+                      // --- LOGIKA BARU: UPLOAD FOTO KE FIREBASE STORAGE ---
+                      this.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                      let proofImageUrl = finishPhotoBase64; // Default ke base64 jika gagal (sebagai cadangan)
+                      
+                      try {
+                          // Buat nama file unik berdasarkan ID Order dan Waktu
+                          const fileName = `proof_${window.currentActiveOrderId}_${Date.now()}.jpg`;
+                          // Tentukan folder penyimpanan di Firebase Storage
+                          const storageRef = ref(storage, `artifacts/${appId}/public/data/proof_images/${fileName}`);
+                          
+                          // Unggah string Base64 ke Firebase Storage
+                          await uploadString(storageRef, finishPhotoBase64, 'data_url');
+                          
+                          // Dapatkan Link URL Publik (https://...)
+                          proofImageUrl = await getDownloadURL(storageRef);
+                      } catch (uploadErr) {
+                          console.error("Gagal mengunggah ke Storage, fallback ke Base64:", uploadErr);
+                          // Biarkan sistem menggunakan Base64 jika upload ke storage gagal (misal aturan di console belum dibuka)
+                      }
+
                       // 1. Update status order menjadi completed di koleksi Admin
+                      this.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
                       const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
                       await updateDoc(orderRef, {
                           status: 'completed',
                           finished_at: serverTimestamp(),
                           proof_desc: desc,
-                          proof_image: finishPhotoBase64 // PERBAIKAN: Memasukkan data foto ke dalam field database
+                          proof_image: proofImageUrl // SEKARANG MENYIMPAN URL YANG RINGAN
                       });
                       
                       const isToggleOn = document.getElementById('onbid-toggle').checked;
@@ -7044,7 +7067,7 @@ if (window.AndroidInterface) {
                           in_main_queue: isToggleOn,
                           last_drop_time: serverTimestamp(),
                           last_drop_desc: desc,
-                          last_drop_image: finishPhotoBase64, // NEW: Simpan gambar Base64 ke status rider agar langsung muncul di List Antrean
+                          last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
                           last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
                       }, { merge: true });
                       
@@ -7172,26 +7195,27 @@ if (window.AndroidInterface) {
                           }
                       }
 
-                      // LOGIKA FORMAT BASE64 PAMUNGKAS UNTUK WEBVIEW ANDROID
+                      // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
                       if (imageSrc && typeof imageSrc === 'string') {
-                          // 1. Ambil HANYA data base64 murninya (buang header lama jika ada)
-                          let pureBase64 = imageSrc;
-                          if (imageSrc.includes('base64,')) {
-                              pureBase64 = imageSrc.split('base64,')[1];
-                          } else if (imageSrc.startsWith('data:image')) {
-                              // Fallback jika format aneh tapi ada prefix data:image
-                              pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
-                          }
-                          
-                          // 2. BERSIIHKAN TOTAL: Hapus SEMUA karakter selain format standar Base64
-                          // (Ini akan membunuh semua enter, spasi, tab, dan karakter tak terlihat lainnya)
-                          pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
-                          
-                          // 3. Rakit ulang dengan header baru yang 100% pasti dibaca WebView Android
-                          if (pureBase64.length > 0) {
-                              imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                          // Jika gambar sudah berupa URL (https:// atau http://), biarkan apa adanya!
+                          if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
+                              // Biarkan imageSrc utuh, WebView Android 100% bisa membaca URL langsung
                           } else {
-                              imageSrc = null; // Kosongkan jika ternyata string rusak
+                              // LOGIKA FALLBACK UNTUK BASE64 LAMA (Jika masih ada sisa data lama)
+                              let pureBase64 = imageSrc;
+                              if (imageSrc.includes('base64,')) {
+                                  pureBase64 = imageSrc.split('base64,')[1];
+                              } else if (imageSrc.startsWith('data:image')) {
+                                  pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
+                              }
+                              
+                              pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
+                              
+                              if (pureBase64.length > 0) {
+                                  imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                              } else {
+                                  imageSrc = null;
+                              }
                           }
                       }
 
