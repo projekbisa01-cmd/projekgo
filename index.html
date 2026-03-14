@@ -7216,8 +7216,12 @@ if (window.AndroidInterface) {
 
                       // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
                       if (imageSrc && typeof imageSrc === 'string') {
-                          // Jika gambar sudah berupa URL (https:// atau http://), biarkan apa adanya!
-                          if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
+                          imageSrc = imageSrc.trim(); // Bersihkan spasi
+                          
+                          // Cegah string "null" atau "undefined" yang tersimpan sebagai text
+                          if (imageSrc === '' || imageSrc === 'null' || imageSrc === 'undefined') {
+                              imageSrc = null;
+                          } else if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
                               // Biarkan imageSrc utuh, WebView Android 100% bisa membaca URL langsung
                           } else {
                               // LOGIKA FALLBACK UNTUK BASE64 LAMA (Jika masih ada sisa data lama)
@@ -7255,9 +7259,15 @@ if (window.AndroidInterface) {
                       const name = rider.name || 'Rider';
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
                       
-                      // LOGIKA GAMBAR BASE64: Menggunakan displayImage yang sudah di-format WebView
+                      // LOGIKA GAMBAR: Ditambahkan fungsi fallback (onerror) jika link rusak tidak jadi blank putih
                       const photoHtml = rider.displayImage 
-                          ? `<div class="w-full mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-100 aspect-video"><img src="${rider.displayImage}" class="w-full h-full object-cover" alt="Lokasi Rider"></div>` 
+                          ? `<div class="w-full mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-100 aspect-video relative flex flex-col items-center justify-center">
+                               <img src="${rider.displayImage}" class="absolute inset-0 w-full h-full object-cover z-10" alt="Lokasi Rider" onerror="this.onerror=null; this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden'); this.nextElementSibling.classList.add('flex');">
+                               <div class="hidden flex-col items-center justify-center w-full h-full text-gray-400 z-0 bg-gray-50">
+                                   <i class="fa-solid fa-link-slash text-3xl mb-2"></i>
+                                   <span class="text-[10px] font-bold uppercase tracking-wider text-center">Gambar Gagal Dimuat<br><span class="text-[8px] font-normal">(Link Rusak/Dihapus)</span></span>
+                               </div>
+                             </div>` 
                           : `<div class="w-full aspect-video bg-gray-50 rounded-xl mt-3 flex flex-col items-center justify-center border border-dashed border-gray-300"><i class="fa-solid fa-camera text-gray-300 text-3xl mb-2"></i><span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Belum ada foto lokasi</span></div>`;
                       
                       // Desain Card Per Rider (Lebih Lebar dan Bebas Potong)
@@ -7524,19 +7534,49 @@ if (window.AndroidInterface) {
 
                try {
                    const rName = document.getElementById('display-rider-name').innerText || "Rider";
-                   const base64Images = [];
+                   
+                   // --- LOGIKA BARU: MENGGUNAKAN IMGBB UNTUK UPLOAD MENU ---
+                   const imageUrls = []; 
+                   const imgbbApiKey = "a7f38cbe7221b2c0b0788d2fd391953a"; // Menggunakan API Key ImgBB Anda
 
                    for (let i = 0; i < fileInput.files.length; i++) {
                        const file = fileInput.files[i];
+                       
+                       // Update status agar rider tahu prosesnya
+                       statusMsg.innerText = `Mengunggah foto ${i + 1} dari ${fileInput.files.length}...`;
+                       
+                       // 1. Kompres gambar
                        const compressedBase64 = await compressImage(file, 800, 0.7);
-                       base64Images.push(compressedBase64);
+                       const pureBase64 = compressedBase64.split(',')[1];
+                       
+                       // 2. Siapkan data untuk ImgBB
+                       const formData = new FormData();
+                       formData.append('image', pureBase64);
+                       
+                       // 3. Kirim ke ImgBB
+                       const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbApiKey}`, {
+                           method: 'POST',
+                           body: formData
+                       });
+                       
+                       const imgbbResult = await imgbbResponse.json();
+                       
+                       // 4. Simpan URL jika sukses
+                       if (imgbbResult.success) {
+                           imageUrls.push(imgbbResult.data.url);
+                       } else {
+                           throw new Error(imgbbResult.error?.message || "Gagal mengunggah gambar ke server");
+                       }
                    }
 
+                   statusMsg.innerText = "Menyimpan data ke sistem Admin...";
+
+                   // 5. Simpan HANYA Link URL ke Firestore (Sangat ringan!)
                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'menu_uploads'), {
                        rider_uid: currentUserUID,
                        rider_name: rName,
                        resto_name: restoName,
-                       images: base64Images,
+                       images: imageUrls, 
                        status: 'pending',
                        created_at: serverTimestamp()
                    });
