@@ -5958,7 +5958,7 @@
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
       import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
-      import { getStorage, ref, uploadString, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
+      import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
       const firebaseConfig = {
           apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -7029,24 +7029,43 @@ if (window.AndroidInterface) {
                   window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
                   
                   try {
-                      // --- LOGIKA BARU: UPLOAD FOTO KE FIREBASE STORAGE ---
+                      // --- LOGIKA BARU: UPLOAD FOTO KE IMGBB (GRATIS & CEPAT) ---
                       this.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
-                      let proofImageUrl = finishPhotoBase64; // Default ke base64 jika gagal (sebagai cadangan)
+                      let proofImageUrl = ""; 
                       
                       try {
-                          // Buat nama file unik berdasarkan ID Order dan Waktu
-                          const fileName = `proof_${window.currentActiveOrderId}_${Date.now()}.jpg`;
-                          // Tentukan folder penyimpanan di Firebase Storage
-                          const storageRef = ref(storage, `artifacts/${appId}/public/data/proof_images/${fileName}`);
+                          // 1. MASUKKAN API KEY IMGBB ANDA DI SINI
+                          const imgbbApiKey = "a7f38cbe7221b2c0b0788d2fd391953a"; 
                           
-                          // Unggah string Base64 ke Firebase Storage
-                          await uploadString(storageRef, finishPhotoBase64, 'data_url');
+                          // 2. Buang bagian depan (header) dari Base64 agar bisa dibaca ImgBB
+                          const pureBase64 = finishPhotoBase64.split(',')[1];
                           
-                          // Dapatkan Link URL Publik (https://...)
-                          proofImageUrl = await getDownloadURL(storageRef);
+                          // 3. Siapkan paket data untuk dikirim ke ImgBB
+                          const formData = new FormData();
+                          formData.append('image', pureBase64);
+                          
+                          // 4. Kirim ke Server ImgBB
+                          const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbApiKey}`, {
+                              method: 'POST',
+                              body: formData
+                          });
+                          
+                          const imgbbResult = await imgbbResponse.json();
+                          
+                          // 5. Jika sukses, ambil Link URL Publiknya
+                          if (imgbbResult.success) {
+                              proofImageUrl = imgbbResult.data.url; 
+                          } else {
+                              throw new Error("Ditolak oleh server ImgBB");
+                          }
+
                       } catch (uploadErr) {
-                          console.error("Gagal mengunggah ke Storage, fallback ke Base64:", uploadErr);
-                          // Biarkan sistem menggunakan Base64 jika upload ke storage gagal (misal aturan di console belum dibuka)
+                          console.error("Gagal mengunggah ke ImgBB:", uploadErr);
+                          alert("Gagal mengunggah foto! Pastikan koneksi internet stabil.");
+                          this.disabled = false;
+                          this.innerHTML = originalHtml;
+                          window.isFinishingOrder = false;
+                          return; // HENTIKAN PROSES! Jangan lanjutkan jika foto gagal
                       }
 
                       // 1. Update status order menjadi completed di koleksi Admin
