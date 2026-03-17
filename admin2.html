@@ -468,7 +468,8 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        // PENAMBAHAN getDoc DISINI
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -535,6 +536,43 @@
             }
         };
         initAuth();
+
+        // =========================================================================
+        // FUNGSI BARU: MENGIRIM PUSH NOTIFICATION KE GOOGLE APPS SCRIPT
+        // =========================================================================
+        async function sendPushNotification(riderUid, title, body) {
+            try {
+                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
+                const tokenSnap = await getDoc(tokenRef);
+                
+                if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
+                    const fcmToken = tokenSnap.data().fcm_token;
+                    
+                    // MASUKKAN URL GOOGLE APPS SCRIPT ANDA DI BAWAH INI
+                    const GAS_URL = "https://script.google.com/macros/s/AKfycbxJfCYb7a1JUIgpQCAU9bcQhsmHdmCTZfBSzWMvGYh214t6Dd7fQ7yK740V4dPmo9jUCA/exec";
+                    
+                    fetch(GAS_URL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            token: fcmToken,
+                            title: title,
+                            body: body
+                        })
+                    });
+                    console.log("FCM berhasil dikirim ke UID:", riderUid);
+                } else {
+                    console.log("Token FCM tidak ditemukan di database untuk UID:", riderUid);
+                }
+            } catch(err) {
+                console.warn("Gagal mengirim Push Notification:", err);
+            }
+        }
+        // =========================================================================
+
 
         window.switchPage = (page) => {
             const pages = ['dispatch', 'active', 'history', 'contacts'];
@@ -788,7 +826,6 @@
             availableNewShift.forEach((rider) => {
                 let ketLokasi = "Menunggu Verifikasi";
 
-                // 1. Cari proof_desc dari orderan terakhir di active_orders
                 let orderProofDesc = "";
                 const riderOrders = allGlobalOrders.filter(o => o.rider_uid === rider.uid && o.proof_desc);
                 if (riderOrders.length > 0) {
@@ -800,7 +837,6 @@
                     orderProofDesc = riderOrders[0].proof_desc;
                 }
 
-                // 2. Prioritas mutlak: Utamakan proof_desc tanpa peduli timestamp
                 if (rider.proof_desc && String(rider.proof_desc).trim() !== "") {
                     ketLokasi = rider.proof_desc;
                 } else if (orderProofDesc && String(orderProofDesc).trim() !== "") {
@@ -811,7 +847,6 @@
                     ketLokasi = rider.last_drop_desc;
                 }
                 
-                // 3. Cegah tulisan "aktif kembali" muncul di UI
                 if (ketLokasi.toLowerCase().includes("aktif kembali")) {
                     ketLokasi = "Menunggu Verifikasi";
                 }
@@ -884,7 +919,6 @@
                 
                 let ketLokasi = "Posisi / Standby";
 
-                // 1. Cari proof_desc dari orderan terakhir di active_orders
                 let orderProofDesc = "";
                 const riderOrders = allGlobalOrders.filter(o => o.rider_uid === rider.uid && o.proof_desc);
                 if (riderOrders.length > 0) {
@@ -896,7 +930,6 @@
                     orderProofDesc = riderOrders[0].proof_desc;
                 }
 
-                // 2. Prioritas mutlak: Utamakan proof_desc
                 if (rider.proof_desc && String(rider.proof_desc).trim() !== "") {
                     ketLokasi = rider.proof_desc;
                 } else if (orderProofDesc && String(orderProofDesc).trim() !== "") {
@@ -907,7 +940,6 @@
                     ketLokasi = rider.last_drop_desc;
                 }
                 
-                // 3. Cegah tulisan "aktif kembali" muncul di UI
                 if (ketLokasi.toLowerCase().includes("aktif kembali")) {
                     ketLokasi = "Posisi / Standby";
                 }
@@ -1141,6 +1173,9 @@
                 });
 
                 console.log(`Order berhasil dialihkan dari ${order.rider_uid} ke ${nextRider.uid}`);
+                
+                // TEMBAKAN PUSH NOTIFICATION AUTO REASSIGN
+                sendPushNotification(nextRider.uid, "🔥 ORDERAN MASUK 🔥", "Orderan sebelumnya dilewatkan, sekarang giliranmu!");
 
             } catch(e) {
                 if (e !== "Sudah dialihkan oleh admin lain") {
@@ -1262,6 +1297,10 @@
                     });
                     
                     window.showAlert('Berhasil', `Orderan dialihkan ke ${nextRiderName}.`, 'success');
+                    
+                    // TEMBAKAN PUSH NOTIFICATION MANUAL REASSIGN
+                    sendPushNotification(nextRider.uid, "🔥 ORDERAN DIALIHKAN 🔥", "Kamu mendapat lemparan orderan baru!");
+                    
                 } catch(e) {
                     console.error(e);
                     window.showAlert('Gagal', 'Terjadi kesalahan saat mengalihkan order.', 'error');
@@ -2009,8 +2048,8 @@
                     is_nyambi: false,
                     created_at: serverTimestamp(),
                     daily_order_id: dailyOrderId,
-                    missed_by: null, // Inisiasi nilai untuk mencegah error tracking missed order
-                    last_ping: serverTimestamp() // <-- Tambahan: Langsung ping otomatis saat order dibuat
+                    missed_by: null,
+                    last_ping: serverTimestamp() 
                 });
 
                 await setDoc(dailyOrdersRef, {
@@ -2023,6 +2062,11 @@
                     Keterangan: details.replace(/\n/g, ' | '),
                     created_at: serverTimestamp()
                 });
+
+                // =====================================================================
+                // TRIGGER PUSH NOTIFICATION KE RIDER
+                // =====================================================================
+                sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
 
                 document.getElementById('cust-phone').value = '';
                 document.getElementById('cust-name').value = '';
@@ -2043,7 +2087,14 @@
         window.pingOrder = async (id) => {
             try {
                 await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { last_ping: serverTimestamp() });
-                window.showAlert('Up Berhasil', 'HP Rider berbunyi kembali.', 'success');
+                
+                // MENGIRIM PING PUSH NOTIFICATION JUGA JIKA ADMIN TEKAN TOMBOL "UP"
+                const order = allGlobalOrders.find(o => o.id === id);
+                if (order && order.rider_uid) {
+                    sendPushNotification(order.rider_uid, "⚠️ PANGGILAN ADMIN ⚠️", "Segera cek aplikasi! Admin memanggilmu.");
+                }
+                
+                window.showAlert('Up Berhasil', 'Sinyal pemanggilan ulang telah dikirim ke Rider.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
         };
 
