@@ -6150,12 +6150,19 @@
           // NEW: FUNGSI SETUP FCM TOKEN (PUSH NOTIFICATIONS)
           // -------------------------------------------------------------
           window.setupFCMToken = async (uid) => {
-              if (!messaging) return; // Batalkan jika browser tidak mendukung
+              // MATIKAN: Firebase Messaging versi Web dinonaktifkan agar tidak bentrok
+              console.log("Setup FCM Token diserahkan ke Native Android.");
+              
+              // PERINTAH KE ANDROID: Beritahu Android untuk mengambil Token Asli
+              if (window.AndroidInterface && window.AndroidInterface.sendFcmTokenToDatabase) {
+                  window.AndroidInterface.sendFcmTokenToDatabase(String(uid).trim().toUpperCase());
+              }
+              
+              /* Kode Asli Web FCM Dinonaktifkan:
+              if (!messaging) return; 
               try {
-                  // Dapatkan token notifikasi unik dari device ini
                   const currentToken = await getToken(messaging);
                   if (currentToken) {
-                      // Pastikan menyimpannya tepat di folder Canvas (artifacts/...)
                       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
                       await setDoc(docRef, {
                           fcm_token: currentToken,
@@ -6165,6 +6172,26 @@
                   }
               } catch (e) {
                   console.warn("Gagal setup FCM Token:", e);
+              }
+              */
+          };
+
+          // FUNGSI JEMBATAN PENERIMA: Dipanggil oleh Android setelah berhasil mendapatkan Token
+          window.saveTokenToFirebase = async function(token, uid) {
+              console.log("Menerima Token FCM dari Android Native:", token);
+              try {
+                  // Menggunakan format Firebase Modular (v9+) sesuai setup aplikasi Anda
+                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
+                  
+                  await setDoc(docRef, { 
+                      fcm_token: token,
+                      last_token_update: serverTimestamp(),
+                      source: "android_native" // Menandai bahwa ini token asli HP
+                  }, { merge: true });
+                  
+                  console.log("FCM Token Native berhasil disimpan ke Database!");
+              } catch (e) {
+                  console.error("Gagal menyimpan FCM token ke Database:", e);
               }
           };
 
