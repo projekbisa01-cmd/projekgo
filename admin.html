@@ -587,6 +587,72 @@
                     </div>
                 </div>
 
+                <!-- NEW: MANAJEMEN CICILAN ATRIBUT (FIREBASE) -->
+                <div class="mt-8 border-t border-gray-200 pt-6">
+                    <div class="flex items-center space-x-3 mb-4 px-1">
+                        <div class="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center shadow-sm">
+                            <i class="fa-solid fa-file-invoice-dollar text-lg"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-sm">Manajemen Cicilan Atribut</h3>
+                            <p class="text-[10px] text-gray-500">Database Firebase Real-time</p>
+                        </div>
+                    </div>
+
+                    <!-- Form Tambah/Edit Cicilan -->
+                    <div class="bg-white p-5 rounded-3xl card-shadow border border-gray-100 mb-6">
+                        <h4 class="font-bold text-gray-700 text-xs mb-3 border-l-4 border-orange-500 pl-2">Tambah / Edit Cicilan</h4>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Pilih Rider</label>
+                                <div class="relative">
+                                    <select id="inst-rider-select" class="w-full bg-gray-50 border border-gray-200 text-gray-800 text-xs font-bold rounded-xl focus:ring-orange-500 focus:border-orange-500 block p-3 appearance-none">
+                                        <option value="">-- Memuat daftar rider... --</option>
+                                    </select>
+                                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                                        <i class="fa-solid fa-chevron-down text-xs"></i>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Total Hutang Awal</label>
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">Rp</span>
+                                        <input type="number" id="inst-total" placeholder="0" class="w-full bg-gray-50 border border-gray-200 text-gray-800 text-xs font-bold rounded-xl focus:ring-orange-500 focus:border-orange-500 block p-3 pl-8">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Potong /Minggu</label>
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">Rp</span>
+                                        <input type="number" id="inst-weekly" placeholder="0" class="w-full bg-gray-50 border border-gray-200 text-gray-800 text-xs font-bold rounded-xl focus:ring-orange-500 focus:border-orange-500 block p-3 pl-8">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Tgl Mulai Pemotongan</label>
+                                <input type="date" id="inst-start" class="w-full bg-gray-50 border border-gray-200 text-gray-800 text-xs font-bold rounded-xl focus:ring-orange-500 focus:border-orange-500 block p-3">
+                            </div>
+
+                            <button onclick="window.saveInstallment()" id="btn-save-inst" class="w-full py-3 mt-2 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl shadow-lg shadow-orange-200 transition-all active:scale-95 flex items-center justify-center text-xs">
+                                <i class="fa-solid fa-save mr-2"></i> Simpan Data Cicilan
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- List Cicilan -->
+                    <h4 class="font-bold text-gray-700 text-xs mb-3 px-1">Daftar Tagihan Aktif</h4>
+                    <div id="installment-list-container" class="space-y-3 min-h-[150px]">
+                        <div class="text-center py-10 text-gray-400">
+                            <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
+                            <p class="text-xs">Memuat database...</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- NEW: PERINGATAN DOKUMEN KADALUARSA -->
                 <div class="mt-8 border-t border-gray-200 pt-6">
                     <div class="flex justify-between items-center mb-4 px-1">
@@ -977,7 +1043,7 @@
         // --- POPULATE RIDER DROPDOWN FOR SUSPENSION ---
         function populateSuspendRiderSelect() {
             const select = document.getElementById('suspend-rider-select');
-            if(!select) return;
+            const selectInst = document.getElementById('inst-rider-select');
             
             const masterMap = {};
             window.allData.forEach(row => {
@@ -991,11 +1057,59 @@
             // Urutkan alfabet
             const sortedRiders = Object.entries(masterMap).sort((a,b) => a[1].localeCompare(b[1]));
             
-            select.innerHTML = '<option value="">-- Pilih Rider --</option>';
+            if(select) select.innerHTML = '<option value="">-- Pilih Rider --</option>';
+            if(selectInst) selectInst.innerHTML = '<option value="">-- Pilih Rider --</option>';
+            
             sortedRiders.forEach(([uid, name]) => {
-                select.innerHTML += `<option value="${uid}">${name} (${uid.substring(0,4)}...)</option>`;
+                const opt = `<option value="${uid}">${name} (${uid.substring(0,4)}...)</option>`;
+                if(select) select.innerHTML += opt;
+                if(selectInst) selectInst.innerHTML += opt;
             });
         }
+
+        // --- CORE INSTALLMENT LOGIC (ADAPTED FROM RIDER APP) ---
+        window.getInstallmentInfo = function(config, referenceDate) {
+            if (!referenceDate) referenceDate = new Date();
+            if (!config || !config.total_remaining) return null;
+            
+            // Konversi start_date ke Object Date
+            const startDate = config.start_date ? new Date(config.start_date) : new Date();
+            
+            // Normalisasi waktu ke tengah malam agar akurat
+            const refDateMidnight = new Date(referenceDate);
+            refDateMidnight.setHours(0,0,0,0);
+            const startDateMidnight = new Date(startDate);
+            startDateMidnight.setHours(0,0,0,0);
+
+            // Jika tanggal saat ini belum mencapai tanggal mulai cicilan
+            if (refDateMidnight < startDateMidnight) {
+                return { weekly: 0, remaining: config.total_remaining, is_paid_off: false, not_started: true, diffWeeks: 0 };
+            }
+            
+            // Hitung selisih minggu (1 minggu = 7 hari = 604800000 ms)
+            const diffTime = Math.max(0, refDateMidnight - startDateMidnight);
+            const diffWeeks = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7)) + 1;
+            
+            // Hitung sisa hutang saat ini
+            let currentRemaining = config.total_remaining - (config.weekly * diffWeeks);
+            
+            // Jika sudah lunas
+            if (currentRemaining <= 0) return { weekly: 0, remaining: 0, is_paid_off: true, diffWeeks: diffWeeks };
+            
+            // Penyesuaian jika sisa hutang lebih kecil dari potongan mingguan
+            let actualWeekly = config.weekly;
+            let prevRemaining = config.total_remaining - (config.weekly * (diffWeeks - 1));
+            if (prevRemaining < config.weekly) {
+                actualWeekly = prevRemaining; // Bayar sisa akhirnya saja
+            }
+
+            return { 
+                weekly: actualWeekly, 
+                remaining: currentRemaining, 
+                is_paid_off: false,
+                diffWeeks: diffWeeks 
+            };
+        };
 
         // --- POPULATE RIDER DROPDOWN FOR PROFILE ---
         window.populateProfileSelect = function() {
@@ -2406,6 +2520,7 @@
                 populateSuspendRiderSelect(); // Populate dropdown saat data siap
                 window.populateProfileSelect(); // Populate form profil
                 loadExpiredDocs(); // NEW: Load data dokumen saat refresh data utama
+                // loadDebtList(); <-- REMOVED: Sekarang menggunakan Firebase listener
             } catch (error) {
                 console.error("Error fetch data:", error);
             } finally {
@@ -2632,7 +2747,95 @@
             initAuth();
 
             function setupFirebaseListeners() {
-                // 0. KONTROL RIDER (SUSPENSION) LISTENER
+                // 0.1 INSTALLMENTS (CICILAN) LISTENER
+                const installmentsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_installments');
+                onSnapshot(installmentsCol, (snapshot) => {
+                    const container = document.getElementById('installment-list-container');
+                    if (!container) return;
+
+                    if (snapshot.empty) {
+                        container.innerHTML = `
+                            <div class="bg-green-50 border border-green-200 rounded-2xl p-6 text-center shadow-sm">
+                                <i class="fa-solid fa-check-circle text-green-500 text-3xl mb-2"></i>
+                                <p class="text-xs text-green-700 font-bold">Tidak ada tagihan cicilan aktif.</p>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    let html = '';
+                    const items = [];
+                    snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+
+                    // Sort: Sisa hutang terbesar di atas
+                    items.sort((a, b) => b.total_remaining - a.total_remaining).forEach(item => {
+                        // Kalkulasi Hutang Aktual saat ini
+                        const calc = window.getInstallmentInfo(item);
+                        if(!calc) return;
+                        
+                        // Abaikan / render berbeda jika sudah lunas
+                        if (calc.is_paid_off) {
+                            html += `
+                                <div class="bg-gray-50 p-4 rounded-2xl border border-gray-200 flex items-center justify-between opacity-70">
+                                    <div>
+                                        <h4 class="text-sm font-bold text-gray-500 line-through">${item.nama || 'Tanpa Nama'}</h4>
+                                        <p class="text-[10px] text-green-600 font-bold mt-0.5"><i class="fa-solid fa-check mr-1"></i>Lunas</p>
+                                    </div>
+                                    <button onclick="window.deleteInstallment('${item.uid}')" class="text-gray-400 hover:text-red-500 text-xs px-2"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            `;
+                            return;
+                        }
+
+                        const sisaFormatted = "Rp " + calc.remaining.toLocaleString('id-ID');
+                        const awalFormatted = "Rp " + Number(item.total_remaining).toLocaleString('id-ID');
+                        const potongFormatted = "Rp " + Number(item.weekly).toLocaleString('id-ID');
+                        
+                        const isNotStarted = calc.not_started;
+                        const statusBadge = isNotStarted 
+                            ? `<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[9px] font-bold">Belum Mulai</span>`
+                            : `<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[9px] font-bold">Minggu ke-${calc.diffWeeks}</span>`;
+
+                        // WA Penagihan
+                        const waMsg = `Halo ${item.nama}, menginformasikan sisa tagihan atribut/jaket Anda saat ini adalah *${sisaFormatted}* (Potongan ${potongFormatted}/minggu). Mohon pastikan saldo mencukupi. Terima kasih.`;
+
+                        html += `
+                            <div class="bg-white p-4 rounded-2xl border border-orange-200 shadow-sm hover:shadow-md transition-shadow relative group">
+                                <button onclick="window.deleteInstallment('${item.uid}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500 text-xs w-6 h-6 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-100"><i class="fa-solid fa-trash"></i></button>
+                                
+                                <div class="flex items-center space-x-3 mb-2">
+                                    <div class="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center shrink-0 border border-orange-100">
+                                        <i class="fa-solid fa-user-tag text-sm"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="text-sm font-bold text-gray-800">${item.nama || 'Tanpa Nama'}</h4>
+                                        <div class="flex items-center space-x-2 mt-0.5">
+                                            ${statusBadge}
+                                            <span class="text-[9px] text-gray-400">ID: ${item.uid}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-gray-50">
+                                    <div>
+                                        <p class="text-[9px] text-gray-400 font-bold uppercase">Sisa Hutang Real-time</p>
+                                        <p class="text-sm font-black text-red-600">${sisaFormatted}</p>
+                                        <p class="text-[8px] text-gray-400">Dari: ${awalFormatted}</p>
+                                    </div>
+                                    <div class="text-right flex flex-col items-end justify-between">
+                                        <p class="text-[9px] text-gray-500 font-bold bg-gray-50 px-2 py-1 rounded">Potong: ${potongFormatted}</p>
+                                        <a href="https://wa.me/?text=${encodeURIComponent(waMsg)}" target="_blank" class="bg-green-50 hover:bg-green-100 text-green-600 px-2 py-1 mt-1 rounded text-[9px] font-bold transition-colors border border-green-200 flex items-center">
+                                            <i class="fa-brands fa-whatsapp mr-1"></i> Tagih
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                });
+
+                // 0.2 KONTROL RIDER (SUSPENSION) LISTENER
                 const suspendCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'suspended_riders');
                 onSnapshot(suspendCol, (snapshot) => {
                     const container = document.getElementById('suspended-list-container');
@@ -2933,6 +3136,65 @@
                     container.innerHTML = html;
                 });
             }
+
+            // --- SAVE INSTALLMENT FUNCTION ---
+            window.saveInstallment = async () => {
+                const select = document.getElementById('inst-rider-select');
+                const btn = document.getElementById('btn-save-inst');
+                const rawUid = select.value;
+                const total = parseInt(document.getElementById('inst-total').value);
+                const weekly = parseInt(document.getElementById('inst-weekly').value);
+                const startDateStr = document.getElementById('inst-start').value;
+
+                if (!rawUid || !total || !weekly || !startDateStr) {
+                    window.customAlert("Semua kolom (Rider, Total, Potongan, Tanggal) wajib diisi!", "Gagal", "error");
+                    return;
+                }
+
+                const uid = String(rawUid).trim().toUpperCase();
+                const namaRider = select.options[select.selectedIndex].text.split(' (')[0];
+
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Proses...';
+
+                try {
+                    await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_installments', uid), {
+                        uid: uid,
+                        nama: namaRider,
+                        total_remaining: total,
+                        weekly: weekly,
+                        start_date: startDateStr, // Disimpan sebagai "YYYY-MM-DD"
+                        updated_at: serverTimestamp()
+                    });
+
+                    // Reset form
+                    select.value = "";
+                    document.getElementById('inst-total').value = "";
+                    document.getElementById('inst-weekly').value = "";
+                    document.getElementById('inst-start').value = "";
+
+                    window.customAlert(`Cicilan untuk ${namaRider} berhasil disimpan.`, "Berhasil", "success");
+                } catch (error) {
+                    console.error("Gagal save cicilan:", error);
+                    window.customAlert("Terjadi kesalahan sistem saat menyimpan data cicilan.", "Error", "error");
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-save mr-2"></i> Simpan Data Cicilan';
+                }
+            };
+
+            // --- DELETE INSTALLMENT FUNCTION ---
+            window.deleteInstallment = (uid) => {
+                window.customConfirm(`Hapus riwayat cicilan untuk rider ini? (Biasanya dihapus otomatis jika sudah lunas)`, async () => {
+                    try {
+                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_installments', String(uid).trim().toUpperCase()));
+                        window.customAlert(`Data cicilan berhasil dihapus.`, "Berhasil", "success");
+                    } catch(error) {
+                        console.error("Gagal delete cicilan:", error);
+                        window.customAlert("Gagal menghapus data cicilan.", "Error", "error");
+                    }
+                });
+            };
 
             // SUSPEND FUNCTION
             window.suspendRider = () => {
