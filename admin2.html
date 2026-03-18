@@ -685,6 +685,9 @@
             });
         }
 
+        // Variabel untuk melacak waktu auto-ping agar tidak spamming setiap detik
+        window.autoPingTracker = {};
+
         function startLiveTimers() {
             setInterval(() => {
                 const now = Date.now();
@@ -710,6 +713,30 @@
                                 if (cardEl && cardEl.classList.contains('ring-rose-500')) {
                                     cardEl.classList.remove('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
                                     cardEl.classList.add('border-slate-200', 'shadow-sm');
+                                }
+                            }
+
+                            // ==========================================================
+                            // LOGIKA PING AGRESIF (JIKA > 60 DETIK TIDAK DIRESPON)
+                            // ==========================================================
+                            if (elapsed >= 60) {
+                                const lastAutoPing = window.autoPingTracker[order.id] || 0;
+                                
+                                // Tembakkan Ping secara otomatis setiap 15 detik
+                                if (now - lastAutoPing >= 15000) {
+                                    window.autoPingTracker[order.id] = now;
+                                    console.log(`[Auto-Ping] Mengirim ping agresif ke ${order.rider_uid} untuk order ${order.id}`);
+                                    
+                                    // 1. Update status last_ping di Firestore secara diam-diam (tanpa memunculkan alert di layar admin)
+                                    const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
+                                    updateDoc(orderRef, { last_ping: serverTimestamp() }).catch(e => console.error("Gagal auto-ping DB:", e));
+
+                                    // 2. Tembakkan Push Notification ke HP Rider
+                                    sendPushNotification(
+                                        order.rider_uid, 
+                                        "🚨 WAKE UP! ORDERAN MASUK 🚨", 
+                                        "Buka aplikasi sekarang! Waktu konfirmasi sudah lebih dari 1 menit!"
+                                    );
                                 }
                             }
                         }
