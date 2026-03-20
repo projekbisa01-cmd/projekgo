@@ -134,7 +134,7 @@
                 </div>
             </div>
             
-            <!-- KARTU TUJUAN ORDER (TELAH DIPERBARUI) -->
+            <!-- KARTU TUJUAN ORDER -->
             <div id="selected-rider-display" class="hidden mt-3 p-4 bg-blue-600 text-white rounded-[1.5rem] shadow-[0_4px_25px_rgba(37,99,235,0.4)] flex items-center justify-between border-2 border-blue-400 animate-in fade-in duration-300">
                 <div class="flex items-center gap-3 overflow-hidden w-full pr-2">
                     <div class="w-11 h-11 rounded-full bg-blue-500 flex items-center justify-center shrink-0 shadow-inner border border-blue-400">
@@ -142,7 +142,6 @@
                     </div>
                     <div class="flex flex-col w-full overflow-hidden">
                         <p class="text-[10px] font-bold text-blue-200 uppercase tracking-widest mb-0.5">Tujuan Orderan:</p>
-                        <!-- NAMA RIDER DIPERBESAR 3x (text-3xl) & DIBERI ANIMASI BERDETAK -->
                         <div class="overflow-hidden">
                             <p id="display-name-text" class="text-3xl font-black text-white truncate animate-berdetak leading-tight"></p>
                         </div>
@@ -452,7 +451,6 @@
             <p id="custom-modal-text" class="text-[10px] text-black mb-4 leading-relaxed">Pesan</p>
             <input type="text" id="custom-modal-input" class="hidden w-full bg-slate-50 border border-gray-200 rounded-xl p-3 mb-4 text-center text-lg font-black text-black focus:outline-none focus:ring-2 focus:ring-sky-500">
             
-            <!-- TAMBAHAN UNTUK DROPDOWN ALIH RIDER -->
             <div id="custom-modal-select-wrapper" class="hidden w-full relative mb-4 text-left">
                 <select id="custom-modal-select" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none"></select>
                 <i class="fa-solid fa-caret-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
@@ -521,7 +519,6 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        // PENAMBAHAN getDoc DISINI
         import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
@@ -552,7 +549,7 @@
         let allDailyOrders = []; 
         let allRiders = []; 
         let allRiderContacts = [];
-        let allRiderBalances = []; // State tambahan untuk saldo
+        let allRiderBalances = []; 
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
@@ -563,7 +560,7 @@
                 startGlobalOrdersListener();
                 startDailyOrdersListeners(); 
                 startRiderContactsListener();
-                startRiderBalancesListener(); // Memulai listener saldo
+                startRiderBalancesListener(); 
                 startLiveTimers(); 
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
@@ -592,9 +589,6 @@
         };
         initAuth();
 
-        // =========================================================================
-        // FUNGSI BARU: MENGIRIM PUSH NOTIFICATION KE GOOGLE APPS SCRIPT
-        // =========================================================================
         async function sendPushNotification(riderUid, title, body) {
             try {
                 const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
@@ -603,7 +597,6 @@
                 if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
                     const fcmToken = tokenSnap.data().fcm_token;
                     
-                    // MASUKKAN URL GOOGLE APPS SCRIPT ANDA DI BAWAH INI
                     const GAS_URL = "https://script.google.com/macros/s/AKfycbxJfCYb7a1JUIgpQCAU9bcQhsmHdmCTZfBSzWMvGYh214t6Dd7fQ7yK740V4dPmo9jUCA/exec";
                     
                     fetch(GAS_URL, {
@@ -618,16 +611,11 @@
                             body: body
                         })
                     });
-                    console.log("FCM berhasil dikirim ke UID:", riderUid);
-                } else {
-                    console.log("Token FCM tidak ditemukan di database untuk UID:", riderUid);
                 }
             } catch(err) {
                 console.warn("Gagal mengirim Push Notification:", err);
             }
         }
-        // =========================================================================
-
 
         window.switchPage = (page) => {
             const pages = ['dispatch', 'active', 'history', 'contacts', 'saldo'];
@@ -696,10 +684,7 @@
                     try {
                         const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.id);
                         await deleteDoc(ref);
-                        console.log(`[Auto-Cleanup] Berhasil menghapus histori lama: ${order.id}`);
-                    } catch (e) {
-                        console.error("[Auto-Cleanup] Gagal menghapus histori lama:", e);
-                    }
+                    } catch (e) {}
                 }
             });
 
@@ -710,7 +695,6 @@
                         try {
                             const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                             await deleteDoc(ref);
-                            console.log(`[Auto-Cleanup] Berhasil menghapus antrean usang: ${order.id}`);
                         } catch(e) {}
                     }
                 }
@@ -729,7 +713,6 @@
                 if ((!isOnline || !isAvailable) && inMainQueue) {
                     let lastUpdateMs = getTimestampMs(data.last_updated);
                     if (lastUpdateMs > 0 && (now - lastUpdateMs > oneHour)) {
-                        console.log(`[Sistem] Mengeluarkan ${data.uid} dari antrean utama karena > 1 Jam off.`);
                         const ref = doc(db, 'status_rider_aktif', data.uid);
                         updateDoc(ref, { 
                             in_main_queue: false,
@@ -740,7 +723,6 @@
             });
         }
 
-        // Variabel untuk melacak waktu auto-ping agar tidak spamming setiap detik
         window.autoPingTracker = {};
 
         function startLiveTimers() {
@@ -771,22 +753,15 @@
                                 }
                             }
 
-                            // ==========================================================
-                            // LOGIKA PING AGRESIF (JIKA > 60 DETIK TIDAK DIRESPON)
-                            // ==========================================================
                             if (elapsed >= 60) {
                                 const lastAutoPing = window.autoPingTracker[order.id] || 0;
                                 
-                                // Tembakkan Ping secara otomatis setiap 15 detik
                                 if (now - lastAutoPing >= 15000) {
                                     window.autoPingTracker[order.id] = now;
-                                    console.log(`[Auto-Ping] Mengirim ping agresif ke ${order.rider_uid} untuk order ${order.id}`);
                                     
-                                    // 1. Update status last_ping di Firestore secara diam-diam (tanpa memunculkan alert di layar admin)
                                     const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                                     updateDoc(orderRef, { last_ping: serverTimestamp() }).catch(e => console.error("Gagal auto-ping DB:", e));
 
-                                    // 2. Tembakkan Push Notification ke HP Rider
                                     sendPushNotification(
                                         order.rider_uid, 
                                         "🚨 WAKE UP! ORDERAN MASUK 🚨", 
@@ -821,11 +796,9 @@
                         const wasActive = window.riderStates[uid];
                         
                         if (wasActive === false && isNowActive === true && inMainQueue) {
-                            console.log(`[Sistem] ${uid} kembali aktif, melempar ke posisi paling bawah antrean.`);
                             const ref = doc(db, 'status_rider_aktif', uid);
                             updateDoc(ref, {
                                 last_drop_time: serverTimestamp()
-                                // last_drop_desc tidak ditimpa agar keterangan lokasi dari rider tetap tampil
                             }).catch(e => console.error(e));
                         }
                         
@@ -1233,14 +1206,12 @@
                         transaction.delete(oldDailyRef);
                     }
 
-                    // REFUND POTONGAN ADMIN 16% KE RIDER LAMA
                     if (currentData.rider_uid && currentData.fee) {
                         const refundAmount = currentData.fee * 0.16;
                         const oldBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', currentData.rider_uid);
                         transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
                     }
                     
-                    // POTONG ADMIN 16% DARI RIDER BARU
                     if (currentData.fee) {
                         const cutAmount = currentData.fee * 0.16;
                         const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
@@ -1267,10 +1238,7 @@
                         missed_by: null
                     });
                 });
-
-                console.log(`Order berhasil dialihkan dari ${order.rider_uid} ke ${nextRider.uid}`);
                 
-                // TEMBAKAN PUSH NOTIFICATION AUTO REASSIGN
                 sendPushNotification(nextRider.uid, "🔥 ORDERAN MASUK 🔥", "Orderan sebelumnya dilewatkan, sekarang giliranmu!");
 
             } catch(e) {
@@ -1371,14 +1339,12 @@
                             transaction.delete(oldDailyRef);
                         }
 
-                        // REFUND POTONGAN ADMIN 16% KE RIDER LAMA
                         if (currentData.rider_uid && currentData.fee) {
                             const refundAmount = currentData.fee * 0.16;
                             const oldBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', currentData.rider_uid);
                             transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
                         }
                         
-                        // POTONG ADMIN 16% DARI RIDER BARU
                         if (currentData.fee) {
                             const cutAmount = currentData.fee * 0.16;
                             const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
@@ -1408,7 +1374,6 @@
                     
                     window.showAlert('Berhasil', `Orderan dialihkan ke ${nextRiderName}.`, 'success');
                     
-                    // TEMBAKAN PUSH NOTIFICATION MANUAL REASSIGN
                     sendPushNotification(nextRider.uid, "🔥 ORDERAN DIALIHKAN 🔥", "Kamu mendapat lemparan orderan baru!");
                     
                 } catch(e) {
@@ -2195,9 +2160,6 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
-                // =====================================================================
-                // TRIGGER PUSH NOTIFICATION KE RIDER
-                // =====================================================================
                 sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
 
                 document.getElementById('cust-phone').value = '';
@@ -2220,7 +2182,6 @@
             try {
                 await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { last_ping: serverTimestamp() });
                 
-                // MENGIRIM PING PUSH NOTIFICATION JUGA JIKA ADMIN TEKAN TOMBOL "UP"
                 const order = allGlobalOrders.find(o => o.id === id);
                 if (order && order.rider_uid) {
                     sendPushNotification(order.rider_uid, "⚠️ PANGGILAN ADMIN ⚠️", "Segera cek aplikasi! Admin memanggilmu.");
@@ -2230,14 +2191,24 @@
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
         };
 
+        // =========================================================================
+        // BATALKAN ORDER (REFUND 16% SALDO)
+        // =========================================================================
         window.deleteOrder = (id) => {
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;
 
-            window.showConfirm('Batalkan Order?', 'Yakin ingin membatalkan orderan ini dari antrean?', async () => {
+            window.showConfirm('Batalkan Order?', 'Yakin ingin membatalkan orderan ini dari antrean? (Saldo yang terpotong akan dikembalikan)', async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
+                    // REFUND POTONGAN ADMIN 16% KARENA DIBATALKAN (Dijalankan Lebih Awal agar aman)
+                    if (order.rider_uid && order.fee) {
+                        const refundAmount = order.fee * 0.16;
+                        const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
+                        await setDoc(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
+                    }
+
                     await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     
                     if (order && order.rider_uid && order.daily_order_id) {
@@ -2254,18 +2225,10 @@
                             proof_desc: ""
                         }, { merge: true });
                         
-                        // REFUND POTONGAN ADMIN 16% KARENA DIBATALKAN
-                        if (order.fee) {
-                            const refundAmount = order.fee * 0.16;
-                            const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
-                            await setDoc(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
-                        }
-
-                        // --- PENAMBAHAN: NOTIFIKASI SAAT ORDER DIBATALKAN ADMIN ---
                         sendPushNotification(order.rider_uid, "❌ ORDERAN DIBATALKAN ❌", "Orderan barusan telah dibatalkan admin. Kamu dikembalikan ke antrean prioritas atas! (Saldo dikembalikan)");
                     }
                     
-                    window.showAlert('Berhasil', 'Orderan dibatalkan. Rider kembali ke antrean teratas dan potongan admin di-refund.', 'success');
+                    window.showAlert('Berhasil', 'Orderan dibatalkan. Rider kembali ke antrean teratas dan potongan 16% berhasil di-refund.', 'success');
                 } catch(e) { 
                     window.showAlert('Gagal', 'Terjadi kesalahan saat membatalkan.', 'error'); 
                 } finally {
@@ -2562,15 +2525,27 @@
             }
         };
 
+        // =========================================================================
+        // HAPUS HISTORI ORDER (REFUND 16% SALDO)
+        // =========================================================================
         window.deleteHistoryOrder = (id, riderUid, isDaily) => {
-            window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus orderan ini secara permanen dari histori?', async () => {
+            window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus orderan ini secara permanen dari histori? (Saldo potongan 16% akan dikembalikan ke Rider)', async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
+                    let feeToRefund = 0;
+                    
                     if (isDaily) {
+                        const order = allDailyOrders.find(o => o.id === id);
+                        if (order) {
+                            feeToRefund = (parseFloat(order.Nominal_Kotor) || 0) * 1000;
+                        }
                         await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
                     } else {
                         const order = allGlobalOrders.find(o => o.id === id);
+                        if (order) {
+                            feeToRefund = order.fee || 0;
+                        }
                         await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                         
                         if (order && order.rider_uid && order.daily_order_id) {
@@ -2578,7 +2553,14 @@
                         }
                     }
 
-                    window.showAlert('Dihapus', 'Riwayat orderan berhasil dihapus.', 'success');
+                    // REFUND SALDO
+                    if (feeToRefund > 0 && riderUid) {
+                        const refundAmount = feeToRefund * 0.16;
+                        const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
+                        await setDoc(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
+                    }
+
+                    window.showAlert('Dihapus', 'Riwayat orderan berhasil dihapus dan saldo telah dikembalikan.', 'success');
                 } catch(e) { 
                     window.showAlert('Gagal', 'Terjadi kesalahan saat menghapus.', 'error'); 
                 } finally {
@@ -2651,10 +2633,6 @@
             const installBtn = document.getElementById('btn-install-pwa');
             if(installBtn) installBtn.style.display = 'flex';
         });
-
-        // ============================================================================
-        // FUNGSI KHUSUS UNTUK KELOLA SALDO RIDER (TAMBAHAN BARU)
-        // ============================================================================
         
         function startRiderBalancesListener() {
             const balCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
@@ -2777,7 +2755,7 @@
                 } else if (actionType === 'sub') {
                     updateData.saldo = increment(-amount);
                 } else if (actionType === 'set') {
-                    updateData.saldo = amount; // Set ulang nilai absolute
+                    updateData.saldo = amount; 
                 }
 
                 await setDoc(balRef, updateData, { merge: true });
