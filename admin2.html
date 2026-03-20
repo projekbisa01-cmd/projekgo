@@ -2655,44 +2655,98 @@
             // Render opsi Dropdown
             const currentSel = select.value;
             let optHtml = '<option value="">-- Pilih Rider --</option>';
-            const sortedRiders = [...allRiders].sort((a,b) => (a.nama||a.uid).localeCompare(b.nama||b.uid));
-            sortedRiders.forEach(r => {
+            const alphaSortedRiders = [...allRiders].sort((a,b) => (a.nama||a.uid).localeCompare(b.nama||b.uid));
+            alphaSortedRiders.forEach(r => {
                 const rName = r.nama || r.name || r.uid;
                 optHtml += `<option value="${r.uid}">${getRiderCode(r.uid)} - ${rName}</option>`;
             });
             select.innerHTML = optHtml;
             if(currentSel) select.value = currentSel;
 
-            // Render List Kartu Saldo
+            // --- LOGIKA PRIORITAS URUTAN SALDO (Minus -> Limit -> Aman) ---
+            let ridersWithBalances = allRiders.map(rider => {
+                const balData = allRiderBalances.find(b => b.uid === rider.uid);
+                const currentSaldo = balData ? (balData.saldo || 0) : 0;
+                
+                // Set prioritas urutan: 0 = Minus (Paling Atas), 1 = Limit, 2 = Aman
+                let priority = 2;
+                if (currentSaldo < 0) priority = 0;
+                else if (currentSaldo < 10000) priority = 1;
+
+                return { ...rider, currentSaldo, priority };
+            });
+
+            // Urutkan berdasarkan prioritas, lalu abjad
+            ridersWithBalances.sort((a, b) => {
+                if (a.priority !== b.priority) {
+                    return a.priority - b.priority;
+                }
+                const nameA = (a.nama || a.name || a.uid).toLowerCase();
+                const nameB = (b.nama || b.name || b.uid).toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+
             let html = '';
             
-            if (sortedRiders.length === 0) {
+            if (ridersWithBalances.length === 0) {
                 container.innerHTML = `<div class="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-gray-200 mt-2"><p class="text-[10px] text-black font-bold">Belum ada data rider.</p></div>`;
                 return;
             }
 
-            sortedRiders.forEach(rider => {
+            ridersWithBalances.forEach(rider => {
                 const rName = rider.nama || rider.name || rider.uid;
                 if (searchQuery && !rName.toLowerCase().includes(searchQuery) && !rider.uid.toLowerCase().includes(searchQuery)) return;
 
-                const balData = allRiderBalances.find(b => b.uid === rider.uid);
-                const currentSaldo = balData ? (balData.saldo || 0) : 0;
+                const currentSaldo = rider.currentSaldo;
                 
                 let colorClass = 'text-slate-600';
                 let bgClass = 'bg-slate-50 border-slate-100';
                 let warningBadge = '';
+                let waButtonHtml = '';
 
-                // LOGIKA TAMPILAN SALDO MINUS DAN LIMIT
+                // Dapatkan Nomor WA Rider dari Database Kontak
+                let riderPhone = '';
+                const contact = allRiderContacts.find(c => c.uid === rider.uid);
+                if (contact && contact.phone) {
+                    let p = String(contact.phone).replace(/[^0-9]/g, '');
+                    if (p.startsWith('0')) p = '62' + p.slice(1);
+                    else if (!p.startsWith('62')) p = '62' + p;
+                    riderPhone = p;
+                }
+
+                // LOGIKA TAMPILAN SALDO MINUS DAN LIMIT & TOMBOL WA
                 if (currentSaldo < 0) {
                     // KONDISI 1: SALDO MINUS (NGUTANG) -> Merah Gelap Menyala
                     colorClass = 'text-red-700';
                     bgClass = 'bg-red-100 border-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]';
                     warningBadge = '<span class="bg-red-600 text-white text-[9px] px-2 py-0.5 rounded animate-pulse absolute -top-2.5 -right-2 shadow-md border border-red-200 z-10 font-black"><i class="fa-solid fa-triangle-exclamation"></i> MINUS</span>';
+                    
+                    if (riderPhone) {
+                        const msg = encodeURIComponent(`Halo ${rName}, Peringatan dari Admin PROJEKGO. Saldo kamu saat ini MINUS (- Rp ${Math.abs(currentSaldo).toLocaleString('id-ID')}). Mohon segera lakukan Top Up agar kamu bisa menerima orderan kembali. Terima kasih.`);
+                        waButtonHtml = `
+                            <a href="https://wa.me/${riderPhone}?text=${msg}" target="_blank" class="mt-2.5 w-full py-2 bg-red-600 hover:bg-red-700 text-white text-[10px] font-black rounded-lg text-center shadow-sm flex items-center justify-center gap-1.5 transition-colors">
+                                <i class="fa-brands fa-whatsapp text-sm"></i> Ingatkan Top Up via WA
+                            </a>`;
+                    } else {
+                        waButtonHtml = `<button onclick="window.showAlert('Info', 'Nomor WA belum dimasukkan di menu Kontak.', 'info')" class="mt-2.5 w-full py-2 bg-red-300 text-white text-[10px] font-black rounded-lg text-center flex items-center justify-center gap-1.5 opacity-80"><i class="fa-brands fa-whatsapp text-sm"></i> WA Tidak Tersedia</button>`;
+                    }
+
                 } else if (currentSaldo < 10000) {
                     // KONDISI 2: SALDO LIMIT (DIBAWAH 10K) -> Merah Muda / Rose Menyala
                     colorClass = 'text-rose-600';
                     bgClass = 'bg-rose-50 border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.4)]';
                     warningBadge = '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded animate-pulse absolute -top-2 -right-2 shadow-md border border-rose-200 z-10 font-black">LIMIT</span>';
+                    
+                    if (riderPhone) {
+                         const msg = encodeURIComponent(`Halo ${rName}, Info dari Admin PROJEKGO. Saldo kamu saat ini LIMIT (Rp ${currentSaldo.toLocaleString('id-ID')}). Mohon siapkan Top Up agar akun tidak tertunda saat menerima orderan. Terima kasih.`);
+                         waButtonHtml = `
+                            <a href="https://wa.me/${riderPhone}?text=${msg}" target="_blank" class="mt-2.5 w-full py-2 bg-rose-500 hover:bg-rose-600 text-white text-[10px] font-black rounded-lg text-center shadow-sm flex items-center justify-center gap-1.5 transition-colors">
+                                <i class="fa-brands fa-whatsapp text-sm"></i> Ingatkan Top Up via WA
+                            </a>`;
+                    } else {
+                         waButtonHtml = `<button onclick="window.showAlert('Info', 'Nomor WA belum dimasukkan di menu Kontak.', 'info')" class="mt-2.5 w-full py-2 bg-rose-300 text-white text-[10px] font-black rounded-lg text-center flex items-center justify-center gap-1.5 opacity-80"><i class="fa-brands fa-whatsapp text-sm"></i> WA Tidak Tersedia</button>`;
+                    }
+
                 } else {
                     // KONDISI 3: SALDO AMAN
                     colorClass = 'text-emerald-600';
@@ -2703,16 +2757,19 @@
                 if (currentSaldo < 0) displaySaldo = `- Rp ${Math.abs(currentSaldo).toLocaleString('id-ID')}`;
 
                 html += `
-                    <div class="${bgClass} rounded-xl p-3.5 border flex justify-between items-center transition-all gap-2 relative mt-2.5">
+                    <div class="${bgClass} rounded-xl p-3.5 border flex flex-col transition-all relative mt-2.5">
                         ${warningBadge}
-                        <div class="flex flex-col overflow-hidden w-full">
-                            <span class="font-black text-black text-xs truncate uppercase">${rName}</span>
-                            <span class="text-[9px] text-slate-500 font-bold">${getRiderCode(rider.uid)} | UID: ${rider.uid}</span>
+                        <div class="flex justify-between items-center w-full gap-2">
+                            <div class="flex flex-col overflow-hidden w-full">
+                                <span class="font-black text-black text-xs truncate uppercase">${rName}</span>
+                                <span class="text-[9px] text-slate-500 font-bold">${getRiderCode(rider.uid)} | UID: ${rider.uid}</span>
+                            </div>
+                            <div class="flex flex-col items-end shrink-0 relative z-10">
+                                <span class="text-[9px] font-black uppercase text-slate-500 tracking-wider">Total Saldo</span>
+                                <span class="text-sm font-black ${colorClass}">${displaySaldo}</span>
+                            </div>
                         </div>
-                        <div class="flex flex-col items-end shrink-0 relative z-10">
-                            <span class="text-[9px] font-black uppercase text-slate-500 tracking-wider">Total Saldo</span>
-                            <span class="text-sm font-black ${colorClass}">${displaySaldo}</span>
-                        </div>
+                        ${waButtonHtml}
                     </div>
                 `;
             });
