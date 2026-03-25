@@ -2356,6 +2356,15 @@
             }
         };
 
+        // --- FUNGSI PROMO ADM DINAMIS ---
+        window.getAdmRate = function(dateStr) {
+            // Promo khusus hari ini: 25 Maret 2026 (Format MM-DD-YYYY)
+            if (dateStr === "03-25-2026") {
+                return 0.0; // Potongan 0%
+            }
+            return 0.16; // Normal rate 16% besoknya
+        };
+
         // --- LOGIKA WA SELECTOR ---
         window.pendingWaPhone = "";
         window.pendingWaText = "";
@@ -2842,7 +2851,8 @@
             // --- NEW: Kalkulasi dan Update Nilai Pendapatan ---
             const baseFee = (window.currentActiveOrderBaseFee || 0) * 1000;
             const extraFee = (window.currentActiveOrderExtraFee || 0) * 1000;
-            const admRate = typeof ADM_RATE_FIXED_PRO !== 'undefined' ? ADM_RATE_FIXED_PRO : 0.16;
+            const todayStr = getJakartaDateString();
+            const admRate = typeof window.getAdmRate === 'function' ? window.getAdmRate(todayStr) : 0.16;
             const netFee = baseFee * (1 - admRate);
             const totalMasuk = netFee + extraFee;
 
@@ -4589,7 +4599,8 @@
                 if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
                     const k = (Number(curr.Nominal_Kotor) || 0) * 1000;
                     const t = (Number(curr.Tambahan) || 0) * 1000;
-                    tNet += (k * (1 - ADM_RATE_FIXED_PRO)) + t; 
+                    const itemRate = window.getAdmRate(todayKey);
+                    tNet += (k * (1 - itemRate)) + t; 
                     tTrips++; tGrossPure += k; tExtraOngkir += t;
                 }
             });
@@ -4640,22 +4651,37 @@
             const admNoteEl = document.getElementById('adm-dynamic-note');
             const admLabelEl = document.getElementById('weekly-adm-label');
             
-            currentWeeklyAdmRate = 0.16; // Selalu 16%
+            currentWeeklyAdmRate = 0.16; // Tetap 16% sebagai referensi dasar
             
-            const admPercent = Math.round(currentWeeklyAdmRate * 100);
-            admLabelEl.innerText = `Adm. (${admPercent}%)`;
-            document.getElementById('weekly-adm-percent-badge').innerText = `ADM ${admPercent}%`;
+            // Cek promo hari ini untuk merubah badge laporan UI
+            const todayRate = window.getAdmRate(getJakartaDateString());
+            if (todayRate === 0) {
+                admLabelEl.innerText = `Adm. (0% PROMO)`;
+                const badge = document.getElementById('weekly-adm-percent-badge');
+                if (badge) {
+                    badge.innerText = `PROMO 0%`;
+                    badge.className = "text-[9px] font-extrabold text-white uppercase bg-green-500 px-2 py-0.5 rounded-md inline-block";
+                }
+            } else {
+                admLabelEl.innerText = `Adm. (16%)`;
+                const badge = document.getElementById('weekly-adm-percent-badge');
+                if (badge) {
+                    badge.innerText = `ADM 16%`;
+                    badge.className = "text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block";
+                }
+            }
 
             let wNet = 0, wAdm = 0, wTrips = 0, wGrossPure = 0, wGrossTotalForEst = 0, wExtraTotal = 0;
             const finalChartNetto = [];
             currentWeekKeys.forEach(key => {
                 let dNet = 0;
+                const dRate = window.getAdmRate(key);
                 rawData.forEach(item => {
                     if (parseSheetDate(item.Tanggal) === key && String(item.Status || '').trim().toLowerCase() === 'selesai') {
                         const k = (Number(item.Nominal_Kotor) || 0) * 1000;
                         const t = (Number(item.Tambahan) || 0) * 1000;
-                        const net = (k * (1 - currentWeeklyAdmRate)) + t;
-                        wNet += net; wAdm += (k * currentWeeklyAdmRate); wGrossPure += k; wExtraTotal += t; wGrossTotalForEst += k; wTrips++; dNet += net;
+                        const net = (k * (1 - dRate)) + t;
+                        wNet += net; wAdm += (k * dRate); wGrossPure += k; wExtraTotal += t; wGrossTotalForEst += k; wTrips++; dNet += net;
                     }
                 });
                 finalChartNetto.push(Math.round(dNet));
@@ -4689,6 +4715,7 @@
             let prevWDays = new Set();
             
             lastWeekKeys.forEach(key => {
+                const dailyRate = window.getAdmRate(key);
                 rawData.forEach(item => { 
                     if (parseSheetDate(item.Tanggal) === key && String(item.Status || '').trim().toLowerCase() === 'selesai') { 
                         const k = (Number(item.Nominal_Kotor) || 0) * 1000;
@@ -4696,6 +4723,7 @@
                         prevWTrips++; 
                         prevWGross += k;
                         prevWExtra += t;
+                        prevWAdm += (k * dailyRate); // Tagihan ADM per item (Mendukung Promo)
                         prevWDays.add(parseSheetDate(item.Tanggal));
                     } 
                 });
@@ -4719,7 +4747,7 @@
                 }
             }
             
-            prevWAdm = prevWGross * prevWeekRate;
+            // prevWAdm dihitung secara per item (Mendukung Promo 0%) di atas
 
             const prevInstallmentRow = document.getElementById('prev-weekly-installment-row');
             if (prevWeeklyInstallmentAmount > 0) {
@@ -4783,7 +4811,9 @@
                 const p = parseSheetDate(item.Tanggal).split('-'); return p.length === 3 && parseInt(p[0]) === cM && parseInt(p[2]) === cY;
             }).forEach(curr => {
                 if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
-                    mNetTotal += ((Number(curr.Nominal_Kotor) || 0) * 1000 * (1 - currentWeeklyAdmRate)) + ((Number(curr.Tambahan) || 0) * 1000);
+                    const itemDate = parseSheetDate(curr.Tanggal);
+                    const itemRate = window.getAdmRate(itemDate);
+                    mNetTotal += ((Number(curr.Nominal_Kotor) || 0) * 1000 * (1 - itemRate)) + ((Number(curr.Tambahan) || 0) * 1000);
                     mTripsTotal++;
                 }
             });
@@ -4844,7 +4874,9 @@
                 const kotor = Math.round(rawVal * 1000); 
                 const tambahan = Math.round((Number(item.Tambahan) || 0) * 1000);
                 
-                let netto = isDone ? (kotor * (1 - rateToUse)) + tambahan : 0;
+                const itemDate = parseSheetDate(item.Tanggal);
+                const dynamicRate = window.getAdmRate(itemDate);
+                let netto = isDone ? (kotor * (1 - dynamicRate)) + tambahan : 0;
                 
                 // LOGIKA DETEKSI SALAH INPUT
                 let isSuspicious = false;
@@ -4872,6 +4904,9 @@
                 const kotorStyle = isSuspicious 
                     ? 'bg-red-600 text-white animate-pulse px-2 py-0.5 rounded shadow-sm inline-block' 
                     : 'text-gray-600';
+                
+                const admText = dynamicRate === 0 ? 'PROMO 0%' : `Adm ${Math.round(dynamicRate * 100)}%`;
+                const admBadgeColor = dynamicRate === 0 ? 'text-green-600 border-green-300 bg-green-50' : 'text-orange-500 border-orange-200 bg-transparent';
                 
                 // NEW: Tambahkan Badge Live jika data berasal dari Firebase (Hari Ini)
                 let liveBadge = '';
@@ -4931,7 +4966,7 @@
                 }
 
                 // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
-                html += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold text-orange-500 bg-transparent border border-orange-200 px-2 py-0.5 rounded-full">Adm ${Math.round(rateToUse * 100)}%</div></div>` : ''}`;
+                html += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold ${admBadgeColor} border px-2 py-0.5 rounded-full">${admText}</div></div>` : ''}`;
 
                 // NEW: Catatan Pembayaran Lokal (Tunai/Transfer)
                 if (isDone) {
@@ -4981,7 +5016,8 @@
                 if (!acc[key]) acc[key] = { net: 0, gross: 0, extra: 0, trips: 0 };
                 if (String(curr.Status || '').trim().toLowerCase() === 'selesai') {
                     const k = (Number(curr.Nominal_Kotor) || 0) * 1000; const t = (Number(curr.Tambahan) || 0) * 1000;
-                    acc[key].net += (k * (1 - ADM_RATE_FIXED_PRO)) + t; acc[key].gross += k; acc[key].extra += t; acc[key].trips += 1;
+                    const dRate = window.getAdmRate(key);
+                    acc[key].net += (k * (1 - dRate)) + t; acc[key].gross += k; acc[key].extra += t; acc[key].trips += 1;
                 } return acc;
             }, {});
             let html = ''; let firstKey = null;
@@ -5028,41 +5064,42 @@
                     } 
                 });
                 
-                // Aturan lama untuk minggu-minggu sebelumnya (Pro 16%, Beginner 20%, Part-Time 16%)
-                let weekRate = 0.16; // Default Part-time
-                const fixedRateDate = new Date(2026, 1, 16);
-                
-                if (start >= fixedRateDate) {
-                    weekRate = 0.16; // Mulai 16 Feb 2026, selalu 16%
-                } else {
-                    if (weekTrips >= 80 && weekDays.size >= 6) {
-                        weekRate = 0.16; // PRO
-                    } else if (weekTrips >= 40 && weekDays.size >= 5) {
-                        weekRate = 0.20; // BEGINNER
-                    }
-                }
-
-                let wNet = 0, wTripsActual = 0, wGrossPure = 0, wExtra = 0;
+                let wNet = 0, wTripsActual = 0, wGrossPure = 0, wExtra = 0, wAdmAmount = 0;
                 rawData.forEach(item => {
-                    if (weekKeys.includes(parseSheetDate(item.Tanggal)) && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                    const itemDate = parseSheetDate(item.Tanggal);
+                    if (weekKeys.includes(itemDate) && String(item.Status || '').trim().toLowerCase() === 'selesai') {
                         const k = (Number(item.Nominal_Kotor) || 0) * 1000; const t = (Number(item.Tambahan) || 0) * 1000;
-                        wNet += (k * (1 - weekRate)) + t; wGrossPure += k; wExtra += t; wTripsActual++;
+                        const dRate = window.getAdmRate(itemDate);
+                        wNet += (k * (1 - dRate)) + t; 
+                        wAdmAmount += (k * dRate);
+                        wGrossPure += k; wExtra += t; wTripsActual++;
                     }
                 });
                 if (wTripsActual > 0 || i < 2) { 
-                    html += `<div onclick="showMonthlyWeekDetail(${wGrossPure}, ${wExtra}, ${wNet}, ${weekRate}, ${wTripsActual})" class="bg-white p-4 rounded-2xl border border-gray-100 card-shadow flex items-center justify-between active:scale-95 transition-all cursor-pointer"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center border border-gray-100"><i class="fa-solid fa-calendar-check"></i></div><div><p class="text-[10px] text-gray-400 font-bold uppercase tracking-tight">${start.toLocaleDateString('id-ID', {day:'numeric', month:'short'})} - ${end.toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</p><h4 class="text-sm font-bold text-gray-800">Rp ${Math.round(wNet).toLocaleString('id-ID')}</h4></div></div><div class="text-right"><p class="text-[10px] text-gray-400 font-bold uppercase">Hasil</p><p class="text-xs font-extrabold text-orange-600">${wTripsActual} Trip</p></div></div>`;
+                    html += `<div onclick="showMonthlyWeekDetail(${wGrossPure}, ${wExtra}, ${wNet}, ${wAdmAmount}, ${wTripsActual})" class="bg-white p-4 rounded-2xl border border-gray-100 card-shadow flex items-center justify-between active:scale-95 transition-all cursor-pointer"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center border border-gray-100"><i class="fa-solid fa-calendar-check"></i></div><div><p class="text-[10px] text-gray-400 font-bold uppercase tracking-tight">${start.toLocaleDateString('id-ID', {day:'numeric', month:'short'})} - ${end.toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</p><h4 class="text-sm font-bold text-gray-800">Rp ${Math.round(wNet).toLocaleString('id-ID')}</h4></div></div><div class="text-right"><p class="text-[10px] text-gray-400 font-bold uppercase">Hasil</p><p class="text-xs font-extrabold text-orange-600">${wTripsActual} Trip</p></div></div>`;
                 }
             }
             container.innerHTML = html || `<div class="p-8 text-center text-gray-400 text-xs italic">Belum ada riwayat mingguan sebelumnya</div>`;
         }
-        function showMonthlyWeekDetail(gross, extra, net, rate, trips) {
+        function showMonthlyWeekDetail(gross, extra, net, admAmount, trips) {
             const overlay = document.getElementById('monthly-weekly-detail-overlay');
-            const admNominal = gross * rate; const ratePercent = Math.round(rate * 100);
             document.getElementById('mw-detail-gross').innerText = `Rp ${Math.round(gross).toLocaleString('id-ID')}`;
             document.getElementById('mw-detail-extra').innerText = `Rp ${Math.round(extra).toLocaleString('id-ID')}`;
             document.getElementById('mw-detail-net').innerText = `Rp ${Math.round(net).toLocaleString('id-ID')}`;
-            document.getElementById('mw-detail-adm-nominal').innerText = `- Rp ${Math.round(admNominal).toLocaleString('id-ID')}`;
-            document.getElementById('mw-detail-status-adm').innerText = `ADM ${ratePercent}%`;
+            document.getElementById('mw-detail-adm-nominal').innerText = `- Rp ${Math.round(admAmount).toLocaleString('id-ID')}`;
+            
+            const statusAdmEl = document.getElementById('mw-detail-status-adm');
+            if (admAmount === 0 && gross > 0) {
+                 statusAdmEl.innerText = `PROMO 0%`;
+                 statusAdmEl.className = "text-[10px] font-bold bg-green-100 text-green-600 px-2 py-1 rounded-md uppercase tracking-wide";
+            } else if (admAmount > 0 && admAmount < (gross * 0.16)) {
+                 statusAdmEl.innerText = `MIXED RATE`;
+                 statusAdmEl.className = "text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-1 rounded-md uppercase tracking-wide";
+            } else {
+                 statusAdmEl.innerText = `ADM 16%`;
+                 statusAdmEl.className = "text-[10px] font-bold bg-orange-100 text-orange-600 px-2 py-1 rounded-md uppercase tracking-wide";
+            }
+
             document.getElementById('mw-detail-trips').innerText = `${trips} Trip`;
             overlay.classList.add('active'); playBeep(660, 0.05);
         }
