@@ -952,6 +952,32 @@
         </div>
     </div>
 
+    <!-- POPUP PENGINGAT RATING (TIDAK ADA RATING HARI INI) -->
+    <div id="rating-reminder-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="rating-reminder-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center w-full overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-yellow-500 animate-pulse"></div>
+            
+            <div class="w-20 h-20 bg-yellow-50 text-yellow-500 rounded-full flex items-center justify-center text-4xl mb-4 shadow-inner border-4 border-white">
+                <i class="fa-solid fa-star-half-stroke animate-bounce"></i>
+            </div>
+            
+            <h2 class="text-2xl font-black text-yellow-600 mb-2 leading-tight tracking-tight uppercase">Belum Ada Ulasan!</h2>
+            
+            <p class="text-gray-700 font-bold text-[11px] leading-relaxed mb-4 bg-yellow-50 p-4 rounded-xl border border-yellow-100 italic">
+                "Komen pelanggan hari ini masih kosong. Pastikan kamu selalu mengirimkan <span class="text-yellow-600 font-black uppercase">ucapan terimakasih</span> setelah selesai antar."
+            </p>
+            
+            <div class="text-[10px] text-gray-500 mb-6 font-medium px-2 leading-relaxed text-left space-y-2">
+                <p>Jika kamu tidak punya format ucapan dan link rating yang terhubung ke aplikasi, <b>silakan minta ke admin</b>.</p>
+                <p class="text-red-500 font-bold bg-red-50 p-2 rounded-lg border border-red-100">Rider DIWAJIBKAN untuk mengirim ucapan terimakasih yang didalamnya ada link tersebut, agar kita mampu bertumbuh lebih baik, karena masukan pelanggan sangat berarti untuk kita.</p>
+            </div>
+            
+            <button onclick="closeRatingReminderPopup()" class="w-full py-4 bg-yellow-500 text-white font-black rounded-2xl shadow-xl shadow-yellow-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                <i class="fa-solid fa-thumbs-up"></i> Siap, Laksanakan!
+            </button>
+        </div>
+    </div>
+
     <!-- POPUP PERINGATAN CEK PESANAN NOTA -->
     <div id="nota-warning-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
         <div id="nota-warning-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-8 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
@@ -2567,7 +2593,58 @@
         let profileCached = false;
         let lastDataCount = -1;
         let hasShownWelcomePopup = false;
+        window.isFinishingOrder = false; // Flag status rider menekan Selesai
         
+        // --- VARIABEL & FUNGSI PENGINGAT RATING HARI INI ---
+        window.hasNoReviewsToday = true;
+        window.ratingReminderInterval = null;
+
+        window.checkAndShowRatingReminder = () => {
+            // Hanya tampilkan jika rider sudah menyelesaikan minimal 1 trip hari ini, tapi belum ada ulasan
+            if (window.currentTodayTrips > 0 && window.hasNoReviewsToday) {
+                const popup = document.getElementById('rating-reminder-popup');
+                const content = document.getElementById('rating-reminder-content');
+                if(popup && content && popup.classList.contains('hidden')) {
+                    popup.classList.remove('hidden');
+                    popup.classList.add('flex');
+                    setTimeout(() => {
+                        popup.classList.remove('opacity-0');
+                        content.classList.remove('scale-90');
+                        content.classList.add('scale-100');
+                    }, 10);
+                    
+                    try { 
+                        playBeep(600, 0.2); 
+                        setTimeout(() => playBeep(800, 0.3), 200);
+                        setTimeout(() => playBeep(1000, 0.4), 400);
+                        if ("vibrate" in navigator) navigator.vibrate([300, 100, 300, 100, 500]);
+                    } catch(e){}
+                }
+            }
+        };
+
+        window.closeRatingReminderPopup = () => {
+            const popup = document.getElementById('rating-reminder-popup');
+            const content = document.getElementById('rating-reminder-content');
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
+            }
+        };
+
+        function startRatingReminderInterval() {
+            if (window.ratingReminderInterval) clearInterval(window.ratingReminderInterval);
+            // Cek setiap 30 menit (1800000 ms)
+            window.ratingReminderInterval = setInterval(() => {
+                window.checkAndShowRatingReminder();
+            }, 1800000);
+        }
+
         let swipeBtn, swipeTrack;
         let isDragging = false;
         let startX = 0;
@@ -2888,6 +2965,11 @@
                 setTimeout(() => {
                     popup.classList.add('hidden');
                     popup.classList.remove('flex');
+                    
+                    // NEW: Cek pengingat rating setelah menyelesaikan order
+                    setTimeout(() => {
+                        window.checkAndShowRatingReminder();
+                    }, 500);
                 }, 300); // Sesuaikan dengan durasi animasi
             }
         };
@@ -3750,6 +3832,7 @@
             // Mengecek keberadaan 'AndroidInterface' yang disuntikkan oleh Android Studio
             
             if (typeof window.AndroidInterface === 'undefined') {
+                /* SEMENTARA DINONAKTIFKAN UNTUK KEPERLUAN EDITING WEB
                 document.getElementById('block-browser-popup').classList.remove('hidden');
                 document.getElementById('block-browser-popup').classList.add('flex');
                 
@@ -3764,6 +3847,7 @@
                 
                 // Hentikan proses inisialisasi aplikasi selanjutnya
                 return; 
+                */
             }
             
 
@@ -3869,6 +3953,7 @@
                 }
             }
             initSwipe();
+            startRatingReminderInterval(); // Mulai interval pengingat rating
         }
 
         async function manualRefresh() {
@@ -4087,7 +4172,13 @@
                             document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('main-app').classList.remove('hidden');
                             updateUI(); setTimeout(showWelcomePopup, 500);
                             const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
-                            if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
+                            if (cachedRating) {
+                                const parsedRating = JSON.parse(cachedRating);
+                                renderRatingUI(parsedRating);
+                                const todayStr = getJakartaDateString();
+                                const todaysReviews = parsedRating.filter(item => parseSheetDate(item.Tanggal) === todayStr && item.Rating && Number(item.Rating) > 0);
+                                window.hasNoReviewsToday = todaysReviews.length === 0;
+                            }
                             const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                             if (cachedDocs) updateDocsUI(JSON.parse(cachedDocs));
                             hasLoadedFromCache = true;
@@ -4316,7 +4407,13 @@
                 const allRatings = await response.json();
                 const namaLower = String(namaRider).trim().toLowerCase();
                 const filtered = allRatings.filter(i => i.Nama_Rider && String(i.Nama_Rider).trim().toLowerCase() === namaLower);
-                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered)); renderRatingUI(filtered);
+                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered)); 
+                renderRatingUI(filtered);
+                
+                // Cek ulasan hari ini
+                const todayStr = getJakartaDateString();
+                const todaysReviews = filtered.filter(item => parseSheetDate(item.Tanggal) === todayStr && item.Rating && Number(item.Rating) > 0);
+                window.hasNoReviewsToday = todaysReviews.length === 0;
             } catch(e) {}
         }
         async function fetchVehicleAndDocsData(uid) {
