@@ -440,10 +440,11 @@
             </div>
             
             <div>
-                <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1.5">Tanggal Libur Acuan Pertama</label>
+                <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1.5">Tanggal Libur (Untuk Minggu Ini)</label>
                 <div class="relative">
                     <input type="date" id="libur-tanggal-select" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-sky-500">
                 </div>
+                <p class="text-[8px] text-slate-500 mt-1 italic leading-tight ml-1">*Pilih jadwal libur rider pada minggu ini. Jadwal minggu depan dan seterusnya akan otomatis mundur 1 hari dari tanggal ini.</p>
             </div>
             
             <button onclick="window.saveMasterDayOff()" class="w-full py-3 bg-sky-500 hover:bg-sky-600 text-white font-black rounded-xl text-[10px] uppercase shadow-md transition-colors flex items-center justify-center gap-1.5 mt-2">
@@ -612,12 +613,12 @@
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
+        let activeDailyListeners = {}; // Menyimpan daftar listener aktif agar tidak ganda
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 startRiderListener();
                 startGlobalOrdersListener();
-                startDailyOrdersListeners(); 
                 startRiderContactsListener();
                 startRiderBalancesListener(); 
                 startRiderSchedulesListener();
@@ -916,6 +917,9 @@
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
                 if (typeof window.updateContactRiderSelect === 'function') window.updateContactRiderSelect();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
+                
+                // Mulai listener harian setelah data allRiders termuat
+                startDailyOrdersListeners();
                 
             }, (error) => {
                 console.error("Error Firebase:", error);
@@ -1480,28 +1484,31 @@
         }
 
         function startDailyOrdersListeners() {
-            const uids = Object.keys(riderExcelCodes);
-            uids.forEach(uid => {
-                const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'daily_orders');
-                onSnapshot(dailyRef, (snapshot) => {
-                    allDailyOrders = allDailyOrders.filter(o => o.rider_uid !== uid);
-                    
-                    snapshot.forEach(docSnap => {
-                        const data = docSnap.data();
-                        if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
-                            allDailyOrders.push({
-                                id: docSnap.id,
-                                rider_uid: uid,
-                                customer_name: data.Nama_Pelanggan || '-',
-                                ...data
-                            });
+            // Memantau order harian secara dinamis berdasarkan UID yang aktif
+            allRiders.forEach(rider => {
+                const uid = rider.uid;
+                if (!activeDailyListeners[uid]) {
+                    const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'daily_orders');
+                    activeDailyListeners[uid] = onSnapshot(dailyRef, (snapshot) => {
+                        allDailyOrders = allDailyOrders.filter(o => o.rider_uid !== uid);
+                        
+                        snapshot.forEach(docSnap => {
+                            const data = docSnap.data();
+                            if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
+                                allDailyOrders.push({
+                                    id: docSnap.id,
+                                    rider_uid: uid,
+                                    customer_name: data.Nama_Pelanggan || '-',
+                                    ...data
+                                });
+                            }
+                        });
+                        
+                        if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                            renderHistoryOrders();
                         }
                     });
-                    
-                    if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                        renderHistoryOrders();
-                    }
-                });
+                }
             });
         }
 
@@ -1629,23 +1636,9 @@
             container.innerHTML = html;
         }
 
-        const riderExcelCodes = {
-            "UID113": "A01", "UID245": "A02", "UID379": "A03", "UID445": "A04",
-            "UID556": "A05", "UID659": "A06", "UID723": "A07", "UID856": "A08",
-            "UID959": "A09", "UID109": "A10", "UID117": "A11", "UID122": "A12",
-            "UID135": "A13", "UID146": "A14", "UID155": "A15", "UID164": "A16",
-            "UID174": "A17", "UID183": "A18", "UID196": "A19", "UID203": "A20",
-            "UID214": "A21", "UID226": "A22", "UID232": "A23", "UID247": "A24",
-            "UID256": "A25", "UID267": "A26", "UID275": "A27", "UID284": "A28",
-            "UID292": "A29", "UID303": "A30", "UID315": "A31", "UID326": "PT1",
-            "UID339": "PT2", "UID347": "PT3", "UID328": "A32", "UID337": "A33",
-            "UID348": "A34"
-        };
-
         function getRiderCode(uid) {
             if (!uid) return "-";
-            const cleanUid = String(uid).trim().toUpperCase();
-            return riderExcelCodes[cleanUid] || cleanUid;
+            return String(uid).trim().toUpperCase();
         }
 
         window.renderHistoryOrders = () => {
