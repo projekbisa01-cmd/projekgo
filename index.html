@@ -5134,8 +5134,53 @@
                     const dateStr = parseSheetDate(item.Tanggal);
                     const timeStr = parseSheetTime(item.Jam);
                     const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                    const savedPaymentStr = localStorage.getItem(orderKey);
+                    let savedPaymentStr = localStorage.getItem(orderKey);
                     
+                    // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH)
+                    if (!savedPaymentStr) {
+                        let closestKey = null;
+                        let minDiff = 15; // Maksimal selisih 15 menit
+                        
+                        const tParts = timeStr.split(':');
+                        let targetTimeMin = 0;
+                        if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
+                        
+                        const prefix = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_`;
+                        const suffix = `_${kotor}`;
+                        
+                        // Iterasi mencari catatan transfer terdekat
+                        for (let i = localStorage.length - 1; i >= 0; i--) {
+                            const key = localStorage.key(i);
+                            if (key && key.startsWith(prefix) && key.endsWith(suffix)) {
+                                const keyTimeStr = key.split('_')[3]; 
+                                if (keyTimeStr && keyTimeStr.length === 4) {
+                                    const keyTimeMin = parseInt(keyTimeStr.substring(0,2), 10) * 60 + parseInt(keyTimeStr.substring(2,4), 10);
+                                    const diff = Math.abs(targetTimeMin - keyTimeMin);
+                                    if (diff < minDiff) {
+                                        minDiff = diff;
+                                        closestKey = key;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Jika ketemu catatan yang cocok (selisih < 15 menit), sinkronkan jamnya
+                        if (closestKey) {
+                            savedPaymentStr = localStorage.getItem(closestKey);
+                            try {
+                                const savedData = JSON.parse(savedPaymentStr);
+                                // Sinkronkan jam dengan history admin/server
+                                savedData.timeStr = timeStr; 
+                                // Update nama pelanggan agar lebih akurat
+                                const safeName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '');
+                                savedData.orderName = safeName;
+                                
+                                localStorage.setItem(orderKey, JSON.stringify(savedData));
+                                localStorage.removeItem(closestKey);
+                            } catch(e){}
+                        }
+                    }
+
                     // Default dianggap Tunai jika tidak ada catatan transfer
                     let savedPayment = { type: 'Tunai', nominal: '' };
                     if (savedPaymentStr) {
