@@ -1827,6 +1827,37 @@
                     <div class="absolute -bottom-6 -right-6 w-24 h-24 bg-white/10 rounded-full"></div>
                 </div>
 
+                <!-- KARTU REKOMENDASI LIBUR MINGGU INI -->
+                <div id="weekly-schedule-card" class="bg-gray-900 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden border border-gray-800">
+                    <div class="absolute -right-6 -top-6 w-24 h-24 bg-orange-500/20 rounded-full blur-2xl pointer-events-none"></div>
+                    <div class="absolute -left-6 -bottom-6 w-24 h-24 bg-orange-500/10 rounded-full blur-2xl pointer-events-none"></div>
+                    
+                    <div class="relative z-10">
+                        <div class="flex items-center space-x-3 mb-2">
+                            <div class="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center border border-gray-700 shrink-0 text-orange-500 shadow-inner">
+                                <i class="fa-solid fa-calendar-day text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-xs font-black uppercase tracking-widest text-white leading-tight">Rekomendasi Libur</h3>
+                                <p class="text-[9px] text-orange-400 font-bold tracking-widest mt-0.5">MINGGU INI</p>
+                            </div>
+                        </div>
+                        
+                        <p class="text-[9px] text-gray-300 leading-relaxed font-medium mt-3 bg-gray-800/80 p-3 rounded-xl border border-gray-700/50 italic shadow-sm">
+                            "Ini adalah rekomendasi hari libur, buat kamu yang ingin libur. Jika kamu ingin tetap masuk silakan, pendapatan kamu jadi makin meningkat."
+                        </p>
+                        
+                        <div class="mt-4">
+                            <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                <i class="fa-solid fa-thumbtack text-orange-500"></i> Jadwal Libur Kamu:
+                            </p>
+                            <div id="recommended-off-days-container" class="flex flex-wrap gap-2">
+                                <span class="text-xs text-gray-500 font-bold italic">Memuat data...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Kontainer ADM Minggu Lalu dengan Swipe Slider -->
                 <div id="prev-weekly-card" class="bg-white rounded-2xl p-4 border border-gray-100 card-shadow transition-all duration-300">
                     <div class="flex items-center justify-between">
@@ -4165,6 +4196,7 @@
             if (typeof window.startOrderListener === 'function') window.startOrderListener(currentUserUID);
             if (typeof window.startDeviceListener === 'function') window.startDeviceListener(currentUserUID);
             if (typeof window.startWalletListener === 'function') window.startWalletListener(currentUserUID);
+            if (typeof window.startScheduleListener === 'function') window.startScheduleListener(currentUserUID);
             
             document.getElementById('login-page').style.display = 'none'; 
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -6436,6 +6468,7 @@
                       if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(window.pendingSuspensionCheck.uid);
                       if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.startDeviceListener === 'function') window.startDeviceListener(window.pendingSuspensionCheck.uid);
+                      if (typeof window.startScheduleListener === 'function') window.startScheduleListener(window.pendingSuspensionCheck.uid);
                       window.pendingSuspensionCheck = null;
                   } else {
                       // Ambil dari local storage agar yang otomatis login langsung dilisten
@@ -6448,6 +6481,7 @@
                           if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(savedUid);
                           if (typeof window.startDeviceListener === 'function') window.startDeviceListener(savedUid);
                           if (typeof window.startWalletListener === 'function') window.startWalletListener(savedUid);
+                          if (typeof window.startScheduleListener === 'function') window.startScheduleListener(savedUid);
                       }
                   }
 
@@ -6624,6 +6658,106 @@
                   console.warn("Device listener error:", error);
               });
               */
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER JADWAL LIBUR RIDER (RIDER SCHEDULES)
+          // -------------------------------------------------------------
+          let scheduleUnsubscribe = null;
+
+          window.startScheduleListener = (uid) => {
+              if (!uid) return;
+              
+              // PERBAIKAN: Mencegah gagal render karena Firebase belum selesai dimuat
+              if (!window.isFirebaseReady) {
+                  setTimeout(() => window.startScheduleListener(uid), 1000);
+                  return;
+              }
+              
+              if (scheduleUnsubscribe) return;
+
+              const uid_rider = String(uid).trim().toUpperCase();
+              
+              // Mengambil data dari Firebase sesuai path yang diminta:
+              const scheduleRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_schedules', uid_rider);
+
+              scheduleUnsubscribe = onSnapshot(scheduleRef, (docSnap) => {
+                  const container = document.getElementById('recommended-off-days-container');
+                  if (!container) return;
+
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      
+                      let days = [];
+                      let rawText = "";
+
+                      // Logika pencarian data: Prioritaskan field "anchor_date" sesuai permintaan
+                      if (data.anchor_date) { rawText = data.anchor_date; }
+                      else if (data.off_days) { rawText = data.off_days; } 
+                      else if (data.recommended_off_days) { rawText = data.recommended_off_days; } 
+                      else if (data.libur) { rawText = data.libur; } 
+                      else if (data.hari_libur) { rawText = data.hari_libur; }
+                      else if (data.jadwal) { rawText = data.jadwal; }
+                      else {
+                          // Fallback Ekstrem: Jika admin pakai nama field lain, ambil isinya langsung
+                          const keys = Object.keys(data);
+                          if (keys.length > 0 && keys[0] !== 'uid') {
+                              rawText = data[keys[0]];
+                          }
+                      }
+
+                      // Konversi text/array menjadi format yang siap di-render
+                      if (rawText) {
+                          if (Array.isArray(rawText)) {
+                              days = rawText;
+                          } else if (typeof rawText === 'string' && rawText.includes(',')) {
+                              days = rawText.split(',');
+                          } else {
+                              // Jika isinya hanya 1 kata (misal: "Senin") atau kalimat bebas tanpa koma
+                              days = [String(rawText)];
+                          }
+                      }
+
+                      // Bersihkan spasi dan filter data yang kosong
+                      days = days.map(d => String(d).trim()).filter(d => d.length > 0 && d !== 'undefined');
+
+                      // Format tanggal agar menjadi Hari, Tanggal Nama-Bulan Tahun
+                      const formattedDays = days.map(d => {
+                          if (!/\d/.test(d)) return d; // Jika tidak ada angka (misal: "Senin"), biarkan aslinya
+                          
+                          let dateObj;
+                          const partsId = d.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/); // Deteksi DD-MM-YYYY
+                          const partsIso = d.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/); // Deteksi YYYY-MM-DD
+                          
+                          if (partsId) {
+                              dateObj = new Date(partsId[3], partsId[2] - 1, partsId[1]);
+                          } else if (partsIso) {
+                              dateObj = new Date(partsIso[1], partsIso[2] - 1, partsIso[3]);
+                          } else {
+                              dateObj = new Date(d); // Fallback bawaan browser
+                          }
+
+                          if (!isNaN(dateObj.getTime())) {
+                              const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                              const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                              return `${dayNames[dateObj.getDay()]}, ${dateObj.getDate()} ${monthNames[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+                          }
+                          return d; // Jika gagal parsing, kembalikan teks aslinya
+                      });
+
+                      if (formattedDays.length > 0) {
+                          container.innerHTML = formattedDays.map(d => `<span class="bg-orange-500 text-white text-[10px] font-extrabold px-3 py-1.5 rounded-lg uppercase tracking-wider shadow-md">${d}</span>`).join('');
+                      } else {
+                          container.innerHTML = `<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-700">Bebas pilih hari liburmu.</span>`;
+                      }
+                  } else {
+                      container.innerHTML = `<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-700">Belum ada jadwal dari admin.</span>`;
+                  }
+              }, (error) => {
+                  console.error("Gagal mengambil jadwal libur:", error);
+                  const container = document.getElementById('recommended-off-days-container');
+                  if (container) container.innerHTML = `<span class="text-[10px] text-red-400 font-bold italic">Gagal menghubungkan ke server.</span>`;
+              });
           };
 
           // -------------------------------------------------------------
