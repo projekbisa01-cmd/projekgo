@@ -2475,6 +2475,12 @@
                 setTimeout(() => {
                     modal.classList.add('hidden');
                     modal.classList.remove('flex');
+                    
+                    // --- NEW LOGIC: Munculkan form pembayaran jika tertunda (saat fallback web) ---
+                    if (window.pendingPaymentPopupAfterWa && typeof window.showPaymentPopupInternal === 'function') {
+                        window.showPaymentPopupInternal();
+                        window.pendingPaymentPopupAfterWa = false;
+                    }
                 }, 300);
             }
         };
@@ -7454,10 +7460,7 @@
               // 3. Ambil nomor telepon pelanggan dari data yang sedang aktif
               const phoneStr = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
 
-              // 4. Buka WA
-              window.openWaSelector(phoneStr, waMessage);
-
-              // 5. Sembunyikan popup feedback
+              // 4. Sembunyikan popup feedback
               const feedbackPopup = document.getElementById('feedback-wa-popup');
               const feedbackContent = feedbackPopup.children[0];
               feedbackPopup.classList.add('opacity-0');
@@ -7468,13 +7471,22 @@
                   feedbackPopup.classList.remove('flex');
                   feedbackPopup.classList.add('hidden');
                   
-                  // 6. Lanjut panggil popup pembayaran (Fungsi internal baru)
-                  showPaymentPopupInternal();
+                  // 5. Buka WA dan Lanjut ke Pembayaran (Logika Khusus Native vs Web)
+                  if (window.AndroidInterface && window.AndroidInterface.openWhatsApp) {
+                      // NATIVE ANDROID: Buka WA secara langsung
+                      window.AndroidInterface.openWhatsApp(phoneStr, waMessage);
+                      // Form Pembayaran langsung muncul di background (stand-by saat rider kembali ke app)
+                      window.showPaymentPopupInternal();
+                  } else {
+                      // WEB FALLBACK: Tahan form pembayaran agar tidak menimpa popup pilihan WA
+                      window.pendingPaymentPopupAfterWa = true;
+                      window.openWaSelector(phoneStr, waMessage);
+                  }
               }, 300);
           };
 
           // FUNGSI INTERNAL UNTUK MENAMPILKAN POPUP PEMBAYARAN SAJA
-          function showPaymentPopupInternal() {
+          window.showPaymentPopupInternal = function() {
               // Reset Form Pembayaran
               document.querySelectorAll('input[name="payment_method"]').forEach(r => r.checked = false);
               document.querySelectorAll('.payment-radio-label').forEach(l => l.classList.remove('border-orange-500', 'bg-orange-50'));
@@ -7492,7 +7504,7 @@
                   content.classList.remove('scale-90');
                   content.classList.add('scale-100');
               }, 10);
-          }
+          };
 
           if (btnFinishOrder) {
               // UBAH: Sekarang mengarah ke Feedback WA dulu, bukan langsung pembayaran
