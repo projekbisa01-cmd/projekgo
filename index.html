@@ -1269,6 +1269,51 @@
         </div>
     </div>
 
+    <!-- POPUP EDIT TRANSFER -->
+    <div id="transfer-edit-modal" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="transfer-edit-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center text-3xl mb-4 shadow-sm border border-blue-100">
+                <i class="fa-solid fa-pen-to-square"></i>
+            </div>
+            <h3 class="text-lg font-black text-gray-800 mb-1">Edit Nominal</h3>
+            <p class="text-[10px] text-gray-500 mb-4 leading-relaxed">Ubah nominal transfer jika terdapat kesalahan input sebelumnya.</p>
+            
+            <div class="w-full relative mb-6">
+                <span class="absolute left-4 top-3.5 text-gray-400 text-sm font-bold">Rp</span>
+                <input type="text" inputmode="numeric" id="transfer-edit-input" class="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-800 focus:outline-none focus:border-blue-500 transition-colors" oninput="formatCurrencyInput(this)">
+            </div>
+
+            <input type="hidden" id="transfer-edit-key">
+            
+            <div class="flex w-full gap-3">
+                <button onclick="window.closeTransferEditModal()" class="w-1/2 py-3.5 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200 active:scale-95 transition-all text-sm">Batal</button>
+                <button onclick="window.saveTransferEdit()" class="w-1/2 py-3.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all text-sm">Simpan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- POPUP HAPUS TRANSFER -->
+    <div id="transfer-delete-modal" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="transfer-delete-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center text-3xl mb-4 shadow-sm border border-red-100">
+                <i class="fa-solid fa-trash-can"></i>
+            </div>
+            <h3 class="text-lg font-black text-gray-800 mb-1">Hapus Catatan?</h3>
+            <p class="text-[10px] text-gray-500 mb-6 leading-relaxed">Catatan transfer ini akan dihapus secara permanen dari riwayat lokal perangkat ini.</p>
+
+            <input type="hidden" id="transfer-delete-key">
+
+            <div class="w-full space-y-3">
+                <button onclick="window.confirmDeleteTransfer()" class="w-full py-3.5 bg-red-500 text-white font-bold rounded-xl shadow-lg shadow-red-200 active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-check"></i> Ya, Hapus
+                </button>
+                <button onclick="window.closeTransferDeleteModal()" class="w-full py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl active:scale-95 transition-all text-sm">
+                    Batal
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- POPUP PILIH WHATSAPP (WA SELECTOR) -->
     <div id="wa-selector-modal" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
         <div id="wa-selector-content" class="relative bg-white w-full max-w-xs rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center">
@@ -5084,39 +5129,34 @@
                 // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
                 html += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold ${admBadgeColor} border px-2 py-0.5 rounded-full">${admText}</div></div>` : ''}`;
 
-                // NEW: Catatan Pembayaran Lokal (Tunai/Transfer)
+                // NEW: Catatan Pembayaran Lokal (Tunai/Transfer) - Tampilan Otomatis Berlabel
                 if (isDone) {
-                    const safeName = (item.List_Pesanan || item.Keterangan || 'Orderan').replace(/['"\\]/g, '');
                     const dateStr = parseSheetDate(item.Tanggal);
                     const timeStr = parseSheetTime(item.Jam);
                     const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
                     const savedPaymentStr = localStorage.getItem(orderKey);
-                    let savedPayment = { type: '', nominal: '' };
+                    
+                    // Default dianggap Tunai jika tidak ada catatan transfer
+                    let savedPayment = { type: 'Tunai', nominal: '' };
                     if (savedPaymentStr) {
-                        try { savedPayment = JSON.parse(savedPaymentStr); } catch(e){}
+                        try { 
+                            const parsed = JSON.parse(savedPaymentStr); 
+                            if (parsed && parsed.type) savedPayment = parsed;
+                        } catch(e){}
+                    }
+
+                    let paymentLabel = '';
+                    if (savedPayment.type === 'Transfer') {
+                        const nomStr = savedPayment.nominal ? `Rp ${Number(savedPayment.nominal).toLocaleString('id-ID')}` : 'Rp 0';
+                        paymentLabel = `<span class="px-2 py-1 rounded-md bg-blue-50 text-blue-600 border border-blue-100 font-bold text-[9px] flex items-center gap-1 shadow-sm"><i class="fa-solid fa-building-columns"></i> Transfer (${nomStr})</span>`;
+                    } else {
+                        paymentLabel = `<span class="px-2 py-1 rounded-md bg-green-50 text-green-600 border border-green-100 font-bold text-[9px] flex items-center gap-1 shadow-sm"><i class="fa-solid fa-money-bill-wave"></i> Tunai (Cash)</span>`;
                     }
 
                     html += `
-                        <div class="mt-2 ml-14 bg-gray-50/80 p-2 rounded-xl border border-gray-100 flex flex-col gap-2 shadow-sm">
-                            <div class="flex items-center justify-between">
-                                <span class="text-[9px] font-bold text-gray-500"><i class="fa-solid fa-wallet text-orange-400 mr-1"></i>Catatan Pembayaran</span>
-                                <div class="flex gap-2">
-                                    <label class="flex items-center gap-1 text-[9px] font-bold text-gray-600 cursor-pointer">
-                                        <input type="radio" name="pay_type_${orderKey}" value="Tunai" onchange="window.updatePaymentInfo('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" ${savedPayment.type === 'Tunai' ? 'checked' : ''} class="w-3 h-3 accent-orange-500">
-                                        Tunai
-                                    </label>
-                                    <label class="flex items-center gap-1 text-[9px] font-bold text-gray-600 cursor-pointer">
-                                        <input type="radio" name="pay_type_${orderKey}" value="Transfer" onchange="window.updatePaymentInfo('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" ${savedPayment.type === 'Transfer' ? 'checked' : ''} class="w-3 h-3 accent-orange-500">
-                                        Transfer
-                                    </label>
-                                </div>
-                            </div>
-                            <div id="pay_nominal_container_${orderKey}" class="${savedPayment.type === 'Transfer' ? 'block' : 'hidden'} mt-1 transition-all">
-                                <div class="relative">
-                                    <span class="absolute left-2.5 top-1.5 text-gray-400 text-[10px]">Rp</span>
-                                    <input type="text" id="pay_nominal_${orderKey}" value="${savedPayment.nominal ? savedPayment.nominal.toLocaleString('id-ID') : ''}" oninput="formatCurrencyInput(this); window.savePaymentNominal('${orderKey}', this.value, '${safeName}', '${dateStr}', '${timeStr}')" placeholder="Nominal Transfer" class="w-full pl-7 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg text-[10px] font-bold text-gray-700 focus:outline-none focus:border-orange-500 transition-colors">
-                                </div>
-                            </div>
+                        <div class="mt-2 ml-14 bg-gray-50/80 p-2.5 rounded-xl border border-gray-100 flex items-center justify-between shadow-sm">
+                            <span class="text-[9px] font-bold text-gray-500"><i class="fa-solid fa-wallet text-orange-400 mr-1"></i>Metode Pembayaran</span>
+                            ${paymentLabel}
                         </div>
                     `;
                 }
@@ -5922,6 +5962,10 @@
         }
 
         window.showTransferDetail = function(dateKey, dayName, dateFormatted) {
+            window.currentTransferDetailDateKey = dateKey;
+            window.currentTransferDetailDayName = dayName;
+            window.currentTransferDetailDateFormatted = dateFormatted;
+            
             const group = window.transferGroupedData[dateKey];
             if (!group) return;
 
@@ -5959,6 +6003,10 @@
                             <span class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Nominal Input</span>
                             <span class="text-sm font-extrabold text-gray-800">Rp ${item.nominal.toLocaleString('id-ID')}</span>
                         </div>
+                        <div class="pl-2 pt-2 border-t border-gray-50 flex justify-end gap-2 mt-1">
+                            <button onclick="window.editTransferRecord('${item.key}')" class="text-[10px] text-blue-600 font-bold bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 active:scale-95 transition-transform flex items-center"><i class="fa-solid fa-pen mr-1"></i>Edit</button>
+                            <button onclick="window.deleteTransferRecord('${item.key}')" class="text-[10px] text-red-600 font-bold bg-red-50 px-3 py-1.5 rounded-lg border border-red-100 active:scale-95 transition-transform flex items-center"><i class="fa-solid fa-trash mr-1"></i>Hapus</button>
+                        </div>
                     </div>
                 `;
             });
@@ -5978,6 +6026,111 @@
             const detailView = document.getElementById('transfer-detail-view');
             if(dailyList) dailyList.classList.remove('hidden');
             if(detailView) detailView.classList.add('hidden');
+        }
+        
+        // --- FUNGSI EDIT DAN HAPUS RIWAYAT TRANSFER ---
+        window.editTransferRecord = function(key) {
+            const dataStr = localStorage.getItem(key);
+            if (dataStr) {
+                try {
+                    const data = JSON.parse(dataStr);
+                    document.getElementById('transfer-edit-input').value = data.nominal ? data.nominal.toLocaleString('id-ID') : '';
+                    document.getElementById('transfer-edit-key').value = key;
+                    
+                    const modal = document.getElementById('transfer-edit-modal');
+                    const content = document.getElementById('transfer-edit-content');
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                    setTimeout(() => {
+                        modal.classList.remove('opacity-0');
+                        content.classList.remove('scale-90');
+                        content.classList.add('scale-100');
+                    }, 10);
+                } catch(e){}
+            }
+        }
+
+        window.closeTransferEditModal = function() {
+            const modal = document.getElementById('transfer-edit-modal');
+            const content = document.getElementById('transfer-edit-content');
+            if(modal && content) {
+                modal.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                    modal.classList.remove('flex');
+                }, 300);
+            }
+        }
+
+        window.saveTransferEdit = function() {
+            const key = document.getElementById('transfer-edit-key').value;
+            const nominalStr = document.getElementById('transfer-edit-input').value;
+            const nominal = parseInt(nominalStr.replace(/\./g, '')) || 0;
+            
+            const dataStr = localStorage.getItem(key);
+            if (dataStr) {
+                try {
+                    const data = JSON.parse(dataStr);
+                    data.nominal = nominal;
+                    localStorage.setItem(key, JSON.stringify(data));
+                    
+                    window.renderTransferHistory();
+                    if (window.currentTransferDetailDateKey) {
+                        const updatedGroup = window.transferGroupedData[window.currentTransferDetailDateKey];
+                        if (updatedGroup) {
+                            window.showTransferDetail(window.currentTransferDetailDateKey, window.currentTransferDetailDayName, window.currentTransferDetailDateFormatted);
+                        } else {
+                            window.closeTransferDetail();
+                        }
+                    }
+                    window.closeTransferEditModal();
+                } catch(e){}
+            }
+        }
+
+        window.deleteTransferRecord = function(key) {
+            document.getElementById('transfer-delete-key').value = key;
+            const modal = document.getElementById('transfer-delete-modal');
+            const content = document.getElementById('transfer-delete-content');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                content.classList.remove('scale-90');
+                content.classList.add('scale-100');
+            }, 10);
+        }
+
+        window.closeTransferDeleteModal = function() {
+            const modal = document.getElementById('transfer-delete-modal');
+            const content = document.getElementById('transfer-delete-content');
+            if(modal && content) {
+                modal.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                    modal.classList.remove('flex');
+                }, 300);
+            }
+        }
+
+        window.confirmDeleteTransfer = function() {
+            const key = document.getElementById('transfer-delete-key').value;
+            localStorage.removeItem(key);
+            
+            window.renderTransferHistory();
+            if (window.currentTransferDetailDateKey) {
+                const updatedGroup = window.transferGroupedData[window.currentTransferDetailDateKey];
+                if (updatedGroup) {
+                    window.showTransferDetail(window.currentTransferDetailDateKey, window.currentTransferDetailDayName, window.currentTransferDetailDateFormatted);
+                } else {
+                    window.closeTransferDetail();
+                }
+            }
+            window.closeTransferDeleteModal();
         }
         
         // --- LOGIKA UPLOAD MENU ---
