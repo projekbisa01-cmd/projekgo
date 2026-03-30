@@ -678,16 +678,44 @@
         }
 
         window.getInstallmentInfo = function(config, referenceDate) {
-            if (!referenceDate) referenceDate = new Date(); if (!config || !config.total_remaining) return null;
-            const startDate = config.start_date ? new Date(config.start_date) : new Date();
+            if (!referenceDate) referenceDate = new Date(); 
+            if (!config || config.total_remaining === undefined || config.total_remaining === null) return null;
+            
+            // 1. Pastikan angka yang masuk valid, jika error paksa jadi 0
+            const totalRemaining = Number(config.total_remaining) || 0;
+            const weekly = Number(config.weekly) || 0;
+
+            // 2. Parsing tanggal yang super aman
+            let startDate = new Date();
+            if (config.start_date) {
+                if (typeof config.start_date === 'object' && typeof config.start_date.toDate === 'function') {
+                    // Cek jika formatnya adalah Timestamp Firebase
+                    startDate = config.start_date.toDate();
+                } else {
+                    const parsed = new Date(config.start_date);
+                    // Cek jika hasil parsing bukanlah Invalid Date (NaN)
+                    if (!isNaN(parsed.getTime())) startDate = parsed;
+                }
+            }
+
             const refDateMidnight = new Date(referenceDate); refDateMidnight.setHours(0,0,0,0);
             const startDateMidnight = new Date(startDate); startDateMidnight.setHours(0,0,0,0);
-            if (refDateMidnight < startDateMidnight) return { weekly: 0, remaining: config.total_remaining, is_paid_off: false, not_started: true, diffWeeks: 0 };
-            const diffTime = Math.max(0, refDateMidnight - startDateMidnight); const diffWeeks = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7)) + 1;
-            let currentRemaining = config.total_remaining - (config.weekly * diffWeeks);
+            
+            if (refDateMidnight < startDateMidnight) return { weekly: 0, remaining: totalRemaining, is_paid_off: false, not_started: true, diffWeeks: 0 };
+            
+            // 3. Hitung selisih minggu dengan pengaman isNaN
+            const diffTime = Math.max(0, refDateMidnight - startDateMidnight); 
+            let diffWeeks = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7)) + 1;
+            if (isNaN(diffWeeks)) diffWeeks = 1; // Fallback jika gagal hitung
+            
+            let currentRemaining = totalRemaining - (weekly * diffWeeks);
+            if (isNaN(currentRemaining)) currentRemaining = totalRemaining; // Fallback jika perhitungan error
+            
             if (currentRemaining <= 0) return { weekly: 0, remaining: 0, is_paid_off: true, diffWeeks: diffWeeks };
-            let actualWeekly = config.weekly; let prevRemaining = config.total_remaining - (config.weekly * (diffWeeks - 1));
-            if (prevRemaining < config.weekly) actualWeekly = prevRemaining;
+            
+            let actualWeekly = weekly; let prevRemaining = totalRemaining - (weekly * (diffWeeks - 1));
+            if (prevRemaining < weekly) actualWeekly = prevRemaining;
+            
             return { weekly: actualWeekly, remaining: currentRemaining, is_paid_off: false, diffWeeks: diffWeeks };
         };
 
@@ -1459,21 +1487,42 @@
                     if (currentActiveTab === 'target' && chartInstance) initChart();
                 });
 
-                // ... (Fungsi Firebase tetap sama, karena tidak menyebabkan lag saat perpindahan tab lokal)
+                // LISTENER UNTUK CICILAN
                 const installmentsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_installments');
                 onSnapshot(installmentsCol, (snapshot) => {
                     const container = document.getElementById('installment-list-container'); if (!container) return;
                     if (snapshot.empty) { container.innerHTML = `<div class="bg-green-50 border border-green-200 rounded-2xl p-6 text-center shadow-sm"><i class="fa-solid fa-check-circle text-green-500 text-3xl mb-2"></i><p class="text-xs text-green-700 font-bold">Tidak ada tagihan cicilan aktif.</p></div>`; return; }
+                    
                     let html = ''; const items = []; snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
-                    items.sort((a, b) => b.total_remaining - a.total_remaining).forEach(item => {
-                        const calc = window.getInstallmentInfo(item); if(!calc) return;
-                        if (calc.is_paid_off) { html += `<div class="bg-gray-50 p-4 rounded-2xl border border-gray-200 flex items-center justify-between opacity-70"><div><h4 class="text-sm font-bold text-gray-500 line-through">${item.nama || 'Tanpa Nama'}</h4><p class="text-[10px] text-green-600 font-bold mt-0.5"><i class="fa-solid fa-check mr-1"></i>Lunas</p></div><button onclick="window.deleteInstallment('${item.uid}')" class="text-gray-400 hover:text-red-500 text-xs px-2"><i class="fa-solid fa-trash"></i></button></div>`; return; }
-                        const sisaFormatted = "Rp " + calc.remaining.toLocaleString('id-ID'); const awalFormatted = "Rp " + Number(item.total_remaining).toLocaleString('id-ID'); const potongFormatted = "Rp " + Number(item.weekly).toLocaleString('id-ID');
-                        const isNotStarted = calc.not_started; const statusBadge = isNotStarted ? `<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[9px] font-bold">Belum Mulai</span>` : `<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[9px] font-bold">Minggu ke-${calc.diffWeeks}</span>`;
-                        const waMsg = `Halo ${item.nama}, menginformasikan sisa tagihan atribut/jaket Anda saat ini adalah *${sisaFormatted}* (Potongan ${potongFormatted}/minggu). Mohon pastikan saldo mencukupi. Terima kasih.`;
-                        html += `<div class="bg-white p-4 rounded-2xl border border-orange-200 shadow-sm hover:shadow-md transition-shadow relative group"><button onclick="window.deleteInstallment('${item.uid}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500 text-xs w-6 h-6 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-100"><i class="fa-solid fa-trash"></i></button><div class="flex items-center space-x-3 mb-2"><div class="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center shrink-0 border border-orange-100"><i class="fa-solid fa-user-tag text-sm"></i></div><div><h4 class="text-sm font-bold text-gray-800">${item.nama || 'Tanpa Nama'}</h4><div class="flex items-center space-x-2 mt-0.5">${statusBadge}<span class="text-[9px] text-gray-400">ID: ${item.uid}</span></div></div></div><div class="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-gray-50"><div><p class="text-[9px] text-gray-400 font-bold uppercase">Sisa Hutang Real-time</p><p class="text-sm font-black text-red-600">${sisaFormatted}</p><p class="text-[8px] text-gray-400">Dari: ${awalFormatted}</p></div><div class="text-right flex flex-col items-end justify-between"><p class="text-[9px] text-gray-500 font-bold bg-gray-50 px-2 py-1 rounded">Potong: ${potongFormatted}</p><a href="https://wa.me/?text=${encodeURIComponent(waMsg)}" target="_blank" class="bg-green-50 hover:bg-green-100 text-green-600 px-2 py-1 mt-1 rounded text-[9px] font-bold transition-colors border border-green-200 flex items-center"><i class="fa-brands fa-whatsapp mr-1"></i> Tagih</a></div></div></div>`;
+                    
+                    // FIX: Urutkan dengan aman (pastikan bertipe Number) dan tangkap error per item
+                    items.sort((a, b) => (Number(b.total_remaining) || 0) - (Number(a.total_remaining) || 0)).forEach(item => {
+                        try {
+                            const calc = window.getInstallmentInfo(item); 
+                            if(!calc) return; // Lewati hanya jika data benar-benar kosong/invalid
+                            
+                            if (calc.is_paid_off) { 
+                                html += `<div class="bg-gray-50 p-4 rounded-2xl border border-gray-200 flex items-center justify-between opacity-70"><div><h4 class="text-sm font-bold text-gray-500 line-through">${item.nama || 'Tanpa Nama'}</h4><p class="text-[10px] text-green-600 font-bold mt-0.5"><i class="fa-solid fa-check mr-1"></i>Lunas</p></div><button onclick="window.deleteInstallment('${item.uid}')" class="text-gray-400 hover:text-red-500 text-xs px-2"><i class="fa-solid fa-trash"></i></button></div>`; 
+                                return; 
+                            }
+                            
+                            const sisaFormatted = "Rp " + calc.remaining.toLocaleString('id-ID'); 
+                            const awalFormatted = "Rp " + Number(item.total_remaining).toLocaleString('id-ID'); 
+                            const potongFormatted = "Rp " + Number(item.weekly).toLocaleString('id-ID');
+                            const isNotStarted = calc.not_started; 
+                            const statusBadge = isNotStarted ? `<span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[9px] font-bold">Belum Mulai</span>` : `<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[9px] font-bold">Minggu ke-${calc.diffWeeks}</span>`;
+                            const waMsg = `Halo ${item.nama}, menginformasikan sisa tagihan atribut/jaket Anda saat ini adalah *${sisaFormatted}* (Potongan ${potongFormatted}/minggu). Mohon pastikan saldo mencukupi. Terima kasih.`;
+                            
+                            html += `<div class="bg-white p-4 rounded-2xl border border-orange-200 shadow-sm hover:shadow-md transition-shadow relative group"><button onclick="window.deleteInstallment('${item.uid}')" class="absolute top-2 right-2 text-gray-300 hover:text-red-500 text-xs w-6 h-6 flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-100"><i class="fa-solid fa-trash"></i></button><div class="flex items-center space-x-3 mb-2"><div class="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center shrink-0 border border-orange-100"><i class="fa-solid fa-user-tag text-sm"></i></div><div><h4 class="text-sm font-bold text-gray-800">${item.nama || 'Tanpa Nama'}</h4><div class="flex items-center space-x-2 mt-0.5">${statusBadge}<span class="text-[9px] text-gray-400">ID: ${item.uid}</span></div></div></div><div class="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-gray-50"><div><p class="text-[9px] text-gray-400 font-bold uppercase">Sisa Hutang Real-time</p><p class="text-sm font-black text-red-600">${sisaFormatted}</p><p class="text-[8px] text-gray-400">Dari: ${awalFormatted}</p></div><div class="text-right flex flex-col items-end justify-between"><p class="text-[9px] text-gray-500 font-bold bg-gray-50 px-2 py-1 rounded">Potong: ${potongFormatted}</p><a href="https://wa.me/?text=${encodeURIComponent(waMsg)}" target="_blank" class="bg-green-50 hover:bg-green-100 text-green-600 px-2 py-1 mt-1 rounded text-[9px] font-bold transition-colors border border-green-200 flex items-center"><i class="fa-brands fa-whatsapp mr-1"></i> Tagih</a></div></div></div>`;
+                        } catch(e) {
+                            console.error("Gagal merender data cicilan untuk item:", item.uid, e);
+                        }
                     });
+                    
+                    if(html === '') { html = `<div class="text-center py-6 text-gray-400 text-xs italic">Semua tagihan sudah lunas.</div>`; }
                     container.innerHTML = html;
+                }, (error) => {
+                    console.error("Gagal sinkronisasi data cicilan:", error);
                 });
 
                 const suspendCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'suspended_riders');
