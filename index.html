@@ -2407,6 +2407,46 @@
                     </div>
                 </div>
 
+                <!-- NEW HEALTH SERVICE CARD -->
+                <div class="bg-white rounded-3xl p-6 card-shadow border border-gray-50 transition-all duration-300" id="health-service-card">
+                    <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3"><i class="fa-solid fa-notes-medical text-red-500 mr-2 text-base"></i>Layanan Kesehatan</h3>
+                    
+                    <div id="health-service-form" class="hidden">
+                        <div class="bg-red-50 p-3 rounded-xl border border-red-100 mb-4 flex items-start gap-2 shadow-inner">
+                            <i class="fa-solid fa-circle-exclamation text-red-500 mt-0.5 text-xs shrink-0"></i>
+                            <p class="text-[9px] text-red-700 leading-relaxed font-bold italic">
+                                "Wajib diisi 1 kali! Pastikan sesuai dengan yang Anda miliki saat ini. Setelah disimpan, hanya Admin yang bisa merubahnya."
+                            </p>
+                        </div>
+                        
+                        <div class="space-y-3">
+                            <p class="text-xs font-bold text-gray-700">Layanan kesehatan yang kamu punya apa?</p>
+                            <select id="health-service-select" class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-500 transition-colors">
+                                <option value="" disabled selected>-- Pilih Layanan --</option>
+                                <option value="BPJS Kesehatan Mandiri">BPJS Kesehatan Mandiri</option>
+                                <option value="KIS">KIS (Kartu Indonesia Sehat)</option>
+                                <option value="Tidak Punya">Tidak Punya</option>
+                            </select>
+                        </div>
+                        
+                        <button onclick="window.saveHealthService()" id="btn-save-health" class="w-full mt-4 py-3.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl shadow-md active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-floppy-disk"></i> Simpan Permanen
+                        </button>
+                    </div>
+
+                    <div id="health-service-display" class="hidden">
+                        <p class="text-[10px] text-gray-500 mb-1.5 font-bold uppercase tracking-wider">Layanan Terdaftar:</p>
+                        <div class="flex items-center justify-between bg-green-50 px-4 py-3.5 rounded-xl border border-green-200 shadow-sm">
+                            <div class="flex items-center gap-3">
+                                <i class="fa-solid fa-house-medical text-green-600 text-lg"></i>
+                                <span id="health-service-value" class="text-sm font-bold text-green-800">Memuat...</span>
+                            </div>
+                            <i class="fa-solid fa-circle-check text-green-500 text-xl drop-shadow-sm"></i>
+                        </div>
+                        <p class="text-[9px] text-gray-400 mt-2 italic text-right">*Hubungi admin jika ingin mengubah data</p>
+                    </div>
+                </div>
+
                 <!-- Tombol Buka Tata Tertib di Profil -->
                 <button onclick="showRulesPopup(true)" class="w-full bg-white border border-gray-200 p-4 rounded-2xl flex items-center justify-between shadow-sm active:scale-95 transition-all group">
                     <div class="flex items-center space-x-3">
@@ -5537,6 +5577,16 @@
         };
 
         function switchPage(page, isHistoryEvent = false) {
+            // TAMBAHAN CEK LAYANAN KESEHATAN
+            if (window.needsHealthService && page !== 'profile') {
+                alert("Sistem Terkunci: Wajib melengkapi data Layanan Kesehatan di Profil Anda terlebih dahulu.");
+                page = 'profile';
+                setTimeout(() => {
+                    const hsCardEl = document.getElementById('health-service-card');
+                    if(hsCardEl) hsCardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 800);
+            }
+
              // Tampilkan Loading Overlay dengan Logo
             const loader = document.getElementById('loading-overlay');
             const retryBtn = document.getElementById('retry-btn');
@@ -6502,580 +6552,7 @@
           initAuth();
 
           // -------------------------------------------------------------
-          // NEW: SISTEM KEAMANAN (DEVICE BINDING & SINGLE LOGIN)
-          // -------------------------------------------------------------
-          window.checkDeviceBinding = async (uid, deviceId) => {
-              // SISTEM KEAMANAN DINONAKTIFKAN: Rider bebas masuk dengan UID saja
-              return 'allowed';
-              
-              /* Kode asli disembunyikan
-              try {
-                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
-                  const docSnap = await getDoc(docRef);
-                  
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      if (data.device_id === deviceId) {
-                          // Update waktu login terakhir di background
-                          updateDoc(docRef, { last_login: serverTimestamp() }).catch(e=>{});
-                          return 'allowed';
-                      } else {
-                          return 'conflict'; // Device berbeda, butuh pass admin
-                      }
-                  } else {
-                      // Login pertama kali, daftarkan device id
-                      await setDoc(docRef, {
-                          device_id: deviceId,
-                          last_login: serverTimestamp()
-                      });
-                      return 'allowed';
-                  }
-              } catch (e) {
-                  console.error("Error security check:", e);
-                  // Jika internet bermasalah, tetap izinkan agar rider tidak terkunci
-                  return 'allowed'; 
-              }
-              */
-          };
-
-          window.forceTakeoverDevice = async (uid, deviceId) => {
-              try {
-                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
-                  await setDoc(docRef, {
-                      device_id: deviceId,
-                      last_login: serverTimestamp()
-                  });
-                  return true;
-              } catch (e) {
-                  console.error("Error takeover device:", e);
-                  return false;
-              }
-          };
-
-          // -------------------------------------------------------------
-          // NEW: FUNGSI SETUP FCM TOKEN (PUSH NOTIFICATIONS)
-          // -------------------------------------------------------------
-          window.setupFCMToken = async (uid) => {
-              // MATIKAN: Firebase Messaging versi Web dinonaktifkan agar tidak bentrok
-              console.log("Setup FCM Token diserahkan ke Native Android.");
-              
-              // PERINTAH KE ANDROID: Beritahu Android untuk mengambil Token Asli
-              if (window.AndroidInterface && window.AndroidInterface.sendFcmTokenToDatabase) {
-                  window.AndroidInterface.sendFcmTokenToDatabase(String(uid).trim().toUpperCase());
-              }
-              
-              /* Kode Asli Web FCM Dinonaktifkan:
-              if (!messaging) return; 
-              try {
-                  const currentToken = await getToken(messaging);
-                  if (currentToken) {
-                      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
-                      await setDoc(docRef, {
-                          fcm_token: currentToken,
-                          last_token_update: serverTimestamp()
-                      }, { merge: true });
-                      console.log("FCM Token berhasil disinkronisasi ke database.");
-                  }
-              } catch (e) {
-                  console.warn("Gagal setup FCM Token:", e);
-              }
-              */
-          };
-
-          // FUNGSI JEMBATAN PENERIMA: Dipanggil oleh Android setelah berhasil mendapatkan Token
-          window.saveTokenToFirebase = async function(token, uid) {
-              console.log("Menerima Token FCM dari Android Native:", token);
-              try {
-                  // Menggunakan format Firebase Modular (v9+) sesuai setup aplikasi Anda
-                  const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
-                  
-                  await setDoc(docRef, { 
-                      fcm_token: token,
-                      last_token_update: serverTimestamp(),
-                      source: "android_native" // Menandai bahwa ini token asli HP
-                  }, { merge: true });
-                  
-                  console.log("FCM Token Native berhasil disimpan ke Database!");
-              } catch (e) {
-                  console.error("Gagal menyimpan FCM token ke Database:", e);
-              }
-          };
-
-          let deviceListenerUnsubscribe = null;
-          window.startDeviceListener = (uid) => {
-              // LISTENER KEAMANAN DINONAKTIFKAN: Mencegah auto-logout jika login di 2 HP
-              return;
-
-              /* Kode asli disembunyikan
-              if (!uid || !isAuthReady) return;
-              if (deviceListenerUnsubscribe) deviceListenerUnsubscribe();
-
-              const currentDeviceId = getDeviceID();
-              const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_devices', String(uid).trim().toUpperCase());
-              
-              deviceListenerUnsubscribe = onSnapshot(docRef, (docSnap) => {
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      // Jika device_id di database berubah (ditake-over perangkat lain)
-                      if (data.device_id && data.device_id !== currentDeviceId) {
-                          alert("Akses dihentikan! Akun Anda baru saja diloginkan di perangkat lain.");
-                          localStorage.removeItem('rider_uid');
-                          location.reload();
-                      }
-                  }
-              }, (error) => {
-                  console.warn("Device listener error:", error);
-              });
-              */
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER JADWAL LIBUR RIDER (RIDER SCHEDULES)
-          // -------------------------------------------------------------
-          let scheduleUnsubscribe = null;
-
-          window.startScheduleListener = (uid) => {
-              if (!uid) return;
-              
-              // PERBAIKAN: Mencegah gagal render karena Firebase belum selesai dimuat
-              if (!window.isFirebaseReady) {
-                  setTimeout(() => window.startScheduleListener(uid), 1000);
-                  return;
-              }
-              
-              if (scheduleUnsubscribe) return;
-
-              const uid_rider = String(uid).trim().toUpperCase();
-              
-              // Mengambil data dari Firebase sesuai path yang diminta:
-              const scheduleRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_schedules', uid_rider);
-
-              scheduleUnsubscribe = onSnapshot(scheduleRef, (docSnap) => {
-                  const container = document.getElementById('recommended-off-days-container');
-                  if (!container) return;
-
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      
-                      let days = [];
-                      let rawText = "";
-
-                      // Logika pencarian data: Prioritaskan field "anchor_date" sesuai permintaan
-                      if (data.anchor_date) { rawText = data.anchor_date; }
-                      else if (data.off_days) { rawText = data.off_days; } 
-                      else if (data.recommended_off_days) { rawText = data.recommended_off_days; } 
-                      else if (data.libur) { rawText = data.libur; } 
-                      else if (data.hari_libur) { rawText = data.hari_libur; }
-                      else if (data.jadwal) { rawText = data.jadwal; }
-                      else {
-                          // Fallback Ekstrem: Jika admin pakai nama field lain, ambil isinya langsung
-                          const keys = Object.keys(data);
-                          if (keys.length > 0 && keys[0] !== 'uid') {
-                              rawText = data[keys[0]];
-                          }
-                      }
-
-                      // Konversi text/array menjadi format yang siap di-render
-                      if (rawText) {
-                          if (Array.isArray(rawText)) {
-                              days = rawText;
-                          } else if (typeof rawText === 'string' && rawText.includes(',')) {
-                              days = rawText.split(',');
-                          } else {
-                              // Jika isinya hanya 1 kata (misal: "Senin") atau kalimat bebas tanpa koma
-                              days = [String(rawText)];
-                          }
-                      }
-
-                      // Bersihkan spasi dan filter data yang kosong
-                      days = days.map(d => String(d).trim()).filter(d => d.length > 0 && d !== 'undefined');
-
-                      // Format tanggal agar menjadi Hari, Tanggal Nama-Bulan Tahun
-                      const formattedDays = days.map(d => {
-                          if (!/\d/.test(d)) return d; // Jika tidak ada angka (misal: "Senin"), biarkan aslinya
-                          
-                          let dateObj;
-                          const partsId = d.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/); // Deteksi DD-MM-YYYY
-                          const partsIso = d.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/); // Deteksi YYYY-MM-DD
-                          
-                          if (partsId) {
-                              dateObj = new Date(partsId[3], partsId[2] - 1, partsId[1]);
-                          } else if (partsIso) {
-                              dateObj = new Date(partsIso[1], partsIso[2] - 1, partsIso[3]);
-                          } else {
-                              dateObj = new Date(d); // Fallback bawaan browser
-                          }
-
-                          if (!isNaN(dateObj.getTime())) {
-                              const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-                              const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-                              return `${dayNames[dateObj.getDay()]}, ${dateObj.getDate()} ${monthNames[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
-                          }
-                          return d; // Jika gagal parsing, kembalikan teks aslinya
-                      });
-
-                      if (formattedDays.length > 0) {
-                          container.innerHTML = formattedDays.map(d => `<span class="bg-orange-500 text-white text-[10px] font-extrabold px-3 py-1.5 rounded-lg uppercase tracking-wider shadow-md">${d}</span>`).join('');
-                      } else {
-                          container.innerHTML = `<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-700">Bebas pilih hari liburmu.</span>`;
-                      }
-                  } else {
-                      container.innerHTML = `<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-700">Belum ada jadwal dari admin.</span>`;
-                  }
-              }, (error) => {
-                  console.error("Gagal mengambil jadwal libur:", error);
-                  const container = document.getElementById('recommended-off-days-container');
-                  if (container) container.innerHTML = `<span class="text-[10px] text-red-400 font-bold italic">Gagal menghubungkan ke server.</span>`;
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: FUNGSI MIGRASI DATA CICILAN KE FIREBASE (JALANKAN SEKALI VIA CONSOLE)
-          // -------------------------------------------------------------
-          window.uploadInstallmentsToFirebase = async () => {
-              const targetProjectId = "onbid-2f87a";
-              
-              // DATA SUDAH DIRAPIKAN DENGAN NAMA RIDER
-              const OLD_DATA = {
-                  'UID113': { name: "Agus Setiono", weekly: 5000, total_remaining: 110000 },
-                  'UID379': { name: "Restu", weekly: 15000, total_remaining: 225000 },
-                  'UID556': { name: "Rider 556", weekly: 5000, total_remaining: 110000 },
-                  'UID109': { name: "Dedi", weekly: 5000, total_remaining: 85000 },
-                  'UID117': { name: "Ari", weekly: 5000, total_remaining: 85000 },
-                  'UID122': { name: "Roy", weekly: 14000, total_remaining: 386000 },
-                  'UID135': { name: "Warihatno", weekly: 5000, total_remaining: 25000 },
-                  'UID146': { name: "Welly", weekly: 5000, total_remaining: 85000 },
-                  'UID164': { name: "Dimas", weekly: 5000, total_remaining: 105000 },
-                  'UID174': { name: "Rider 174", weekly: 5000, total_remaining: 85000 },
-                  'UID214': { name: "Rider 214", weekly: 5000, total_remaining: 125000 },
-                  'UID226': { name: "Rahmat", weekly: 5000, total_remaining: 125000 },
-                  'UID232': { name: "Y Latif", weekly: 5000, total_remaining: 150000 },
-                  'UID247': { name: "Nanda", weekly: 5000, total_remaining: 140000 },
-                  'UID256': { name: "Ade", weekly: 5000, total_remaining: 150000 },
-                  'UID267': { name: "Septian", weekly: 5000, total_remaining: 170000 },
-                  'UID275': { name: "Rider 275", weekly: 5000, total_remaining: 120000 },
-                  'UID303': { name: "Alfin", weekly: 5000, total_remaining: 150000 },
-                  'UID315': { name: "Rider 315", weekly: 5000, total_remaining: 155000 },
-                  'UID326': { name: "Imam Arifin", weekly: 5000, total_remaining: 125000 },
-                  'UID347': { name: "Rider 347", weekly: 5000, total_remaining: 140000 },
-                  'UID348': { name: "Lukman", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-                  'UID337': { name: "Teguh B", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-                  'UID284': { name: "Pras", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-                  'UID959': { name: "Opy", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-                  'UID292': { name: "Teguh", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-                  'UID155': { name: "Budi", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 2, 30) }
-              };
-              
-              console.log("Memulai migrasi data ke Firebase...");
-              for (const [uid, data] of Object.entries(OLD_DATA)) {
-                  try {
-                      const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', uid);
-                      
-                      // FORMAT RAPI SESUAI PERMINTAAN
-                      await setDoc(docRef, {
-                          nama: data.name,
-                          uid: uid,
-                          weekly: data.weekly,
-                          weekly_amount: data.weekly,
-                          total_amount: data.total_remaining,
-                          total_remaining: data.total_remaining,
-                          start_date: data.start_date || new Date(2026, 0, 19), // 19 Januari 2026
-                          updated_at: serverTimestamp()
-                      }, { merge: true }); // Menggunakan merge agar data aman
-                      
-                      console.log(`✅ Berhasil upload & merapikan: ${uid} - ${data.name}`);
-                  } catch (e) {
-                      console.error(`❌ Gagal upload ${uid}:`, e);
-                  }
-              }
-              console.log("🎉 Proses migrasi dan perapihan selesai! Anda bisa cek Firestore Anda.");
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER CICILAN (INSTALLMENTS) DARI FIREBASE
-          // -------------------------------------------------------------
-          let installmentsUnsubscribe = null;
-
-          window.startInstallmentsListener = (uid) => {
-              if (!uid || !isAuthReady) return;
-              if (installmentsUnsubscribe) installmentsUnsubscribe();
-
-              const targetProjectId = "onbid-2f87a";
-              const cleanUid = String(uid).trim().toUpperCase();
-              const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', cleanUid);
-
-              installmentsUnsubscribe = onSnapshot(docRef, (docSnap) => {
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      
-                      let startDate = INSTALLMENT_START_DATE; // Default dari JS atas
-                      if (data.start_date) {
-                          if (data.start_date.seconds) {
-                              startDate = new Date(data.start_date.seconds * 1000);
-                          } else if (typeof data.start_date === 'string') {
-                              startDate = new Date(data.start_date);
-                          }
-                      }
-
-                      // Update global data container
-                      window.firebaseInstallmentsData[cleanUid] = {
-                          weekly: data.weekly_amount || data.weekly || 0,
-                          total_remaining: data.total_amount || data.total_debt || data.total_remaining || 0,
-                          start_date: startDate,
-                          is_from_firebase: true
-                      };
-                      
-                      console.log("Data cicilan Firebase termuat untuk:", cleanUid);
-                  } else {
-                      window.firebaseInstallmentsData[cleanUid] = null;
-                  }
-                  
-                  // Trigger re-render UI jika diperlukan (terutama halaman mingguan / cicilan)
-                  if (typeof window.processData === 'function' && rawData && rawData.length > 0) {
-                      window.processData();
-                  }
-                  if (document.getElementById('page-installments') && !document.getElementById('page-installments').classList.contains('hidden-page')) {
-                      if (typeof window.renderInstallmentsHistory === 'function') {
-                          window.renderInstallmentsHistory();
-                      }
-                  }
-              }, (error) => {
-                  console.error("Gagal mengambil data cicilan Firebase:", error);
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER DOMPET KREDIT & RIWAYAT (REALTIME)
-          // -------------------------------------------------------------
-          let walletBalanceUnsubscribe = null;
-          let walletHistoryUnsubscribe = null;
-
-          window.startWalletListener = (uid) => {
-              if (!uid || !isAuthReady) return;
-              
-              // Mencegah error case sensitive
-              const cleanUidUpper = String(uid).trim().toUpperCase();
-              const cleanUid = String(uid).trim();
-
-              // FIX: Kunci path ke Project ID spesifik agar sinkron dengan Admin App
-              const targetProjectId = firebaseConfig.projectId;
-
-              // ========================================================
-              // FUNGSI 1: MENDENGARKAN SALDO KREDIT REALTIME
-              // ========================================================
-              if (walletBalanceUnsubscribe) walletBalanceUnsubscribe();
-              
-              // Path sesuai dengan tempat Admin menyimpan saldo: artifacts/onbid-2f87a/public/data/rider_balances/{uid}
-              const balanceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_balances', cleanUidUpper);
-              
-              walletBalanceUnsubscribe = onSnapshot(balanceRef, (docSnap) => {
-                  const cardEl = document.getElementById('saldo-card');
-                  const amountEl = document.getElementById('rider-saldo-amount');
-                  const badgeEl = document.getElementById('rider-saldo-badge');
-                  
-                  if (!cardEl || !amountEl || !badgeEl) return;
-
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      const currentSaldo = data.saldo || 0;
-                      
-                      // Format Rupiah
-                      let displaySaldo = `Rp ${Math.abs(currentSaldo).toLocaleString('id-ID')}`;
-                      if (currentSaldo < 0) displaySaldo = `- Rp ${Math.abs(currentSaldo).toLocaleString('id-ID')}`;
-                      
-                      // Simpan ke memori global untuk sinkronisasi tombol mata (Privacy)
-                      window.currentWalletBalance = displaySaldo;
-                      
-                      // Tampilkan selalu nominal saldo tanpa terpengaruh mode privasi
-                      amountEl.innerText = displaySaldo;
-
-                      // Logika Warna Persis Seperti Aplikasi Admin
-                      if (currentSaldo < 0) {
-                          // MINUS (Merah Gelap)
-                          cardEl.className = 'bg-red-100 rounded-2xl p-5 border border-red-600 shadow-[0_0_20px_rgba(220,38,38,0.4)] relative overflow-hidden transition-all duration-300';
-                          amountEl.className = 'text-3xl font-black text-red-700';
-                          badgeEl.className = 'absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-red-600 text-white animate-pulse shadow-md';
-                          badgeEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> MINUS';
-                      } else if (currentSaldo < 10000) {
-                          // LIMIT (Rose / Merah Muda)
-                          cardEl.className = 'bg-rose-50 rounded-2xl p-5 border border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)] relative overflow-hidden transition-all duration-300';
-                          amountEl.className = 'text-3xl font-black text-rose-600';
-                          badgeEl.className = 'absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-rose-500 text-white animate-pulse shadow-md';
-                          badgeEl.innerText = 'LIMIT';
-                      } else {
-                          // AMAN (Hijau)
-                          cardEl.className = 'bg-emerald-50 rounded-2xl p-5 border border-emerald-200 shadow-sm relative overflow-hidden transition-all duration-300';
-                          amountEl.className = 'text-3xl font-black text-emerald-600';
-                          badgeEl.className = 'absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-emerald-200 text-emerald-800';
-                          badgeEl.innerText = 'AMAN';
-                      }
-                  } else {
-                      // Jika data saldo belum pernah dibuat oleh admin
-                      window.currentWalletBalance = "Rp 0";
-                      amountEl.innerText = "Rp 0";
-                      badgeEl.innerText = "KOSONG";
-                      badgeEl.className = 'absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-slate-200 text-slate-600';
-                      cardEl.className = 'bg-slate-50 rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden transition-all duration-300';
-                  }
-              }, (error) => {
-                  console.error("Gagal mengambil saldo dompet:", error);
-                  const amountEl = document.getElementById('rider-saldo-amount');
-                  if (amountEl) amountEl.innerText = "Gagal memuat";
-              });
-
-              // ========================================================
-              // FUNGSI 2: MENDENGARKAN RIWAYAT ORDER (DAILY ORDERS) REALTIME
-              // ========================================================
-              if (walletHistoryUnsubscribe) walletHistoryUnsubscribe();
-              
-              // Path histori sesuai Admin: artifacts/onbid-2f87a/users/{uid}/daily_orders
-              const historyCol = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
-              
-              // Urutkan dari yang terbaru berdasarkan waktu ditarik ke riwayat
-              const q = query(historyCol, orderBy('created_at', 'desc'));
-
-              walletHistoryUnsubscribe = onSnapshot(q, (snapshot) => {
-                  const container = document.getElementById('rider-history-list');
-                  if (!container) return;
-                  
-                  if (snapshot.empty) {
-                      container.innerHTML = `
-                          <div class="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-gray-200">
-                              <i class="fa-solid fa-box-open text-3xl text-gray-300 mb-2"></i>
-                              <p class="text-[10px] text-black font-bold">Belum ada riwayat orderan selesai.</p>
-                          </div>`;
-                      return;
-                  }
-
-                  let html = '';
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
-                      
-                      // Di Admin, Nominal_Kotor disimpan dalam satuan ribuan (dibagi 1000). Kita kembalikan ke asli.
-                      const ongkir = (parseFloat(data.Nominal_Kotor) || 0) * 1000;
-                      const tambahan = (parseFloat(data.Tambahan) || 0) * 1000;
-                      
-                      // Hitung persis potongan sistem (16% dari Ongkir)
-                      // DITANGGUHKAN SEMENTARA: Fitur pending menunggu sosialisasi
-                      const potonganSistem = 0; // ongkir * 0.16;
-                      
-                      const tamStr = tambahan > 0 ? `<span class="text-[9px] font-black text-emerald-500 bg-emerald-50 px-1 py-0.5 rounded ml-1">+ Rp ${tambahan.toLocaleString('id-ID')}</span>` : '';
-
-                      const tgl = data.Tanggal || data.tanggal || 'Hari Ini';
-                      const jam = data.Jam || data.jam || '';
-
-                      html += `
-                          <div class="bg-white rounded-xl p-4 border border-gray-100 shadow-sm relative overflow-hidden mb-3">
-                              <div class="flex justify-between items-center mb-2 pb-2 border-b border-gray-50">
-                                  <div class="flex items-center gap-1.5 text-slate-500">
-                                      <i class="fa-regular fa-calendar text-[10px]"></i>
-                                      <span class="text-[9px] font-bold">${tgl} • ${jam}</span>
-                                  </div>
-                                  <span class="text-[8px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded uppercase border border-indigo-100">
-                                      ${data.Status || data.status || 'Selesai'}
-                                  </span>
-                              </div>
-                              
-                              <p class="font-black text-sm text-black mb-0.5 uppercase">${data.Nama_Pelanggan || data.customer_name || 'Pelanggan'}</p>
-                              <p class="text-[10px] text-slate-500 italic mb-3 line-clamp-2 leading-tight">"${data.Keterangan || data.proof_desc || '-'}"</p>
-                              
-                              <div class="bg-slate-50 rounded-lg p-2.5 border border-slate-100 flex justify-between items-center">
-                                  <div>
-                                      <p class="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Ongkos Kirim</p>
-                                      <div class="flex items-center">
-                                          <p class="text-xs font-black text-black">Rp ${ongkir.toLocaleString('id-ID')}</p>
-                                          ${tamStr}
-                                      </div>
-                                  </div>
-                                  <div class="text-right opacity-60">
-                                      <p class="text-[8px] font-black text-rose-500 uppercase tracking-widest mb-0.5"><i class="fa-solid fa-clock mr-1"></i>Potongan (16%)</p>
-                                      <p class="text-[10px] font-bold text-rose-600 italic">PENDING</p>
-                                  </div>
-                              </div>
-                          </div>
-                      `;
-                  });
-                  
-                  container.innerHTML = html;
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER KONTROL ADMIN (SUSPEND / FORCE KILL)
-          // -------------------------------------------------------------
-          let suspensionUnsubscribe = null;
-          let forceKillUnsubscribe = null;
-
-          window.startSuspensionListener = (uid, name) => {
-              if (!uid || !isAuthReady) return;
-              if (suspensionUnsubscribe) return;
-
-              // 1. LOGIKA SUSPEND: Mengunci path PASTI ke (onbid-2f87a) sesuai instruksi agar tidak diubah sistem
-              const targetProjectId = firebaseConfig.projectId; 
-              const suspendRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'suspended_riders', String(uid).trim().toUpperCase());
-              
-              suspensionUnsubscribe = onSnapshot(suspendRef, (docSnap) => {
-                  const toggle = document.getElementById('onbid-toggle');
-                  const suspendedOverlay = document.getElementById('suspended-overlay');
-                  
-                  if (docSnap.exists()) {
-                      // Jika dokumen ada, berarti rider DITANGGUHKAN
-                      const data = docSnap.data() || {};
-                      if (suspendedOverlay) {
-                          suspendedOverlay.classList.remove('hidden');
-                          suspendedOverlay.classList.add('flex');
-                          const nameEl = document.getElementById('suspended-name');
-                          // Ambil nama dari dokumen, jika kosong fallback ke UI yang ada
-                          if (nameEl) nameEl.innerText = data.name || window.document.getElementById('display-rider-name').innerText || "Rider";
-                      }
-                      // Paksa mematikan tombol On-Bid jika disuspend
-                      if (toggle && toggle.checked) {
-                          toggle.checked = false;
-                          if (typeof window.updateOnbidUI === 'function') {
-                              window.updateOnbidUI(false);
-                          } else if (typeof updateOnbidUI === 'function') {
-                              updateOnbidUI(false);
-                          }
-                          localStorage.setItem('rider_onbid_status', 'false');
-                      }
-                  } else {
-                      // Jika dokumen TIDAK ADA (dihapus), berarti rider DIBUKA AKSESNYA (Unblock)
-                      if (suspendedOverlay) {
-                          suspendedOverlay.classList.add('hidden');
-                          suspendedOverlay.classList.remove('flex');
-                      }
-                  }
-              }, (error) => {
-                  console.warn("Suspension listener error:", error);
-              });
-
-              // 2. LOGIKA FORCE KILL: Path status_rider_aktif (Untuk dikeluarkan dari radar secara paksa)
-              const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
-              forceKillUnsubscribe = onSnapshot(statusRef, (docSnap) => {
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      // Jika admin menekan paksa offline (force_kill)
-                      if (data.force_kill === true) {
-                          const toggle = document.getElementById('onbid-toggle');
-                          if (toggle && toggle.checked) {
-                              toggle.checked = false;
-                              if (typeof window.updateOnbidUI === 'function') {
-                                  window.updateOnbidUI(false);
-                              } else if (typeof updateOnbidUI === 'function') {
-                                  updateOnbidUI(false);
-                              }
-                              localStorage.setItem('rider_onbid_status', 'false');
-                              alert("Sesi Anda diakhiri oleh Admin. Anda telah dikeluarkan dari antrean radar.");
-                          }
-                          // Matikan status force_kill agar tidak berulang
-                          updateDoc(statusRef, { force_kill: false }).catch(e => {});
-                      }
-                  }
-              });
-          };
-
-          // -------------------------------------------------------------
-          // NEW: FUNGSI RENDER FOTO PROFIL RIDER
+          // NEW: FUNGSI RENDER FOTO PROFIL RIDER & LAYANAN KESEHATAN
           // -------------------------------------------------------------
           let profilePhotoUnsubscribe = null;
           
@@ -7088,6 +6565,11 @@
               const photoRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', String(uid).trim().toUpperCase());
               
               profilePhotoUnsubscribe = onSnapshot(photoRef, (docSnap) => {
+                  const hsCard = document.getElementById('health-service-card');
+                  const hsForm = document.getElementById('health-service-form');
+                  const hsDisplay = document.getElementById('health-service-display');
+                  const hsValue = document.getElementById('health-service-value');
+
                   if (docSnap.exists()) {
                       const data = docSnap.data() || {};
                       // Sesuai catatan: foto disimpan dalam field foto_base64 (Base64 String)
@@ -7101,10 +6583,74 @@
                           const profileImg = document.getElementById('profile-img');
                           if (profileImg) profileImg.src = photoSrc;
                       }
+
+                      // LOGIKA LAYANAN KESEHATAN
+                      if (data.health_service) {
+                          window.needsHealthService = false;
+                          if(hsForm) hsForm.classList.add('hidden');
+                          if(hsDisplay) {
+                              hsDisplay.classList.remove('hidden');
+                              if(hsValue) hsValue.innerText = data.health_service;
+                          }
+                          if(hsCard) hsCard.classList.remove('ring-2', 'ring-red-500', 'shadow-[0_0_15px_rgba(239,68,68,0.3)]');
+                      } else {
+                          window.needsHealthService = true;
+                          if(hsForm) hsForm.classList.remove('hidden');
+                          if(hsDisplay) hsDisplay.classList.add('hidden');
+                          if(hsCard) hsCard.classList.add('ring-2', 'ring-red-500', 'shadow-[0_0_15px_rgba(239,68,68,0.3)]');
+                          if (typeof window.enforceHealthService === 'function') window.enforceHealthService();
+                      }
+                  } else {
+                      window.needsHealthService = true;
+                      if(hsForm) hsForm.classList.remove('hidden');
+                      if(hsDisplay) hsDisplay.classList.add('hidden');
+                      if(hsCard) hsCard.classList.add('ring-2', 'ring-red-500', 'shadow-[0_0_15px_rgba(239,68,68,0.3)]');
+                      if (typeof window.enforceHealthService === 'function') window.enforceHealthService();
                   }
               }, (error) => {
                   console.warn("Profile photo listener error:", error);
               });
+          };
+
+          window.enforceHealthService = () => {
+              if (window.needsHealthService) {
+                  const isProfileHidden = document.getElementById('page-profile').classList.contains('hidden-page');
+                  const isMainAppHidden = document.getElementById('main-app').classList.contains('hidden');
+                  
+                  if (isProfileHidden && !isMainAppHidden) {
+                      alert("Wajib Mengisi Data: Silakan lengkapi informasi Layanan Kesehatan Anda di menu Profil terlebih dahulu.");
+                      if (typeof switchPage === 'function') switchPage('profile');
+                  }
+              }
+          };
+
+          window.saveHealthService = async () => {
+              const select = document.getElementById('health-service-select');
+              const val = select.value;
+              if (!val) {
+                  alert("Pilih layanan kesehatan Anda terlebih dahulu!");
+                  return;
+              }
+              
+              const btn = document.getElementById('btn-save-health');
+              const originalHtml = btn.innerHTML;
+              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyimpan...';
+              btn.disabled = true;
+              
+              try {
+                  const targetProjectId = firebaseConfig.projectId; 
+                  const uid = localStorage.getItem('rider_uid');
+                  const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', String(uid).trim().toUpperCase());
+                  
+                  await setDoc(docRef, { health_service: val, updated_at: serverTimestamp() }, { merge: true });
+                  
+                  alert("Data layanan kesehatan berhasil disimpan permanen!");
+              } catch (e) {
+                  console.error(e);
+                  alert("Gagal menyimpan data. Pastikan internet Anda stabil.");
+                  btn.innerHTML = originalHtml;
+                  btn.disabled = false;
+              }
           };
 
           // -------------------------------------------------------------
@@ -8699,6 +8245,100 @@
               } catch(e) {
                   console.error("Gagal keluar antrean:", e);
               }
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM KEAMANAN (DEVICE BINDING & SUSPENSI)
+          // -------------------------------------------------------------
+          window.checkDeviceBinding = async (uid, deviceId) => {
+              try {
+                  const deviceRef = doc(db, 'artifacts', appId, 'users', String(uid).trim().toUpperCase(), 'device_binding', 'info');
+                  const docSnap = await getDoc(deviceRef);
+                  
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      if (data.deviceId === deviceId) {
+                          return 'allowed';
+                      } else {
+                          return 'conflict';
+                      }
+                  } else {
+                      // Pertama kali login di device ini
+                      await setDoc(deviceRef, {
+                          deviceId: deviceId,
+                          last_login: serverTimestamp()
+                      }, { merge: true });
+                      return 'allowed';
+                  }
+              } catch (error) {
+                  console.error("Device Binding Check Error:", error);
+                  return 'allowed'; // Fallback diizinkan jika error koneksi
+              }
+          };
+
+          window.forceTakeoverDevice = async (uid, deviceId) => {
+              try {
+                  const deviceRef = doc(db, 'artifacts', appId, 'users', String(uid).trim().toUpperCase(), 'device_binding', 'info');
+                  await setDoc(deviceRef, {
+                      deviceId: deviceId,
+                      last_login: serverTimestamp()
+                  }, { merge: true });
+                  return true;
+              } catch (error) {
+                  console.error("Force Takeover Error:", error);
+                  return false;
+              }
+          };
+
+          window.startDeviceListener = (uid) => {
+              if (!uid) return;
+              const deviceRef = doc(db, 'artifacts', appId, 'users', String(uid).trim().toUpperCase(), 'device_binding', 'info');
+              
+              onSnapshot(deviceRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      const currentDeviceId = typeof getDeviceID === 'function' ? getDeviceID() : localStorage.getItem('projekgo_device_id');
+                      if (data.deviceId && data.deviceId !== currentDeviceId) {
+                          alert("Akun Anda telah masuk di perangkat lain. Anda akan dikeluarkan secara otomatis.");
+                          if (typeof window.handleLogout === 'function') {
+                              window.handleLogout();
+                          } else {
+                              localStorage.removeItem('rider_uid');
+                              location.reload();
+                          }
+                      }
+                  }
+              });
+          };
+
+          window.startSuspensionListener = (uid, name) => {
+              if (!uid) return;
+              const suspendRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_profiles', String(uid).trim().toUpperCase());
+              
+              onSnapshot(suspendRef, (docSnap) => {
+                  const overlay = document.getElementById('suspended-overlay');
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      if (data.is_suspended) {
+                          if (overlay) {
+                              overlay.classList.remove('hidden');
+                              overlay.classList.add('flex');
+                          }
+                          const nameEl = document.getElementById('suspended-name');
+                          if (nameEl) nameEl.innerText = name || "Rider";
+                      } else {
+                          if (overlay) {
+                              overlay.classList.add('hidden');
+                              overlay.classList.remove('flex');
+                          }
+                      }
+                  } else {
+                      if (overlay) {
+                          overlay.classList.add('hidden');
+                          overlay.classList.remove('flex');
+                      }
+                  }
+              });
           };
 
       } catch (e) { console.error("Firebase Init Error:", e); }
