@@ -1149,7 +1149,7 @@
 
                 <!-- 3. DAFTAR RIWAYAT ORDER -->
                 <section>
-                    <h3 class="text-sm font-black text-black mb-3"><i class="fa-solid fa-clipboard-list text-sky-500 mr-2"></i>Riwayat Order Selesai</h3>
+                    <h3 class="text-sm font-black text-black mb-3"><i class="fa-solid fa-file-invoice-dollar text-red-500 mr-2"></i>Riwayat Potongan Kredit</h3>
                     
                     <div id="rider-history-list" class="space-y-3 pb-6">
                         <p class="text-xs text-center text-slate-400 py-6 font-bold animate-pulse">Menarik data dari server...</p>
@@ -3949,6 +3949,7 @@
             // LOGIKA BLOKIR WEB BROWSER: Wajib dari Aplikasi Android Native
             // Mengecek keberadaan 'AndroidInterface' yang disuntikkan oleh Android Studio
             
+            /* --- DINONAKTIFKAN SEMENTARA UNTUK TESTING DI BROWSER ---
             if (typeof window.AndroidInterface === 'undefined') {
                 document.getElementById('block-browser-popup').classList.remove('hidden');
                 document.getElementById('block-browser-popup').classList.add('flex');
@@ -3965,6 +3966,7 @@
                 // Hentikan proses inisialisasi aplikasi selanjutnya
                 return; 
             }
+            --------------------------------------------------------- */
             
             initPWA(); // Inisialisasi Deteksi PWA
 
@@ -4758,6 +4760,9 @@
             processData();
             checkAdmPaymentStatus();
         }
+
+        window.processData = processData; // EKSPOS KE WINDOW AGAR BISA DIPANGGIL LISTENER FIREBASE
+        window.renderInstallmentsHistory = renderInstallmentsHistory; // EKSPOS JUGA FUNGSI RENDERNYA
 
         function processData() {
             const todayKey = getJakartaDateString();
@@ -8342,6 +8347,7 @@
           // NEW: SISTEM LISTENER SALDO DOMPET RIDER
           // -------------------------------------------------------------
           let walletUnsubscribe = null;
+          let walletHistoryUnsubscribe = null;
 
           window.startWalletListener = (uid) => {
               if (!uid || !isAuthReady) return;
@@ -8349,6 +8355,9 @@
 
               if (walletUnsubscribe) {
                   walletUnsubscribe();
+              }
+              if (walletHistoryUnsubscribe) {
+                  walletHistoryUnsubscribe();
               }
 
               // PATH DATABASE: Mengambil saldo dari /artifacts/onbid-2f87a/public/data/rider_balances/{UID}
@@ -8403,6 +8412,220 @@
                   console.error("Error fetching wallet balance:", error);
                   const saldoEl = document.getElementById('rider-saldo-amount');
                   if (saldoEl) saldoEl.innerText = "Error";
+              });
+
+              // -------------------------------------------------------------
+              // NEW: MENGAMBIL RIWAYAT ORDER (KOTOR) UNTUK DOMPET
+              // -------------------------------------------------------------
+              const historyCol = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
+              const q = query(historyCol, orderBy('created_at', 'desc'));
+
+              walletHistoryUnsubscribe = onSnapshot(q, (snapshot) => {
+                  const historyList = document.getElementById('rider-history-list');
+                  if (!historyList) return;
+
+                  if (snapshot.empty) {
+                      historyList.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold">Belum ada riwayat order.</p>';
+                      return;
+                  }
+
+                  let html = '';
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      
+                      const dateStr = data.Tanggal || data.tanggal || '-';
+                      const timeStr = data.Jam || data.jam || '-';
+                      
+                      let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
+                      let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
+                      
+                      // Format jika nilai kotor dalam bentuk pecahan (misal: 15 = Rp 15.000)
+                      if (kotor > 0 && kotor <= 500) kotor = kotor * 1000;
+                      if (extra > 0 && extra <= 500) extra = extra * 1000;
+
+                      const desc = data.List_Pesanan || data.Keterangan || 'Orderan';
+                      const status = data.Status || data.status || 'Selesai';
+                      const isDone = status.toLowerCase() === 'selesai';
+
+                      // MENGHITUNG JUMLAH POTONGAN (ADM RATE * NOMINAL KOTOR)
+                      const admRate = typeof window.getAdmRate === 'function' && dateStr !== '-' ? window.getAdmRate(dateStr) : 0.16;
+                      const potongan = isDone ? Math.round(kotor * admRate) : 0;
+
+                      const netClass = isDone ? 'text-red-600' : 'text-gray-400 line-through';
+                      const iconClass = isDone ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200';
+                      const icon = isDone ? 'fa-minus' : 'fa-xmark';
+
+                      html += `
+                          <div class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
+                              <div class="flex items-center gap-3">
+                                  <div class="w-8 h-8 rounded-full ${iconClass} border flex items-center justify-center shrink-0">
+                                      <i class="fa-solid ${icon} text-xs"></i>
+                                  </div>
+                                  <div>
+                                      <h4 class="text-[11px] font-bold text-gray-800 line-clamp-1 w-32 truncate" title="${desc}">${desc}</h4>
+                                      <p class="text-[9px] text-gray-400 font-medium mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${dateStr} • ${timeStr}</p>
+                                  </div>
+                              </div>
+                              <div class="text-right shrink-0">
+                                  <p class="text-xs font-black ${netClass}">- Rp ${potongan.toLocaleString('id-ID')}</p>
+                                  <p class="text-[8px] font-bold text-gray-400 uppercase mt-0.5">Potongan</p>
+                              </div>
+                          </div>
+                      `;
+                  });
+                  historyList.innerHTML = html;
+              }, (error) => {
+                  console.error("Error fetching wallet history:", error);
+                  const historyList = document.getElementById('rider-history-list');
+                  if (historyList) historyList.innerHTML = '<p class="text-xs text-center text-red-400 py-6 font-bold">Gagal memuat riwayat.</p>';
+              });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER JADWAL LIBUR MINGGUAN
+          // -------------------------------------------------------------
+          let scheduleUnsubscribe = null;
+
+          window.startScheduleListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              const cleanUid = String(uid).trim().toUpperCase();
+
+              if (scheduleUnsubscribe) {
+                  scheduleUnsubscribe();
+              }
+
+              // PATH DATABASE: Mengambil jadwal libur dari /artifacts/onbid-2f87a/public/data/rider_schedules/{UID}
+              const targetProjectId = firebaseConfig.projectId; // onbid-2f87a
+              const scheduleRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_schedules', cleanUid);
+
+              scheduleUnsubscribe = onSnapshot(scheduleRef, (docSnap) => {
+                  const container = document.getElementById('recommended-off-days-container');
+                  if (!container) return;
+
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      
+                      // Mengambil field anchor_date (Format YYYY-MM-DD) dan fallback array
+                      const anchorDateStr = data.anchor_date; 
+                      const offDates = data.off_dates || data.tanggal_libur || [];
+                      const offDays = data.off_days || data.hari_libur || data.libur || [];
+                      
+                      let html = '';
+                      // Opsi format: "Senin, 30 Maret 2026"
+                      const dateOptions = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' };
+
+                      // 1. Jika admin menetapkan anchor_date (Tanggal spesifik)
+                      if (anchorDateStr) {
+                          try {
+                              const d = new Date(anchorDateStr);
+                              if (!isNaN(d.getTime())) {
+                                  const formatted = d.toLocaleDateString('id-ID', dateOptions);
+                                  html += `<span class="bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-sm">${formatted}</span>`;
+                              }
+                          } catch(e) {
+                              console.error("Format date error:", e);
+                          }
+                      }
+
+                      // 2. Jika admin menetapkan array berisi tanggal spesifik lainnya
+                      if (Array.isArray(offDates) && offDates.length > 0) {
+                          offDates.forEach(dateStr => {
+                              if (dateStr === anchorDateStr) return; // Hindari merender tanggal yang sama dua kali
+                              try {
+                                  const d = new Date(dateStr);
+                                  if (!isNaN(d.getTime())) {
+                                      const formatted = d.toLocaleDateString('id-ID', dateOptions);
+                                      html += `<span class="bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-sm">${formatted}</span>`;
+                                  }
+                              } catch(e){}
+                          });
+                      }
+
+                      // 3. Fallback: Jika tidak ada format tanggal (Hanya diatur nama harinya saja: "Senin", "Jumat")
+                      if (html === '' && Array.isArray(offDays) && offDays.length > 0) {
+                          offDays.forEach(day => {
+                              html += `<span class="bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-sm">${day}</span>`;
+                          });
+                      }
+
+                      if (html !== '') {
+                          container.innerHTML = html;
+                      } else {
+                          container.innerHTML = '<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800/80 px-3 py-1.5 rounded-lg border border-gray-700/50">Tidak ada jadwal libur (Full Masuk)</span>';
+                      }
+                  } else {
+                      // Jika dokumen belum dibuat oleh admin
+                      container.innerHTML = '<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800/80 px-3 py-1.5 rounded-lg border border-gray-700/50">Belum diatur Admin</span>';
+                  }
+              }, (error) => {
+                  console.error("Error fetching schedule:", error);
+                  const container = document.getElementById('recommended-off-days-container');
+                  if (container) container.innerHTML = '<span class="text-[10px] text-red-400 font-bold italic bg-red-900/30 px-3 py-1.5 rounded-lg border border-red-800/50">Gagal memuat jadwal</span>';
+              });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER RIWAYAT CICILAN JAKET / ATRIBUT
+          // -------------------------------------------------------------
+          let installmentsUnsubscribe = null;
+
+          window.startInstallmentsListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              const cleanUid = String(uid).trim().toUpperCase();
+
+              if (installmentsUnsubscribe) {
+                  installmentsUnsubscribe();
+              }
+
+              // PATH DATABASE: Mengambil cicilan dari /artifacts/onbid-2f87a/public/data/rider_installments/{UID}
+              const targetProjectId = "onbid-2f87a";
+              const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', cleanUid);
+
+              installmentsUnsubscribe = onSnapshot(docRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      
+                      // Fallback start_date jika tidak ada (Default 19 Jan 2026)
+                      let startDate = new Date(2026, 0, 19); 
+                      if (data.start_date) {
+                          if (data.start_date.seconds) {
+                              startDate = new Date(data.start_date.seconds * 1000);
+                          } else {
+                              const parsed = new Date(data.start_date);
+                              if (!isNaN(parsed.getTime())) startDate = parsed;
+                          }
+                      }
+
+                      // Menyimpan ke memori global
+                      window.firebaseInstallmentsData[cleanUid] = {
+                          weekly: data.weekly_amount || data.weekly || 0,
+                          total_remaining: data.total_amount || data.total_debt || data.total_remaining || 0,
+                          start_date: startDate,
+                          is_from_firebase: true
+                      };
+                  } else {
+                      // Jika belum ada data cicilan atau dokumen kosong
+                      window.firebaseInstallmentsData[cleanUid] = {
+                          weekly: 0,
+                          total_remaining: 0,
+                          start_date: new Date(),
+                          is_from_firebase: true
+                      };
+                  }
+
+                  // TRIGGER RE-RENDER UI: Update halaman mingguan dan halaman detail cicilan
+                  if (typeof window.processData === 'function' && window.rawData && window.rawData.length > 0) {
+                      window.processData();
+                  }
+                  
+                  const pageInstallments = document.getElementById('page-installments');
+                  if (pageInstallments && !pageInstallments.classList.contains('hidden-page')) {
+                      if (typeof window.renderInstallmentsHistory === 'function') {
+                          window.renderInstallmentsHistory();
+                      }
+                  }
+              }, (error) => {
+                  console.error("Error fetching installments:", error);
               });
           };
 
