@@ -2651,37 +2651,8 @@
             'UID959': 'https://bit.ly/rideropy'
         };
 
-        const RIDER_INSTALLMENTS = {
-            'UID113': { weekly: 5000, total_remaining: 110000 },
-            'UID379': { weekly: 15000, total_remaining: 225000 },
-            'UID556': { weekly: 5000, total_remaining: 110000 },
-            'UID109': { weekly: 5000, total_remaining: 85000 },
-            'UID117': { weekly: 5000, total_remaining: 85000 },
-            'UID122': { weekly: 14000, total_remaining: 386000 },
-            'UID135': { weekly: 5000, total_remaining: 25000 },
-            'UID146': { weekly: 5000, total_remaining: 85000 },
-            'UID164': { weekly: 5000, total_remaining: 105000 },
-            'UID174': { weekly: 5000, total_remaining: 85000 },
-            'UID214': { weekly: 5000, total_remaining: 125000 },
-            'UID226': { weekly: 5000, total_remaining: 125000 },
-            'UID232': { weekly: 5000, total_remaining: 150000 },
-            'UID247': { weekly: 5000, total_remaining: 140000 },
-            'UID256': { weekly: 5000, total_remaining: 150000 },
-            'UID267': { weekly: 5000, total_remaining: 170000 },
-            'UID275': { weekly: 5000, total_remaining: 120000 },
-            'UID303': { weekly: 5000, total_remaining: 150000 },
-            'UID315': { weekly: 5000, total_remaining: 155000 },
-            'UID326': { weekly: 5000, total_remaining: 45000 },
-            'UID347': { weekly: 5000, total_remaining: 140000 },
-            // TAMBAHAN RIDER BARU (Mulai dipotong minggu 16 Februari 2026)
-            'UID348': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-            'UID337': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-            'UID284': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-            'UID959': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-            'UID292': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
-            // TAMBAHAN RIDER BARU (Mulai dipotong minggu 30 Maret 2026)
-            'UID155': { weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 2, 30) }
-        };
+        // Wadah global untuk data cicilan dari Firebase
+        window.firebaseInstallmentsData = {};
 
         // --- DATA TATA TERTIB (RULES) ---
         const rulesData = [
@@ -3750,12 +3721,11 @@
 
         function getInstallmentInfo(uid, referenceDate) {
             if (!referenceDate) referenceDate = new Date();
-            const uidKey = String(uid).trim().toUpperCase();
-            const normalizedData = {};
-            Object.keys(RIDER_INSTALLMENTS).forEach(k => {
-                normalizedData[k.trim().toUpperCase().replace(/\s/g, '')] = RIDER_INSTALLMENTS[k];
-            });
-            const config = normalizedData[uidKey.replace(/\s/g, '')];
+            const uidKey = String(uid).trim().toUpperCase().replace(/\s/g, '');
+            
+            // Ambil murni dari data Firebase
+            const config = window.firebaseInstallmentsData ? window.firebaseInstallmentsData[uidKey] : null;
+
             if (!config) return null;
             
             const startDate = config.start_date || INSTALLMENT_START_DATE;
@@ -4197,6 +4167,7 @@
             if (typeof window.startDeviceListener === 'function') window.startDeviceListener(currentUserUID);
             if (typeof window.startWalletListener === 'function') window.startWalletListener(currentUserUID);
             if (typeof window.startScheduleListener === 'function') window.startScheduleListener(currentUserUID);
+            if (typeof window.startInstallmentsListener === 'function') window.startInstallmentsListener(currentUserUID);
             
             document.getElementById('login-page').style.display = 'none'; 
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -5859,14 +5830,10 @@
 
             if (!container) return;
 
-            // Cari data original total hutang
             const uidKey = String(currentUserUID).trim().toUpperCase().replace(/\s/g, '');
-            let originalConfig = null;
-            Object.keys(RIDER_INSTALLMENTS).forEach(k => {
-                if(k.trim().toUpperCase().replace(/\s/g, '') === uidKey) {
-                    originalConfig = RIDER_INSTALLMENTS[k];
-                }
-            });
+            
+            // Ambil murni dari Firebase
+            const originalConfig = window.firebaseInstallmentsData ? window.firebaseInstallmentsData[uidKey] : null;
 
             if (!originalConfig || (config && config.weekly === 0 && config.total_remaining === undefined && config.remaining === 0)) {
                 remainEl.innerText = "Rp 0";
@@ -6469,6 +6436,7 @@
                       if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.startDeviceListener === 'function') window.startDeviceListener(window.pendingSuspensionCheck.uid);
                       if (typeof window.startScheduleListener === 'function') window.startScheduleListener(window.pendingSuspensionCheck.uid);
+                      if (typeof window.startInstallmentsListener === 'function') window.startInstallmentsListener(window.pendingSuspensionCheck.uid);
                       window.pendingSuspensionCheck = null;
                   } else {
                       // Ambil dari local storage agar yang otomatis login langsung dilisten
@@ -6482,6 +6450,7 @@
                           if (typeof window.startDeviceListener === 'function') window.startDeviceListener(savedUid);
                           if (typeof window.startWalletListener === 'function') window.startWalletListener(savedUid);
                           if (typeof window.startScheduleListener === 'function') window.startScheduleListener(savedUid);
+                          if (typeof window.startInstallmentsListener === 'function') window.startInstallmentsListener(savedUid);
                       }
                   }
 
@@ -6757,6 +6726,121 @@
                   console.error("Gagal mengambil jadwal libur:", error);
                   const container = document.getElementById('recommended-off-days-container');
                   if (container) container.innerHTML = `<span class="text-[10px] text-red-400 font-bold italic">Gagal menghubungkan ke server.</span>`;
+              });
+          };
+
+          // -------------------------------------------------------------
+          // NEW: FUNGSI MIGRASI DATA CICILAN KE FIREBASE (JALANKAN SEKALI VIA CONSOLE)
+          // -------------------------------------------------------------
+          window.uploadInstallmentsToFirebase = async () => {
+              const targetProjectId = "onbid-2f87a";
+              
+              // DATA SUDAH DIRAPIKAN DENGAN NAMA RIDER
+              const OLD_DATA = {
+                  'UID113': { name: "Agus Setiono", weekly: 5000, total_remaining: 110000 },
+                  'UID379': { name: "Restu", weekly: 15000, total_remaining: 225000 },
+                  'UID556': { name: "Rider 556", weekly: 5000, total_remaining: 110000 },
+                  'UID109': { name: "Dedi", weekly: 5000, total_remaining: 85000 },
+                  'UID117': { name: "Ari", weekly: 5000, total_remaining: 85000 },
+                  'UID122': { name: "Roy", weekly: 14000, total_remaining: 386000 },
+                  'UID135': { name: "Warihatno", weekly: 5000, total_remaining: 25000 },
+                  'UID146': { name: "Welly", weekly: 5000, total_remaining: 85000 },
+                  'UID164': { name: "Dimas", weekly: 5000, total_remaining: 105000 },
+                  'UID174': { name: "Rider 174", weekly: 5000, total_remaining: 85000 },
+                  'UID214': { name: "Rider 214", weekly: 5000, total_remaining: 125000 },
+                  'UID226': { name: "Rahmat", weekly: 5000, total_remaining: 125000 },
+                  'UID232': { name: "Y Latif", weekly: 5000, total_remaining: 150000 },
+                  'UID247': { name: "Nanda", weekly: 5000, total_remaining: 140000 },
+                  'UID256': { name: "Ade", weekly: 5000, total_remaining: 150000 },
+                  'UID267': { name: "Septian", weekly: 5000, total_remaining: 170000 },
+                  'UID275': { name: "Rider 275", weekly: 5000, total_remaining: 120000 },
+                  'UID303': { name: "Alfin", weekly: 5000, total_remaining: 150000 },
+                  'UID315': { name: "Rider 315", weekly: 5000, total_remaining: 155000 },
+                  'UID326': { name: "Imam Arifin", weekly: 5000, total_remaining: 125000 },
+                  'UID347': { name: "Rider 347", weekly: 5000, total_remaining: 140000 },
+                  'UID348': { name: "Lukman", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
+                  'UID337': { name: "Teguh B", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
+                  'UID284': { name: "Pras", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
+                  'UID959': { name: "Opy", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
+                  'UID292': { name: "Teguh", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 1, 16) },
+                  'UID155': { name: "Budi", weekly: 5000, total_remaining: 150000, start_date: new Date(2026, 2, 30) }
+              };
+              
+              console.log("Memulai migrasi data ke Firebase...");
+              for (const [uid, data] of Object.entries(OLD_DATA)) {
+                  try {
+                      const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', uid);
+                      
+                      // FORMAT RAPI SESUAI PERMINTAAN
+                      await setDoc(docRef, {
+                          nama: data.name,
+                          uid: uid,
+                          weekly: data.weekly,
+                          weekly_amount: data.weekly,
+                          total_amount: data.total_remaining,
+                          total_remaining: data.total_remaining,
+                          start_date: data.start_date || new Date(2026, 0, 19), // 19 Januari 2026
+                          updated_at: serverTimestamp()
+                      }, { merge: true }); // Menggunakan merge agar data aman
+                      
+                      console.log(`✅ Berhasil upload & merapikan: ${uid} - ${data.name}`);
+                  } catch (e) {
+                      console.error(`❌ Gagal upload ${uid}:`, e);
+                  }
+              }
+              console.log("🎉 Proses migrasi dan perapihan selesai! Anda bisa cek Firestore Anda.");
+          };
+
+          // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER CICILAN (INSTALLMENTS) DARI FIREBASE
+          // -------------------------------------------------------------
+          let installmentsUnsubscribe = null;
+
+          window.startInstallmentsListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              if (installmentsUnsubscribe) installmentsUnsubscribe();
+
+              const targetProjectId = "onbid-2f87a";
+              const cleanUid = String(uid).trim().toUpperCase();
+              const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', cleanUid);
+
+              installmentsUnsubscribe = onSnapshot(docRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      
+                      let startDate = INSTALLMENT_START_DATE; // Default dari JS atas
+                      if (data.start_date) {
+                          if (data.start_date.seconds) {
+                              startDate = new Date(data.start_date.seconds * 1000);
+                          } else if (typeof data.start_date === 'string') {
+                              startDate = new Date(data.start_date);
+                          }
+                      }
+
+                      // Update global data container
+                      window.firebaseInstallmentsData[cleanUid] = {
+                          weekly: data.weekly_amount || data.weekly || 0,
+                          total_remaining: data.total_amount || data.total_debt || data.total_remaining || 0,
+                          start_date: startDate,
+                          is_from_firebase: true
+                      };
+                      
+                      console.log("Data cicilan Firebase termuat untuk:", cleanUid);
+                  } else {
+                      window.firebaseInstallmentsData[cleanUid] = null;
+                  }
+                  
+                  // Trigger re-render UI jika diperlukan (terutama halaman mingguan / cicilan)
+                  if (typeof window.processData === 'function' && rawData && rawData.length > 0) {
+                      window.processData();
+                  }
+                  if (document.getElementById('page-installments') && !document.getElementById('page-installments').classList.contains('hidden-page')) {
+                      if (typeof window.renderInstallmentsHistory === 'function') {
+                          window.renderInstallmentsHistory();
+                      }
+                  }
+              }, (error) => {
+                  console.error("Gagal mengambil data cicilan Firebase:", error);
               });
           };
 
