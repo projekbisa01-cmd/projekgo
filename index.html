@@ -1182,6 +1182,24 @@
                 </button>
             </div>
 
+            <!-- BAGIAN PIN KEAMANAN (BARU) -->
+            <div id="pin-section" class="hidden space-y-4 w-full mt-4">
+                <div class="space-y-2 mb-6">
+                    <h3 id="pin-title" class="font-bold text-xl text-gray-800">Masukkan PIN</h3>
+                    <p id="pin-desc" class="text-xs text-gray-500">Masukkan 6 digit PIN keamanan Anda.</p>
+                </div>
+                <div class="relative flex justify-center">
+                    <input type="password" id="pin-input" inputmode="numeric" maxlength="6" class="w-full text-center tracking-[1em] text-3xl py-4 bg-white border border-gray-200 rounded-2xl shadow-inner focus:outline-none focus:ring-2 focus:ring-orange-500 font-black text-gray-800" placeholder="••••••">
+                </div>
+                <div id="pin-error-msg" class="hidden text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl border border-red-100 mt-2">PIN Salah!</div>
+                <div class="flex space-x-3 mt-6">
+                    <button onclick="window.cancelPin()" class="w-1/3 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 transition-all text-sm border border-gray-200">Batal</button>
+                    <button onclick="window.submitPin()" id="submit-pin-btn" class="w-2/3 py-4 orange-gradient text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-unlock-keyhole"></i> Lanjut
+                    </button>
+                </div>
+            </div>
+
             <!-- BAGIAN PASSWORD ADMIN (Disembunyikan secara default) -->
             <div id="password-section" class="hidden space-y-4 mt-2">
                 <div class="bg-red-50 p-4 rounded-2xl border border-red-100 mb-2 text-left">
@@ -4168,7 +4186,13 @@
                 // Validasi Perangkat (Single Device Login) - DINONAKTIFKAN SEMENTARA UNTUK MEMPERMUDAH LOGIN
                 if (prefetchedData) window.prefetchedRiderData = prefetchedData;
                 if (prefetchedAll) window.prefetchedAllData = prefetchedAll;
-                proceedWithLogin(uid);
+                
+                // PANGGIL SISTEM PIN FIREBASE (PENGGANTI DEVICE BINDING)
+                if (typeof window.checkRiderPin === 'function') {
+                    window.checkRiderPin(uid);
+                } else {
+                    window.proceedWithLogin(uid); // Fallback jika Firebase belum siap
+                }
                 
             } catch (error) {
                 console.error("Login Error:", error);
@@ -4179,7 +4203,7 @@
             }
         }
 
-        function proceedWithLogin(uid) {
+        window.proceedWithLogin = function(uid) {
             currentUserUID = uid;
             
             // Simpan UID ke local storage SETELAH lolos keamanan
@@ -8275,7 +8299,100 @@
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM KEAMANAN (DEVICE BINDING & SUSPENSI)
+          // NEW: SISTEM KEAMANAN PIN 6-DIGIT (MENGGANTIKAN DEVICE BINDING)
+          // -------------------------------------------------------------
+          window.checkRiderPin = async (uid) => {
+              const btn = document.getElementById('login-btn');
+              const originalText = btn.innerHTML;
+              
+              try {
+                  const targetProjectId = firebaseConfig.projectId;
+                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', String(uid).trim().toUpperCase(), 'security', 'pin_data');
+                  const pinSnap = await getDoc(pinRef);
+                  
+                  document.getElementById('login-input-section').classList.add('hidden');
+                  document.getElementById('pin-section').classList.remove('hidden');
+                  document.getElementById('pin-input').value = '';
+                  document.getElementById('pin-error-msg').classList.add('hidden');
+                  
+                  if (pinSnap.exists() && pinSnap.data().pin) {
+                      // MINTA PIN (Sudah pernah buat)
+                      window.currentLoginMode = 'verify';
+                      window.expectedPin = pinSnap.data().pin;
+                      document.getElementById('pin-title').innerText = "Masukkan PIN";
+                      document.getElementById('pin-desc').innerText = "Masukkan 6 digit PIN keamanan akun Anda.";
+                  } else {
+                      // BUAT PIN BARU (Pertama kali login)
+                      window.currentLoginMode = 'create';
+                      document.getElementById('pin-title').innerText = "Buat PIN Baru";
+                      document.getElementById('pin-desc').innerText = "Akun ini belum memiliki PIN. Buat 6 digit PIN rahasia Anda sekarang.";
+                  }
+                  
+                  setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
+                  
+              } catch (error) {
+                  console.error("PIN Check Error:", error);
+                  // Jika gagal koneksi ke firebase, langsung masuk saja agar rider tetap bisa kerja saat sinyal jelek
+                  window.proceedWithLogin(uid);
+              }
+              btn.innerHTML = originalText;
+          };
+
+          window.submitPin = async () => {
+              const inputVal = document.getElementById('pin-input').value;
+              const errorMsg = document.getElementById('pin-error-msg');
+              const uid = document.getElementById('uid-input').value.trim().toUpperCase();
+              const btn = document.getElementById('submit-pin-btn');
+              
+              if (inputVal.length !== 6 || isNaN(inputVal)) {
+                  errorMsg.innerText = "PIN harus tepat 6 digit angka!";
+                  errorMsg.classList.remove('hidden');
+                  return;
+              }
+              
+              errorMsg.classList.add('hidden');
+              const originalHtml = btn.innerHTML;
+              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i>';
+              btn.disabled = true;
+              
+              if (window.currentLoginMode === 'verify') {
+                  if (inputVal === window.expectedPin) {
+                      window.proceedWithLogin(uid); // PIN Benar -> Masuk
+                  } else {
+                      errorMsg.innerText = "PIN Salah! Silakan coba lagi.";
+                      errorMsg.classList.remove('hidden');
+                      btn.innerHTML = originalHtml;
+                      btn.disabled = false;
+                  }
+              } else if (window.currentLoginMode === 'create') {
+                  try {
+                      // Simpan PIN Baru ke Firebase
+                      const targetProjectId = firebaseConfig.projectId;
+                      const pinRef = doc(db, 'artifacts', targetProjectId, 'users', uid, 'security', 'pin_data');
+                      await setDoc(pinRef, {
+                          pin: inputVal,
+                          created_at: serverTimestamp()
+                      });
+                      window.proceedWithLogin(uid); // Berhasil Simpan -> Masuk
+                  } catch(e) {
+                      console.error(e);
+                      errorMsg.innerText = "Gagal menyimpan PIN. Periksa koneksi internet.";
+                      errorMsg.classList.remove('hidden');
+                      btn.innerHTML = originalHtml;
+                      btn.disabled = false;
+                  }
+              }
+          };
+
+          window.cancelPin = () => {
+              document.getElementById('pin-section').classList.add('hidden');
+              document.getElementById('login-input-section').classList.remove('hidden');
+              document.getElementById('pin-input').value = '';
+              document.getElementById('pin-error-msg').classList.add('hidden');
+          };
+
+          // -------------------------------------------------------------
+          // FITUR LAMA (DEVICE BINDING) - KITA TIMPA / MATIKAN
           // -------------------------------------------------------------
           window.checkDeviceBinding = async (uid, deviceId) => {
               try {
