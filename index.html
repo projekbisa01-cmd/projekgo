@@ -1200,6 +1200,24 @@
                 </div>
             </div>
 
+            <!-- BAGIAN VERIFIKASI PLAT NOMOR (PENGAMAN SEBELUM BUAT PIN) -->
+            <div id="setup-security-section" class="hidden space-y-4 w-full mt-4">
+                <div class="space-y-2 mb-6">
+                    <h3 class="font-bold text-xl text-gray-800">Verifikasi Data</h3>
+                    <p class="text-xs text-gray-500">Untuk keamanan, masukkan Plat Nomor kendaraan Anda yang terdaftar di Admin sebelum membuat PIN.</p>
+                </div>
+                <div class="relative flex justify-center">
+                    <input type="text" id="plat-input" class="w-full text-center tracking-widest text-2xl py-4 bg-white border border-gray-200 rounded-2xl shadow-inner focus:outline-none focus:ring-2 focus:ring-orange-500 font-black text-gray-800 uppercase" placeholder="R1234AB">
+                </div>
+                <div id="plat-error-msg" class="hidden text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl border border-red-100 mt-2">Plat Nomor salah!</div>
+                <div class="flex space-x-3 mt-6">
+                    <button onclick="window.cancelPlatVerify()" class="w-1/3 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 transition-all text-sm border border-gray-200">Batal</button>
+                    <button onclick="window.submitPlatVerify()" id="submit-plat-btn" class="w-2/3 py-4 bg-gray-800 text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-id-card"></i> Cek Data
+                    </button>
+                </div>
+            </div>
+
             <!-- BAGIAN PASSWORD ADMIN (Disembunyikan secara default) -->
             <div id="password-section" class="hidden space-y-4 mt-2">
                 <div class="bg-red-50 p-4 rounded-2xl border border-red-100 mb-2 text-left">
@@ -8311,31 +8329,105 @@
                   const pinSnap = await getDoc(pinRef);
                   
                   document.getElementById('login-input-section').classList.add('hidden');
-                  document.getElementById('pin-section').classList.remove('hidden');
-                  document.getElementById('pin-input').value = '';
+                  document.getElementById('pin-section').classList.add('hidden');
+                  document.getElementById('setup-security-section').classList.add('hidden');
                   document.getElementById('pin-error-msg').classList.add('hidden');
+                  document.getElementById('plat-error-msg').classList.add('hidden');
                   
                   if (pinSnap.exists() && pinSnap.data().pin) {
-                      // MINTA PIN (Sudah pernah buat)
+                      // MINTA PIN (Sudah pernah buat, Langsung Login)
                       window.currentLoginMode = 'verify';
                       window.expectedPin = pinSnap.data().pin;
+                      document.getElementById('pin-section').classList.remove('hidden');
                       document.getElementById('pin-title').innerText = "Masukkan PIN";
                       document.getElementById('pin-desc').innerText = "Masukkan 6 digit PIN keamanan akun Anda.";
+                      document.getElementById('pin-input').value = '';
+                      setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
                   } else {
-                      // BUAT PIN BARU (Pertama kali login)
-                      window.currentLoginMode = 'create';
-                      document.getElementById('pin-title').innerText = "Buat PIN Baru";
-                      document.getElementById('pin-desc').innerText = "Akun ini belum memiliki PIN. Buat 6 digit PIN rahasia Anda sekarang.";
+                      // BUAT PIN BARU -> TAHAN! VERIFIKASI PLAT NOMOR DULU
+                      document.getElementById('setup-security-section').classList.remove('hidden');
+                      document.getElementById('plat-input').value = '';
+                      setTimeout(() => { document.getElementById('plat-input').focus(); }, 100);
                   }
-                  
-                  setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
                   
               } catch (error) {
                   console.error("PIN Check Error:", error);
-                  // Jika gagal koneksi ke firebase, langsung masuk saja agar rider tetap bisa kerja saat sinyal jelek
                   window.proceedWithLogin(uid);
               }
               btn.innerHTML = originalText;
+          };
+
+          window.submitPlatVerify = async () => {
+              const platInput = document.getElementById('plat-input').value.trim().toUpperCase().replace(/\s/g, '');
+              const errorMsg = document.getElementById('plat-error-msg');
+              const btn = document.getElementById('submit-plat-btn');
+              const uid = document.getElementById('uid-input').value.trim().toUpperCase();
+
+              if (platInput.length < 3) {
+                  errorMsg.innerText = "Masukkan plat nomor yang valid!";
+                  errorMsg.classList.remove('hidden'); return;
+              }
+
+              errorMsg.classList.add('hidden');
+              const originalHtml = btn.innerHTML;
+              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mencocokkan...';
+              btn.disabled = true;
+
+              try {
+                  // Cek ke Database Dokumen Google Sheet
+                  const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`);
+                  if (!response.ok) throw new Error("Gagal mengambil data profil");
+                  const rawJson = await response.json();
+                  
+                  const targetUid = uid.replace(/[\s_\.]/g, '');
+                  let matchedPlat = null;
+
+                  for (const item of rawJson) {
+                      const normalizedItem = {};
+                      for (const key in item) { normalizedItem[key.toLowerCase().replace(/[\s_\.]/g, '')] = item[key]; }
+                      const itemId = normalizedItem.uid || normalizedItem.id || normalizedItem.userid || normalizedItem.noid || normalizedItem.user || normalizedItem.nomorid;
+                      
+                      if (String(itemId || '').trim().toLowerCase().replace(/[\s_\.]/g, '') === targetUid.toLowerCase()) {
+                          matchedPlat = normalizedItem.platnomor || normalizedItem.plat || normalizedItem.nopolisi || normalizedItem.nopol || normalizedItem.platno || normalizedItem.nomorpolisi;
+                          break;
+                      }
+                  }
+
+                  if (!matchedPlat) {
+                      errorMsg.innerText = "Data kendaraan Anda belum terdaftar di Admin!";
+                      errorMsg.classList.remove('hidden');
+                      btn.innerHTML = originalHtml; btn.disabled = false; return;
+                  }
+
+                  const cleanDbPlat = String(matchedPlat).trim().toUpperCase().replace(/\s/g, '');
+                  
+                  if (platInput === cleanDbPlat) {
+                      // PLAT COCOK -> LANJUT BUAT PIN
+                      document.getElementById('setup-security-section').classList.add('hidden');
+                      document.getElementById('pin-section').classList.remove('hidden');
+                      
+                      window.currentLoginMode = 'create';
+                      document.getElementById('pin-title').innerText = "Buat PIN Baru";
+                      document.getElementById('pin-desc').innerText = "Verifikasi plat berhasil! Buat 6 digit PIN rahasia Anda.";
+                      document.getElementById('pin-input').value = '';
+                      setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
+                  } else {
+                      errorMsg.innerText = "Plat Nomor tidak cocok dengan database Admin!";
+                      errorMsg.classList.remove('hidden');
+                  }
+              } catch (e) {
+                  console.error(e);
+                  errorMsg.innerText = "Gagal terhubung ke database. Coba lagi.";
+                  errorMsg.classList.remove('hidden');
+              }
+              btn.innerHTML = originalHtml; btn.disabled = false;
+          };
+
+          window.cancelPlatVerify = () => {
+              document.getElementById('setup-security-section').classList.add('hidden');
+              document.getElementById('login-input-section').classList.remove('hidden');
+              document.getElementById('plat-input').value = '';
+              document.getElementById('plat-error-msg').classList.add('hidden');
           };
 
           window.submitPin = async () => {
