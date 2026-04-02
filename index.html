@@ -2738,6 +2738,17 @@
             }
         };
 
+        // --- FUNGSI LAPOR MASALAH DATA KE ADMIN ---
+        window.laporAdminMasalah = function(type, customer, nominal) {
+            let pesan = "";
+            if (type === 'nyangkut') {
+                pesan = `Halo Admin, saya mau lapor ada data orderan yang *nyangkut/dobel* di aplikasi saya.\n\nAtas nama: *${customer}*\nNominal: *Rp ${parseInt(nominal).toLocaleString('id-ID')}*\n\nMohon dicek dan dihapus dari sistem Live agar rekap pendapatan saya sesuai. Terima kasih.`;
+            } else if (type === 'ongkir') {
+                pesan = `Halo Admin, saya mau lapor sepertinya ada *salah ketik ongkir* di orderan ini:\n\nAtas nama: *${customer}*\nNominal Tercatat: *Rp ${parseInt(nominal).toLocaleString('id-ID')}*\n\nMohon dicek dan disesuaikan kembali ya min. Terima kasih.`;
+            }
+            window.openWaSelector('6281292802623', pesan); // Menggunakan nomor kontak Admin
+        };
+
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
         const RATING_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwB0Z1bQ-HTrn8kP84wc2iOc3J9bJk1V2dtYqjfno4BgkncGdjCSyvZvOkNnyYtjq15/exec";
         const PROFILE_DOCS_URL = "https://script.google.com/macros/s/AKfycbx-L15ePYQPSFaTY6wvn4wfC0DtwqJNVzEVTAFoq-bw8eFEr_HNYxLMJTPPC6aHv9paNA/exec";
@@ -5208,6 +5219,7 @@
                 
                 // NEW: Pastikan Nama Pelanggan Selalu Tampil
                 const namaPelanggan = item.Nama_Pelanggan || item.Customer_Name || item.customer_name || item.Nama_Customer || item.Pelanggan || item.Customer || 'Pelanggan';
+                const safeCustomerName = String(namaPelanggan).replace(/['"\\]/g, ''); // Membersihkan karakter agar aman untuk fungsi klik
                 const customerDisplay = `<p class="text-[10px] font-bold text-orange-600 mt-1 flex items-center gap-1"><i class="fa-solid fa-user text-[9px]"></i> ${namaPelanggan}</p>`;
 
                 html += `<div class="mb-2 pb-4 border-b border-dashed border-gray-300 last:border-0 last:pb-0 px-2">
@@ -5234,23 +5246,39 @@
                 
                 // Tambahkan Pesan Peringatan Jika Suspicious Atau Error Live
                 if (item.is_leftover_live) {
+                    if (typeof window.autoReportAnomaly === 'function') {
+                        window.autoReportAnomaly('Data Nyangkut/Dobel', item, kotor);
+                    }
                     html += `
                         <div class="bg-red-100 border border-red-300 p-3 rounded-lg flex items-start gap-3 mt-1 relative overflow-hidden shadow-sm">
                             <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-600"></div>
                             <div class="mt-0.5"><i class="fa-solid fa-triangle-exclamation text-red-600 text-xs"></i></div>
-                            <p class="text-[10px] text-red-700 leading-snug font-bold">
-                                "Sepertinya admin salah input, dimungkinkan dobel input. Data live ini belum terbuang. Abaikan pesanan ini jika riwayat aslinya sudah ada."
-                            </p>
+                            <div class="flex-1">
+                                <p class="text-[10px] text-red-700 leading-snug font-bold mb-2">
+                                    "Sepertinya admin salah input, dimungkinkan dobel input. Data live ini belum terbuang. Abaikan pesanan ini jika riwayat aslinya sudah ada."
+                                </p>
+                                <div class="w-full py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-[10px] font-bold flex justify-center items-center gap-1.5">
+                                    <i class="fa-solid fa-robot"></i> Sistem otomatis melapor ke Admin
+                                </div>
+                            </div>
                         </div>
                     `;
                 } else if (isSuspicious) {
+                    if (typeof window.autoReportAnomaly === 'function') {
+                        window.autoReportAnomaly('Ongkir Mencurigakan', item, kotor);
+                    }
                     html += `
                         <div class="bg-red-50 border border-red-100 p-3 rounded-lg flex items-start gap-3 mt-1 animate-pulse relative overflow-hidden">
                             <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500"></div>
                             <div class="mt-0.5"><i class="fa-solid fa-triangle-exclamation text-red-500 text-xs"></i></div>
-                            <p class="text-[10px] text-red-600 leading-snug font-bold italic">
-                                "Sepertinya admin salah input, coba cek lagi ongkirnya sudah sesuai belum, dan konfirmasi admin yah, bahwa ongkirnya tolong disesuaikan"
-                            </p>
+                            <div class="flex-1">
+                                <p class="text-[10px] text-red-600 leading-snug font-bold italic mb-2">
+                                    "Sepertinya admin salah input, coba cek lagi ongkirnya sudah sesuai belum. Sistem telah mengirim peringatan ke admin."
+                                </p>
+                                <div class="w-full py-2 bg-red-500 text-white rounded-lg text-[10px] font-bold shadow-sm flex justify-center items-center gap-1.5">
+                                    <i class="fa-solid fa-paper-plane"></i> Laporan otomatis terkirim ke Admin
+                                </div>
+                            </div>
                         </div>
                     `;
                 }
@@ -6897,6 +6925,43 @@
           initAuth();
 
           // -------------------------------------------------------------
+          // NEW: SISTEM AUTO-REPORT ANOMALI KE ADMIN
+          // -------------------------------------------------------------
+          window.autoReportAnomaly = async (type, item, nominal) => {
+              if (!currentUserUID || !window.isFirebaseReady) return;
+              
+              // Gunakan kombinasi ID untuk mencegah spam laporan ganda jika aplikasi direfresh berkali-kali
+              const reportId = `report_${currentUserUID}_${item.Tanggal}_${item.Jam}_${type.replace(/\s/g, '')}`;
+              if (localStorage.getItem(reportId)) return; // Sudah pernah dilaporkan
+              
+              try {
+                  const targetProjectId = firebaseConfig.projectId;
+                  const alertsRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'admin_alerts');
+                  
+                  const rName = document.getElementById('display-rider-name').innerText;
+                  const cName = item.Nama_Pelanggan || item.Customer_Name || item.customer_name || 'Pelanggan';
+                  
+                  await addDoc(alertsRef, {
+                      tipe_kendala: type, 
+                      rider_uid: currentUserUID,
+                      rider_name: rName === 'Memuat...' ? 'Rider' : rName,
+                      customer_name: cName,
+                      nominal_tercatat: nominal,
+                      tanggal_order: item.Tanggal,
+                      jam_order: item.Jam,
+                      status: 'unread', // Flag untuk Aplikasi Admin (belum dibaca)
+                      created_at: serverTimestamp()
+                  });
+                  
+                  // Tandai sukses di local storage HP Rider agar tidak melapor ulang untuk data yang sama
+                  localStorage.setItem(reportId, 'true');
+                  console.log(`[Sistem] Auto-report kendala '${type}' berhasil dikirim ke Admin.`);
+              } catch (e) {
+                  console.error("Gagal auto-report ke admin:", e);
+              }
+          };
+
+          // -------------------------------------------------------------
           // NEW: FUNGSI RENDER FOTO PROFIL RIDER & LAYANAN KESEHATAN
           // -------------------------------------------------------------
           let profilePhotoUnsubscribe = null;
@@ -7141,7 +7206,8 @@
           // -------------------------------------------------------------
           // NEW: SISTEM LISTENER ORDER REAL-TIME (ACTIVE ORDERS)
           // -------------------------------------------------------------
-          let activeOrderUnsubscribe = null;
+          let activeOrderUnsubscribeDoc = null;
+          let activeOrderUnsubscribeQuery = null;
           window.currentActiveOrderId = null;
           window.currentIncomingOrderId = null; // Ditambahkan untuk melacak ID pop-up aktif
           let finishPhotoBase64 = null;
@@ -7152,39 +7218,27 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
-              if (activeOrderUnsubscribe) {
-                  activeOrderUnsubscribe();
-              }
+              if (activeOrderUnsubscribeDoc) activeOrderUnsubscribeDoc();
+              if (activeOrderUnsubscribeQuery) activeOrderUnsubscribeQuery();
 
-              // PATH DATABASE: Mengambil Orderan dari path spesifik Admin (artifacts/{appId}/public/data/active_orders)
               const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
 
-              activeOrderUnsubscribe = onSnapshot(ordersRef, (snapshot) => {
-                  let hasActiveOrder = false;
+              // FUNGSI SENTRAL UNTUK MENANGANI DATA ORDER (Mencegah Duplikasi Logika)
+              const handleOrderData = (data, docId) => {
+                  const status = String(data.status || '').trim().toLowerCase();
 
-                  snapshot.forEach((docSnap) => {
-                      const data = docSnap.data();
-                      const docId = docSnap.id;
-                      
-                      // Filter in-memory: Cocokkan Doc ID ATAU field rider_uid dari Admin
-                      if (docId === cleanUid || String(data.rider_uid || '').trim().toUpperCase() === cleanUid) {
-                          hasActiveOrder = true;
-                          
-                          // Pastikan tidak ada case-sensitive issue pada status
-                          const status = String(data.status || '').trim().toLowerCase();
+                  if (status === "assigned") {
+                      showIncomingOrderPopup(data, docId);
+                  } else if (status === "processing") {
+                      showActiveOrderOverlay(data, docId);
+                  } else if (status === "completed" && window.currentActiveOrderId === docId) {
+                      hideActiveOrderOverlay();
+                  }
+              };
 
-                          if (status === "assigned") {
-                              showIncomingOrderPopup(data, docId);
-                          } else if (status === "processing") {
-                              showActiveOrderOverlay(data, docId);
-                          } else if (status === "completed" && window.currentActiveOrderId === docId) {
-                              hideActiveOrderOverlay();
-                          }
-                      }
-                  });
-
-                  // Jika tidak ada order aktif untuk rider ini sama sekali
-                  if (!hasActiveOrder) {
+              // FUNGSI PENGECEKAN JIKA TIDAK ADA ORDER
+              const checkNoOrderLogic = () => {
+                  if (!window._hasActiveDocOrder && !window._hasActiveQueryOrder) {
                       let wasActive = false;
                       
                       if (window.currentActiveOrderId !== null) {
@@ -7206,7 +7260,7 @@
                               clearInterval(window.vibrateInterval);
                               window.vibrateInterval = null;
                           }
-                          window.currentIncomingOrderId = null; // Reset track ID
+                          window.currentIncomingOrderId = null; 
                           wasActive = true;
                       }
 
@@ -7228,9 +7282,30 @@
                           }
                       }
                   }
-              }, (error) => {
-                  console.error("Error listening to orders:", error);
-              });
+              };
+
+              // PERBAIKAN KUOTA 1: Dengar langsung ke Document ID (Paling Hemat Kuota - 1 Read/Perubahan)
+              const orderDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', cleanUid);
+              activeOrderUnsubscribeDoc = onSnapshot(orderDocRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      window._hasActiveDocOrder = true;
+                      handleOrderData(docSnap.data(), docSnap.id);
+                  } else {
+                      window._hasActiveDocOrder = false;
+                      checkNoOrderLogic();
+                  }
+              }, (error) => { console.error("Error listening doc order:", error); });
+
+              // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Jika Admin pakai Document ID acak)
+              const q = query(ordersRef, where('rider_uid', '==', cleanUid));
+              activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
+                  window._hasActiveQueryOrder = !snapshot.empty;
+                  
+                  snapshot.forEach((docSnap) => {
+                      handleOrderData(docSnap.data(), docSnap.id);
+                  });
+                  checkNoOrderLogic();
+              }, (error) => { console.error("Error listening query order:", error); });
           };
 
           // --- LOGIKA UI ORDERAN ---
@@ -8145,71 +8220,53 @@
                   }
 
                   // --- LOGIKA ASYNC: Ambil gambar Base64 dari path active_orders & Format Base64 ---
-                  // Tampilkan indikator loading halus jika gambar baru di-load pertama kali
-                  if (container.children.length === 0 || container.innerHTML.includes('Memuat antrean...')) {
-                      container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-4"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-lg mb-2 block"></i> Merender gambar lokasi...</div>`;
+              // Tampilkan indikator loading halus jika gambar baru di-load pertama kali
+              if (container.children.length === 0 || container.innerHTML.includes('Memuat antrean...')) {
+                  container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-4"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-lg mb-2 block"></i> Merender gambar lokasi...</div>`;
+              }
+
+              // PERBAIKAN KUOTA BACA: Menghapus getDoc berulang di dalam onSnapshot yang menyebabkan kuota jebol (1.28M reads/hari).
+              // Nilai last_drop_image sudah diset dan berisi URL/Base64 langsung dari status_rider_aktif saat selesai order.
+              const ridersWithImages = onlineRiders.map((rider) => {
+                  let imageSrc = rider.last_drop_image || null;
+
+                  // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
+                  if (imageSrc && typeof imageSrc === 'string') {
+                      imageSrc = imageSrc.trim(); // Bersihkan spasi
+                      
+                      // Cegah string "null" atau "undefined" yang tersimpan sebagai text
+                      if (imageSrc === '' || imageSrc === 'null' || imageSrc === 'undefined') {
+                          imageSrc = null;
+                      } else if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
+                          // TRIK ANTI-BLOKIR ISP INDONESIA
+                          // Ubah otomatis domain i.ibb.co yang rawan diblokir menjadi i.ibb.co.com
+                          imageSrc = imageSrc.replace('//i.ibb.co/', '//i.ibb.co.com/');
+                      } else {
+                          // LOGIKA FALLBACK UNTUK BASE64 LAMA (Jika masih ada sisa data lama)
+                          let pureBase64 = imageSrc;
+                          if (imageSrc.includes('base64,')) {
+                              pureBase64 = imageSrc.split('base64,')[1];
+                          } else if (imageSrc.startsWith('data:image')) {
+                              pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
+                          }
+                          
+                          pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
+                          
+                          if (pureBase64.length > 0) {
+                              imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                          } else {
+                              imageSrc = null;
+                          }
+                      }
                   }
 
-                  // Gunakan Promise.all agar fetching ke database Firebase berjalan paralel (cepat)
-                  const ridersWithImages = await Promise.all(onlineRiders.map(async (rider) => {
-                      let imageSrc = rider.last_drop_image || null;
-                      
-                      // Cek ke path artifacts/onbid-2f87a/public/data/active_orders/{ID_Orderan}
-                      if (rider.last_order_id) {
-                          try {
-                              // FIX: Kunci (hardcode) path ke 'onbid-2f87a' agar tidak nyasar ke folder virtual/testing
-                              const targetProjectId = "onbid-2f87a";
-                              const orderDocRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'active_orders', rider.last_order_id);
-                              const orderSnap = await getDoc(orderDocRef);
-                              if (orderSnap.exists()) {
-                                  const orderData = orderSnap.data();
-                                  // Ambil field proof_image sesuai arahan
-                                  if (orderData.proof_image) {
-                                      imageSrc = orderData.proof_image; 
-                                  }
-                              }
-                          } catch (e) {
-                              console.warn("Gagal fetch gambar dari active_orders", e);
-                          }
-                      }
+                  return { ...rider, displayImage: imageSrc };
+              });
 
-                      // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
-                      if (imageSrc && typeof imageSrc === 'string') {
-                          imageSrc = imageSrc.trim(); // Bersihkan spasi
-                          
-                          // Cegah string "null" atau "undefined" yang tersimpan sebagai text
-                          if (imageSrc === '' || imageSrc === 'null' || imageSrc === 'undefined') {
-                              imageSrc = null;
-                          } else if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
-                              // TRIK ANTI-BLOKIR ISP INDONESIA
-                              // Ubah otomatis domain i.ibb.co yang rawan diblokir menjadi i.ibb.co.com
-                              imageSrc = imageSrc.replace('//i.ibb.co/', '//i.ibb.co.com/');
-                          } else {
-                              // LOGIKA FALLBACK UNTUK BASE64 LAMA (Jika masih ada sisa data lama)
-                              let pureBase64 = imageSrc;
-                              if (imageSrc.includes('base64,')) {
-                                  pureBase64 = imageSrc.split('base64,')[1];
-                              } else if (imageSrc.startsWith('data:image')) {
-                                  pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
-                              }
-                              
-                              pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
-                              
-                              if (pureBase64.length > 0) {
-                                  imageSrc = `data:image/jpeg;base64,${pureBase64}`;
-                              } else {
-                                  imageSrc = null;
-                              }
-                          }
-                      }
-
-                      return { ...rider, displayImage: imageSrc };
-                  }));
-
-                  let html = '';
-                  let myRank = '--';
-                  
-                  ridersWithImages.forEach((rider, index) => {
+              let html = '';
+              let myRank = '--';
+              
+              ridersWithImages.forEach((rider, index) => {
                       const rank = index + 1;
                       const uidClean = String(rider.uid || '').trim().toUpperCase();
                       const myUidClean = String(currentUserUID).trim().toUpperCase();
