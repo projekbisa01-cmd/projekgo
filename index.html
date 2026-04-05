@@ -2634,13 +2634,68 @@
             }
         };
 
-        // --- FUNGSI PROMO ADM DINAMIS ---
+        // --- FUNGSI PROMO ADM DINAMIS & TIERING MINGGUAN ---
+        window._admRateCache = {};
+        
         window.getAdmRate = function(dateStr) {
-            // Promo khusus hari ini: 25 Maret 2026 (Format MM-DD-YYYY)
+            // Promo khusus: 25 Maret 2026 (Format MM-DD-YYYY)
             if (dateStr === "03-25-2026") {
                 return 0.0; // Potongan 0%
             }
-            return 0.16; // Normal rate 16% besoknya
+
+            // Fallback jika data belum termuat
+            if (!currentUserUID || !window.rawData || window.rawData.length === 0) {
+                return 0.20; // Default tier pemula 20%
+            }
+
+            // Pengecualian Rider Part-Time (Fix 16%)
+            const partTimeUIDs = ['UID326', 'UID339', 'UID347'];
+            if (partTimeUIDs.includes(currentUserUID)) {
+                return 0.16;
+            }
+
+            // Tentukan periode minggu dari dateStr, atau gunakan hari ini
+            let targetDate = new Date();
+            if (dateStr && dateStr !== '-') {
+                const p = dateStr.split('-');
+                if (p.length === 3) targetDate = new Date(p[2], p[0]-1, p[1]); // Format MM-DD-YYYY ke Object Date
+            }
+            
+            const startOfWeek = getStartOfWeek(targetDate);
+            const weekCacheKey = startOfWeek.getTime();
+
+            // Cek Cache agar tidak perlu meloop rawData berulang kali
+            if (window._admRateCache[weekCacheKey] !== undefined) {
+                return window._admRateCache[weekCacheKey];
+            }
+
+            // Kumpulkan tanggal dalam minggu target
+            const weekKeys = [];
+            for(let i = 0; i < 7; i++) {
+                const d = new Date(startOfWeek); d.setDate(d.getDate() + i);
+                const parts = DATE_FORMATTER.formatToParts(d);
+                weekKeys.push(`${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`);
+            }
+
+            // Hitung total order dan jumlah hari aktif (onbid) di minggu tersebut
+            let wTrips = 0;
+            let wDays = new Set();
+            window.rawData.forEach(item => {
+                const d = parseSheetDate(item.Tanggal);
+                if (weekKeys.includes(d) && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                    wTrips++;
+                    wDays.add(d);
+                }
+            });
+
+            // Hitung rata-rata per hari
+            const avgPerDay = wDays.size > 0 ? (wTrips / wDays.size) : 0;
+            
+            // Aturan baru: < 15 = 20%, >= 15 = 16%
+            const rate = avgPerDay >= 15 ? 0.16 : 0.20;
+            
+            window._admRateCache[weekCacheKey] = rate; // Simpan ke cache
+            return rate;
         };
 
         // --- LOGIKA WA SELECTOR ---
@@ -4860,6 +4915,7 @@
         window.renderInstallmentsHistory = renderInstallmentsHistory; // EKSPOS JUGA FUNGSI RENDERNYA
 
         function processData() {
+            window._admRateCache = {}; // Reset cache kalkulasi ADM mingguan agar update real-time
             const todayKey = getJakartaDateString();
             const todayData = rawData.filter(item => parseSheetDate(item.Tanggal) === todayKey);
             let tNet = 0, tTrips = 0, tGrossPure = 0, tExtraOngkir = 0;
@@ -4948,27 +5004,54 @@
                 });
             });
 
-            const badgeEl = document.getElementById('rider-badge');
-            const admNoteEl = document.getElementById('adm-dynamic-note');
-            const admLabelEl = document.getElementById('weekly-adm-label');
+            let wActiveDaysSet = new Set();
+            currentWeekKeys.forEach(key => {
+                rawData.forEach(item => { 
+                    if (parseSheetDate(item.Tanggal) === key && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                        wActiveDaysSet.add(key);
+                    }
+                });
+            });
+
+            const partTimeUIDs = ['UID326', 'UID339', 'UID347'];
+            let currentBaseRate = 0.20;
+            let currentLevelName = "BEGINNER";
             
-            currentWeeklyAdmRate = 0.16; // Tetap 16% sebagai referensi dasar
+            if (partTimeUIDs.includes(currentUserUID)) {
+                currentBaseRate = 0.16;
+                currentLevelName = "PART-TIME";
+            } else {
+                const avgPerDay = wActiveDaysSet.size > 0 ? (wTripsCount / wActiveDaysSet.size) : 0;
+                if (avgPerDay >= 15) {
+                    currentBaseRate = 0.16;
+                    currentLevelName = "PRO";
+                }
+            }
+            
+            currentWeeklyAdmRate = currentBaseRate; // Update variabel global
+
+            const admLabelEl = document.getElementById('weekly-adm-label');
+            const badge = document.getElementById('weekly-adm-percent-badge');
             
             // Cek promo hari ini untuk merubah badge laporan UI
             const todayRate = window.getAdmRate(getJakartaDateString());
             if (todayRate === 0) {
-                admLabelEl.innerText = `Adm. (0% PROMO)`;
-                const badge = document.getElementById('weekly-adm-percent-badge');
+                if (admLabelEl) admLabelEl.innerText = `Adm. (0% PROMO)`;
                 if (badge) {
                     badge.innerText = `PROMO 0%`;
                     badge.className = "text-[9px] font-extrabold text-white uppercase bg-green-500 px-2 py-0.5 rounded-md inline-block";
                 }
             } else {
-                admLabelEl.innerText = `Adm. (16%)`;
-                const badge = document.getElementById('weekly-adm-percent-badge');
+                if (admLabelEl) admLabelEl.innerText = `Adm. (${Math.round(currentBaseRate * 100)}%)`;
                 if (badge) {
-                    badge.innerText = `ADM 16%`;
-                    badge.className = "text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block";
+                    badge.innerText = `${currentLevelName} ${Math.round(currentBaseRate * 100)}%`;
+                    if (currentLevelName === "PART-TIME") {
+                        badge.className = "text-[9px] font-extrabold text-white uppercase bg-purple-500/80 px-2 py-0.5 rounded-md inline-block border border-purple-400";
+                    } else if (currentLevelName === "BEGINNER") {
+                        badge.className = "text-[9px] font-extrabold text-white uppercase bg-blue-500/80 px-2 py-0.5 rounded-md inline-block border border-blue-400";
+                    } else {
+                        badge.className = "text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block";
+                    }
                 }
             }
 
@@ -5030,25 +5113,20 @@
                 });
             });
 
-            // Aturan Lama untuk Minggu Lalu (Sesuai request: Pro 16%, Beginner 20%, Part-Time 16%)
-            let prevWeekRate = 0.16; // Default Part-time
-            let prevLevelName = "PART-TIME";
+            // Aturan ADM Minggu Lalu Berdasarkan Rata-rata Per Hari
+            let prevWeekRate = 0.20; 
+            let prevLevelName = "BEGINNER";
             
-            const fixedRateDate = new Date(2026, 1, 16);
-            if (startOfLastWeek >= fixedRateDate) {
-                prevWeekRate = 0.16; // Mulai 16 Feb 2026 semua 16%
-                prevLevelName = "ALL-RIDER";
+            if (partTimeUIDs.includes(currentUserUID)) {
+                prevWeekRate = 0.16;
+                prevLevelName = "PART-TIME";
             } else {
-                if (prevWTrips >= 80 && prevWDays.size >= 6) {
+                const prevAvgPerDay = prevWDays.size > 0 ? (prevWTrips / prevWDays.size) : 0;
+                if (prevAvgPerDay >= 15) {
                     prevWeekRate = 0.16;
                     prevLevelName = "PRO";
-                } else if (prevWTrips >= 40 && prevWDays.size >= 5) {
-                    prevWeekRate = 0.20;
-                    prevLevelName = "BEGINNER";
                 }
             }
-            
-            // prevWAdm dihitung secara per item (Mendukung Promo 0%) di atas
 
             const prevInstallmentRow = document.getElementById('prev-weekly-installment-row');
             if (prevWeeklyInstallmentAmount > 0) {
@@ -5089,14 +5167,11 @@
             const prevBadge = document.getElementById('prev-weekly-rate-badge');
             if(prevBadge) {
                 let badgeColor = "text-gray-600 bg-gray-50 border-gray-200";
-                if (prevLevelName === "PRO" || prevLevelName === "ALL-RIDER") badgeColor = "text-orange-600 bg-orange-50 border-orange-200";
+                if (prevLevelName === "PRO") badgeColor = "text-orange-600 bg-orange-50 border-orange-200";
                 else if (prevLevelName === "BEGINNER") badgeColor = "text-blue-600 bg-blue-50 border-blue-200";
+                else if (prevLevelName === "PART-TIME") badgeColor = "text-purple-600 bg-purple-50 border-purple-200";
 
-                if (prevLevelName === "ALL-RIDER") {
-                    prevBadge.innerText = `ADM ${Math.round(prevWeekRate * 100)}%`;
-                } else {
-                    prevBadge.innerText = `${prevLevelName} (${Math.round(prevWeekRate * 100)}%)`;
-                }
+                prevBadge.innerText = `${prevLevelName} (${Math.round(prevWeekRate * 100)}%)`;
                 prevBadge.className = `text-[8px] font-extrabold ${badgeColor} px-2 py-0.5 rounded-md uppercase border`;
             }
 
@@ -5467,11 +5542,13 @@
             if (admAmount === 0 && gross > 0) {
                  statusAdmEl.innerText = `PROMO 0%`;
                  statusAdmEl.className = "text-[10px] font-bold bg-green-100 text-green-600 px-2 py-1 rounded-md uppercase tracking-wide";
-            } else if (admAmount > 0 && admAmount < (gross * 0.16)) {
+            } else if (admAmount > 0 && admAmount < (gross * 0.16) - 100) {
                  statusAdmEl.innerText = `MIXED RATE`;
                  statusAdmEl.className = "text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-1 rounded-md uppercase tracking-wide";
             } else {
-                 statusAdmEl.innerText = `ADM 16%`;
+                 const impliedRate = (admAmount / gross) * 100;
+                 const roundedRate = Math.round(impliedRate);
+                 statusAdmEl.innerText = `ADM ${roundedRate}%`;
                  statusAdmEl.className = "text-[10px] font-bold bg-orange-100 text-orange-600 px-2 py-1 rounded-md uppercase tracking-wide";
             }
 
