@@ -2971,10 +2971,8 @@
 
             let html = '';
             const today = new Date();
-            const nextWeekDate = new Date(today);
-            nextWeekDate.setDate(today.getDate() + 7);
 
-            // Perhitungan tanggal libur dinamis untuk minggu ini dan minggu depan
+            // Perhitungan tanggal libur dinamis untuk minggu ini
             const enrichedSchedules = allRiderSchedules.map(sch => {
                 let anchorDateStr = sch.anchor_date;
                 if (!anchorDateStr) {
@@ -2987,9 +2985,23 @@
                 }
 
                 const currentWeekLeave = calculateLeaveDate(anchorDateStr, today);
-                const nextWeekLeave = calculateLeaveDate(anchorDateStr, nextWeekDate);
+                
+                // --- UPDATE FIREBASE AGAR RIDER APP SINKRON ---
+                // Ekstrak string tanggal (YYYY-MM-DD) untuk disimpan langsung di Firebase
+                const year = currentWeekLeave.getFullYear();
+                const month = String(currentWeekLeave.getMonth() + 1).padStart(2, '0');
+                const day = String(currentWeekLeave.getDate()).padStart(2, '0');
+                const formattedCurrentLeave = `${year}-${month}-${day}`;
 
-                return { ...sch, currentWeekLeave, nextWeekLeave };
+                // Jika tanggal libur minggu ini di Firebase tidak sesuai/kosong, auto-sync!
+                if (sch.current_leave_date !== formattedCurrentLeave) {
+                    updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_schedules', sch.id), {
+                        current_leave_date: formattedCurrentLeave,
+                        updated_at: serverTimestamp()
+                    }).catch(e => console.log("Gagal auto-sync jadwal:", e));
+                }
+
+                return { ...sch, currentWeekLeave, formattedCurrentLeave };
             });
 
             // Urutkan jadwal yang liburnya paling dekat di minggu ini
@@ -3002,7 +3014,6 @@
 
             enrichedSchedules.forEach(sch => {
                 const currentDayNameStr = formatLeaveDate(sch.currentWeekLeave);
-                const nextDayNameStr = formatLeaveDate(sch.nextWeekLeave);
                 
                 // Highlight khusus jika hari ini rider tersebut sedang jadwal libur
                 const isLeaveToday = sch.currentWeekLeave.toDateString() === today.toDateString();
@@ -3022,14 +3033,10 @@
                                 <i class="fa-solid fa-trash text-[10px]"></i>
                             </button>
                         </div>
-                        <div class="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-gray-100">
-                            <div class="bg-sky-50 rounded p-2 text-center border border-sky-100 shadow-inner">
-                                <p class="text-[8px] text-sky-600 font-bold uppercase mb-0.5">Minggu Ini</p>
-                                <p class="text-[10px] text-sky-800 font-black tracking-tight">${currentDayNameStr}</p>
-                            </div>
-                            <div class="bg-indigo-50 rounded p-2 text-center border border-indigo-100 shadow-inner">
-                                <p class="text-[8px] text-indigo-600 font-bold uppercase mb-0.5">Minggu Depan</p>
-                                <p class="text-[10px] text-indigo-800 font-black tracking-tight">${nextDayNameStr}</p>
+                        <div class="mt-2 pt-2 border-t border-gray-100">
+                            <div class="bg-sky-50 rounded-xl p-2.5 text-center border border-sky-100 shadow-inner w-full">
+                                <p class="text-[8px] text-sky-600 font-bold uppercase mb-0.5">Jadwal Libur Minggu Ini</p>
+                                <p class="text-[12px] text-sky-800 font-black tracking-tight">${currentDayNameStr}</p>
                             </div>
                         </div>
                     </div>
@@ -3054,11 +3061,21 @@
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
+                const today = new Date();
+                const calculatedLeave = calculateLeaveDate(anchorDate, today);
+                
+                // Format tanggal libur saat pertama kali disimpan
+                const year = calculatedLeave.getFullYear();
+                const month = String(calculatedLeave.getMonth() + 1).padStart(2, '0');
+                const day = String(calculatedLeave.getDate()).padStart(2, '0');
+                const formattedCurrentLeave = `${year}-${month}-${day}`;
+
                 const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_schedules', uid);
                 await setDoc(docRef, {
                     uid: uid,
                     name: rName,
                     anchor_date: anchorDate,
+                    current_leave_date: formattedCurrentLeave, // Info langsung yang bisa dibaca aplikasi Rider
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
