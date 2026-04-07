@@ -3092,6 +3092,233 @@
             });
         };
 
+        // =========================================================================
+        // OPEN CONTACT PICKER (DAFTAR KONTAK HP)
+        // =========================================================================
+        window.openContactPicker = async () => {
+            const supported = 'contacts' in navigator && 'ContactsManager' in window;
+            if (supported) {
+                try {
+                    const props = ['name', 'tel'];
+                    const opts = { multiple: false };
+                    const contacts = await navigator.contacts.select(props, opts);
+                    if (contacts && contacts.length > 0) {
+                        const contact = contacts[0];
+                        if (contact.name && contact.name.length > 0) document.getElementById('cust-name').value = contact.name[0];
+                        if (contact.tel && contact.tel.length > 0) {
+                            let phone = contact.tel[0].replace(/[^0-9+]/g, '');
+                            document.getElementById('cust-phone').value = phone;
+                        }
+                    }
+                } catch (ex) {
+                    console.warn("Contact picker failed:", ex);
+                    window.showAlert('Info', 'Akses kontak dibatalkan atau tidak diizinkan.', 'info');
+                }
+            } else {
+                window.showAlert('Tidak Didukung', 'Browser / perangkat ini tidak mendukung akses kontak langsung.', 'warning');
+            }
+        };
+
+        // =========================================================================
+        // EDIT ORDER (ACTIVE & HISTORY)
+        // =========================================================================
+        window.openEditOrder = (id, isDaily = false) => {
+            let orderData = null;
+            if (isDaily) {
+                orderData = allDailyOrders.find(o => o.id === id);
+            } else {
+                orderData = allGlobalOrders.find(o => o.id === id);
+            }
+            
+            // Fallback jikalau isDaily salah tangkap
+            if (!orderData) {
+                orderData = allGlobalOrders.find(o => o.id === id);
+            }
+            
+            if (!orderData) {
+                window.showAlert('Error', 'Data order tidak ditemukan.', 'error');
+                return;
+            }
+
+            document.getElementById('edit-order-id').value = id;
+            document.getElementById('edit-order-is-daily').value = isDaily ? 'true' : 'false';
+            document.getElementById('edit-order-rider-uid').value = orderData.rider_uid || '';
+
+            // Set nilai ke form edit
+            if (isDaily) {
+                document.getElementById('edit-phone').value = ''; 
+                document.getElementById('edit-name').value = orderData.customer_name || orderData.Nama_Pelanggan || '';
+                document.getElementById('edit-details').value = (orderData.Keterangan || '').replace(/ \| /g, '\n');
+                document.getElementById('edit-fee').value = (orderData.Nominal_Kotor || 0) * 1000;
+                document.getElementById('edit-tambahan').value = (orderData.Tambahan || 0) * 1000;
+            } else {
+                document.getElementById('edit-phone').value = orderData.customer_phone || '';
+                document.getElementById('edit-name').value = orderData.customer_name || '';
+                document.getElementById('edit-details').value = orderData.items ? orderData.items.map(i => i.name).join('\n') : '';
+                document.getElementById('edit-fee').value = orderData.fee || 0;
+                document.getElementById('edit-tambahan').value = orderData.tambahan || 0;
+            }
+
+            const modal = document.getElementById('edit-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        };
+
+        window.saveEditOrder = async () => {
+            const id = document.getElementById('edit-order-id').value;
+            const isDaily = document.getElementById('edit-order-is-daily').value === 'true';
+            const riderUid = document.getElementById('edit-order-rider-uid').value;
+            
+            const phone = document.getElementById('edit-phone').value.trim();
+            const name = document.getElementById('edit-name').value.trim();
+            const details = document.getElementById('edit-details').value.trim();
+            const rawFee = document.getElementById('edit-fee').value.trim().toLowerCase();
+            const rawTambahan = document.getElementById('edit-tambahan').value.trim().toLowerCase();
+
+            if (!id || !details || !rawFee) {
+                window.showAlert('Peringatan', 'Rincian dan Ongkir tidak boleh kosong.', 'warning');
+                return;
+            }
+
+            const parseNominal = (rawStr) => {
+                let str = String(rawStr).toLowerCase().replace(',', '.');
+                let isK = str.includes('k');
+                let val = parseFloat(str.replace(/[^0-9.]/g, '')) || 0;
+                if (isK || (val > 0 && val < 1000)) {
+                    return { real: val * 1000, saved: val };
+                } else {
+                    return { real: val, saved: val / 1000 };
+                }
+            };
+
+            const feeParsed = parseNominal(rawFee);
+            const tamParsed = parseNominal(rawTambahan);
+
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden'); loader.classList.add('flex');
+
+            try {
+                if (isDaily) {
+                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
+                    
+                    // Hitung selisih fee untuk menyesuaikan potongan saldo
+                    const oldData = allDailyOrders.find(o => o.id === id);
+                    if (oldData) {
+                        const oldFeeSaved = parseFloat(oldData.Nominal_Kotor || 0);
+                        const oldFeeReal = oldFeeSaved * 1000;
+                        const newFeeReal = feeParsed.real;
+                        
+                        const diffFee = newFeeReal - oldFeeReal;
+                        if (diffFee !== 0) {
+                            const diffAdminCut = diffFee * 0.16;
+                            const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
+                            await setDoc(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
+                        }
+                    }
+
+                    await updateDoc(ref, {
+                        Nama_Pelanggan: name,
+                        Keterangan: details.replace(/\n/g, ' | '),
+                        Nominal_Kotor: feeParsed.saved,
+                        Tambahan: tamParsed.saved
+                    });
+
+                } else {
+                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id);
+                    const oldData = allGlobalOrders.find(o => o.id === id);
+                    
+                    if (oldData) {
+                        const oldFeeReal = parseFloat(oldData.fee || 0);
+                        const newFeeReal = feeParsed.real;
+                        
+                        // Hitung selisih fee jika sudah ditarik rider
+                        const diffFee = newFeeReal - oldFeeReal;
+                        if (diffFee !== 0 && oldData.rider_uid) {
+                            const diffAdminCut = diffFee * 0.16;
+                            const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', oldData.rider_uid);
+                            await setDoc(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
+                        }
+
+                        const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
+                        
+                        await updateDoc(ref, {
+                            customer_phone: phone,
+                            customer_name: name,
+                            fee: feeParsed.real,
+                            tambahan: tamParsed.real,
+                            items: items
+                        });
+
+                        // Sinkronkan ke daily order miliknya
+                        if (oldData.daily_order_id && oldData.rider_uid) {
+                            const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
+                            await updateDoc(dailyRef, {
+                                Nama_Pelanggan: name,
+                                Keterangan: details.replace(/\n/g, ' | '),
+                                Nominal_Kotor: feeParsed.saved,
+                                Tambahan: tamParsed.saved
+                            }).catch(e => console.warn(e));
+                        }
+                    }
+                }
+
+                document.getElementById('edit-modal').classList.add('hidden');
+                document.getElementById('edit-modal').classList.remove('flex');
+                window.showAlert('Berhasil', 'Orderan berhasil diperbarui dan saldo telah disesuaikan.', 'success');
+                
+            } catch(e) {
+                console.error(e);
+                window.showAlert('Gagal', 'Terjadi kesalahan saat menyimpan.', 'error');
+            } finally {
+                loader.classList.add('hidden'); loader.classList.remove('flex');
+            }
+        };
+
+        // =========================================================================
+        // HAPUS HISTORY ORDER (REFUND 16%)
+        // =========================================================================
+        window.deleteHistoryOrder = (id, riderUid, isDaily) => {
+            window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus riwayat orderan ini secara permanen? (Potongan 16% akan dikembalikan)', async () => {
+                const loader = document.getElementById('loading-overlay');
+                loader.classList.remove('hidden'); loader.classList.add('flex');
+                
+                try {
+                    let feeRealToRefund = 0;
+
+                    if (isDaily) {
+                        const oldData = allDailyOrders.find(o => o.id === id);
+                        if (oldData) {
+                            feeRealToRefund = parseFloat(oldData.Nominal_Kotor || 0) * 1000;
+                        }
+                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
+                    } else {
+                        const oldData = allGlobalOrders.find(o => o.id === id);
+                        if (oldData) {
+                            feeRealToRefund = parseFloat(oldData.fee || 0);
+                            if (oldData.daily_order_id) {
+                                await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id)).catch(e=>console.warn(e));
+                            }
+                        }
+                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
+                    }
+
+                    // Kembalikan saldo jika data ada
+                    if (feeRealToRefund > 0) {
+                        const refundCut = feeRealToRefund * 0.16;
+                        const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
+                        await setDoc(balanceRef, { saldo: increment(refundCut) }, { merge: true });
+                    }
+
+                    window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
+                } catch(e) {
+                    console.error(e);
+                    window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
+                } finally {
+                    loader.classList.add('hidden'); loader.classList.remove('flex');
+                }
+            });
+        };
+
         document.addEventListener('DOMContentLoaded', () => {
             const installBtn = document.getElementById('btn-install-pwa');
             if(installBtn) {
