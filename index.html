@@ -7357,12 +7357,19 @@
 
               // FUNGSI PEMULIHAN STANDBY JIKA ORDER DIBATALKAN
               const handleCanceledOrderProcess = () => {
-                  // 1. Sembunyikan halaman tugas berjalan
-                  if (typeof hideActiveOrderOverlay === 'function') hideActiveOrderOverlay();
+                  let wasActiveTask = false;
+                  let wasRinging = false;
 
-                  // 2. Sembunyikan popup order masuk jika sedang tampil
+                  // Kondisi 1: Apakah rider sedang di halaman Tugas Berjalan?
+                  if (window.currentActiveOrderId !== null) {
+                      wasActiveTask = true;
+                      if (typeof hideActiveOrderOverlay === 'function') hideActiveOrderOverlay();
+                  }
+
+                  // Kondisi 2: Apakah pop-up "Orderan Baru!" sedang berdering di layar?
                   const popup = document.getElementById('incoming-order-popup');
                   if (popup && !popup.classList.contains('hidden')) {
+                      wasRinging = true;
                       popup.classList.add('hidden');
                       popup.classList.remove('flex');
                       
@@ -7380,13 +7387,13 @@
                   window.currentIncomingOrderId = null; 
                   window.currentActiveOrderId = null;
 
-                  // 3. Tampilkan Notifikasi Halus (Non-Blocking) pengganti alert()
-                  if (typeof window.showCustomToast === 'function') {
-                      window.showCustomToast("Orderan dibatalkan Admin. Anda kembali standby!");
+                  // Memberikan Pemberitahuan ke Rider JIKA salah satu kondisi terpenuhi
+                  if (wasActiveTask || wasRinging) {
+                      try { playBeep(300, 0.4); } catch(e){} // Suara peringatan nada rendah
+                      alert("Mohon maaf orderan dibatalkan admin, tenang saja kamu masih dapat urutan pertama kok.");
                   }
-                  try { playBeep(400, 0.4); } catch(e){}
                   
-                  // 4. PENEGASAN: Kembalikan Rider ke Antrean Secara Otomatis
+                  // PENEGASAN: Kembalikan Rider ke Antrean Secara Otomatis
                   const toggleEl = document.getElementById('onbid-toggle');
                   if (toggleEl && toggleEl.checked) {
                       localStorage.setItem('rider_onbid_status', 'true');
@@ -7397,7 +7404,7 @@
                       updateDoc(statusRef, { is_available: true, in_main_queue: true }).catch(e=>{});
                   }
 
-                  // 5. Refresh data agar antarmuka kembali bersih dan sync
+                  // Refresh data agar antarmuka kembali bersih dan sync
                   if (typeof window.manualRefresh === 'function') {
                       setTimeout(() => { window.manualRefresh(); }, 500);
                   }
@@ -7406,19 +7413,8 @@
               // FUNGSI PENGECEKAN JIKA TIDAK ADA ORDER (Dihapus admin)
               const checkNoOrderLogic = () => {
                   if (!window._hasActiveDocOrder && !window._hasActiveQueryOrder) {
-                      let wasActive = false;
-                      
-                      if (window.currentActiveOrderId !== null) {
-                          wasActive = true;
-                      }
-                      
-                      const popup = document.getElementById('incoming-order-popup');
-                      if (popup && !popup.classList.contains('hidden')) {
-                          wasActive = true;
-                      }
-
                       // Mencegah logic berjalan jika rider yang sengaja melewatkan (missed order)
-                      if (wasActive && !window.isMissingOrder) {
+                      if (!window.isMissingOrder) {
                           handleCanceledOrderProcess();
                       }
                   }
