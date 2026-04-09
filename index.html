@@ -2701,15 +2701,28 @@
 
         // --- FUNGSI CUSTOM TOAST NON-BLOCKING ---
         window.showCustomToast = function(msg) {
-            const toast = document.getElementById('custom-toast');
-            const msgEl = document.getElementById('toast-message');
-            if (toast && msgEl) {
-                msgEl.innerHTML = msg;
-                toast.classList.add('active');
-                setTimeout(() => {
-                    toast.classList.remove('active');
-                }, 4000);
+            let toast = document.getElementById('custom-toast');
+            let msgEl = document.getElementById('toast-message');
+            
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'custom-toast';
+                toast.className = 'fixed top-10 left-1/2 transform -translate-x-1/2 z-[9999999] bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none text-center text-xs font-bold w-11/12 max-w-sm';
+                
+                msgEl = document.createElement('span');
+                msgEl.id = 'toast-message';
+                toast.appendChild(msgEl);
+                document.body.appendChild(toast);
             }
+            
+            msgEl.innerHTML = msg;
+            toast.classList.remove('opacity-0');
+            toast.classList.add('opacity-100');
+            
+            setTimeout(() => {
+                toast.classList.remove('opacity-100');
+                toast.classList.add('opacity-0');
+            }, 4000);
         };
 
         // --- FUNGSI DARK MODE ---
@@ -7357,7 +7370,7 @@
                   }
               };
 
-              // FUNGSI PEMULIHAN STANDBY JIKA ORDER DIBATALKAN (REVISI)
+              // FUNGSI PEMULIHAN STANDBY JIKA ORDER DIBATALKAN/DIHAPUS OLEH ADMIN
               const handleCanceledOrderProcess = () => {
                   let wasActiveTask = false;
                   let wasRinging = false;
@@ -7397,8 +7410,10 @@
                   if (wasActiveTask || wasRinging) {
                       try { playBeep(300, 0.4); } catch(e){} // Suara peringatan nada rendah
                       
-                      // Pesan Alert Sesuai Permintaan
-                      alert("Mohon maaf orderan dibatalkan admin, status kamu sudah otomatis dikembalikan ke antrean radar.");
+                      // MENGGUNAKAN TOAST NON-BLOCKING SEBAGAI PENGGANTI ALERT BROWSER YANG BIKIN HANG
+                      if (typeof window.showCustomToast === 'function') {
+                          window.showCustomToast("Pesanan dihapus Admin. Status otomatis dikembalikan ke antrean.");
+                      }
                       
                       // KEMBALI KE BERANDA (Redirect)
                       if (typeof switchPage === 'function') {
@@ -7448,6 +7463,7 @@
               const orderDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', cleanUid);
               activeOrderUnsubscribeDoc = onSnapshot(orderDocRef, (docSnap) => {
                   let hasValidActiveOrder = false;
+                  
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       const status = String(data.status || '').trim().toLowerCase();
@@ -7455,11 +7471,17 @@
                           hasValidActiveOrder = true;
                       }
                       handleOrderData(data, docSnap.id);
+                  } else {
+                      // DOKUMEN DIHAPUS SECARA FISIK OLEH ADMIN (Aksi: deleteDoc)
+                      if (window.currentActiveOrderId === docSnap.id || window.currentIncomingOrderId === docSnap.id) {
+                          console.log("Detect deleteDoc pada DocRef:", docSnap.id);
+                          handleCanceledOrderProcess();
+                      }
                   }
                   
                   window._hasActiveDocOrder = hasValidActiveOrder;
                   if (!hasValidActiveOrder) {
-                      checkNoOrderLogic(); // Memicu pengecekan jika dokumen dihapus atau status berubah
+                      checkNoOrderLogic(); // Memicu pengecekan fallback
                   }
               }, (error) => { console.error("Error listening doc order:", error); });
 
@@ -7467,6 +7489,17 @@
               const q = query(ordersRef, where('rider_uid', '==', cleanUid));
               activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
                   let hasValidActiveOrder = false;
+                  
+                  // PENGECEKAN AKTIF SECARA REAL-TIME JIKA ADA DOKUMEN YANG DIHAPUS (Aksi: deleteDoc)
+                  snapshot.docChanges().forEach((change) => {
+                      if (change.type === 'removed') {
+                          const removedId = change.doc.id;
+                          if (window.currentActiveOrderId === removedId || window.currentIncomingOrderId === removedId) {
+                              console.log("Detect deleteDoc pada Query:", removedId);
+                              handleCanceledOrderProcess();
+                          }
+                      }
+                  });
                   
                   snapshot.forEach((docSnap) => {
                       const data = docSnap.data();
