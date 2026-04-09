@@ -7349,9 +7349,11 @@
                       showActiveOrderOverlay(data, docId);
                   } else if (status === "completed" && window.currentActiveOrderId === docId) {
                       hideActiveOrderOverlay();
-                  } else if ((status === "canceled" || status === "cancelled" || status === "batal") && (window.currentActiveOrderId === docId || window.currentIncomingOrderId === docId)) {
-                      // Jika order dibatalkan admin secara langsung dengan mengubah status
-                      handleCanceledOrderProcess();
+                  } else if (status !== "assigned" && status !== "processing" && status !== "completed") {
+                      // Tangkap semua status lain: canceled, cancelled, batal, dibatalkan, cancel, dll.
+                      if (window.currentActiveOrderId === docId || window.currentIncomingOrderId === docId) {
+                          handleCanceledOrderProcess();
+                      }
                   }
               };
 
@@ -7445,26 +7447,39 @@
               // PERBAIKAN KUOTA 1: Dengar langsung ke Document ID (Paling Hemat Kuota - 1 Read/Perubahan)
               const orderDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', cleanUid);
               activeOrderUnsubscribeDoc = onSnapshot(orderDocRef, (docSnap) => {
+                  let hasValidActiveOrder = false;
                   if (docSnap.exists()) {
-                      window._hasActiveDocOrder = true;
-                      handleOrderData(docSnap.data(), docSnap.id);
-                  } else {
-                      window._hasActiveDocOrder = false;
-                      checkNoOrderLogic(); // Memicu pengecekan jika dokumen dihapus
+                      const data = docSnap.data();
+                      const status = String(data.status || '').trim().toLowerCase();
+                      if (status === 'assigned' || status === 'processing') {
+                          hasValidActiveOrder = true;
+                      }
+                      handleOrderData(data, docSnap.id);
+                  }
+                  
+                  window._hasActiveDocOrder = hasValidActiveOrder;
+                  if (!hasValidActiveOrder) {
+                      checkNoOrderLogic(); // Memicu pengecekan jika dokumen dihapus atau status berubah
                   }
               }, (error) => { console.error("Error listening doc order:", error); });
 
               // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Jika Admin pakai Document ID acak)
               const q = query(ordersRef, where('rider_uid', '==', cleanUid));
               activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
-                  window._hasActiveQueryOrder = !snapshot.empty;
+                  let hasValidActiveOrder = false;
                   
                   snapshot.forEach((docSnap) => {
-                      handleOrderData(docSnap.data(), docSnap.id);
+                      const data = docSnap.data();
+                      const status = String(data.status || '').trim().toLowerCase();
+                      if (status === 'assigned' || status === 'processing') {
+                          hasValidActiveOrder = true;
+                      }
+                      handleOrderData(data, docSnap.id);
                   });
                   
-                  if (snapshot.empty) {
-                      checkNoOrderLogic(); // Memicu pengecekan jika hasil query kosong
+                  window._hasActiveQueryOrder = hasValidActiveOrder;
+                  if (!hasValidActiveOrder) {
+                      checkNoOrderLogic(); // Memicu pengecekan jika hasil query tidak ada yang aktif
                   }
               }, (error) => { console.error("Error listening query order:", error); });
           };
