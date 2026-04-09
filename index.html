@@ -9067,6 +9067,71 @@
           };
 
           // -------------------------------------------------------------
+          // NEW: SISTEM LISTENER STATUS RIDER PRIBADI (REMOTE FORCE KILL)
+          // -------------------------------------------------------------
+          let myStatusUnsubscribe = null;
+
+          window.startMyStatusListener = (uid) => {
+              if (!uid || !isAuthReady) return;
+              const cleanUid = String(uid).trim();
+
+              // Mencegah memory leak dengan menonaktifkan listener lama jika fungsi dipanggil ulang
+              if (myStatusUnsubscribe) {
+                  myStatusUnsubscribe();
+              }
+
+              // Path menunjuk ke status individu rider yang login saat ini
+              const statusRef = doc(db, '/status_rider_aktif', cleanUid);
+
+              myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      const toggle = document.getElementById('onbid-toggle');
+                      
+                      // LOGIKA REMOTE KILL: Jika Firebase bilang offline, tapi toggle di layar masih menyala (true)
+                      if (data.is_online === false && toggle && toggle.checked === true) {
+                          console.log("Remote Force Kill: Mematikan status On-Bid dari sistem/admin.");
+                          
+                          // 1. Ubah paksa tombol toggle menjadi mati (false)
+                          toggle.checked = false;
+                          
+                          // 2. Panggil fungsi UI untuk merubah tampilan menjadi OFFLINE / menyembunyikan radar
+                          if (typeof updateOnbidUI === 'function') {
+                              updateOnbidUI(false);
+                          }
+                          
+                          // 3. Simpan status offline ini ke memori lokal HP (localStorage)
+                          localStorage.setItem('rider_onbid_status', 'false');
+                          
+                          // (Opsional) Teruskan status mati ke Native Android Bridge jika diakses via Aplikasi
+                          if (window.AndroidInterface) {
+                              window.AndroidInterface.updateOnBidStatus(false);
+                          }
+                          
+                          // 4. Putar suara peringatan (beep pelan/nada rendah)
+                          try {
+                              playBeep(300, 0.3); // Nada peringatan rendah berdurasi 0.3 detik
+                          } catch (e) {}
+                          
+                          // Tampilkan notifikasi peringatan non-blocking kepada user
+                          if (typeof window.showCustomToast === 'function') {
+                              window.showCustomToast("Status On-Bid dimatikan oleh Sistem.");
+                          } else {
+                              alert("Sistem telah mematikan status On-Bid Anda.");
+                          }
+
+                          // 5. Ekstra Proteksi: Hentikan juga listener antrean/radar yang sedang berjalan
+                          if (typeof window.stopQueueListener === 'function') {
+                              window.stopQueueListener();
+                          }
+                      }
+                  }
+              }, (error) => {
+                  console.error("Error pada MyStatusListener:", error);
+              });
+          };
+
+          // -------------------------------------------------------------
           // NEW: SISTEM LISTENER SALDO DOMPET RIDER
           // -------------------------------------------------------------
           let walletUnsubscribe = null;
