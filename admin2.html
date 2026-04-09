@@ -223,9 +223,9 @@
             <div class="flex items-center gap-2">
                 <div class="flex-1 bg-slate-50 border border-gray-200 rounded-xl flex items-center px-3 focus-within:ring-2 focus-within:ring-sky-500 overflow-hidden shadow-inner">
                     <span id="history-day-name" class="text-[13px] font-black text-black mr-1 shrink-0 hidden uppercase tracking-wide">Hari</span>
-                    <input type="date" id="history-date" onchange="updateDayName(); renderHistoryOrders()" class="w-full bg-transparent py-3 text-sm font-bold text-black focus:outline-none border-none cursor-pointer">
+                    <input type="date" id="history-date" onchange="updateDayName(); window.renderHistoryOrders()" class="w-full bg-transparent py-3 text-sm font-bold text-black focus:outline-none border-none cursor-pointer">
                 </div>
-                <button onclick="renderHistoryOrders()" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0">
+                <button onclick="window.renderHistoryOrders()" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0">
                     <i class="fa-solid fa-magnifying-glass"></i>
                 </button>
             </div>
@@ -612,7 +612,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -648,7 +648,6 @@
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
-        let activeDailyListeners = {}; // Menyimpan daftar listener aktif agar tidak ganda
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -758,7 +757,7 @@
             }
 
             if (page === 'history') {
-                renderHistoryOrders();
+                window.renderHistoryOrders();
             }
         };
 
@@ -786,47 +785,14 @@
 
         function autoCleanUpOldData() {
             const now = Date.now();
-            const threshold = 45 * 24 * 60 * 60 * 1000; 
             const recapThreshold = 30 * 24 * 60 * 60 * 1000; // 30 hari untuk rekap cloud
 
-            allDailyOrders.forEach(async (order) => {
-                let orderTimeMs = 0;
-                if (order.created_at) {
-                    if (order.created_at.seconds) {
-                        orderTimeMs = order.created_at.seconds * 1000;
-                    } else if (order.created_at.getTime) {
-                        orderTimeMs = order.created_at.getTime(); 
-                    }
-                }
-
-                if (orderTimeMs > 0 && (now - orderTimeMs > threshold)) {
-                    try {
-                        const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.id);
-                        await deleteDoc(ref);
-                    } catch (e) {}
-                }
-            });
-
-            allGlobalOrders.forEach(async (order) => {
-                if (order.created_at && order.created_at.seconds) {
-                    const orderTimeMs = order.created_at.seconds * 1000;
-                    if (now - orderTimeMs > threshold) {
-                        try {
-                            const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                            await deleteDoc(ref);
-                        } catch(e) {}
-                    }
-                }
-            });
-
-            // PEMBERSIHAN OTOMATIS: Hapus rekap cloud yang umurnya lebih dari 30 hari
+            // Hapus rekap cloud yang umurnya lebih dari 30 hari
             allCloudRecaps.forEach(async (rekap) => {
                 let recapTimeMs = 0;
-                // Cek dari timestamp kapan data tersebut disimpan ke cloud
                 if (rekap.updated_at && rekap.updated_at.seconds) {
                     recapTimeMs = rekap.updated_at.seconds * 1000;
                 } else if (rekap.tanggal) {
-                    // Jika tidak ada timestamp, ambil dari tulisan tanggalnya
                     const d = new Date(rekap.tanggal);
                     if (!isNaN(d.getTime())) recapTimeMs = d.getTime();
                 }
@@ -999,8 +965,7 @@
                 if (typeof window.updateContactRiderSelect === 'function') window.updateContactRiderSelect();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
                 
-                // Mulai listener harian setelah data allRiders termuat
-                startDailyOrdersListeners();
+                // Hapus panggilan listener order harian (startDailyOrdersListeners) yang memboroskan kuota
                 
             }, (error) => {
                 console.error("Error Firebase:", error);
@@ -1533,7 +1498,10 @@
 
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
-            onSnapshot(ordersCol, (snapshot) => {
+            // MENGHEMAT READS: Hanya mendengarkan orderan yang masih tertahan/aktif
+            const q = query(ordersCol, where("status", "in", ["assigned", "processing", "missed", "unassigned"]));
+            
+            onSnapshot(q, (snapshot) => {
                 const newGlobalOrders = [];
                 let hasNewOrder = false;
 
@@ -1557,39 +1525,14 @@
                 }
 
                 renderActiveOrders();
-                renderHistoryOrders();
+                
+                // Jika sedang di halaman histori, refresh manual
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                    window.renderHistoryOrders();
+                }
                 
                 updateNewShiftUI();
                 updateMainQueueUI();
-            });
-        }
-
-        function startDailyOrdersListeners() {
-            // Memantau order harian secara dinamis berdasarkan UID yang aktif
-            allRiders.forEach(rider => {
-                const uid = rider.uid;
-                if (!activeDailyListeners[uid]) {
-                    const dailyRef = collection(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'daily_orders');
-                    activeDailyListeners[uid] = onSnapshot(dailyRef, (snapshot) => {
-                        allDailyOrders = allDailyOrders.filter(o => o.rider_uid !== uid);
-                        
-                        snapshot.forEach(docSnap => {
-                            const data = docSnap.data();
-                            if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
-                                allDailyOrders.push({
-                                    id: docSnap.id,
-                                    rider_uid: uid,
-                                    customer_name: data.Nama_Pelanggan || '-',
-                                    ...data
-                                });
-                            }
-                        });
-                        
-                        if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                            renderHistoryOrders();
-                        }
-                    });
-                }
             });
         }
 
@@ -1722,193 +1665,179 @@
             return String(uid).trim().toUpperCase();
         }
 
-        window.renderHistoryOrders = () => {
+        // MENGHEMAT READS: Fungsi ini diubah total untuk menarik data HANYA jika dipanggil dan HANYA untuk 1 tanggal
+        window.renderHistoryOrders = async () => {
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
             const totalFeeEl = document.getElementById('history-total-fee');
             const dateVal = document.getElementById('history-date').value; 
             
             if(!container) return;
-
-            const activeDailyOrderIds = new Set(
-                allGlobalOrders
-                    .filter(o => o.status === 'assigned' || o.status === 'processing')
-                    .map(o => o.daily_order_id)
-                    .filter(id => id)
-            );
-
-            const historyOrders = allGlobalOrders.filter(o => {
-                const stat = (o.status || '').toLowerCase();
-                if (stat !== 'completed' && stat !== 'selesai') return false;
-
-                const timestamp = o.created_at;
-                if (dateVal && timestamp && timestamp.seconds) {
-                    const d = new Date(timestamp.seconds * 1000);
-                    const localDateStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-                    return localDateStr === dateVal;
-                }
-                return !dateVal || !timestamp;
-            });
-
-            const existingDailyOrderIds = new Set(historyOrders.map(o => o.daily_order_id).filter(id => id));
-
-            const dailyOrdersMapped = allDailyOrders.filter(o => {
-                if (activeDailyOrderIds.has(o.id)) return false;
-
-                let localDateStr = '';
-                if (o.Tanggal) {
-                    const parts = o.Tanggal.split('-');
-                    if (parts.length === 3) {
-                        if (parts[0].length === 4) {
-                            localDateStr = o.Tanggal;
-                        } else {
-                            localDateStr = `${parts[2]}-${parts[0]}-${parts[1]}`;
-                        }
-                    }
-                } else if (o.created_at && o.created_at.seconds) {
-                    const d = new Date(o.created_at.seconds * 1000);
-                    localDateStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-                }
-                return !dateVal || localDateStr === dateVal;
-            }).map(o => {
-                const matchedRider = allRiders.find(r => r.uid === o.rider_uid);
-                const realNameFromRider = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName) : null;
-                const realName = realNameFromRider && String(realNameFromRider).trim() !== '' ? realNameFromRider : 'Rider';
-
-                return {
-                    id: o.id,
-                    rider_uid: o.rider_uid,
-                    rider_name: realName, 
-                    customer_name: o.customer_name || o.Nama_Pelanggan || '-',
-                    fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000,
-                    tambahan: (parseFloat(o.Tambahan) || 0) * 1000,
-                    status: 'completed',
-                    created_at: o.created_at,
-                    finished_at: o.created_at, 
-                    timeStr: o.Jam,
-                    tanggalStr: o.Tanggal,
-                    keterangan: o.Keterangan || '',
-                    is_bookmarked: o.is_bookmarked === true,
-                    is_daily_order: true 
-                };
-            });
-
-            const finalHistoryOrders = [...historyOrders];
-            dailyOrdersMapped.forEach(dOrder => {
-                if (!existingDailyOrderIds.has(dOrder.id)) {
-                    finalHistoryOrders.push(dOrder);
-                }
-            });
-
-            let sumFee = 0;
-            let sumTambahan = 0;
-            finalHistoryOrders.forEach(o => {
-                sumFee += parseInt(o.fee || 0);
-                sumTambahan += parseInt(o.tambahan || 0);
-            });
             
-            const totalAdminCut = sumFee * 0.16;
-            
-            totalCountEl.innerText = finalHistoryOrders.length;
-            totalFeeEl.innerHTML = `Rp ${sumFee.toLocaleString('id-ID')}${sumTambahan > 0 ? `<span class="text-[11px] text-emerald-500 font-black ml-1">+ ${sumTambahan.toLocaleString('id-ID')}</span>` : ''}`;
-            
-            const adminCutEl = document.getElementById('history-total-admin');
-            if (adminCutEl) {
-                adminCutEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
-            }
-
-            finalHistoryOrders.sort((a, b) => {
-                const timeA = a.created_at ? a.created_at.seconds : 0;
-                const timeB = b.created_at ? b.created_at.seconds : 0;
-                return timeA - timeB;
-            });
-            
-            window.currentHistoryData = finalHistoryOrders;
-
-            if (finalHistoryOrders.length === 0) {
-                container.innerHTML = `
-                    <div class="text-center py-10 bg-white rounded-2xl border border-gray-100">
-                        <i class="fa-solid fa-box-open text-3xl text-gray-300 mb-3"></i>
-                        <p class="text-xs font-bold text-black">Belum ada order selesai pada tanggal ini.</p>
-                        <p class="text-[9px] text-black mt-1 italic">Hapus input tanggal untuk melihat semua riwayat (jika ada).</p>
-                    </div>`;
+            if(!dateVal) {
+                window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
                 return;
             }
 
-            let html = '';
-            finalHistoryOrders.forEach(order => {
-                const timestamp = order.created_at;
-                const timeStr = order.timeStr || (timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--');
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden'); loader.classList.add('flex');
+
+            try {
+                let fetchedOrders = [];
                 
-                let finalName = order.rider_name || 'Rider';
-                if (finalName === getRiderCode(order.rider_uid) || finalName === 'Rider') {
-                   const matched = allRiders.find(r => r.uid === order.rider_uid);
-                   const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
-                   if (rName) finalName = rName;
+                // Menarik data "daily_orders" secara spesifik hanya untuk tanggal yang dipilih (Tanpa looping panjang)
+                const promises = allRiders.map(async (rider) => {
+                    const q = query(
+                        collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders'),
+                        where("Tanggal", "==", dateVal)
+                    );
+                    const snap = await getDocs(q);
+                    
+                    snap.forEach(docSnap => {
+                        const data = docSnap.data();
+                        if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
+                            const matchedRider = allRiders.find(r => r.uid === rider.uid);
+                            const realNameFromRider = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName) : null;
+                            const realName = realNameFromRider && String(realNameFromRider).trim() !== '' ? realNameFromRider : 'Rider';
+
+                            fetchedOrders.push({
+                                id: docSnap.id,
+                                rider_uid: rider.uid,
+                                rider_name: realName, 
+                                customer_name: data.customer_name || data.Nama_Pelanggan || '-',
+                                fee: (parseFloat(data.Nominal_Kotor) || 0) * 1000,
+                                tambahan: (parseFloat(data.Tambahan) || 0) * 1000,
+                                status: 'completed',
+                                created_at: data.created_at,
+                                finished_at: data.created_at, 
+                                timeStr: data.Jam,
+                                tanggalStr: data.Tanggal,
+                                keterangan: data.Keterangan || '',
+                                is_bookmarked: data.is_bookmarked === true,
+                                is_daily_order: true 
+                            });
+                        }
+                    });
+                });
+
+                await Promise.all(promises);
+
+                let sumFee = 0;
+                let sumTambahan = 0;
+                fetchedOrders.forEach(o => {
+                    sumFee += parseInt(o.fee || 0);
+                    sumTambahan += parseInt(o.tambahan || 0);
+                });
+                
+                const totalAdminCut = sumFee * 0.16;
+                
+                totalCountEl.innerText = fetchedOrders.length;
+                totalFeeEl.innerHTML = `Rp ${sumFee.toLocaleString('id-ID')}${sumTambahan > 0 ? `<span class="text-[11px] text-emerald-500 font-black ml-1">+ ${sumTambahan.toLocaleString('id-ID')}</span>` : ''}`;
+                
+                const adminCutEl = document.getElementById('history-total-admin');
+                if (adminCutEl) {
+                    adminCutEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
                 }
 
-                const displayRider = `${getRiderCode(order.rider_uid)} (${finalName})`;
+                fetchedOrders.sort((a, b) => {
+                    const timeA = a.created_at ? a.created_at.seconds : 0;
+                    const timeB = b.created_at ? b.created_at.seconds : 0;
+                    return timeA - timeB;
+                });
                 
-                const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
-                const tamVal = parseInt(order.tambahan || 0);
-                
-                const tamStr = tamVal > 0 ? `<span class="text-xs text-black font-black bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 ml-1.5">+ Rp ${tamVal.toLocaleString('id-ID')}</span>` : '';
-                
-                const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[11px] text-black mt-1 font-medium"><i class="fa-solid fa-user mr-1.5 text-slate-400"></i>${order.customer_name}</p>` : '';
+                window.currentHistoryData = fetchedOrders;
+                allDailyOrders = fetchedOrders; // Update buffer memory untuk fungsi edit/delete
 
-                const isBookmarked = order.is_bookmarked === true;
-                const cardClasses = isBookmarked 
-                    ? "bg-indigo-50/30 border-indigo-300 ring-2 ring-indigo-200" 
-                    : "bg-white border-gray-100 hover:bg-slate-50";
-                
-                const badgeHtml = isBookmarked 
-                    ? `<div class="absolute -top-2.5 -right-2 bg-indigo-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full shadow-sm border-2 border-white flex items-center gap-1 z-20"><i class="fa-solid fa-thumbtack"></i> BATAS TERAKHIR</div>` 
-                    : '';
+                if (fetchedOrders.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-10 bg-white rounded-2xl border border-gray-100">
+                            <i class="fa-solid fa-box-open text-3xl text-gray-300 mb-3"></i>
+                            <p class="text-xs font-bold text-black">Belum ada order selesai pada tanggal ini.</p>
+                        </div>`;
+                    return;
+                }
 
-                const btnMarkColor = isBookmarked 
-                    ? "bg-indigo-500 text-white shadow-inner" 
-                    : "bg-slate-100 text-slate-400 hover:bg-indigo-500 hover:text-white";
-                
-                const btnMarkIcon = isBookmarked ? "fa-solid fa-thumbtack" : "fa-solid fa-thumbtack -rotate-45";
+                let html = '';
+                fetchedOrders.forEach(order => {
+                    const timestamp = order.created_at;
+                    const timeStr = order.timeStr || (timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--');
+                    
+                    let finalName = order.rider_name || 'Rider';
+                    if (finalName === getRiderCode(order.rider_uid) || finalName === 'Rider') {
+                       const matched = allRiders.find(r => r.uid === order.rider_uid);
+                       const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
+                       if (rName) finalName = rName;
+                    }
 
-                html += `
-                    <div ${isBookmarked ? 'id="bookmark-target"' : ''} class="rounded-xl p-3.5 border shadow-sm flex justify-between items-center transition-all gap-3 relative ${cardClasses}">
-                        ${badgeHtml}
-                        <div class="flex items-center gap-3 w-full pr-1">
-                            <div class="flex flex-col items-center justify-center shrink-0 w-12">
-                                <i class="fa-regular fa-clock text-slate-400 text-sm mb-0.5"></i>
-                                <span class="text-xs font-black text-black">${timeStr}</span>
-                            </div>
-                            
-                            <div class="w-px bg-gray-200 self-stretch shrink-0 min-h-[45px]"></div>
-                            
-                            <div class="overflow-hidden flex flex-col justify-center">
-                                <span class="text-sm font-black text-black leading-tight break-words">${displayRider}</span>
-                                ${custName}
+                    const displayRider = `${getRiderCode(order.rider_uid)} (${finalName})`;
+                    
+                    const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
+                    const tamVal = parseInt(order.tambahan || 0);
+                    
+                    const tamStr = tamVal > 0 ? `<span class="text-xs text-black font-black bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 ml-1.5">+ Rp ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                    
+                    const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[11px] text-black mt-1 font-medium"><i class="fa-solid fa-user mr-1.5 text-slate-400"></i>${order.customer_name}</p>` : '';
+
+                    const isBookmarked = order.is_bookmarked === true;
+                    const cardClasses = isBookmarked 
+                        ? "bg-indigo-50/30 border-indigo-300 ring-2 ring-indigo-200" 
+                        : "bg-white border-gray-100 hover:bg-slate-50";
+                    
+                    const badgeHtml = isBookmarked 
+                        ? `<div class="absolute -top-2.5 -right-2 bg-indigo-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full shadow-sm border-2 border-white flex items-center gap-1 z-20"><i class="fa-solid fa-thumbtack"></i> BATAS TERAKHIR</div>` 
+                        : '';
+
+                    const btnMarkColor = isBookmarked 
+                        ? "bg-indigo-500 text-white shadow-inner" 
+                        : "bg-slate-100 text-slate-400 hover:bg-indigo-500 hover:text-white";
+                    
+                    const btnMarkIcon = isBookmarked ? "fa-solid fa-thumbtack" : "fa-solid fa-thumbtack -rotate-45";
+
+                    html += `
+                        <div ${isBookmarked ? 'id="bookmark-target"' : ''} class="rounded-xl p-3.5 border shadow-sm flex justify-between items-center transition-all gap-3 relative ${cardClasses}">
+                            ${badgeHtml}
+                            <div class="flex items-center gap-3 w-full pr-1">
+                                <div class="flex flex-col items-center justify-center shrink-0 w-12">
+                                    <i class="fa-regular fa-clock text-slate-400 text-sm mb-0.5"></i>
+                                    <span class="text-xs font-black text-black">${timeStr}</span>
+                                </div>
                                 
-                                <div class="flex items-center mt-1.5 flex-wrap gap-y-1">
-                                    <span class="text-sm font-black text-black bg-slate-100 px-2 py-0.5 rounded border border-slate-200">Rp ${feeStr}</span>
-                                    ${tamStr}
+                                <div class="w-px bg-gray-200 self-stretch shrink-0 min-h-[45px]"></div>
+                                
+                                <div class="overflow-hidden flex flex-col justify-center">
+                                    <span class="text-sm font-black text-black leading-tight break-words">${displayRider}</span>
+                                    ${custName}
+                                    
+                                    <div class="flex items-center mt-1.5 flex-wrap gap-y-1">
+                                        <span class="text-sm font-black text-black bg-slate-100 px-2 py-0.5 rounded border border-slate-200">Rp ${feeStr}</span>
+                                        ${tamStr}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end shrink-0 gap-2 relative z-10">
+                                <div class="flex flex-col gap-1.5">
+                                    <button onclick="window.toggleHistoryBookmark('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'}, ${isBookmarked})" class="w-8 h-8 ${btnMarkColor} rounded-xl flex items-center justify-center transition-colors shadow-sm" title="${isBookmarked ? 'Hapus Batas' : 'Jadikan Batas Terakhir'}">
+                                        <i class="${btnMarkIcon} text-xs"></i>
+                                    </button>
+                                    <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
+                                        <i class="fa-solid fa-pen text-xs"></i>
+                                    </button>
+                                    <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Hapus Riwayat">
+                                        <i class="fa-solid fa-trash text-xs"></i>
+                                    </button>
                                 </div>
                             </div>
                         </div>
-                        <div class="flex flex-col items-end shrink-0 gap-2 relative z-10">
-                            <div class="flex flex-col gap-1.5">
-                                <button onclick="window.toggleHistoryBookmark('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'}, ${isBookmarked})" class="w-8 h-8 ${btnMarkColor} rounded-xl flex items-center justify-center transition-colors shadow-sm" title="${isBookmarked ? 'Hapus Batas' : 'Jadikan Batas Terakhir'}">
-                                    <i class="${btnMarkIcon} text-xs"></i>
-                                </button>
-                                <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
-                                    <i class="fa-solid fa-pen text-xs"></i>
-                                </button>
-                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Hapus Riwayat">
-                                    <i class="fa-solid fa-trash text-xs"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-            container.innerHTML = html;
+                    `;
+                });
+                container.innerHTML = html;
+                
+            } catch(e) {
+                console.error("Gagal menarik histori:", e);
+                window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memuat data riwayat tanggal ini.', 'error');
+            } finally {
+                loader.classList.add('hidden'); loader.classList.remove('flex');
+            }
         };
 
         window.exportToCSV = () => {
@@ -1920,7 +1849,7 @@
             const dateVal = document.getElementById('history-date').value || 'Semua_Waktu';
             
             let csvRows = [];
-            csvRows.push(["UID", "Nama_Rider", "Nama_Pelanggan", "Tanggal", "Jam", "Keterangan", "Nominal_Kotor", "Tambahan", "Status"].join(';'));
+            csvRows.push(["UID", "Nama_Rider", "Tanggal", "Jam", "Keterangan", "Nominal_Kotor", "Tambahan", "Status"].join(';'));
 
             let dailyCounters = {}; 
 
@@ -2000,15 +1929,15 @@
                 
                 const escapeCSV = (str) => `"${String(str).replace(/"/g, '""')}"`;
                 
-                const custNameCSV = order.customer_name && order.customer_name !== '-' ? order.customer_name : '';
+                let ketDetail = order.keterangan || '';
+                if (!ketDetail || ketDetail === '-') ketDetail = noOrder;
 
                 csvRows.push([
                     escapeCSV(order.rider_uid),  
                     escapeCSV(finalName),        
-                    escapeCSV(custNameCSV),      
                     escapeCSV(tgl),              
                     escapeCSV(timeStr),          
-                    escapeCSV(noOrder),          
+                    escapeCSV(ketDetail),          
                     escapeCSV(formatFee),        
                     escapeCSV(formatTambahan),   
                     escapeCSV("Selesai")         
@@ -2066,12 +1995,12 @@
                 if (isDaily) {
                     await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id), { is_bookmarked: newState });
                 } else {
-                    const order = allGlobalOrders.find(o => o.id === id);
                     await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { is_bookmarked: newState });
-                    
-                    if (order && order.rider_uid && order.daily_order_id) {
-                        await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id), { is_bookmarked: newState });
-                    }
+                }
+                
+                // Segarkan tampilan histori
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                    await window.renderHistoryOrders();
                 }
             } catch(e) { 
                 console.error(e);
@@ -2207,6 +2136,11 @@
                 document.getElementById('manual-tambahan').value = '';
                 
                 window.showAlert('Berhasil', 'Orderan susulan berhasil ditambahkan ke histori.', 'success');
+                
+                // Segarkan tampilan histori
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                    await window.renderHistoryOrders();
+                }
             } catch(e) {
                 console.error(e);
                 window.showAlert('Gagal', 'Terjadi kesalahan saat input.', 'error');
@@ -2289,7 +2223,7 @@
                     Nama_Pelanggan: custName,
                     Nominal_Kotor: savedKotor,
                     Tambahan: savedTambahan,
-                    Status: "Selesai",
+                    Status: "Selesai", // Untuk histori
                     Keterangan: details.replace(/\n/g, ' | '),
                     created_at: serverTimestamp()
                 });
@@ -2604,19 +2538,13 @@
             }
         };
 
-        window.downloadCloudRecap = (dateStr) => {
+        window.downloadCloudRecap = async (dateStr) => {
             document.getElementById('history-date').value = dateStr;
             if(typeof window.updateDayName === 'function') window.updateDayName();
-            window.renderHistoryOrders();
             
-            const loader = document.getElementById('loading-overlay');
-            loader.classList.remove('hidden'); loader.classList.add('flex');
-            
-            // Jeda 1 detik memastikan data selesai di-render ulang ke dalam memori
-            setTimeout(() => {
-                window.exportToCSV();
-                loader.classList.add('hidden'); loader.classList.remove('flex');
-            }, 1000); 
+            // Tunggu data ditarik dari database sebelum diekspor
+            await window.renderHistoryOrders();
+            window.exportToCSV();
         };
 
         window.deleteCloudRecap = (id, dateFormatted) => {
@@ -3172,6 +3100,11 @@
                 document.getElementById('edit-modal').classList.remove('flex');
                 window.showAlert('Berhasil', 'Orderan berhasil diperbarui dan saldo telah disesuaikan.', 'success');
                 
+                // Segarkan tampilan histori
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                    await window.renderHistoryOrders();
+                }
+                
             } catch(e) {
                 console.error(e);
                 window.showAlert('Gagal', 'Terjadi kesalahan saat menyimpan.', 'error');
@@ -3216,6 +3149,11 @@
                     }
 
                     window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
+                    
+                    // Segarkan tampilan histori
+                    if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                        await window.renderHistoryOrders();
+                    }
                 } catch(e) {
                     console.error(e);
                     window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
