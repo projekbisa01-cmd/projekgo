@@ -713,6 +713,61 @@
             }
         }
 
+        // --- SISTEM PEMANTAUAN OTOMATIS SALDO 0/MINUS ---
+        function checkAndEnforceRiderBalances() {
+            if (allRiders.length === 0 || allRiderBalances.length === 0) return;
+            
+            allRiders.forEach(rider => {
+                const balanceData = allRiderBalances.find(b => b.uid === rider.uid);
+                if (!balanceData) return;
+                
+                const saldo = parseInt(balanceData.saldo || 0);
+
+                const inQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
+                const isAvailable = rider.is_available === true || rider.is_available === 'true';
+                const isOnline = rider.is_online === true || rider.is_online === 'true';
+
+                // KONDISI 1: Saldo habis / minus tapi masih di antrean atau onbid
+                if (saldo <= 0) {
+                    if (inQueue || isAvailable || isOnline) {
+                        const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        // Gunakan setDoc merge agar persis seperti tombol Force Kill manual
+                        setDoc(ref, {
+                            is_online: false,      // Matikan toggle onbid secara paksa
+                            is_available: false,   // Matikan status ketersediaan
+                            in_main_queue: false,  // Keluarkan dari antrean radar
+                            force_kill: true,      // Beri sinyal force kill ke aplikasi rider
+                            last_drop_desc: "Saldo Rp 0 / Minus. Silakan Top Up.",
+                            proof_desc: "",
+                            last_updated: serverTimestamp()
+                        }, { merge: true }).catch(e => console.error("Gagal auto-kick:", e));
+                        
+                        // Kirim push notif ke panel rider
+                        sendPushNotification(rider.uid, "⚠️ SALDO KOSONG / MINUS ⚠️", "Aplikasi dipaksa offline. Isi dulu dompet kredit nya agar bisa masuk antrean lagi.");
+                    }
+                } 
+                // KONDISI 2: Saldo sudah terisi (>0) dan sebelumnya di-kick KARENA saldo habis
+                else if (saldo > 0) {
+                    if (rider.force_kill === true && (rider.last_drop_desc || "").includes("Saldo Rp 0")) {
+                        const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        setDoc(ref, {
+                            is_online: true,       // Otomatis nyalakan kembali toggle onbid
+                            in_main_queue: true,   // Masukkan kembali ke antrean
+                            is_available: true,
+                            force_kill: false,     // Pulihkan dari paksa kill
+                            last_drop_desc: "Aktif Kembali (Saldo Terisi)",
+                            last_drop_time: serverTimestamp(),
+                            last_updated: serverTimestamp()
+                        }, { merge: true }).catch(e => console.error("Gagal auto-rejoin:", e));
+                        
+                        // Kirim push notif ke panel rider
+                        sendPushNotification(rider.uid, "✅ SALDO TERISI ✅", "Saldo berhasil ditambah. Kamu otomatis kembali masuk ke antrean utama!");
+                    }
+                }
+            });
+        }
+        // ------------------------------------------------
+
         window.formatInputRibuan = (input) => {
             let value = input.value.replace(/[^0-9]/g, '');
             input.value = value ? parseInt(value, 10).toLocaleString('id-ID') : '';
@@ -982,6 +1037,9 @@
 
                 updateNewShiftUI();
                 updateMainQueueUI();
+                
+                // Memicu pengecekan paksa berdasarkan saldo setiap kali ada update status rider
+                checkAndEnforceRiderBalances();
                 
                 // Panggil ulang pembentuk dropdown agar data selalu update
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
@@ -2278,6 +2336,9 @@
                 });
                 if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
+                
+                // Memicu pengecekan paksa berdasarkan saldo setiap kali ada perubahan pada data saldo
+                checkAndEnforceRiderBalances();
             });
         }
 
