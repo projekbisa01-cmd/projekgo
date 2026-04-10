@@ -213,10 +213,11 @@
             <div class="flex items-center gap-2">
                 <div class="flex-1 bg-slate-50 border border-gray-200 rounded-xl flex items-center px-3 focus-within:ring-2 focus-within:ring-sky-500 overflow-hidden shadow-inner">
                     <span id="history-day-name" class="text-[13px] font-black text-black mr-1 shrink-0 hidden uppercase tracking-wide">Hari</span>
-                    <input type="date" id="history-date" onchange="updateDayName(); window.renderHistoryOrders()" class="w-full bg-transparent py-3 text-sm font-bold text-black focus:outline-none border-none cursor-pointer">
+                    <input type="date" id="history-date" onchange="updateDayName(); window.renderHistoryOrders(false)" class="w-full bg-transparent py-3 text-sm font-bold text-black focus:outline-none border-none cursor-pointer">
                 </div>
-                <button onclick="window.renderHistoryOrders()" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0">
-                    <i class="fa-solid fa-magnifying-glass"></i>
+                <!-- Tombol Kaca Pembesar diubah menjadi fungsi Force Refresh ke Database -->
+                <button onclick="window.renderHistoryOrders(true)" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0" title="Refresh Paksa dari Database">
+                    <i class="fa-solid fa-arrows-rotate"></i>
                 </button>
             </div>
         </section>
@@ -668,9 +669,15 @@
         let allRiderSchedules = [];
         let allCloudRecaps = [];
         let allCustomers = []; 
+        
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
+        
+        // --- VARIABEL CACHE BARU UNTUK OPTIMASI ---
+        window.fcmTokenCache = {}; 
+        window.historyDataCache = {}; 
+        window.hasLoadedCloudRecaps = false;
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -679,12 +686,10 @@
                 startRiderContactsListener();
                 startRiderBalancesListener(); 
                 startRiderSchedulesListener();
-                startCloudRecapsListener();
+                // startCloudRecapsListener(); -> DIHAPUS, dipindah ke Lazy Load saat tab Histori diklik
                 startLiveTimers(); 
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
-                setTimeout(autoCleanUpOldData, 15000);
-                setInterval(autoCleanUpOldData, 6 * 60 * 60 * 1000);
                 
                 const today = new Date();
                 const dd = String(today.getDate()).padStart(2, '0');
@@ -710,14 +715,20 @@
 
         async function sendPushNotification(riderUid, title, body) {
             try {
-                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
-                const tokenSnap = await getDoc(tokenRef);
+                // OPTIMASI: Cek token di memori lokal dulu. Jika ada, tidak perlu tembak database lagi.
+                let fcmToken = window.fcmTokenCache[riderUid];
                 
-                if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
-                    const fcmToken = tokenSnap.data().fcm_token;
-                    
+                if (!fcmToken) {
+                    const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
+                    const tokenSnap = await getDoc(tokenRef);
+                    if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
+                        fcmToken = tokenSnap.data().fcm_token;
+                        window.fcmTokenCache[riderUid] = fcmToken; // Simpan ke cache
+                    }
+                }
+                
+                if (fcmToken) {
                     const GAS_URL = "https://script.google.com/macros/s/AKfycbxJfCYb7a1JUIgpQCAU9bcQhsmHdmCTZfBSzWMvGYh214t6Dd7fQ7yK740V4dPmo9jUCA/exec";
-                    
                     fetch(GAS_URL, {
                         method: 'POST',
                         mode: 'no-cors',
@@ -736,7 +747,6 @@
             }
         }
 
-        // --- SISTEM PEMANTAUAN OTOMATIS SALDO 0/MINUS ---
         function checkAndEnforceRiderBalances() {
             if (allRiders.length === 0 || allRiderBalances.length === 0) return;
             
@@ -750,46 +760,39 @@
                 const isAvailable = rider.is_available === true || rider.is_available === 'true';
                 const isOnline = rider.is_online === true || rider.is_online === 'true';
 
-                // KONDISI 1: Saldo habis / minus tapi masih di antrean atau onbid
                 if (saldo <= 0) {
                     if (inQueue || isAvailable || isOnline) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // Eksekusi Force Kill (Disamakan persis dengan tombol Force Kill manual)
                         setDoc(ref, {
-                            is_online: false,      // Matikan toggle onbid secara paksa
-                            is_available: false,   // Matikan status ketersediaan
-                            in_main_queue: false,  // Keluarkan dari antrean radar
-                            force_kill: true,      // Beri sinyal force kill ke aplikasi rider
+                            is_online: false,      
+                            is_available: false,   
+                            in_main_queue: false,  
+                            force_kill: true,      
                             last_drop_desc: "Saldo Rp 0 / Minus. Silakan Top Up.",
-                            proof_desc: "",        // Kosongkan lokasi/bukti
+                            proof_desc: "",        
                             last_updated: serverTimestamp()
                         }, { merge: true }).catch(e => console.error("Gagal auto-kick:", e));
                         
-                        // Kirim push notif ke panel rider
                         sendPushNotification(rider.uid, "⚠️ SALDO KOSONG / MINUS ⚠️", "Aplikasi dipaksa offline. Isi dulu dompet kredit nya agar bisa masuk antrean lagi.");
                     }
                 } 
-                // KONDISI 2: Saldo sudah terisi (>0) dan sebelumnya di-kick KARENA saldo habis
                 else if (saldo > 0) {
                     if (rider.force_kill === true && (rider.last_drop_desc || "").includes("Saldo Rp 0")) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // Eksekusi Rejoin ke Antrean Tunggu/Verifikasi
                         setDoc(ref, {
-                            is_online: true,       // Nyalakan kembali toggle onbid (Rider dianggap online)
-                            is_available: true,    // Set tersedia
-                            in_main_queue: false,  // PENTING: Tetap FALSE agar masuk "Rider Baru Masuk Shift"
-                            force_kill: false,     // Pulihkan dari paksa kill
+                            is_online: true,       
+                            is_available: true,    
+                            in_main_queue: false,  
+                            force_kill: false,     
                             last_drop_desc: "Aktif Kembali (Menunggu Verifikasi)",
                             last_updated: serverTimestamp()
                         }, { merge: true }).catch(e => console.error("Gagal auto-rejoin:", e));
                         
-                        // Kirim push notif ke panel rider
                         sendPushNotification(rider.uid, "✅ SALDO TERISI ✅", "Saldo berhasil ditambah. Kamu masuk antrean tunggu, silakan hubungi admin untuk verifikasi masuk radar.");
                     }
                 }
             });
         }
-        // ------------------------------------------------
 
         window.formatInputRibuan = (input) => {
             let value = input.value.replace(/[^0-9]/g, '');
@@ -837,7 +840,8 @@
             }
 
             if (page === 'history') {
-                window.renderHistoryOrders();
+                window.renderHistoryOrders(false); // Ambil dari cache jika ada
+                window.loadCloudRecaps(); // Panggil lazy load
             }
 
             if (page === 'customers') {
@@ -867,50 +871,55 @@
             return 0;
         }
 
-        // FUNGSI BARU UTK MENGGABUNGKAN SEMUA RIDER YG DIKETAHUI
         function getMergedRidersForDropdown() {
             const mergedRidersMap = new Map();
-            
-            // Masukkan dari status aktif
             allRiders.forEach(r => {
                 mergedRidersMap.set(r.uid, { uid: r.uid, name: r.nama || r.name || r.displayName || r.uid });
             });
-            // Masukkan dari saldo (jika blm ada)
             allRiderBalances.forEach(r => {
                 if (!mergedRidersMap.has(r.uid)) mergedRidersMap.set(r.uid, { uid: r.uid, name: r.name || r.uid });
             });
-            // Masukkan dari kontak (jika blm ada)
             allRiderContacts.forEach(r => {
                 if (r.uid && !mergedRidersMap.has(r.uid)) mergedRidersMap.set(r.uid, { uid: r.uid, name: r.name || r.uid });
             });
-
             return Array.from(mergedRidersMap.values()).sort((a,b) => a.name.localeCompare(b.name));
         }
 
-        function autoCleanUpOldData() {
-            const now = Date.now();
-            const recapThreshold = 30 * 24 * 60 * 60 * 1000; 
-
-            allCloudRecaps.forEach(async (rekap) => {
-                let recapTimeMs = 0;
-                if (rekap.updated_at && rekap.updated_at.seconds) {
-                    recapTimeMs = rekap.updated_at.seconds * 1000;
-                } else if (rekap.tanggal) {
-                    const d = new Date(rekap.tanggal);
-                    if (!isNaN(d.getTime())) recapTimeMs = d.getTime();
-                }
-
-                if (recapTimeMs > 0 && (now - recapTimeMs > recapThreshold)) {
-                    try {
-                        const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', rekap.id);
-                        await deleteDoc(ref);
-                        console.log("Rekap lama otomatis terhapus dari Cloud: " + rekap.id);
-                    } catch(e) {
-                        console.warn("Gagal hapus rekap lama:", e);
+        // OPTIMASI: Lazy Load Arsip Cloud (Hanya jalan 1x saat buka menu histori)
+        window.loadCloudRecaps = async () => {
+            if (window.hasLoadedCloudRecaps) return;
+            const container = document.getElementById('cloud-recaps-list');
+            if(container) container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Mengambil arsip dari cloud...</p>';
+            
+            try {
+                const recapsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian');
+                const snap = await getDocs(recapsCol);
+                allCloudRecaps = [];
+                snap.forEach(docSnap => {
+                    allCloudRecaps.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                window.hasLoadedCloudRecaps = true;
+                if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+                
+                // Cek data lama yg kadaluarsa
+                const now = Date.now();
+                const recapThreshold = 30 * 24 * 60 * 60 * 1000; 
+                allCloudRecaps.forEach(async (rekap) => {
+                    let recapTimeMs = 0;
+                    if (rekap.updated_at && rekap.updated_at.seconds) recapTimeMs = rekap.updated_at.seconds * 1000;
+                    else if (rekap.tanggal) {
+                        const d = new Date(rekap.tanggal);
+                        if (!isNaN(d.getTime())) recapTimeMs = d.getTime();
                     }
-                }
-            });
-        }
+                    if (recapTimeMs > 0 && (now - recapTimeMs > recapThreshold)) {
+                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', rekap.id)).catch(e=>{});
+                    }
+                });
+
+            } catch(e) {
+                if(container) container.innerHTML = '<p class="text-[10px] text-rose-500 italic text-center py-4">Gagal memuat arsip cloud.</p>';
+            }
+        };
 
         function checkOfflineRiders() {
             const now = Date.now();
@@ -986,7 +995,6 @@
             }, 1000);
         }
 
-        // --- SISTEM PELANGGAN ON DEMAND (CRM ANALISIS) ---
         window.loadCustomers = async () => {
             const container = document.getElementById('customers-list');
             container.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[10px] text-slate-500 font-bold">Memuat data analisis dari Google Sheet...</p></div>';
@@ -997,7 +1005,6 @@
             }
 
             try {
-                // Tarik data langsung dari Google Sheets
                 const response = await fetch(GAS_CUSTOMER_URL);
                 if (!response.ok) {
                     throw new Error("HTTP Error " + response.status);
@@ -1022,9 +1029,8 @@
             const query = (document.getElementById('customer-search')?.value || '').toLowerCase();
             const sortVal = document.getElementById('customer-sort')?.value || 'frequent';
             
-            let filtered = [...allCustomers]; // copy array
+            let filtered = [...allCustomers]; 
             
-            // 1. Proses Filtering (Pencarian)
             if (query) {
                 filtered = filtered.filter(c => 
                     (c.name || '').toLowerCase().includes(query) || 
@@ -1032,18 +1038,15 @@
                 );
             }
 
-            // 2. Kalkulasi Analisis Bisnis (Aktif, Churn, Loyal)
             const now = new Date();
             let countAktif = 0;
             let countChurn = 0;
             let countLoyal = 0;
 
-            // Tambahkan field sementara untuk mempermudah sorting dan rendering
             filtered = filtered.map(c => {
                 let lastDate = new Date(c.last_order);
-                if (isNaN(lastDate.getTime())) lastDate = new Date(); // fallback
+                if (isNaN(lastDate.getTime())) lastDate = new Date(); 
                 
-                // Hitung selisih hari
                 const diffTime = Math.abs(now - lastDate);
                 const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
                 
@@ -1057,21 +1060,16 @@
                 return c;
             });
 
-            // Update Angka Statistik di UI
             document.getElementById('stat-customer-total').innerText = allCustomers.length;
             document.getElementById('stat-customer-aktif').innerText = countAktif;
             document.getElementById('stat-customer-churn').innerText = countChurn;
             document.getElementById('stat-customer-loyal').innerText = countLoyal;
 
-            // 3. Proses Sorting (Pengurutan)
             if (sortVal === 'frequent') {
-                // Sering Order Teratas, jika sama urutkan yang terbaru
                 filtered.sort((a, b) => (b.order_count || 0) - (a.order_count || 0) || a._days_ago - b._days_ago);
             } else if (sortVal === 'recent') {
-                // Order terbaru di atas (hari terkecil)
                 filtered.sort((a, b) => a._days_ago - b._days_ago);
             } else if (sortVal === 'churn') {
-                // Pasif/Lama di atas (hari terbesar)
                 filtered.sort((a, b) => b._days_ago - a._days_ago);
             }
 
@@ -1092,10 +1090,7 @@
                 }
                 const waLink = `https://wa.me/${p}?text=${waMessage}`;
                 
-                // Format teks hari
                 let waktuTeks = c._days_ago === 0 ? 'Hari ini' : (c._days_ago === 1 ? 'Kemarin' : `${c._days_ago} hr lalu`);
-
-                // Generate Smart Badges
                 let badges = `<span class="text-[8px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-black w-max border border-purple-200 whitespace-nowrap"><i class="fa-solid fa-bag-shopping mr-0.5"></i> ${c.order_count || 1}x Order</span>`;
                 
                 if (c.order_count >= 5) {
@@ -1107,7 +1102,6 @@
                     badges += `<span class="text-[8px] bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-black w-max border border-rose-200 whitespace-nowrap"><i class="fa-solid fa-sleep mr-0.5"></i> Pasif</span>`;
                 }
                 
-                // Styling Card (Tandai yang berisiko pasif dengan warna merah tipis agar di-notice)
                 let cardClass = c._days_ago >= 30 ? 'bg-rose-50/50 border-rose-100 hover:border-rose-300' : 'bg-slate-50 border-gray-100 hover:border-purple-300';
 
                 html += `
@@ -1148,14 +1142,12 @@
 
                     if (change.type === "modified") {
                         const wasActive = window.riderStates[uid];
-                        
                         if (wasActive === false && isNowActive === true && inMainQueue) {
                             const ref = doc(db, 'status_rider_aktif', uid);
                             updateDoc(ref, {
                                 last_drop_time: serverTimestamp()
                             }).catch(e => console.error(e));
                         }
-                        
                         window.riderStates[uid] = isNowActive;
                     }
                 });
@@ -1208,18 +1200,14 @@
                 updateNewShiftUI();
                 updateMainQueueUI();
                 
-                // Memicu pengecekan paksa berdasarkan saldo setiap kali ada update status rider
                 checkAndEnforceRiderBalances();
                 
-                // Panggil ulang pembentuk dropdown agar data selalu update
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
                 if (typeof window.updateContactRiderSelect === 'function') window.updateContactRiderSelect();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
                 
             }, (error) => {
                 console.error("Error Firebase:", error);
-                document.getElementById('rider-queue-list').innerHTML = `<p class="text-xs text-red-500 font-bold text-center py-4"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Koneksi Database Ditolak / Error.</p>`;
-                document.getElementById('new-shift-queue-list').innerHTML = `<p class="text-[10px] text-red-400 text-center py-3">Gagal memuat data.</p>`;
             });
         }
 
@@ -1774,10 +1762,6 @@
 
                 renderActiveOrders();
                 
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    window.renderHistoryOrders();
-                }
-                
                 updateNewShiftUI();
                 updateMainQueueUI();
             });
@@ -1912,7 +1896,8 @@
             return String(uid).trim().toUpperCase();
         }
 
-        window.renderHistoryOrders = async () => {
+        // OPTIMASI: Fungsi Render Histori dengan SMART CACHING
+        window.renderHistoryOrders = async (forceRefresh = false) => {
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
             const totalFeeEl = document.getElementById('history-total-fee');
@@ -1922,38 +1907,48 @@
             if(!container) return;
             
             if(!dateVal) {
-                if (typeof window.showAlert === 'function') {
-                    window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
-                }
+                if (typeof window.showAlert === 'function') window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
                 return;
             }
 
             const loader = document.getElementById('loading-overlay');
-            if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
+            if(loader && forceRefresh) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
+            else if (container) container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6">Memuat data dari memori...</p>`;
 
             try {
                 let allFetchedOrders = [];
-                const promises = allRiders.map(async (rider) => {
-                    const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
-                    const q = query(dailyCol, where("Tanggal", "==", dateVal));
-                    const snap = await getDocs(q);
-                    const orders = [];
-                    snap.forEach(docSnap => {
-                        const data = docSnap.data();
-                        orders.push({
-                            id: docSnap.id,
-                            rider_uid: rider.uid,
-                            rider_name: rider.nama || rider.name || rider.displayName || rider.uid,
-                            ...data
-                        });
-                    });
-                    return orders;
-                });
                 
-                const results = await Promise.all(promises);
-                results.forEach(res => {
-                    allFetchedOrders = allFetchedOrders.concat(res);
-                });
+                // Cek apakah data untuk tanggal ini sudah ada di Cache dan kita tidak sedang force refresh
+                if (window.historyDataCache[dateVal] && !forceRefresh) {
+                    allFetchedOrders = window.historyDataCache[dateVal];
+                    // console.log("Load from Cache!"); // Debug
+                } else {
+                    // console.log("Fetch from Database!"); // Debug
+                    const promises = allRiders.map(async (rider) => {
+                        const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
+                        const q = query(dailyCol, where("Tanggal", "==", dateVal));
+                        const snap = await getDocs(q);
+                        const orders = [];
+                        snap.forEach(docSnap => {
+                            const data = docSnap.data();
+                            orders.push({
+                                id: docSnap.id,
+                                rider_uid: rider.uid,
+                                rider_name: rider.nama || rider.name || rider.displayName || rider.uid,
+                                ...data
+                            });
+                        });
+                        return orders;
+                    });
+                    
+                    const results = await Promise.all(promises);
+                    results.forEach(res => {
+                        allFetchedOrders = allFetchedOrders.concat(res);
+                    });
+                    
+                    // Simpan ke cache
+                    window.historyDataCache[dateVal] = allFetchedOrders;
+                }
                 
                 allDailyOrders = allFetchedOrders; 
                 window.currentHistoryData = allFetchedOrders.map(o => ({
@@ -2002,6 +1997,9 @@
                     if (order.created_at && order.created_at.seconds) {
                         const d = new Date(order.created_at.seconds * 1000);
                         timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                    } else if (order.created_at && typeof order.created_at.getTime === 'function') {
+                        // Jika created_at adalah objek JS Date (dari cache manual input)
+                        timeStr = order.created_at.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                     }
 
                     html += `
@@ -2107,7 +2105,7 @@
                 const timeParts = timeVal.split(':');
                 pseudoDate.setHours(parseInt(timeParts[0]), parseInt(timeParts[1]), 0, 0);
 
-                batch.set(dailyOrdersRef, {
+                const newOrderObj = {
                     Tanggal: Tanggal,
                     Jam: timeVal,
                     Nama_Pelanggan: custName,
@@ -2116,7 +2114,9 @@
                     Status: "Selesai",
                     Keterangan: details.replace(/\n/g, ' | '),
                     created_at: pseudoDate
-                });
+                };
+
+                batch.set(dailyOrdersRef, newOrderObj);
 
                 const adminCut = feeParsed.real * 0.16;
                 const matchedRider = allRiders.find(r => r.uid === riderUid);
@@ -2129,19 +2129,27 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
-                // --- Simpan Pelanggan Secara Pintar ke Google Apps Script ---
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
                     fetch(GAS_CUSTOMER_URL, {
                         method: 'POST',
                         mode: 'no-cors',
-                        // Gunakan text/plain untuk melewati batasan preflight CORS browser
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify({ phone: cleanPhone, name: custName === 'Pelanggan' ? 'Pelanggan' : custName })
                     }).catch(e => console.warn("GAS Error:", e));
                 }
 
                 await batch.commit();
+
+                // OPTIMASI: Masukkan ke Local Cache langsung, gak usah tarik ulang DB
+                if (window.historyDataCache[Tanggal]) {
+                    window.historyDataCache[Tanggal].push({
+                        id: dailyOrdersRef.id,
+                        rider_uid: riderUid,
+                        rider_name: rName,
+                        ...newOrderObj
+                    });
+                }
 
                 document.getElementById('manual-phone').value = '';
                 document.getElementById('manual-name').value = '';
@@ -2152,7 +2160,7 @@
                 window.showAlert('Berhasil', 'Orderan susulan dan data pelanggan berhasil ditambahkan.', 'success');
                 
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    await window.renderHistoryOrders();
+                    await window.renderHistoryOrders(false); // Panggil dari cache lokal
                 }
             } catch(e) {
                 console.error(e);
@@ -2180,7 +2188,6 @@
             const currentVal = select.value;
             let html = '<option value="">-- Pilih Rider --</option>';
             
-            // Ganti data source dari allRiders ke merged list
             const mergedRiders = getMergedRidersForDropdown();
             
             mergedRiders.forEach(r => {
@@ -2320,13 +2327,11 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
-                // --- Simpan Pelanggan Secara Pintar ke Google Apps Script ---
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
                     fetch(GAS_CUSTOMER_URL, {
                         method: 'POST',
                         mode: 'no-cors',
-                        // Gunakan text/plain untuk melewati batasan preflight CORS browser
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify({ phone: cleanPhone, name: custName || 'Pelanggan' })
                     }).catch(e => console.warn("GAS Error:", e));
@@ -2531,7 +2536,6 @@
                 if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
                 
-                // Memicu pengecekan paksa berdasarkan saldo setiap kali ada perubahan pada data saldo
                 checkAndEnforceRiderBalances();
             });
         }
@@ -2544,17 +2548,6 @@
                     allRiderSchedules.push({ id: docSnap.id, ...docSnap.data() });
                 });
                 if (typeof window.renderRiderSchedules === 'function') window.renderRiderSchedules();
-            });
-        }
-
-        function startCloudRecapsListener() {
-            const recapsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian');
-            onSnapshot(recapsCol, (snapshot) => {
-                allCloudRecaps = [];
-                snapshot.forEach(docSnap => {
-                    allCloudRecaps.push({ id: docSnap.id, ...docSnap.data() });
-                });
-                if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
             });
         }
 
@@ -2627,6 +2620,13 @@
                 }, { merge: true });
 
                 window.showAlert('Tersimpan', 'Rekap tanggal ' + dateVal + ' berhasil dicadangkan ke Database Cloud.', 'success');
+                
+                // Tambahkan langsung ke memori rekap tanpa reload db
+                if (!allCloudRecaps.find(r => r.tanggal === dateVal)) {
+                    allCloudRecaps.push({ id: dateVal, tanggal: dateVal, total_orders: window.currentHistoryData.length, total_omset: totalFee });
+                    window.renderCloudRecaps();
+                }
+
             } catch(e) {
                 console.error(e);
                 window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error');
@@ -2639,7 +2639,7 @@
             document.getElementById('history-date').value = dateStr;
             if(typeof window.updateDayName === 'function') window.updateDayName();
             
-            await window.renderHistoryOrders();
+            await window.renderHistoryOrders(false);
             window.exportToCSV();
         };
 
@@ -2649,6 +2649,11 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', id));
+                    
+                    // Update cache UI
+                    allCloudRecaps = allCloudRecaps.filter(r => r.id !== id);
+                    window.renderCloudRecaps();
+
                     window.showAlert('Berhasil', 'Arsip rekap berhasil dihapus.', 'success');
                 } catch(e) {
                     console.error(e);
@@ -2686,7 +2691,6 @@
                 return saldoA - saldoB; 
             });
 
-            // UPDATE ANGKA COUNTER
             if (countEl) countEl.innerText = filtered.length + ' Data';
 
             if (filtered.length === 0) {
@@ -2801,7 +2805,6 @@
                 const currentVal = sel.value;
                 let html = '<option value="">-- Pilih Rider --</option>';
                 
-                // Ganti data source dari allRiders ke merged list
                 const mergedRiders = getMergedRidersForDropdown();
 
                 mergedRiders.forEach(r => {
@@ -3163,6 +3166,7 @@
 
             try {
                 const batch = writeBatch(db);
+                let updateDataLocal = {};
 
                 if (isDaily) {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
@@ -3180,12 +3184,13 @@
                             batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
                         }
 
-                        batch.update(ref, {
+                        updateDataLocal = {
                             Nama_Pelanggan: name,
                             Keterangan: details.replace(/\n/g, ' | '),
                             Nominal_Kotor: feeParsed.saved,
                             Tambahan: tamParsed.saved
-                        });
+                        };
+                        batch.update(ref, updateDataLocal);
                     }
 
                 } else {
@@ -3215,24 +3220,35 @@
 
                         if (oldData.daily_order_id && oldData.rider_uid) {
                             const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
-                            batch.update(dailyRef, {
+                            
+                            updateDataLocal = {
                                 Nama_Pelanggan: name,
                                 Keterangan: details.replace(/\n/g, ' | '),
                                 Nominal_Kotor: feeParsed.saved,
                                 Tambahan: tamParsed.saved
-                            });
+                            };
+                            batch.update(dailyRef, updateDataLocal);
                         }
                     }
                 }
 
                 await batch.commit();
 
+                // OPTIMASI: Update cache lokal
+                const dateVal = document.getElementById('history-date').value;
+                if (window.historyDataCache[dateVal]) {
+                    const targetIdx = window.historyDataCache[dateVal].findIndex(o => o.id === id || o.id === (allGlobalOrders.find(g => g.id === id)?.daily_order_id));
+                    if (targetIdx > -1) {
+                        window.historyDataCache[dateVal][targetIdx] = { ...window.historyDataCache[dateVal][targetIdx], ...updateDataLocal };
+                    }
+                }
+
                 document.getElementById('edit-modal').classList.add('hidden');
                 document.getElementById('edit-modal').classList.remove('flex');
                 window.showAlert('Berhasil', 'Orderan berhasil diperbarui dan saldo telah disesuaikan.', 'success');
                 
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    await window.renderHistoryOrders();
+                    await window.renderHistoryOrders(false); // Render dr Cache tanpa fetch ulamng
                 }
                 
             } catch(e) {
@@ -3282,10 +3298,16 @@
 
                     await batch.commit();
 
+                    // OPTIMASI: Hapus dari cache lokal
+                    const dateVal = document.getElementById('history-date').value;
+                    if (window.historyDataCache[dateVal]) {
+                        window.historyDataCache[dateVal] = window.historyDataCache[dateVal].filter(o => o.id !== id);
+                    }
+
                     window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
                     
                     if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                        await window.renderHistoryOrders();
+                        await window.renderHistoryOrders(false); // Load dr Cache lagi
                     }
                 } catch(e) {
                     console.error(e);
