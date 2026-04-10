@@ -55,7 +55,6 @@
 
         .hidden-page { display: none !important; }
 
-        /* ANIMASI BERDETAK KHUSUS */
         @keyframes berdetak {
             0% { transform: scale(1); }
             15% { transform: scale(1.08); }
@@ -215,9 +214,6 @@
                     <span id="history-day-name" class="text-[13px] font-black text-black mr-1 shrink-0 hidden uppercase tracking-wide">Hari</span>
                     <input type="date" id="history-date" onchange="updateDayName(); window.renderHistoryOrders()" class="w-full bg-transparent py-3 text-sm font-bold text-black focus:outline-none border-none cursor-pointer">
                 </div>
-                <button onclick="window.renderHistoryOrders()" class="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-900 transition-colors shadow-sm shrink-0">
-                    <i class="fa-solid fa-magnifying-glass"></i>
-                </button>
             </div>
         </section>
 
@@ -671,6 +667,11 @@
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
+        
+        // LAZY LISTENER FLAGS
+        window.unsubHistory = null;
+        let isSchedulesListening = false;
+        let isRecapsListening = false;
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -678,8 +679,8 @@
                 startGlobalOrdersListener();
                 startRiderContactsListener();
                 startRiderBalancesListener(); 
-                startRiderSchedulesListener();
-                startCloudRecapsListener();
+                // SCHEDULE & RECAPS DIMATIKAN SAAT LOAD AWAL (LAZY LOAD)
+                
                 startLiveTimers(); 
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
@@ -754,18 +755,17 @@
                 if (saldo <= 0) {
                     if (inQueue || isAvailable || isOnline) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // Eksekusi Force Kill (Disamakan persis dengan tombol Force Kill manual)
+                        // Eksekusi Force Kill
                         setDoc(ref, {
-                            is_online: false,      // Matikan toggle onbid secara paksa
-                            is_available: false,   // Matikan status ketersediaan
-                            in_main_queue: false,  // Keluarkan dari antrean radar
-                            force_kill: true,      // Beri sinyal force kill ke aplikasi rider
+                            is_online: false,      
+                            is_available: false,   
+                            in_main_queue: false,  
+                            force_kill: true,      
                             last_drop_desc: "Saldo Rp 0 / Minus. Silakan Top Up.",
-                            proof_desc: "",        // Kosongkan lokasi/bukti
+                            proof_desc: "",        
                             last_updated: serverTimestamp()
                         }, { merge: true }).catch(e => console.error("Gagal auto-kick:", e));
                         
-                        // Kirim push notif ke panel rider
                         sendPushNotification(rider.uid, "⚠️ SALDO KOSONG / MINUS ⚠️", "Aplikasi dipaksa offline. Isi dulu dompet kredit nya agar bisa masuk antrean lagi.");
                     }
                 } 
@@ -773,17 +773,16 @@
                 else if (saldo > 0) {
                     if (rider.force_kill === true && (rider.last_drop_desc || "").includes("Saldo Rp 0")) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // Eksekusi Rejoin ke Antrean Tunggu/Verifikasi
+                        // Eksekusi Rejoin
                         setDoc(ref, {
-                            is_online: true,       // Nyalakan kembali toggle onbid (Rider dianggap online)
-                            is_available: true,    // Set tersedia
-                            in_main_queue: false,  // PENTING: Tetap FALSE agar masuk "Rider Baru Masuk Shift"
-                            force_kill: false,     // Pulihkan dari paksa kill
+                            is_online: true,       
+                            is_available: true,    
+                            in_main_queue: false,  
+                            force_kill: false,     
                             last_drop_desc: "Aktif Kembali (Menunggu Verifikasi)",
                             last_updated: serverTimestamp()
                         }, { merge: true }).catch(e => console.error("Gagal auto-rejoin:", e));
                         
-                        // Kirim push notif ke panel rider
                         sendPushNotification(rider.uid, "✅ SALDO TERISI ✅", "Saldo berhasil ditambah. Kamu masuk antrean tunggu, silakan hubungi admin untuk verifikasi masuk radar.");
                     }
                 }
@@ -837,7 +836,20 @@
             }
 
             if (page === 'history') {
+                // LAZY LISTENER UNTUK REKAP
+                if (!isRecapsListening) {
+                    startCloudRecapsListener();
+                    isRecapsListening = true;
+                }
                 window.renderHistoryOrders();
+            }
+
+            if (page === 'management') {
+                // LAZY LISTENER UNTUK SCHEDULE
+                if (!isSchedulesListening) {
+                    startRiderSchedulesListener();
+                    isSchedulesListening = true;
+                }
             }
 
             if (page === 'customers') {
@@ -970,9 +982,8 @@
                                 if (now - lastAutoPing >= 15000) {
                                     window.autoPingTracker[order.id] = now;
                                     
-                                    const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                                    updateDoc(orderRef, { last_ping: serverTimestamp() }).catch(e => console.error("Gagal auto-ping DB:", e));
-
+                                    // OPTIMASI: Hapus update last_ping DB untuk hentikan domino effect reads
+                                    
                                     sendPushNotification(
                                         order.rider_uid, 
                                         "🚨 WAKE UP! ORDERAN MASUK 🚨", 
@@ -1552,7 +1563,8 @@
                 }
 
                 const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+                // OPTIMASI: Ganti path dari users/{uid}/daily_orders ke public global collection
+                const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders'));
 
                 await runTransaction(db, async (transaction) => {
                     const orderDoc = await transaction.get(orderRef);
@@ -1562,7 +1574,7 @@
                     if (currentData.status !== 'missed') throw "Sudah dialihkan oleh admin lain";
 
                     if (currentData.daily_order_id && currentData.rider_uid) {
-                        const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', currentData.rider_uid, 'daily_orders', currentData.daily_order_id);
+                        const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', currentData.daily_order_id);
                         transaction.delete(oldDailyRef);
                     }
 
@@ -1581,6 +1593,8 @@
                     transaction.set(newDailyOrderRef, {
                         Tanggal: Tanggal,
                         Jam: Jam,
+                        rider_uid: nextRider.uid,
+                        rider_name: nextRiderName,
                         Nama_Pelanggan: currentData.customer_name || '-',
                         Nominal_Kotor: (currentData.fee || 0) / 1000,
                         Tambahan: (currentData.tambahan || 0) / 1000,
@@ -1686,7 +1700,8 @@
                     }
 
                     const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                    const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+                    // OPTIMASI: Path ke public collection untuk hindari N+1 query
+                    const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders'));
 
                     await runTransaction(db, async (transaction) => {
                         const orderDoc = await transaction.get(orderRef);
@@ -1695,7 +1710,7 @@
                         const currentData = orderDoc.data();
 
                         if (currentData.daily_order_id && currentData.rider_uid) {
-                            const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', currentData.rider_uid, 'daily_orders', currentData.daily_order_id);
+                            const oldDailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', currentData.daily_order_id);
                             transaction.delete(oldDailyRef);
                         }
 
@@ -1714,6 +1729,8 @@
                         transaction.set(newDailyOrderRef, {
                             Tanggal: Tanggal,
                             Jam: Jam,
+                            rider_uid: nextRider.uid,
+                            rider_name: nextRiderName,
                             Nama_Pelanggan: currentData.customer_name || '-',
                             Nominal_Kotor: (currentData.fee || 0) / 1000,
                             Tambahan: (currentData.tambahan || 0) / 1000,
@@ -1774,9 +1791,7 @@
 
                 renderActiveOrders();
                 
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    window.renderHistoryOrders();
-                }
+                // OPTIMASI: Panggilan renderHistoryOrders dihapus dari sini agar tidak looping setiap kali order aktif berkedip
                 
                 updateNewShiftUI();
                 updateMainQueueUI();
@@ -1912,7 +1927,8 @@
             return String(uid).trim().toUpperCase();
         }
 
-        window.renderHistoryOrders = async () => {
+        // OPTIMASI: Fungsi History diubah drastis memakai onSnapshot realtime di Global Collection. Menghapus 50x loop N+1.
+        window.renderHistoryOrders = () => {
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
             const totalFeeEl = document.getElementById('history-total-fee');
@@ -1922,128 +1938,126 @@
             if(!container) return;
             
             if(!dateVal) {
-                if (typeof window.showAlert === 'function') {
-                    window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
-                }
+                if (typeof window.showAlert === 'function') window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
                 return;
             }
 
             const loader = document.getElementById('loading-overlay');
             if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
+            // Hapus listener yang lama (jika admin ganti tanggal)
+            if (window.unsubHistory) {
+                window.unsubHistory();
+            }
+
             try {
-                let allFetchedOrders = [];
-                const promises = allRiders.map(async (rider) => {
-                    const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
-                    const q = query(dailyCol, where("Tanggal", "==", dateVal));
-                    const snap = await getDocs(q);
-                    const orders = [];
+                // Sekarang menggunakan 1 Collection Global untuk semua DO
+                const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders');
+                const q = query(dailyCol, where("Tanggal", "==", dateVal));
+
+                window.unsubHistory = onSnapshot(q, (snap) => {
+                    let allFetchedOrders = [];
                     snap.forEach(docSnap => {
-                        const data = docSnap.data();
-                        orders.push({
+                        allFetchedOrders.push({
                             id: docSnap.id,
-                            rider_uid: rider.uid,
-                            rider_name: rider.nama || rider.name || rider.displayName || rider.uid,
-                            ...data
+                            ...docSnap.data()
                         });
                     });
-                    return orders;
-                });
-                
-                const results = await Promise.all(promises);
-                results.forEach(res => {
-                    allFetchedOrders = allFetchedOrders.concat(res);
-                });
-                
-                allDailyOrders = allFetchedOrders; 
-                window.currentHistoryData = allFetchedOrders.map(o => ({
-                    id: o.id,
-                    fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000,
-                    tambahan: (parseFloat(o.Tambahan) || 0) * 1000,
-                    ...o
-                }));
 
-                if(totalCountEl) totalCountEl.innerText = allFetchedOrders.length;
-                
-                let totalKotor = 0;
-                let totalTambahan = 0;
-                let totalAdminCut = 0;
-                
-                allFetchedOrders.forEach(o => {
-                    const feeReal = (parseFloat(o.Nominal_Kotor) || 0) * 1000;
-                    totalKotor += feeReal;
-                    totalTambahan += (parseFloat(o.Tambahan) || 0) * 1000;
-                    totalAdminCut += feeReal * 0.16;
-                });
-                
-                const totalOmset = totalKotor + totalTambahan;
-                
-                if(totalFeeEl) totalFeeEl.innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`;
-                if(totalAdminEl) totalAdminEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
+                    allDailyOrders = allFetchedOrders; 
+                    window.currentHistoryData = allFetchedOrders.map(o => ({
+                        id: o.id,
+                        fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000,
+                        tambahan: (parseFloat(o.Tambahan) || 0) * 1000,
+                        ...o
+                    }));
 
-                if (allFetchedOrders.length === 0) {
-                    container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
-                    return;
-                }
-
-                allFetchedOrders.sort((a,b) => {
-                    const timeA = a.created_at ? (a.created_at.seconds || 0) : 0;
-                    const timeB = b.created_at ? (b.created_at.seconds || 0) : 0;
-                    return timeB - timeA;
-                });
-
-                let html = '';
-                allFetchedOrders.forEach(order => {
-                    const feeStr = ((parseFloat(order.Nominal_Kotor) || 0) * 1000).toLocaleString('id-ID');
-                    const tamVal = (parseFloat(order.Tambahan) || 0) * 1000;
-                    const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                    if(totalCountEl) totalCountEl.innerText = allFetchedOrders.length;
                     
-                    let timeStr = order.Jam || '--:--';
-                    if (order.created_at && order.created_at.seconds) {
-                        const d = new Date(order.created_at.seconds * 1000);
-                        timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                    let totalKotor = 0;
+                    let totalTambahan = 0;
+                    let totalAdminCut = 0;
+                    
+                    allFetchedOrders.forEach(o => {
+                        const feeReal = (parseFloat(o.Nominal_Kotor) || 0) * 1000;
+                        totalKotor += feeReal;
+                        totalTambahan += (parseFloat(o.Tambahan) || 0) * 1000;
+                        totalAdminCut += feeReal * 0.16;
+                    });
+                    
+                    const totalOmset = totalKotor + totalTambahan;
+                    
+                    if(totalFeeEl) totalFeeEl.innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`;
+                    if(totalAdminEl) totalAdminEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
+
+                    if (allFetchedOrders.length === 0) {
+                        container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
+                        if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+                        return;
                     }
 
-                    html += `
-                        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500 mb-3">
-                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500"></div>
-                            
-                            <div class="flex justify-between items-start pl-1">
-                                <div class="flex flex-col gap-1.5 overflow-hidden">
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <span class="text-[8px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 uppercase tracking-widest inline-block w-max">Selesai</span>
-                                        <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
-                                            <i class="fa-regular fa-clock text-[8px]"></i>
-                                            <span class="text-[9px] font-black text-black">${timeStr}</span>
+                    allFetchedOrders.sort((a,b) => {
+                        const timeA = a.created_at ? (a.created_at.seconds || 0) : 0;
+                        const timeB = b.created_at ? (b.created_at.seconds || 0) : 0;
+                        return timeB - timeA;
+                    });
+
+                    let html = '';
+                    allFetchedOrders.forEach(order => {
+                        const feeStr = ((parseFloat(order.Nominal_Kotor) || 0) * 1000).toLocaleString('id-ID');
+                        const tamVal = (parseFloat(order.Tambahan) || 0) * 1000;
+                        const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                        
+                        let timeStr = order.Jam || '--:--';
+                        if (order.created_at && order.created_at.seconds) {
+                            const d = new Date(order.created_at.seconds * 1000);
+                            timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                        }
+
+                        html += `
+                            <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500 mb-3">
+                                <div class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500"></div>
+                                
+                                <div class="flex justify-between items-start pl-1">
+                                    <div class="flex flex-col gap-1.5 overflow-hidden">
+                                        <div class="flex items-center gap-2 flex-wrap">
+                                            <span class="text-[8px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 uppercase tracking-widest inline-block w-max">Selesai</span>
+                                            <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                                                <i class="fa-regular fa-clock text-[8px]"></i>
+                                                <span class="text-[9px] font-black text-black">${timeStr}</span>
+                                            </div>
                                         </div>
+                                        <p class="text-xs font-black text-black leading-none mt-0.5">${order.Nama_Pelanggan || '-'}</p>
                                     </div>
-                                    <p class="text-xs font-black text-black leading-none mt-0.5">${order.Nama_Pelanggan || '-'}</p>
+                                    <div class="text-right shrink-0 ml-2">
+                                        <p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p>
+                                    </div>
                                 </div>
-                                <div class="text-right shrink-0 ml-2">
-                                    <p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p>
+                                <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
+                                    <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Rider:</p>
+                                    <p class="text-xs font-bold text-black truncate">${order.rider_name || '-'}</p>
+                                    <p class="text-[9px] text-black mt-1.5 italic line-clamp-2">"${(order.Keterangan || '').replace(/ \| /g, ', ')}"</p>
+                                </div>
+                                
+                                <div class="grid grid-cols-2 gap-2 ml-1 mt-1">
+                                    <button onclick="window.openEditOrder('${order.id}', true)" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                                    <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Hapus</button>
                                 </div>
                             </div>
-                            <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
-                                <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Rider:</p>
-                                <p class="text-xs font-bold text-black truncate">${order.rider_name}</p>
-                                <p class="text-[9px] text-black mt-1.5 italic line-clamp-2">"${(order.Keterangan || '').replace(/ \| /g, ', ')}"</p>
-                            </div>
-                            
-                            <div class="grid grid-cols-2 gap-2 ml-1 mt-1">
-                                <button onclick="window.openEditOrder('${order.id}', true)" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Hapus</button>
-                            </div>
-                        </div>
-                    `;
+                        `;
+                    });
+                    container.innerHTML = html;
+                    
+                    if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+                    
+                }, (error) => {
+                    console.error("Listener Histori Error:", error);
+                    if (typeof window.showAlert === 'function') window.showAlert('Gagal', 'Sistem error saat memuat histori.', 'error');
+                    if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
                 });
-                container.innerHTML = html;
 
             } catch(e) {
                 console.error(e);
-                if (typeof window.showAlert === 'function') {
-                    window.showAlert('Gagal', 'Sistem error saat memuat histori.', 'error');
-                }
-            } finally {
                 if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             }
         };
@@ -2061,6 +2075,9 @@
                 window.showAlert('Lengkapi Form', 'Rider, jam, dan ongkir wajib diisi.', 'warning');
                 return;
             }
+
+            const matchedRider = getMergedRidersForDropdown().find(r => r.uid === riderUid);
+            const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.uid) : riderUid;
 
             const parseNominal = (rawStr) => {
                 let str = String(rawStr).toLowerCase().replace(',', '.');
@@ -2097,7 +2114,8 @@
                     Tanggal = `${yyyy}-${mm}-${dd}`;
                 }
 
-                const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
+                // OPTIMASI: Path global
+                const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders'));
 
                 let pseudoDate = new Date();
                 if (historyDate) {
@@ -2110,6 +2128,8 @@
                 batch.set(dailyOrdersRef, {
                     Tanggal: Tanggal,
                     Jam: timeVal,
+                    rider_uid: riderUid,
+                    rider_name: rName,
                     Nama_Pelanggan: custName,
                     Nominal_Kotor: savedKotor,
                     Tambahan: savedTambahan,
@@ -2119,8 +2139,6 @@
                 });
 
                 const adminCut = feeParsed.real * 0.16;
-                const matchedRider = allRiders.find(r => r.uid === riderUid);
-                const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName || riderUid) : riderUid;
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
                 batch.set(balanceRef, {
                     uid: riderUid,
@@ -2129,13 +2147,11 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
-                // --- Simpan Pelanggan Secara Pintar ke Google Apps Script ---
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
                     fetch(GAS_CUSTOMER_URL, {
                         method: 'POST',
                         mode: 'no-cors',
-                        // Gunakan text/plain untuk melewati batasan preflight CORS browser
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify({ phone: cleanPhone, name: custName === 'Pelanggan' ? 'Pelanggan' : custName })
                     }).catch(e => console.warn("GAS Error:", e));
@@ -2151,9 +2167,6 @@
                 
                 window.showAlert('Berhasil', 'Orderan susulan dan data pelanggan berhasil ditambahkan.', 'success');
                 
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    await window.renderHistoryOrders();
-                }
             } catch(e) {
                 console.error(e);
                 window.showAlert('Gagal', 'Terjadi kesalahan saat input.', 'error');
@@ -2281,7 +2294,8 @@
                 const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
                 
                 const orderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
-                const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
+                // OPTIMASI: Save ke global
+                const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders'));
                 const dailyOrderId = dailyOrdersRef.id;
 
                 batch.set(orderRef, {
@@ -2303,6 +2317,8 @@
                 batch.set(dailyOrdersRef, {
                     Tanggal: Tanggal,
                     Jam: Jam,
+                    rider_uid: riderUid,
+                    rider_name: riderName,
                     Nama_Pelanggan: custName,
                     Nominal_Kotor: savedKotor,
                     Tambahan: savedTambahan,
@@ -2320,13 +2336,11 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
-                // --- Simpan Pelanggan Secara Pintar ke Google Apps Script ---
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
                     fetch(GAS_CUSTOMER_URL, {
                         method: 'POST',
                         mode: 'no-cors',
-                        // Gunakan text/plain untuk melewati batasan preflight CORS browser
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify({ phone: cleanPhone, name: custName || 'Pelanggan' })
                     }).catch(e => console.warn("GAS Error:", e));
@@ -2384,7 +2398,8 @@
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     
                     if (order.rider_uid && order.daily_order_id) {
-                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
+                        // OPTIMASI: Hapus di Global Path
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', order.daily_order_id));
                     }
 
                     if (order.rider_uid) {
@@ -2639,8 +2654,10 @@
             document.getElementById('history-date').value = dateStr;
             if(typeof window.updateDayName === 'function') window.updateDayName();
             
-            await window.renderHistoryOrders();
-            window.exportToCSV();
+            // Tunggu data di-load sebentar sebelum export
+            setTimeout(() => {
+                window.exportToCSV();
+            }, 800);
         };
 
         window.deleteCloudRecap = (id, dateFormatted) => {
@@ -2801,7 +2818,6 @@
                 const currentVal = sel.value;
                 let html = '<option value="">-- Pilih Rider --</option>';
                 
-                // Ganti data source dari allRiders ke merged list
                 const mergedRiders = getMergedRidersForDropdown();
 
                 mergedRiders.forEach(r => {
@@ -3165,7 +3181,8 @@
                 const batch = writeBatch(db);
 
                 if (isDaily) {
-                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
+                    // OPTIMASI: Arahkan update ke public koleksi
+                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', id);
                     
                     const oldData = allDailyOrders.find(o => o.id === id);
                     if (oldData) {
@@ -3214,7 +3231,8 @@
                         });
 
                         if (oldData.daily_order_id && oldData.rider_uid) {
-                            const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
+                            // OPTIMASI: Arahkan update ke public koleksi
+                            const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', oldData.daily_order_id);
                             batch.update(dailyRef, {
                                 Nama_Pelanggan: name,
                                 Keterangan: details.replace(/\n/g, ' | '),
@@ -3230,10 +3248,6 @@
                 document.getElementById('edit-modal').classList.add('hidden');
                 document.getElementById('edit-modal').classList.remove('flex');
                 window.showAlert('Berhasil', 'Orderan berhasil diperbarui dan saldo telah disesuaikan.', 'success');
-                
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    await window.renderHistoryOrders();
-                }
                 
             } catch(e) {
                 console.error(e);
@@ -3257,7 +3271,8 @@
                         if (oldData) {
                             feeRealToRefund = parseFloat(oldData.Nominal_Kotor || 0) * 1000;
                         }
-                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
+                        // OPTIMASI: Hapus di Global Path
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', id));
                         
                         const activeOrderLinked = allGlobalOrders.find(o => o.daily_order_id === id);
                         if (activeOrderLinked) {
@@ -3268,7 +3283,8 @@
                         if (oldData) {
                             feeRealToRefund = parseFloat(oldData.fee || 0);
                             if (oldData.daily_order_id) {
-                                batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id));
+                                // OPTIMASI: Hapus di Global Path
+                                batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'daily_orders', oldData.daily_order_id));
                             }
                         }
                         batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
@@ -3283,10 +3299,6 @@
                     await batch.commit();
 
                     window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
-                    
-                    if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                        await window.renderHistoryOrders();
-                    }
                 } catch(e) {
                     console.error(e);
                     window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
