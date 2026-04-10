@@ -4695,6 +4695,9 @@
                 const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
                 if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
                 
+                // OPTIMASI: Perbarui UI Dompet setelah penggabungan data selesai
+                if (typeof window.renderWalletHistoryUI === 'function') window.renderWalletHistoryUI();
+                
                 document.getElementById('loading-overlay').style.display = 'none'; 
                 document.getElementById('main-app').classList.remove('hidden');
                 setTimeout(showWelcomePopup, 500);
@@ -7275,7 +7278,11 @@
           
           window.startDailyOrdersListener = (uid) => {
               if (!uid || !isAuthReady) return;
+              
+              // PENJAGA GERBANG: Cegah reset looping setiap 1 menit saat auto-sync Sheet
+              if (window.dailyOrdersListenerUid === uid && dailyOrdersUnsubscribe) return;
               if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
+              window.dailyOrdersListenerUid = uid;
 
               // PATH DATABASE: Mengambil riwayat orderan dari path artifacts/{appId}/users/{UID}/daily_orders
               const dailyRef = collection(db, 'artifacts', appId, 'users', String(uid).trim(), 'daily_orders');
@@ -7350,7 +7357,7 @@
           // NEW: SISTEM LISTENER ORDER REAL-TIME (ACTIVE ORDERS)
           // -------------------------------------------------------------
           let activeOrderUnsubscribeDoc = null;
-          let activeOrderUnsubscribeQuery = null;
+          // activeOrderUnsubscribeQuery DIHAPUS (Fokus ke dokumen tunggal agar kuota sangat hemat)
           window.currentActiveOrderId = null;
           window.currentIncomingOrderId = null; // Ditambahkan untuk melacak ID pop-up aktif
           let finishPhotoBase64 = null;
@@ -7361,10 +7368,10 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
+              // PENJAGA GERBANG: Cegah reset looping
+              if (window.activeOrderListenerUid === cleanUid && activeOrderUnsubscribeDoc) return;
               if (activeOrderUnsubscribeDoc) activeOrderUnsubscribeDoc();
-              if (activeOrderUnsubscribeQuery) activeOrderUnsubscribeQuery();
-
-              const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
+              window.activeOrderListenerUid = cleanUid;
 
               // FUNGSI SENTRAL UNTUK MENANGANI DATA ORDER (Mencegah Duplikasi Logika)
               const handleOrderData = (data, docId) => {
@@ -7499,36 +7506,9 @@
                   }
               }, (error) => { console.error("Error listening doc order:", error); });
 
-              // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Jika Admin pakai Document ID acak)
-              const q = query(ordersRef, where('rider_uid', '==', cleanUid));
-              activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
-                  let hasValidActiveOrder = false;
-                  
-                  // PENGECEKAN AKTIF SECARA REAL-TIME JIKA ADA DOKUMEN YANG DIHAPUS (Aksi: deleteDoc)
-                  snapshot.docChanges().forEach((change) => {
-                      if (change.type === 'removed') {
-                          const removedId = change.doc.id;
-                          if (window.currentActiveOrderId === removedId || window.currentIncomingOrderId === removedId) {
-                              console.log("Detect deleteDoc pada Query:", removedId);
-                              handleCanceledOrderProcess();
-                          }
-                      }
-                  });
-                  
-                  snapshot.forEach((docSnap) => {
-                      const data = docSnap.data();
-                      const status = String(data.status || '').trim().toLowerCase();
-                      if (status === 'assigned' || status === 'processing') {
-                          hasValidActiveOrder = true;
-                      }
-                      handleOrderData(data, docSnap.id);
-                  });
-                  
-                  window._hasActiveQueryOrder = hasValidActiveOrder;
-                  if (!hasValidActiveOrder) {
-                      checkNoOrderLogic(); // Memicu pengecekan jika hasil query tidak ada yang aktif
-                  }
-              }, (error) => { console.error("Error listening query order:", error); });
+              // PERBAIKAN KUOTA: Query global berdasarkan rider_uid DIHAPUS SEPENUHNYA.
+              // Memfokuskan radar HANYA pada dokumen ID milik rider, memangkas tagihan reads hingga 50%.
+              window._hasActiveQueryOrder = false; // Mem-bypass logika query lama
           };
 
           // --- LOGIKA UI ORDERAN ---
@@ -9167,10 +9147,12 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim();
 
-              // Mencegah memory leak dengan menonaktifkan listener lama jika fungsi dipanggil ulang
+              // PENJAGA GERBANG: Mencegah memory leak & reset berulang
+              if (window.myStatusListenerUid === cleanUid && myStatusUnsubscribe) return;
               if (myStatusUnsubscribe) {
                   myStatusUnsubscribe();
               }
+              window.myStatusListenerUid = cleanUid;
 
               // Path menunjuk ke status individu rider yang login saat ini
               const statusRef = doc(db, '/status_rider_aktif', cleanUid);
@@ -9257,18 +9239,18 @@
           // NEW: SISTEM LISTENER SALDO DOMPET RIDER
           // -------------------------------------------------------------
           let walletUnsubscribe = null;
-          let walletHistoryUnsubscribe = null;
+          // walletHistoryUnsubscribe DIHAPUS (Menghindari Query Ganda)
 
           window.startWalletListener = (uid) => {
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
+              // PENJAGA GERBANG
+              if (window.walletListenerUid === cleanUid && walletUnsubscribe) return;
               if (walletUnsubscribe) {
                   walletUnsubscribe();
               }
-              if (walletHistoryUnsubscribe) {
-                  walletHistoryUnsubscribe();
-              }
+              window.walletListenerUid = cleanUid;
 
               // PATH DATABASE: Mengambil saldo dari /artifacts/onbid-2f87a/public/data/rider_balances/{UID}
               const targetProjectId = firebaseConfig.projectId; // onbid-2f87a
@@ -9346,72 +9328,71 @@
                   const saldoEl = document.getElementById('rider-saldo-amount');
                   if (saldoEl) saldoEl.innerText = "Error";
               });
+          };
 
-              // -------------------------------------------------------------
-              // NEW: MENGAMBIL RIWAYAT ORDER (KOTOR) UNTUK DOMPET
-              // -------------------------------------------------------------
-              const historyCol = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
-              const q = query(historyCol, orderBy('created_at', 'desc'));
+          // FUNGSI BARU: Render History Dompet secara Realtime Tanpa Menguras Kuota Firebase
+          window.renderWalletHistoryUI = () => {
+              const historyList = document.getElementById('rider-history-list');
+              if (!historyList) return;
 
-              walletHistoryUnsubscribe = onSnapshot(q, (snapshot) => {
-                  const historyList = document.getElementById('rider-history-list');
-                  if (!historyList) return;
+              // Ambil data langsung dari state global yang sudah sinkron
+              let dataToRender = window.firebaseData || [];
+              
+              // LIMIT MAKSIMAL 30 ORDER TERBARU DI MEMORI (Tanpa menyiksa database/kuota)
+              dataToRender = dataToRender.sort((a, b) => {
+                  const timeA = new Date((a.created_at?.seconds || 0) * 1000).getTime();
+                  const timeB = new Date((b.created_at?.seconds || 0) * 1000).getTime();
+                  return timeB - timeA;
+              }).slice(0, 30);
 
-                  if (snapshot.empty) {
-                      historyList.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold">Belum ada riwayat order.</p>';
-                      return;
-                  }
+              if (dataToRender.length === 0) {
+                  historyList.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold">Belum ada riwayat order.</p>';
+                  return;
+              }
 
-                  let html = '';
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
-                      
-                      const dateStr = data.Tanggal || data.tanggal || '-';
-                      const timeStr = data.Jam || data.jam || '-';
-                      
-                      let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
-                      let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
-                      
-                      // Format jika nilai kotor dalam bentuk pecahan (misal: 15 = Rp 15.000)
-                      if (kotor > 0 && kotor <= 500) kotor = kotor * 1000;
-                      if (extra > 0 && extra <= 500) extra = extra * 1000;
+              let html = '';
+              dataToRender.forEach(data => {
+                  const dateStr = data.Tanggal || data.tanggal || '-';
+                  const timeStr = data.Jam || data.jam || '-';
+                  
+                  let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
+                  let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
+                  
+                  // Format jika nilai kotor dalam bentuk pecahan (misal: 15 = Rp 15.000)
+                  if (kotor > 0 && kotor <= 500) kotor = kotor * 1000;
+                  if (extra > 0 && extra <= 500) extra = extra * 1000;
 
-                      const desc = data.List_Pesanan || data.Keterangan || 'Orderan';
-                      const status = data.Status || data.status || 'Selesai';
-                      const isDone = status.toLowerCase() === 'selesai';
+                  const desc = data.List_Pesanan || data.Keterangan || 'Orderan';
+                  const status = data.Status || data.status || 'Selesai';
+                  const isDone = status.toLowerCase() === 'selesai';
 
-                      // MENGHITUNG JUMLAH POTONGAN (ADM RATE * NOMINAL KOTOR)
-                      const admRate = typeof window.getAdmRate === 'function' && dateStr !== '-' ? window.getAdmRate(dateStr) : 0.16;
-                      const potongan = isDone ? Math.round(kotor * admRate) : 0;
+                  // MENGHITUNG JUMLAH POTONGAN (ADM RATE * NOMINAL KOTOR)
+                  const admRate = typeof window.getAdmRate === 'function' && dateStr !== '-' ? window.getAdmRate(dateStr) : 0.16;
+                  const potongan = isDone ? Math.round(kotor * admRate) : 0;
 
-                      const netClass = isDone ? 'text-red-600' : 'text-gray-400 line-through';
-                      const iconClass = isDone ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200';
-                      const icon = isDone ? 'fa-minus' : 'fa-xmark';
+                  const netClass = isDone ? 'text-red-600' : 'text-gray-400 line-through';
+                  const iconClass = isDone ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200';
+                  const icon = isDone ? 'fa-minus' : 'fa-xmark';
 
-                      html += `
-                          <div class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
-                              <div class="flex items-center gap-3">
-                                  <div class="w-8 h-8 rounded-full ${iconClass} border flex items-center justify-center shrink-0">
-                                      <i class="fa-solid ${icon} text-xs"></i>
-                                  </div>
-                                  <div>
-                                      <h4 class="text-[11px] font-bold text-gray-800 line-clamp-1 w-32 truncate" title="${desc}">${desc}</h4>
-                                      <p class="text-[9px] text-gray-400 font-medium mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${dateStr} • ${timeStr}</p>
-                                  </div>
+                  html += `
+                      <div class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
+                          <div class="flex items-center gap-3">
+                              <div class="w-8 h-8 rounded-full ${iconClass} border flex items-center justify-center shrink-0">
+                                  <i class="fa-solid ${icon} text-xs"></i>
                               </div>
-                              <div class="text-right shrink-0">
-                                  <p class="text-xs font-black ${netClass}">- Rp ${potongan.toLocaleString('id-ID')}</p>
-                                  <p class="text-[8px] font-bold text-gray-400 uppercase mt-0.5">Potongan</p>
+                              <div>
+                                  <h4 class="text-[11px] font-bold text-gray-800 line-clamp-1 w-32 truncate" title="${desc}">${desc}</h4>
+                                  <p class="text-[9px] text-gray-400 font-medium mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${dateStr} • ${timeStr}</p>
                               </div>
                           </div>
-                      `;
-                  });
-                  historyList.innerHTML = html;
-              }, (error) => {
-                  console.error("Error fetching wallet history:", error);
-                  const historyList = document.getElementById('rider-history-list');
-                  if (historyList) historyList.innerHTML = '<p class="text-xs text-center text-red-400 py-6 font-bold">Gagal memuat riwayat.</p>';
+                          <div class="text-right shrink-0">
+                              <p class="text-xs font-black ${netClass}">- Rp ${potongan.toLocaleString('id-ID')}</p>
+                              <p class="text-[8px] font-bold text-gray-400 uppercase mt-0.5">Potongan</p>
+                          </div>
+                      </div>
+                  `;
               });
+              historyList.innerHTML = html;
           };
 
           // -------------------------------------------------------------
@@ -9423,9 +9404,12 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
+              // PENJAGA GERBANG
+              if (window.scheduleListenerUid === cleanUid && scheduleUnsubscribe) return;
               if (scheduleUnsubscribe) {
                   scheduleUnsubscribe();
               }
+              window.scheduleListenerUid = cleanUid;
 
               // PATH DATABASE: Mengambil jadwal libur dari /artifacts/onbid-2f87a/public/data/rider_schedules/{UID}
               const targetProjectId = firebaseConfig.projectId; // onbid-2f87a
@@ -9644,9 +9628,12 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
+              // PENJAGA GERBANG
+              if (window.installmentsListenerUid === cleanUid && installmentsUnsubscribe) return;
               if (installmentsUnsubscribe) {
                   installmentsUnsubscribe();
               }
+              window.installmentsListenerUid = cleanUid;
 
               // PATH DATABASE: Mengambil cicilan dari /artifacts/onbid-2f87a/public/data/rider_installments/{UID}
               const targetProjectId = "onbid-2f87a";
