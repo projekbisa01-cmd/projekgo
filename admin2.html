@@ -612,7 +612,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -1670,396 +1670,150 @@
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
             const totalFeeEl = document.getElementById('history-total-fee');
+            const totalAdminEl = document.getElementById('history-total-admin');
             const dateVal = document.getElementById('history-date').value; 
             
             if(!container) return;
             
             if(!dateVal) {
-                window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
+                if (typeof window.showAlert === 'function') {
+                    window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender terlebih dahulu.', 'warning');
+                }
                 return;
             }
 
             const loader = document.getElementById('loading-overlay');
-            loader.classList.remove('hidden'); loader.classList.add('flex');
+            if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
             try {
-                let fetchedOrders = [];
-                
-                // Menarik data "daily_orders" secara spesifik hanya untuk tanggal yang dipilih (Tanpa looping panjang)
+                let allFetchedOrders = [];
+                // Tarik data histori dari semua rider khusus untuk tanggal yang dipilih
                 const promises = allRiders.map(async (rider) => {
-                    const q = query(
-                        collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders'),
-                        where("Tanggal", "==", dateVal)
-                    );
+                    const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
+                    const q = query(dailyCol, where("Tanggal", "==", dateVal));
                     const snap = await getDocs(q);
-                    
+                    const orders = [];
                     snap.forEach(docSnap => {
                         const data = docSnap.data();
-                        if (data.Status === 'Selesai' || (data.Status || '').toLowerCase() === 'completed') {
-                            const matchedRider = allRiders.find(r => r.uid === rider.uid);
-                            const realNameFromRider = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName) : null;
-                            const realName = realNameFromRider && String(realNameFromRider).trim() !== '' ? realNameFromRider : 'Rider';
-
-                            fetchedOrders.push({
-                                id: docSnap.id,
-                                rider_uid: rider.uid,
-                                rider_name: realName, 
-                                customer_name: data.customer_name || data.Nama_Pelanggan || '-',
-                                fee: (parseFloat(data.Nominal_Kotor) || 0) * 1000,
-                                tambahan: (parseFloat(data.Tambahan) || 0) * 1000,
-                                status: 'completed',
-                                created_at: data.created_at,
-                                finished_at: data.created_at, 
-                                timeStr: data.Jam,
-                                tanggalStr: data.Tanggal,
-                                keterangan: data.Keterangan || '',
-                                is_bookmarked: data.is_bookmarked === true,
-                                is_daily_order: true 
-                            });
-                        }
+                        orders.push({
+                            id: docSnap.id,
+                            rider_uid: rider.uid,
+                            rider_name: rider.nama || rider.name || rider.displayName || rider.uid,
+                            ...data
+                        });
                     });
-                });
-
-                await Promise.all(promises);
-
-                let sumFee = 0;
-                let sumTambahan = 0;
-                fetchedOrders.forEach(o => {
-                    sumFee += parseInt(o.fee || 0);
-                    sumTambahan += parseInt(o.tambahan || 0);
+                    return orders;
                 });
                 
-                const totalAdminCut = sumFee * 0.16;
-                
-                totalCountEl.innerText = fetchedOrders.length;
-                totalFeeEl.innerHTML = `Rp ${sumFee.toLocaleString('id-ID')}${sumTambahan > 0 ? `<span class="text-[11px] text-emerald-500 font-black ml-1">+ ${sumTambahan.toLocaleString('id-ID')}</span>` : ''}`;
-                
-                const adminCutEl = document.getElementById('history-total-admin');
-                if (adminCutEl) {
-                    adminCutEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
-                }
-
-                fetchedOrders.sort((a, b) => {
-                    const timeA = a.created_at ? a.created_at.seconds : 0;
-                    const timeB = b.created_at ? b.created_at.seconds : 0;
-                    return timeA - timeB;
+                const results = await Promise.all(promises);
+                results.forEach(res => {
+                    allFetchedOrders = allFetchedOrders.concat(res);
                 });
                 
-                window.currentHistoryData = fetchedOrders;
-                allDailyOrders = fetchedOrders; // Update buffer memory untuk fungsi edit/delete
+                allDailyOrders = allFetchedOrders; 
+                window.currentHistoryData = allFetchedOrders.map(o => ({
+                    id: o.id,
+                    fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000,
+                    tambahan: (parseFloat(o.Tambahan) || 0) * 1000,
+                    ...o
+                }));
 
-                if (fetchedOrders.length === 0) {
-                    container.innerHTML = `
-                        <div class="text-center py-10 bg-white rounded-2xl border border-gray-100">
-                            <i class="fa-solid fa-box-open text-3xl text-gray-300 mb-3"></i>
-                            <p class="text-xs font-bold text-black">Belum ada order selesai pada tanggal ini.</p>
-                        </div>`;
+                if(totalCountEl) totalCountEl.innerText = allFetchedOrders.length;
+                
+                let totalKotor = 0;
+                let totalTambahan = 0;
+                let totalAdminCut = 0;
+                
+                allFetchedOrders.forEach(o => {
+                    const feeReal = (parseFloat(o.Nominal_Kotor) || 0) * 1000;
+                    totalKotor += feeReal;
+                    totalTambahan += (parseFloat(o.Tambahan) || 0) * 1000;
+                    totalAdminCut += feeReal * 0.16;
+                });
+                
+                const totalOmset = totalKotor + totalTambahan;
+                
+                if(totalFeeEl) totalFeeEl.innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`;
+                if(totalAdminEl) totalAdminEl.innerText = `Rp ${totalAdminCut.toLocaleString('id-ID')}`;
+
+                if (allFetchedOrders.length === 0) {
+                    container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
                     return;
                 }
 
+                allFetchedOrders.sort((a,b) => {
+                    const timeA = a.created_at ? (a.created_at.seconds || 0) : 0;
+                    const timeB = b.created_at ? (b.created_at.seconds || 0) : 0;
+                    return timeB - timeA;
+                });
+
                 let html = '';
-                fetchedOrders.forEach(order => {
-                    const timestamp = order.created_at;
-                    const timeStr = order.timeStr || (timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--');
+                allFetchedOrders.forEach(order => {
+                    const feeStr = ((parseFloat(order.Nominal_Kotor) || 0) * 1000).toLocaleString('id-ID');
+                    const tamVal = (parseFloat(order.Tambahan) || 0) * 1000;
+                    const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
                     
-                    let finalName = order.rider_name || 'Rider';
-                    if (finalName === getRiderCode(order.rider_uid) || finalName === 'Rider') {
-                       const matched = allRiders.find(r => r.uid === order.rider_uid);
-                       const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
-                       if (rName) finalName = rName;
+                    let timeStr = order.Jam || '--:--';
+                    if (order.created_at && order.created_at.seconds) {
+                        const d = new Date(order.created_at.seconds * 1000);
+                        timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                     }
 
-                    const displayRider = `${getRiderCode(order.rider_uid)} (${finalName})`;
-                    
-                    const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
-                    const tamVal = parseInt(order.tambahan || 0);
-                    
-                    const tamStr = tamVal > 0 ? `<span class="text-xs text-black font-black bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 ml-1.5">+ Rp ${tamVal.toLocaleString('id-ID')}</span>` : '';
-                    
-                    const custName = order.customer_name && order.customer_name !== '-' ? `<p class="text-[11px] text-black mt-1 font-medium"><i class="fa-solid fa-user mr-1.5 text-slate-400"></i>${order.customer_name}</p>` : '';
-
-                    const isBookmarked = order.is_bookmarked === true;
-                    const cardClasses = isBookmarked 
-                        ? "bg-indigo-50/30 border-indigo-300 ring-2 ring-indigo-200" 
-                        : "bg-white border-gray-100 hover:bg-slate-50";
-                    
-                    const badgeHtml = isBookmarked 
-                        ? `<div class="absolute -top-2.5 -right-2 bg-indigo-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full shadow-sm border-2 border-white flex items-center gap-1 z-20"><i class="fa-solid fa-thumbtack"></i> BATAS TERAKHIR</div>` 
-                        : '';
-
-                    const btnMarkColor = isBookmarked 
-                        ? "bg-indigo-500 text-white shadow-inner" 
-                        : "bg-slate-100 text-slate-400 hover:bg-indigo-500 hover:text-white";
-                    
-                    const btnMarkIcon = isBookmarked ? "fa-solid fa-thumbtack" : "fa-solid fa-thumbtack -rotate-45";
-
                     html += `
-                        <div ${isBookmarked ? 'id="bookmark-target"' : ''} class="rounded-xl p-3.5 border shadow-sm flex justify-between items-center transition-all gap-3 relative ${cardClasses}">
-                            ${badgeHtml}
-                            <div class="flex items-center gap-3 w-full pr-1">
-                                <div class="flex flex-col items-center justify-center shrink-0 w-12">
-                                    <i class="fa-regular fa-clock text-slate-400 text-sm mb-0.5"></i>
-                                    <span class="text-xs font-black text-black">${timeStr}</span>
-                                </div>
-                                
-                                <div class="w-px bg-gray-200 self-stretch shrink-0 min-h-[45px]"></div>
-                                
-                                <div class="overflow-hidden flex flex-col justify-center">
-                                    <span class="text-sm font-black text-black leading-tight break-words">${displayRider}</span>
-                                    ${custName}
-                                    
-                                    <div class="flex items-center mt-1.5 flex-wrap gap-y-1">
-                                        <span class="text-sm font-black text-black bg-slate-100 px-2 py-0.5 rounded border border-slate-200">Rp ${feeStr}</span>
-                                        ${tamStr}
+                        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500 mb-3">
+                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500"></div>
+                            
+                            <div class="flex justify-between items-start pl-1">
+                                <div class="flex flex-col gap-1.5 overflow-hidden">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="text-[8px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 uppercase tracking-widest inline-block w-max">Selesai</span>
+                                        <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                                            <i class="fa-regular fa-clock text-[8px]"></i>
+                                            <span class="text-[9px] font-black text-black">${timeStr}</span>
+                                        </div>
                                     </div>
+                                    <p class="text-xs font-black text-black leading-none mt-0.5">${order.Nama_Pelanggan || '-'}</p>
+                                </div>
+                                <div class="text-right shrink-0 ml-2">
+                                    <p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p>
                                 </div>
                             </div>
-                            <div class="flex flex-col items-end shrink-0 gap-2 relative z-10">
-                                <div class="flex flex-col gap-1.5">
-                                    <button onclick="window.toggleHistoryBookmark('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'}, ${isBookmarked})" class="w-8 h-8 ${btnMarkColor} rounded-xl flex items-center justify-center transition-colors shadow-sm" title="${isBookmarked ? 'Hapus Batas' : 'Jadikan Batas Terakhir'}">
-                                        <i class="${btnMarkIcon} text-xs"></i>
-                                    </button>
-                                    <button onclick="window.openEditOrder('${order.id}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-amber-50 hover:bg-amber-500 text-amber-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Edit Orderan">
-                                        <i class="fa-solid fa-pen text-xs"></i>
-                                    </button>
-                                    <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', ${order.is_daily_order ? 'true' : 'false'})" class="w-8 h-8 bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl flex items-center justify-center transition-colors shadow-sm" title="Hapus Riwayat">
-                                        <i class="fa-solid fa-trash text-xs"></i>
-                                    </button>
-                                </div>
+                            <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
+                                <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Rider:</p>
+                                <p class="text-xs font-bold text-black truncate">${order.rider_name}</p>
+                                <p class="text-[9px] text-black mt-1.5 italic line-clamp-2">"${(order.Keterangan || '').replace(/ \| /g, ', ')}"</p>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-2 ml-1 mt-1">
+                                <button onclick="window.openEditOrder('${order.id}', true)" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Hapus</button>
                             </div>
                         </div>
                     `;
                 });
                 container.innerHTML = html;
-                
+
             } catch(e) {
-                console.error("Gagal menarik histori:", e);
-                window.showAlert('Gagal', 'Terjadi kesalahan sistem saat memuat data riwayat tanggal ini.', 'error');
-            } finally {
-                loader.classList.add('hidden'); loader.classList.remove('flex');
-            }
-        };
-
-        window.exportToCSV = () => {
-            if (!window.currentHistoryData || window.currentHistoryData.length === 0) {
-                window.showAlert('Kosong', 'Tidak ada data untuk diekspor pada tanggal ini.', 'warning');
-                return;
-            }
-
-            const dateVal = document.getElementById('history-date').value || 'Semua_Waktu';
-            
-            let csvRows = [];
-            csvRows.push(["UID", "Nama_Rider", "Tanggal", "Jam", "Keterangan", "Nominal_Kotor", "Tambahan", "Status"].join(';'));
-
-            let dailyCounters = {}; 
-
-            window.currentHistoryData.forEach(order => {
-                const timestamp = order.created_at;
-                
-                let tgl = '';
-                let dayString = '00';
-
-                if (timestamp && timestamp.seconds) {
-                    const d = new Date(timestamp.seconds * 1000);
-                    tgl = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-                    dayString = String(d.getDate()).padStart(2, '0');
-                } else if (order.tanggalStr) {
-                    const parts = order.tanggalStr.split('-');
-                    if(parts.length === 3) {
-                        if (parts[0].length === 4) {
-                            tgl = `${parts[0]}-${parts[1]}-${parts[2]}`; 
-                            dayString = String(parts[2]).padStart(2, '0');
-                        } else {
-                            tgl = `${parts[2]}-${parts[0]}-${parts[1]}`; 
-                            dayString = String(parts[1]).padStart(2, '0'); 
-                        }
-                    }
-                } else {
-                    tgl = document.getElementById('history-date').value || '-';
-                    if (tgl !== '-') {
-                        const parts = tgl.split('-');
-                        if(parts.length === 3) dayString = parts[2];
-                    }
-                }
-                
-                tgl = String(tgl).replace(/\//g, '-');
-                const dateKey = tgl;
-                
-                let timeStr = order.timeStr;
-                let dateForTime = new Date();
-                let isValidTime = false;
-
-                if (!timeStr && timestamp && timestamp.seconds) {
-                    dateForTime = new Date(timestamp.seconds * 1000);
-                    isValidTime = true;
-                } else if (timeStr) {
-                    timeStr = String(timeStr).replace(/\./g, ':');
-                    const tParts = timeStr.split(':');
-                    if (tParts.length >= 2) {
-                        dateForTime.setHours(parseInt(tParts[0]), parseInt(tParts[1]), 0, 0);
-                        isValidTime = true;
-                    }
-                }
-
-                if (isValidTime) {
-                    dateForTime.setMinutes(dateForTime.getMinutes() - 25);
-                    timeStr = String(dateForTime.getHours()).padStart(2, '0') + ':' + String(dateForTime.getMinutes()).padStart(2, '0');
-                } else {
-                    timeStr = '--:--';
-                }
-                
-                let finalName = order.rider_name || 'Rider';
-                const rCode = getRiderCode(order.rider_uid);
-                if (finalName === rCode || finalName === 'Rider') {
-                   const matched = allRiders.find(r => r.uid === order.rider_uid);
-                   const rName = matched ? (matched.nama || matched.name || matched.displayName) : null;
-                   if (rName) finalName = rName;
-                }
-
-                const fee = parseInt(order.fee || 0);
-                const tambahan = parseInt(order.tambahan || 0);
-                
-                const formatFee = `Rp ${fee / 1000}`;
-                const formatTambahan = `Rp ${tambahan / 1000}`;
-                
-                if (!dailyCounters[dateKey]) dailyCounters[dateKey] = 1;
-                else dailyCounters[dateKey]++;
-                const seq = String(dailyCounters[dateKey]).padStart(3, '0');
-                const noOrder = `order #${dayString}${seq}`;
-                
-                const escapeCSV = (str) => `"${String(str).replace(/"/g, '""')}"`;
-                
-                let ketDetail = order.keterangan || '';
-                if (!ketDetail || ketDetail === '-') ketDetail = noOrder;
-
-                csvRows.push([
-                    escapeCSV(order.rider_uid),  
-                    escapeCSV(finalName),        
-                    escapeCSV(tgl),              
-                    escapeCSV(timeStr),          
-                    escapeCSV(ketDetail),          
-                    escapeCSV(formatFee),        
-                    escapeCSV(formatTambahan),   
-                    escapeCSV("Selesai")         
-                ].join(';')); 
-            });
-
-            const csvString = csvRows.join('\n');
-            const blob = new Blob(['\uFEFF' + csvString], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            
-            link.setAttribute("href", url);
-            link.setAttribute("download", `Rekap_Order_${dateVal}.csv`);
-            link.style.visibility = 'hidden';
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        };
-
-        window.scrollToBookmark = () => {
-            const target = document.getElementById('bookmark-target');
-            if (target) {
-                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                target.classList.add('bg-indigo-100');
-                setTimeout(() => {
-                    target.classList.remove('bg-indigo-100');
-                }, 1500);
-            } else {
-                window.showAlert('Info', 'Belum ada data yang ditandai sebagai batas rekap.', 'info');
-            }
-        };
-
-        window.toggleHistoryBookmark = async (id, riderUid, isDaily, currentStatus) => {
-            const newState = !currentStatus;
-            
-            const loader = document.getElementById('loading-overlay');
-            loader.classList.remove('hidden'); loader.classList.add('flex');
-
-            try {
-                if (newState) {
-                    const oldMark = window.currentHistoryData.find(o => o.is_bookmarked === true);
-                    if (oldMark && oldMark.id !== id) {
-                        if (oldMark.is_daily_order) {
-                            await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldMark.rider_uid, 'daily_orders', oldMark.id), { is_bookmarked: false });
-                        } else {
-                            await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', oldMark.id), { is_bookmarked: false });
-                            if (oldMark.daily_order_id) {
-                                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldMark.rider_uid, 'daily_orders', oldMark.daily_order_id), { is_bookmarked: false });
-                            }
-                        }
-                    }
-                }
-
-                if (isDaily) {
-                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id), { is_bookmarked: newState });
-                } else {
-                    await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { is_bookmarked: newState });
-                }
-                
-                // Segarkan tampilan histori
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) {
-                    await window.renderHistoryOrders();
-                }
-            } catch(e) { 
                 console.error(e);
-                window.showAlert('Gagal', 'Terjadi kesalahan saat menandai.', 'error'); 
-            } finally {
-                loader.classList.add('hidden'); loader.classList.remove('flex');
-            }
-        };
-
-        window.toggleManualForm = () => {
-            const container = document.getElementById('manual-form-container');
-            const icon = document.getElementById('manual-form-icon');
-            container.classList.toggle('hidden');
-            if(!container.classList.contains('hidden')) {
-                icon.classList.add('rotate-180');
-                const now = new Date();
-                if(!document.getElementById('manual-time').value) {
-                    document.getElementById('manual-time').value = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+                if (typeof window.showAlert === 'function') {
+                    window.showAlert('Gagal', 'Sistem error saat memuat histori.', 'error');
                 }
-            } else {
-                icon.classList.remove('rotate-180');
+            } finally {
+                if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             }
-        };
-
-        window.updateManualRiderSelect = () => {
-            const select = document.getElementById('manual-rider');
-            if(!select) return;
-            const currentVal = select.value;
-            
-            let html = '<option value="">-- Pilih Rider --</option>';
-            
-            const sortedRiders = [...allRiders].sort((a,b) => {
-                const nameA = a.nama || a.name || a.displayName || a.uid;
-                const nameB = b.nama || b.name || b.displayName || b.uid;
-                return nameA.localeCompare(nameB);
-            });
-
-            sortedRiders.forEach(r => {
-                const rCode = getRiderCode(r.uid);
-                const realName = r.nama || r.name || r.displayName;
-                const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
-                html += `<option value="${r.uid}">${rCode} - ${rName}</option>`;
-            });
-
-            select.innerHTML = html;
-            if(currentVal) select.value = currentVal;
         };
 
         window.submitManualOrder = async () => {
             const riderUid = document.getElementById('manual-rider').value;
-            const phone = document.getElementById('manual-phone').value.trim();
-            const custName = document.getElementById('manual-name').value.trim();
+            const phone = document.getElementById('manual-phone').value.trim() || '-';
+            const custName = document.getElementById('manual-name').value.trim() || 'Pelanggan';
             const timeVal = document.getElementById('manual-time').value;
-            const details = document.getElementById('manual-details').value.trim();
+            const details = document.getElementById('manual-details').value.trim() || 'Orderan Susulan';
             const rawFee = document.getElementById('manual-fee').value.trim().toLowerCase();
             const rawTambahan = document.getElementById('manual-tambahan').value.trim().toLowerCase();
 
-            if (!riderUid || !timeVal || !details || !rawFee) {
-                window.showAlert('Lengkapi Data', 'Pilih rider, jam, keterangan, dan ongkir untuk susulan.', 'warning');
+            if (!riderUid || !rawFee || !timeVal) {
+                window.showAlert('Lengkapi Form', 'Rider, jam, dan ongkir wajib diisi.', 'warning');
                 return;
             }
 
@@ -2075,15 +1829,17 @@
             };
 
             const feeParsed = parseNominal(rawFee);
-            const savedKotor = feeParsed.saved;
-
             const tamParsed = parseNominal(rawTambahan);
+            
+            const savedKotor = feeParsed.saved;
             const savedTambahan = tamParsed.saved;
 
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
+                const batch = writeBatch(db);
+                
                 let historyDate = document.getElementById('history-date').value;
                 let Tanggal;
                 if(historyDate) {
@@ -2106,7 +1862,7 @@
                 const timeParts = timeVal.split(':');
                 pseudoDate.setHours(parseInt(timeParts[0]), parseInt(timeParts[1]), 0, 0);
 
-                await setDoc(dailyOrdersRef, {
+                batch.set(dailyOrdersRef, {
                     Tanggal: Tanggal,
                     Jam: timeVal,
                     Nama_Pelanggan: custName,
@@ -2122,12 +1878,14 @@
                 const matchedRider = allRiders.find(r => r.uid === riderUid);
                 const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName || riderUid) : riderUid;
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                await setDoc(balanceRef, {
+                batch.set(balanceRef, {
                     uid: riderUid,
                     name: rName,
                     saldo: increment(-adminCut),
                     updated_at: serverTimestamp()
                 }, { merge: true });
+
+                await batch.commit();
 
                 document.getElementById('manual-phone').value = '';
                 document.getElementById('manual-name').value = '';
@@ -2147,6 +1905,78 @@
             } finally {
                 loader.classList.add('hidden'); loader.classList.remove('flex');
             }
+        };
+
+        window.toggleManualForm = () => {
+            const formContainer = document.getElementById('manual-form-container');
+            const icon = document.getElementById('manual-form-icon');
+            if(formContainer.classList.contains('hidden')) {
+                formContainer.classList.remove('hidden');
+                icon.classList.add('rotate-180');
+            } else {
+                formContainer.classList.add('hidden');
+                icon.classList.remove('rotate-180');
+            }
+        };
+
+        window.updateManualRiderSelect = () => {
+            const select = document.getElementById('manual-rider');
+            if(!select) return;
+            const currentVal = select.value;
+            let html = '<option value="">-- Pilih Rider --</option>';
+            const sortedRiders = [...allRiders].sort((a,b) => {
+                const nameA = a.nama || a.name || a.displayName || a.uid;
+                const nameB = b.nama || b.name || b.displayName || b.uid;
+                return nameA.localeCompare(nameB);
+            });
+            sortedRiders.forEach(r => {
+                const rCode = getRiderCode(r.uid);
+                const realName = r.nama || r.name || r.displayName;
+                const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
+                html += `<option value="${r.uid}">${rCode} - ${rName}</option>`;
+            });
+            select.innerHTML = html;
+            if(currentVal) select.value = currentVal;
+        };
+
+        window.exportToCSV = () => {
+            if (!window.currentHistoryData || window.currentHistoryData.length === 0) {
+                window.showAlert('Kosong', 'Tidak ada data untuk diekspor pada tanggal ini.', 'warning');
+                return;
+            }
+
+            const dateVal = document.getElementById('history-date').value || 'Rekap';
+            
+            let totalOngkir = 0;
+            let totalTambahan = 0;
+            
+            let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += "TANGGAL,JAM,NAMA PELANGGAN,RIDER,ONGKIR,TAMBAHAN,TOTAL,KETERANGAN\n";
+
+            window.currentHistoryData.forEach(o => {
+                const ongkir = o.fee || 0;
+                const tambahan = o.tambahan || 0;
+                totalOngkir += ongkir;
+                totalTambahan += tambahan;
+                const total = ongkir + tambahan;
+                
+                let row = `"${o.Tanggal || ''}","${o.Jam || ''}","${o.Nama_Pelanggan || ''}","${o.rider_name || ''}",${ongkir},${tambahan},${total},"${(o.Keterangan || '').replace(/"/g, '""')}"`;
+                csvContent += row + "\r\n";
+            });
+
+            csvContent += `\n"TOTAL",,,,${totalOngkir},${totalTambahan},${totalOngkir + totalTambahan},""\n`;
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `Rekap_PROJEKGO_${dateVal}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+        
+        window.scrollToBookmark = () => {
+            window.showAlert('Info', 'Fungsi ini dapat Anda kembangkan lebih lanjut untuk melompat ke orderan tertentu.', 'info');
         };
 
         window.submitOrder = async () => {
@@ -2185,6 +2015,7 @@
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
+                const batch = writeBatch(db);
                 const now = new Date();
                 const mm = String(now.getMonth() + 1).padStart(2, '0');
                 const dd = String(now.getDate()).padStart(2, '0');
@@ -2201,7 +2032,7 @@
                 const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
                 const dailyOrderId = dailyOrdersRef.id;
 
-                await setDoc(orderRef, {
+                batch.set(orderRef, {
                     rider_uid: riderUid,
                     rider_name: riderName,
                     customer_phone: phone,
@@ -2217,7 +2048,7 @@
                     last_ping: serverTimestamp() 
                 });
 
-                await setDoc(dailyOrdersRef, {
+                batch.set(dailyOrdersRef, {
                     Tanggal: Tanggal,
                     Jam: Jam,
                     Nama_Pelanggan: custName,
@@ -2231,12 +2062,14 @@
                 // POTONG SALDO ADMIN 16%
                 const adminCut = realFee * 0.16;
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                await setDoc(balanceRef, {
+                batch.set(balanceRef, {
                     uid: riderUid,
                     name: riderName,
                     saldo: increment(-adminCut),
                     updated_at: serverTimestamp()
                 }, { merge: true });
+
+                await batch.commit();
 
                 sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
 
@@ -2280,29 +2113,35 @@
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
+                    const batch = writeBatch(db);
+
                     // REFUND POTONGAN ADMIN 16% KARENA DIBATALKAN
                     if (order.rider_uid && order.fee) {
                         const refundAmount = order.fee * 0.16;
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
-                        await setDoc(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
+                        batch.set(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
                     }
 
-                    await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
+                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     
-                    if (order && order.rider_uid && order.daily_order_id) {
-                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
+                    if (order.rider_uid && order.daily_order_id) {
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
                     }
 
                     if (order.rider_uid) {
                         const riderRef = doc(db, 'status_rider_aktif', order.rider_uid);
-                        await setDoc(riderRef, { 
+                        batch.set(riderRef, { 
                             in_main_queue: true, 
                             is_available: true, 
                             last_drop_time: new Date("2000-01-01T00:00:00Z"),
                             last_drop_desc: "Prioritas: Dibatalkan Admin",
                             proof_desc: ""
                         }, { merge: true });
-                        
+                    }
+                    
+                    await batch.commit();
+                    
+                    if (order.rider_uid) {
                         sendPushNotification(order.rider_uid, "❌ ORDERAN DIBATALKAN ❌", "Orderan barusan telah dibatalkan admin. Kamu dikembalikan ke antrean prioritas atas! (Saldo dikembalikan)");
                     }
                     
@@ -3032,6 +2871,8 @@
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
             try {
+                const batch = writeBatch(db);
+
                 if (isDaily) {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
                     
@@ -3046,16 +2887,16 @@
                         if (diffFee !== 0) {
                             const diffAdminCut = diffFee * 0.16;
                             const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                            await setDoc(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
+                            batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
                         }
-                    }
 
-                    await updateDoc(ref, {
-                        Nama_Pelanggan: name,
-                        Keterangan: details.replace(/\n/g, ' | '),
-                        Nominal_Kotor: feeParsed.saved,
-                        Tambahan: tamParsed.saved
-                    });
+                        batch.update(ref, {
+                            Nama_Pelanggan: name,
+                            Keterangan: details.replace(/\n/g, ' | '),
+                            Nominal_Kotor: feeParsed.saved,
+                            Tambahan: tamParsed.saved
+                        });
+                    }
 
                 } else {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id);
@@ -3070,12 +2911,12 @@
                         if (diffFee !== 0 && oldData.rider_uid) {
                             const diffAdminCut = diffFee * 0.16;
                             const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', oldData.rider_uid);
-                            await setDoc(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
+                            batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
                         }
 
                         const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
                         
-                        await updateDoc(ref, {
+                        batch.update(ref, {
                             customer_phone: phone,
                             customer_name: name,
                             fee: feeParsed.real,
@@ -3086,15 +2927,17 @@
                         // Sinkronkan ke daily order miliknya
                         if (oldData.daily_order_id && oldData.rider_uid) {
                             const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
-                            await updateDoc(dailyRef, {
+                            batch.update(dailyRef, {
                                 Nama_Pelanggan: name,
                                 Keterangan: details.replace(/\n/g, ' | '),
                                 Nominal_Kotor: feeParsed.saved,
                                 Tambahan: tamParsed.saved
-                            }).catch(e => console.warn(e));
+                            });
                         }
                     }
                 }
+
+                await batch.commit();
 
                 document.getElementById('edit-modal').classList.add('hidden');
                 document.getElementById('edit-modal').classList.remove('flex');
@@ -3122,6 +2965,7 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 
                 try {
+                    const batch = writeBatch(db);
                     let feeRealToRefund = 0;
 
                     if (isDaily) {
@@ -3129,24 +2973,32 @@
                         if (oldData) {
                             feeRealToRefund = parseFloat(oldData.Nominal_Kotor || 0) * 1000;
                         }
-                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
+                        
+                        // Cegah double refund jika orderan masih di Active Queue dan dihapus dari Histori
+                        const activeOrderLinked = allGlobalOrders.find(o => o.daily_order_id === id);
+                        if (activeOrderLinked) {
+                            batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', activeOrderLinked.id));
+                        }
                     } else {
                         const oldData = allGlobalOrders.find(o => o.id === id);
                         if (oldData) {
                             feeRealToRefund = parseFloat(oldData.fee || 0);
                             if (oldData.daily_order_id) {
-                                await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id)).catch(e=>console.warn(e));
+                                batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id));
                             }
                         }
-                        await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     }
 
                     // Kembalikan saldo jika data ada
                     if (feeRealToRefund > 0) {
                         const refundCut = feeRealToRefund * 0.16;
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                        await setDoc(balanceRef, { saldo: increment(refundCut) }, { merge: true });
+                        batch.set(balanceRef, { saldo: increment(refundCut) }, { merge: true });
                     }
+
+                    await batch.commit();
 
                     window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
                     
