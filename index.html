@@ -1533,6 +1533,17 @@
                         <h3 class="font-bold text-gray-800">Pusat Order Admin</h3>
                         <span class="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full uppercase tracking-widest border border-indigo-100 shadow-sm"><i class="fa-solid fa-satellite-dish mr-1"></i> Live Radar</span>
                     </div>
+
+                    <!-- BANNER PERINGATAN SALDO MINUS/NOL (DIPINDAHKAN KE SINI) -->
+                    <div id="global-saldo-warning" class="hidden mb-3 bg-red-50 border border-red-200 rounded-2xl p-4 items-start gap-3 shadow-inner transition-all duration-300">
+                        <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center shrink-0 shadow-sm">
+                            <i class="fa-solid fa-wallet text-xl animate-pulse text-red-600"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h4 class="text-xs font-black text-red-800 mb-1 uppercase tracking-wider">Saldo Habis / Minus!</h4>
+                            <p class="text-[10px] font-medium leading-relaxed text-red-700">Radar otomatis dimatikan sistem. Segera hubungi Admin untuk <b class="uppercase underline">Top-Up</b> agar bisa kembali On-Bid.</p>
+                        </div>
+                    </div>
                     
                     <!-- KEMBALIKAN PADDING NORMAL (p-5) KARENA TOMBOL SUDAH KELUAR -->
                     <div id="order-radar-container" class="bg-white rounded-3xl p-5 card-shadow border border-gray-100 relative overflow-hidden transition-all duration-500 flex-1 flex flex-col">
@@ -9196,7 +9207,8 @@
                           
                           // Tampilkan notifikasi peringatan non-blocking kepada user
                           if (typeof window.showCustomToast === 'function') {
-                              window.showCustomToast("Status On-Bid dimatikan oleh Sistem.");
+                              // Tampilkan pesan khusus jika dimatikan karena Force Kill (Saldo/Pelanggaran)
+                              window.showCustomToast(data.force_kill ? "Radar dimatikan paksa (Cek Saldo/Pelanggaran)." : "Status On-Bid dimatikan oleh Sistem.");
                           } else {
                               alert("Sistem telah mematikan status On-Bid Anda.");
                           }
@@ -9204,6 +9216,35 @@
                           // 5. Ekstra Proteksi: Hentikan juga listener antrean/radar yang sedang berjalan
                           if (typeof window.stopQueueListener === 'function') {
                               window.stopQueueListener();
+                          }
+                      }
+                      // LOGIKA AUTO-REVIVE: Jika Admin mengisi saldo > 0 dan menghidupkan kembali status rider
+                      else if (data.is_online === true && toggle && toggle.checked === false) {
+                          console.log("Remote Auto-Revive: Menyalakan ulang status On-Bid dari sistem.");
+                          
+                          toggle.checked = true;
+                          
+                          if (typeof updateOnbidUI === 'function') {
+                              updateOnbidUI(true);
+                          }
+                          
+                          localStorage.setItem('rider_onbid_status', 'true');
+                          
+                          if (window.AndroidInterface) {
+                              window.AndroidInterface.updateOnBidStatus(true);
+                          }
+                          
+                          try {
+                              playBeep(880, 0.2); // Nada ceria (Aktif)
+                          } catch (e) {}
+                          
+                          if (typeof window.showCustomToast === 'function') {
+                              window.showCustomToast("Saldo terisi, Radar otomatis diaktifkan kembali!");
+                          }
+                          
+                          // Pastikan listener antrean dinyalakan ulang
+                          if (typeof window.startQueueListener === 'function') {
+                              window.startQueueListener();
                           }
                       }
                   }
@@ -9263,6 +9304,21 @@
                               saldoEl.className = "text-3xl font-black text-red-600";
                           }
                       }
+                      
+                      // LOGIKA BANNER PERINGATAN SALDO
+                      const saldoBanner = document.getElementById('global-saldo-warning');
+                      if (saldoBanner) {
+                          if (saldo <= 0) {
+                              saldoBanner.classList.remove('hidden');
+                              saldoBanner.classList.add('flex');
+                          } else {
+                              saldoBanner.classList.add('hidden');
+                              saldoBanner.classList.remove('flex');
+                          }
+                          // Update posisi sticky header karena banner muncul/hilang
+                          setTimeout(updateStickyPositions, 50);
+                      }
+                      
                   } else {
                       // Jika dokumen belum dibuat oleh admin
                       if (saldoEl) {
@@ -9275,6 +9331,14 @@
                       }
                       if (cardEl) {
                           cardEl.className = "bg-gray-50 rounded-2xl p-5 border border-gray-200 shadow-sm relative overflow-hidden transition-all duration-300";
+                      }
+                      
+                      // Munculkan peringatan topup karena saldo belum ada (terbaca 0)
+                      const saldoBanner = document.getElementById('global-saldo-warning');
+                      if (saldoBanner) {
+                          saldoBanner.classList.remove('hidden');
+                          saldoBanner.classList.add('flex');
+                          setTimeout(updateStickyPositions, 50);
                       }
                   }
               }, (error) => {
