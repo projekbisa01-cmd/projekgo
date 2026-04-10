@@ -437,10 +437,10 @@
                 </div>
             </div>
             <div>
-                <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1.5">Nominal (Misal: 10000 / 10k)</label>
+                <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1.5">Nominal (Otomatis Titik Ribuan)</label>
                 <div class="relative">
                     <span class="absolute left-3 top-1/2 -translate-y-1/2 font-black text-black text-xs">Rp</span>
-                    <input type="text" id="saldo-amount" placeholder="10000" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 pl-8 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    <input type="text" id="saldo-amount" oninput="window.formatInputRibuan(this)" placeholder="10.000" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 pl-8 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-sky-500">
                 </div>
             </div>
             
@@ -454,7 +454,7 @@
         <!-- Daftar Saldo -->
         <section>
             <div class="flex justify-between items-center mb-3 px-1 border-b border-gray-200 pb-2 mt-2">
-                <h2 class="font-black text-black text-[11px] uppercase tracking-tight">Daftar Saldo Rider</h2>
+                <h2 class="font-black text-black text-[11px] uppercase tracking-tight">Daftar Saldo Rider <span id="stat-saldo-count" class="text-[9px] font-bold text-sky-600 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-100 ml-1">0 Data</span></h2>
             </div>
             
             <div class="relative mb-4">
@@ -713,6 +713,11 @@
             }
         }
 
+        window.formatInputRibuan = (input) => {
+            let value = input.value.replace(/[^0-9]/g, '');
+            input.value = value ? parseInt(value, 10).toLocaleString('id-ID') : '';
+        };
+
         window.switchPage = (page) => {
             const pages = ['dispatch', 'active', 'history', 'contacts', 'saldo', 'management', 'lainnya'];
             
@@ -720,7 +725,6 @@
                 const btn = document.getElementById(`nav-${p}`);
                 const pageEl = document.getElementById(`page-${p}`);
                 
-                // Urus visibilitas halaman
                 if (pageEl) {
                     if (p === page) {
                         pageEl.classList.remove('hidden-page');
@@ -729,7 +733,6 @@
                     }
                 }
 
-                // Urus warna highlight navbar bawah (hanya Dispatch, Active, History yang punya icon)
                 if (btn) {
                     if (p === page) {
                         btn.classList.replace('text-gray-400', 'text-sky-600');
@@ -739,7 +742,6 @@
                 }
             });
 
-            // Hilangkan sorotan warna biru dari navbar bawah jika sedang di halaman menu "Lainnya" / sub-menunya
             const subPages = ['contacts', 'saldo', 'management', 'lainnya'];
             if (subPages.includes(page)) {
                 ['dispatch', 'active', 'history'].forEach(bp => {
@@ -783,11 +785,30 @@
             return 0;
         }
 
+        // FUNGSI BARU UTK MENGGABUNGKAN SEMUA RIDER YG DIKETAHUI
+        function getMergedRidersForDropdown() {
+            const mergedRidersMap = new Map();
+            
+            // Masukkan dari status aktif
+            allRiders.forEach(r => {
+                mergedRidersMap.set(r.uid, { uid: r.uid, name: r.nama || r.name || r.displayName || r.uid });
+            });
+            // Masukkan dari saldo (jika blm ada)
+            allRiderBalances.forEach(r => {
+                if (!mergedRidersMap.has(r.uid)) mergedRidersMap.set(r.uid, { uid: r.uid, name: r.name || r.uid });
+            });
+            // Masukkan dari kontak (jika blm ada)
+            allRiderContacts.forEach(r => {
+                if (r.uid && !mergedRidersMap.has(r.uid)) mergedRidersMap.set(r.uid, { uid: r.uid, name: r.name || r.uid });
+            });
+
+            return Array.from(mergedRidersMap.values()).sort((a,b) => a.name.localeCompare(b.name));
+        }
+
         function autoCleanUpOldData() {
             const now = Date.now();
-            const recapThreshold = 30 * 24 * 60 * 60 * 1000; // 30 hari untuk rekap cloud
+            const recapThreshold = 30 * 24 * 60 * 60 * 1000; 
 
-            // Hapus rekap cloud yang umurnya lebih dari 30 hari
             allCloudRecaps.forEach(async (rekap) => {
                 let recapTimeMs = 0;
                 if (rekap.updated_at && rekap.updated_at.seconds) {
@@ -961,11 +982,11 @@
 
                 updateNewShiftUI();
                 updateMainQueueUI();
+                
+                // Panggil ulang pembentuk dropdown agar data selalu update
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
                 if (typeof window.updateContactRiderSelect === 'function') window.updateContactRiderSelect();
                 if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
-                
-                // Hapus panggilan listener order harian (startDailyOrdersListeners) yang memboroskan kuota
                 
             }, (error) => {
                 console.error("Error Firebase:", error);
@@ -1498,7 +1519,6 @@
 
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
-            // MENGHEMAT READS: Hanya mendengarkan orderan yang masih tertahan/aktif
             const q = query(ordersCol, where("status", "in", ["assigned", "processing", "missed", "unassigned"]));
             
             onSnapshot(q, (snapshot) => {
@@ -1526,7 +1546,6 @@
 
                 renderActiveOrders();
                 
-                // Jika sedang di halaman histori, refresh manual
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                     window.renderHistoryOrders();
                 }
@@ -1665,7 +1684,6 @@
             return String(uid).trim().toUpperCase();
         }
 
-        // MENGHEMAT READS: Fungsi ini diubah total untuk menarik data HANYA jika dipanggil dan HANYA untuk 1 tanggal
         window.renderHistoryOrders = async () => {
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
@@ -1687,7 +1705,6 @@
 
             try {
                 let allFetchedOrders = [];
-                // Tarik data histori dari semua rider khusus untuk tanggal yang dipilih
                 const promises = allRiders.map(async (rider) => {
                     const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
                     const q = query(dailyCol, where("Tanggal", "==", dateVal));
@@ -1873,7 +1890,6 @@
                     created_at: pseudoDate
                 });
 
-                // POTONG SALDO ADMIN 16%
                 const adminCut = feeParsed.real * 0.16;
                 const matchedRider = allRiders.find(r => r.uid === riderUid);
                 const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName || riderUid) : riderUid;
@@ -1895,7 +1911,6 @@
                 
                 window.showAlert('Berhasil', 'Orderan susulan berhasil ditambahkan ke histori.', 'success');
                 
-                // Segarkan tampilan histori
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                     await window.renderHistoryOrders();
                 }
@@ -1924,16 +1939,13 @@
             if(!select) return;
             const currentVal = select.value;
             let html = '<option value="">-- Pilih Rider --</option>';
-            const sortedRiders = [...allRiders].sort((a,b) => {
-                const nameA = a.nama || a.name || a.displayName || a.uid;
-                const nameB = b.nama || b.name || b.displayName || b.uid;
-                return nameA.localeCompare(nameB);
-            });
-            sortedRiders.forEach(r => {
+            
+            // Ganti data source dari allRiders ke merged list
+            const mergedRiders = getMergedRidersForDropdown();
+            
+            mergedRiders.forEach(r => {
                 const rCode = getRiderCode(r.uid);
-                const realName = r.nama || r.name || r.displayName;
-                const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
-                html += `<option value="${r.uid}">${rCode} - ${rName}</option>`;
+                html += `<option value="${r.uid}">${rCode} - ${r.name}</option>`;
             });
             select.innerHTML = html;
             if(currentVal) select.value = currentVal;
@@ -2054,12 +2066,11 @@
                     Nama_Pelanggan: custName,
                     Nominal_Kotor: savedKotor,
                     Tambahan: savedTambahan,
-                    Status: "Selesai", // Untuk histori
+                    Status: "Selesai", 
                     Keterangan: details.replace(/\n/g, ' | '),
                     created_at: serverTimestamp()
                 });
 
-                // POTONG SALDO ADMIN 16%
                 const adminCut = realFee * 0.16;
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
                 batch.set(balanceRef, {
@@ -2102,9 +2113,6 @@
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
         };
 
-        // =========================================================================
-        // BATALKAN ORDER (REFUND 16% SALDO)
-        // =========================================================================
         window.deleteOrder = (id) => {
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;
@@ -2115,7 +2123,6 @@
                 try {
                     const batch = writeBatch(db);
 
-                    // REFUND POTONGAN ADMIN 16% KARENA DIBATALKAN
                     if (order.rider_uid && order.fee) {
                         const refundAmount = order.fee * 0.16;
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
@@ -2161,17 +2168,11 @@
             
             let html = '<option value="">-- Pilih Rider --</option>';
             
-            const sortedRiders = [...allRiders].sort((a,b) => {
-                const nameA = a.nama || a.name || a.displayName || a.uid;
-                const nameB = b.nama || b.name || b.displayName || b.uid;
-                return nameA.localeCompare(nameB);
-            });
+            const mergedRiders = getMergedRidersForDropdown();
 
-            sortedRiders.forEach(r => {
+            mergedRiders.forEach(r => {
                 const rCode = getRiderCode(r.uid);
-                const realName = r.nama || r.name || r.displayName;
-                const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
-                html += `<option value="${r.uid}">${rCode} - ${rName}</option>`;
+                html += `<option value="${r.uid}">${rCode} - ${r.name}</option>`;
             });
 
             select.innerHTML = html;
@@ -2263,6 +2264,8 @@
                 allRiderContacts.sort((a,b) => (a.name || '').localeCompare(b.name || ''));
                 
                 if (typeof window.renderRidersContactList === 'function') window.renderRidersContactList();
+                if (typeof window.updateContactRiderSelect === 'function') window.updateContactRiderSelect();
+                if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
             });
         }
 
@@ -2274,6 +2277,7 @@
                     allRiderBalances.push({ id: docSnap.id, ...docSnap.data() });
                 });
                 if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
+                if (typeof window.updateLiburRiderSelect === 'function') window.updateLiburRiderSelect();
             });
         }
 
@@ -2308,7 +2312,6 @@
                 return;
             }
 
-            // Urutkan berdasarkan tanggal terbaru
             allCloudRecaps.sort((a,b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
 
             let html = '';
@@ -2381,7 +2384,6 @@
             document.getElementById('history-date').value = dateStr;
             if(typeof window.updateDayName === 'function') window.updateDayName();
             
-            // Tunggu data ditarik dari database sebelum diekspor
             await window.renderHistoryOrders();
             window.exportToCSV();
         };
@@ -2404,16 +2406,33 @@
 
         window.renderRiderBalances = () => {
             const container = document.getElementById('riders-saldo-list');
+            const countEl = document.getElementById('stat-saldo-count');
+            
             if(!container) return;
             const searchQuery = (document.getElementById('saldo-search')?.value || '').toLowerCase();
 
-            let filtered = allRiderBalances;
+            let filtered = [...allRiderBalances];
             if (searchQuery) {
-                filtered = allRiderBalances.filter(c =>
+                filtered = filtered.filter(c =>
                     (c.name || '').toLowerCase().includes(searchQuery) ||
                     (c.uid || '').toLowerCase().includes(searchQuery)
                 );
             }
+
+            filtered.sort((a, b) => {
+                const saldoA = parseInt(a.saldo || 0);
+                const saldoB = parseInt(b.saldo || 0);
+                const isLowA = saldoA < 10000;
+                const isLowB = saldoB < 10000;
+
+                if (isLowA && !isLowB) return -1;
+                if (!isLowA && isLowB) return 1;
+                
+                return saldoA - saldoB; 
+            });
+
+            // UPDATE ANGKA COUNTER
+            if (countEl) countEl.innerText = filtered.length + ' Data';
 
             if (filtered.length === 0) {
                 container.innerHTML = `<div class="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-gray-200 mt-2"><p class="text-[10px] text-black font-bold">Belum ada data saldo rider.</p></div>`;
@@ -2423,18 +2442,55 @@
             let html = '';
             filtered.forEach(b => {
                 const saldo = parseInt(b.saldo || 0);
-                const isMinus = saldo < 0;
-                const saldoClass = isMinus ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200';
+                const isLow = saldo < 10000;
+                const saldoClass = isLow ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200';
+                const cardClass = isLow ? 'bg-rose-50 border-rose-200 shadow-md ring-1 ring-rose-300' : 'bg-white border-gray-100 shadow-sm';
+
+                let riderPhone = '';
+                const contact = allRiderContacts.find(c => c.uid === b.uid);
+                if (contact && contact.phone) {
+                    let p = String(contact.phone).replace(/[^0-9]/g, '');
+                    if (p.startsWith('0')) p = '62' + p.slice(1);
+                    else if (!p.startsWith('62')) p = '62' + p;
+                    riderPhone = p;
+                }
+
+                let waButton = '';
+                if (isLow && riderPhone) {
+                    const message = encodeURIComponent(`Halo ${b.name || b.uid}, info dari Admin PROJEKGO. Saldo aplikasi Anda saat ini minim (Rp ${saldo.toLocaleString('id-ID')}). Mohon segera Top Up saldo agar akun Anda tetap aktif dan bisa menerima orderan. Terima kasih.`);
+                    const waLink = `https://wa.me/${riderPhone}?text=${message}`;
+                    waButton = `
+                        <div class="mt-3 pt-3 border-t border-rose-200 flex justify-end">
+                            <a href="${waLink}" target="_blank" class="bg-[#25D366] hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-sm flex items-center gap-1.5 transition-colors">
+                                <i class="fa-brands fa-whatsapp text-xs"></i> Tagih Top Up
+                            </a>
+                        </div>
+                    `;
+                } else if (isLow && !riderPhone) {
+                    waButton = `
+                        <div class="mt-3 pt-3 border-t border-rose-200 flex justify-end">
+                            <button onclick="window.showAlert('Info', 'Nomor WA tidak ditemukan. Tambahkan di menu Kontak Rider terlebih dahulu.', 'warning')" class="bg-slate-200 text-slate-500 hover:bg-slate-300 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-sm flex items-center gap-1.5 transition-colors">
+                                <i class="fa-brands fa-whatsapp text-xs"></i> WA Tidak Ada
+                            </button>
+                        </div>
+                    `;
+                }
 
                 html += `
-                    <div class="bg-white rounded-xl p-3.5 border border-gray-100 shadow-sm flex justify-between items-center mt-2">
-                        <div class="flex flex-col">
-                            <span class="font-black text-black text-sm uppercase">${b.name || b.uid}</span>
-                            <span class="text-[9px] text-slate-500">${b.uid}</span>
+                    <div class="rounded-xl p-3.5 border flex flex-col mt-2 transition-all ${cardClass}">
+                        <div class="flex justify-between items-center w-full">
+                            <div class="flex flex-col">
+                                <div class="flex items-center gap-1.5 mb-0.5">
+                                    <span class="font-black text-black text-sm uppercase">${b.name || b.uid}</span>
+                                    ${isLow ? '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm">SALDO MINIM</span>' : ''}
+                                </div>
+                                <span class="text-[9px] text-slate-500 font-bold">${b.uid}</span>
+                            </div>
+                            <div class="px-3 py-1.5 rounded-lg border font-black text-sm shrink-0 ${saldoClass}">
+                                Rp ${saldo.toLocaleString('id-ID')}
+                            </div>
                         </div>
-                        <div class="px-3 py-1.5 rounded-lg border font-black text-sm ${saldoClass}">
-                            Rp ${saldo.toLocaleString('id-ID')}
-                        </div>
+                        ${waButton}
                     </div>
                 `;
             });
@@ -2457,8 +2513,8 @@
             let amount = parseFloat(rawAmount.replace(/[^0-9]/g, '')) || 0;
             if (rawAmount.toLowerCase().includes('k') && amount < 1000) amount *= 1000;
 
-            const matchedRider = allRiders.find(r => r.uid === uid);
-            const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName || uid) : uid;
+            const matchedRider = getMergedRidersForDropdown().find(r => r.uid === uid);
+            const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.uid) : uid;
 
             const loader = document.getElementById('loading-overlay');
             if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
@@ -2489,15 +2545,12 @@
                 if(!sel) return;
                 const currentVal = sel.value;
                 let html = '<option value="">-- Pilih Rider --</option>';
-                const sortedRiders = [...allRiders].sort((a,b) => {
-                    const nameA = a.nama || a.name || a.displayName || a.uid;
-                    const nameB = b.nama || b.name || b.displayName || b.uid;
-                    return nameA.localeCompare(nameB);
-                });
-                sortedRiders.forEach(r => {
-                    const realName = r.nama || r.name || r.displayName;
-                    const rName = realName && String(realName).trim() !== '' ? realName : 'Rider';
-                    html += `<option value="${r.uid}">${r.uid} - ${rName}</option>`;
+                
+                // Ganti data source dari allRiders ke merged list
+                const mergedRiders = getMergedRidersForDropdown();
+
+                mergedRiders.forEach(r => {
+                    html += `<option value="${r.uid}">${r.uid} - ${r.name}</option>`;
                 });
                 sel.innerHTML = html;
                 if(currentVal) sel.value = currentVal;
@@ -2594,16 +2647,15 @@
         }
 
         function calculateLeaveDate(anchorDateStr, targetDateObj) {
-            const anchor = new Date(anchorDateStr + 'T00:00:00'); // Prevent timezone shifts
+            const anchor = new Date(anchorDateStr + 'T00:00:00'); 
             const target = targetDateObj;
             
             const deltaWeeks = getWeeksDiff(anchor, target);
             
             let anchorDay = anchor.getDay();
-            if (anchorDay === 0) anchorDay = 7; // Convert Sun to 7
+            if (anchorDay === 0) anchorDay = 7; 
             
             let targetDay = anchorDay - deltaWeeks;
-            // Roling mundur 1 hari / minggu, pastikan berada di range 1-7
             targetDay = ((targetDay - 1) % 7 + 7) % 7 + 1; 
             
             const targetMonday = getMonday(target);
@@ -2633,11 +2685,9 @@
             let html = '';
             const today = new Date();
 
-            // Perhitungan tanggal libur dinamis untuk minggu ini
             const enrichedSchedules = allRiderSchedules.map(sch => {
                 let anchorDateStr = sch.anchor_date;
                 if (!anchorDateStr) {
-                    // Fallback jika data masih pakai format lama (1-7) tanpa tanggal
                     const d = new Date();
                     let cd = d.getDay(); if (cd === 0) cd = 7;
                     let od = sch.day_off; if (od === 0) od = 7;
@@ -2647,14 +2697,11 @@
 
                 const currentWeekLeave = calculateLeaveDate(anchorDateStr, today);
                 
-                // --- UPDATE FIREBASE AGAR RIDER APP SINKRON ---
-                // Ekstrak string tanggal (YYYY-MM-DD) untuk disimpan langsung di Firebase
                 const year = currentWeekLeave.getFullYear();
                 const month = String(currentWeekLeave.getMonth() + 1).padStart(2, '0');
                 const day = String(currentWeekLeave.getDate()).padStart(2, '0');
                 const formattedCurrentLeave = `${year}-${month}-${day}`;
 
-                // Jika tanggal libur minggu ini di Firebase tidak sesuai/kosong, auto-sync!
                 if (sch.current_leave_date !== formattedCurrentLeave) {
                     updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_schedules', sch.id), {
                         current_leave_date: formattedCurrentLeave,
@@ -2665,7 +2712,6 @@
                 return { ...sch, currentWeekLeave, formattedCurrentLeave };
             });
 
-            // Urutkan jadwal yang liburnya paling dekat di minggu ini
             enrichedSchedules.sort((a, b) => {
                 if (a.currentWeekLeave.getTime() !== b.currentWeekLeave.getTime()) {
                     return a.currentWeekLeave.getTime() - b.currentWeekLeave.getTime();
@@ -2676,7 +2722,6 @@
             enrichedSchedules.forEach(sch => {
                 const currentDayNameStr = formatLeaveDate(sch.currentWeekLeave);
                 
-                // Highlight khusus jika hari ini rider tersebut sedang jadwal libur
                 const isLeaveToday = sch.currentWeekLeave.toDateString() === today.toDateString();
                 const todayHighlight = isLeaveToday ? 'bg-amber-100 border-amber-300 ring-2 ring-amber-200 shadow-md' : 'bg-white border-gray-100 shadow-sm';
 
@@ -2715,7 +2760,7 @@
                 return;
             }
 
-            const matchedRider = allRiders.find(r => r.uid === uid);
+            const matchedRider = getMergedRidersForDropdown().find(r => r.uid === uid);
             const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.uid) : uid;
 
             const loader = document.getElementById('loading-overlay');
@@ -2725,7 +2770,6 @@
                 const today = new Date();
                 const calculatedLeave = calculateLeaveDate(anchorDate, today);
                 
-                // Format tanggal libur saat pertama kali disimpan
                 const year = calculatedLeave.getFullYear();
                 const month = String(calculatedLeave.getMonth() + 1).padStart(2, '0');
                 const day = String(calculatedLeave.getDate()).padStart(2, '0');
@@ -2736,12 +2780,12 @@
                     uid: uid,
                     name: rName,
                     anchor_date: anchorDate,
-                    current_leave_date: formattedCurrentLeave, // Info langsung yang bisa dibaca aplikasi Rider
+                    current_leave_date: formattedCurrentLeave, 
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
                 window.showAlert('Berhasil', 'Jadwal libur berhasil disimpan. Sistem akan me-rooling otomatis setiap minggunya.', 'success');
-                document.getElementById('libur-tanggal-select').value = ''; // Reset input
+                document.getElementById('libur-tanggal-select').value = ''; 
             } catch(e) {
                 console.error(e);
                 window.showAlert('Gagal', 'Terjadi kesalahan sistem saat menyimpan jadwal.', 'error');
@@ -2765,9 +2809,6 @@
             });
         };
 
-        // =========================================================================
-        // OPEN CONTACT PICKER (DAFTAR KONTAK HP)
-        // =========================================================================
         window.openContactPicker = async () => {
             const supported = 'contacts' in navigator && 'ContactsManager' in window;
             if (supported) {
@@ -2792,9 +2833,6 @@
             }
         };
 
-        // =========================================================================
-        // EDIT ORDER (ACTIVE & HISTORY)
-        // =========================================================================
         window.openEditOrder = (id, isDaily = false) => {
             let orderData = null;
             if (isDaily) {
@@ -2803,7 +2841,6 @@
                 orderData = allGlobalOrders.find(o => o.id === id);
             }
             
-            // Fallback jikalau isDaily salah tangkap
             if (!orderData) {
                 orderData = allGlobalOrders.find(o => o.id === id);
             }
@@ -2817,7 +2854,6 @@
             document.getElementById('edit-order-is-daily').value = isDaily ? 'true' : 'false';
             document.getElementById('edit-order-rider-uid').value = orderData.rider_uid || '';
 
-            // Set nilai ke form edit
             if (isDaily) {
                 document.getElementById('edit-phone').value = ''; 
                 document.getElementById('edit-name').value = orderData.customer_name || orderData.Nama_Pelanggan || '';
@@ -2876,7 +2912,6 @@
                 if (isDaily) {
                     const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
                     
-                    // Hitung selisih fee untuk menyesuaikan potongan saldo
                     const oldData = allDailyOrders.find(o => o.id === id);
                     if (oldData) {
                         const oldFeeSaved = parseFloat(oldData.Nominal_Kotor || 0);
@@ -2906,7 +2941,6 @@
                         const oldFeeReal = parseFloat(oldData.fee || 0);
                         const newFeeReal = feeParsed.real;
                         
-                        // Hitung selisih fee jika sudah ditarik rider
                         const diffFee = newFeeReal - oldFeeReal;
                         if (diffFee !== 0 && oldData.rider_uid) {
                             const diffAdminCut = diffFee * 0.16;
@@ -2924,7 +2958,6 @@
                             items: items
                         });
 
-                        // Sinkronkan ke daily order miliknya
                         if (oldData.daily_order_id && oldData.rider_uid) {
                             const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
                             batch.update(dailyRef, {
@@ -2943,7 +2976,6 @@
                 document.getElementById('edit-modal').classList.remove('flex');
                 window.showAlert('Berhasil', 'Orderan berhasil diperbarui dan saldo telah disesuaikan.', 'success');
                 
-                // Segarkan tampilan histori
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                     await window.renderHistoryOrders();
                 }
@@ -2956,9 +2988,6 @@
             }
         };
 
-        // =========================================================================
-        // HAPUS HISTORY ORDER (REFUND 16%)
-        // =========================================================================
         window.deleteHistoryOrder = (id, riderUid, isDaily) => {
             window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus riwayat orderan ini secara permanen? (Potongan 16% akan dikembalikan)', async () => {
                 const loader = document.getElementById('loading-overlay');
@@ -2975,7 +3004,6 @@
                         }
                         batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
                         
-                        // Cegah double refund jika orderan masih di Active Queue dan dihapus dari Histori
                         const activeOrderLinked = allGlobalOrders.find(o => o.daily_order_id === id);
                         if (activeOrderLinked) {
                             batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', activeOrderLinked.id));
@@ -2991,7 +3019,6 @@
                         batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     }
 
-                    // Kembalikan saldo jika data ada
                     if (feeRealToRefund > 0) {
                         const refundCut = feeRealToRefund * 0.16;
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
@@ -3002,7 +3029,6 @@
 
                     window.showAlert('Berhasil', 'Riwayat berhasil dihapus dan potongan admin telah dikembalikan.', 'success');
                     
-                    // Segarkan tampilan histori
                     if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                         await window.renderHistoryOrders();
                     }
