@@ -7277,20 +7277,28 @@
               if (!uid || !isAuthReady) return;
               if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
 
-              // PATH DATABASE: Mengambil riwayat orderan dari path artifacts/{appId}/users/{UID}/daily_orders
-              const dailyRef = collection(db, 'artifacts', appId, 'users', String(uid).trim(), 'daily_orders');
+              // PATH DATABASE BARU: Mengambil riwayat orderan dari collection active_orders
+              const activeOrdersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
               
-              dailyOrdersUnsubscribe = onSnapshot(dailyRef, (snapshot) => {
+              // Mengambil semua order milik rider ini (Filter status 'completed' dilakukan di JS memori)
+              const q = query(activeOrdersRef, where('rider_uid', '==', String(uid).trim()));
+              
+              dailyOrdersUnsubscribe = onSnapshot(q, (snapshot) => {
                   const newFirebaseData = [];
                   
                   snapshot.forEach(docSnap => {
                       const data = docSnap.data();
                       
+                      // FILTER: Hanya ambil yang statusnya completed
+                      if (String(data.status || '').trim().toLowerCase() !== 'completed') {
+                          return; // Abaikan jika status bukan completed
+                      }
+                      
                       // PASTIKAN FORMAT JAM & TANGGAL TERISI AGAR TIDAK HILANG / SALING TIMPA DI DAFTAR
                       let fDate = data.Tanggal || data.tanggal;
                       let fTime = data.Jam || data.jam;
                       
-                      const ts = data.timestamp || data.finished_at || data.created_at || null;
+                      const ts = data.finished_at || data.timestamp || data.created_at || null;
                       const dObj = (ts && ts.seconds) ? new Date(ts.seconds * 1000) : new Date();
                       
                       // KONVERSI FORMAT PASTI YYYY-MM-DD
@@ -7305,44 +7313,50 @@
                       
                       if (!fTime) {
                         fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
-                    }
+                      }
                     
-                    // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
-                    let nKotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
-                    let nExtra = Number(data.Tambahan || data.extra || data.Extra || 0);
-                    if (nKotor > 500) nKotor = nKotor / 1000;
-                    if (nExtra > 500) nExtra = nExtra / 1000;
+                      // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
+                      let nKotor = Number(data.fee || data.Fee || data.Nominal_Kotor || 0);
+                      let nExtra = Number(data.extra || data.Extra || data.Tambahan || 0);
+                      if (nKotor > 500) nKotor = nKotor / 1000;
+                      if (nExtra > 500) nExtra = nExtra / 1000;
 
-                    // Proteksi agar "Memuat..." tidak tersimpan sebagai nama rider
-                    let fallbackName = document.getElementById('display-rider-name').innerText;
-                    if (fallbackName === 'Memuat...' || !fallbackName) {
-                        fallbackName = 'Rider';
-                    }
+                      // Proteksi agar "Memuat..." tidak tersimpan sebagai nama rider
+                      let fallbackName = document.getElementById('display-rider-name').innerText;
+                      if (fallbackName === 'Memuat...' || !fallbackName) {
+                          fallbackName = 'Rider';
+                      }
 
-                    // Mapping data Firestore dari path daily_orders agar formatnya sempurna saat di-render ke Riwayat Orderan
-                    newFirebaseData.push({
-                        id: docSnap.id,
-                        is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
-                        Tanggal: fDate,
-                        Jam: fTime,
-                        Nama_Pelanggan: data.Nama_Pelanggan || data.customer_name || data.Customer_Name || 'Pelanggan',
-                        Nama_Rider: data.rider_name || data.Nama_Rider || fallbackName,
-                        UID: String(uid).trim(),
-                        Nominal_Kotor: nKotor,
-                        Tambahan: nExtra,
-                        Status: data.Status || data.status || 'Selesai',
-                        Keterangan: data.Keterangan || data.proof_desc || '',
-                        List_Pesanan: data.List_Pesanan || data.items_string || data.Keterangan || data.proof_desc || 'Orderan'
-                    });
-                });
-                
-                // Perbarui variabel global dan jalankan ulang penggabung data
-                  window.firebaseData = newFirebaseData; // FIX: Akses variabel global secara eksplisit
+                      // Konversi Array Items menjadi String untuk ditampilkan di List
+                      let listPesananStr = data.items_string || data.List_Pesanan || data.Keterangan || data.proof_desc || 'Orderan Selesai';
+                      if (data.items && Array.isArray(data.items)) {
+                          listPesananStr = data.items.map(item => typeof item === 'object' ? (item.name || 'Item') : String(item)).join(', ');
+                      }
+
+                      // Mapping data Firestore dari active_orders agar formatnya sempurna saat di-render ke Riwayat Orderan
+                      newFirebaseData.push({
+                          id: docSnap.id,
+                          is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
+                          Tanggal: fDate,
+                          Jam: fTime,
+                          Nama_Pelanggan: data.customer_name || data.Customer_Name || data.Nama_Pelanggan || 'Pelanggan',
+                          Nama_Rider: data.rider_name || data.Nama_Rider || fallbackName,
+                          UID: String(uid).trim(),
+                          Nominal_Kotor: nKotor,
+                          Tambahan: nExtra,
+                          Status: 'Selesai', // Paksa jadi Selesai karena sudah lolos filter completed
+                          Keterangan: data.proof_desc || data.Keterangan || '',
+                          List_Pesanan: listPesananStr
+                      });
+                  });
+                  
+                  // Perbarui variabel global dan jalankan ulang penggabung data
+                  window.firebaseData = newFirebaseData; 
                   if (typeof window.combineAndRenderData === 'function') {
                       window.combineAndRenderData();
                   }
               }, (error) => {
-                  console.error("Error fetching daily orders:", error);
+                  console.error("Error fetching completed active orders:", error);
               });
           };
 
