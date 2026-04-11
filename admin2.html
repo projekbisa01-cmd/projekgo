@@ -632,7 +632,8 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        // 1. TAMBAHKAN getDocsFromServer di daftar import ini
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -1932,28 +1933,125 @@
             if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
             try {
-                let allFetchedOrders = [];
-                const promises = allRiders.map(async (rider) => {
-                    const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
-                    const q = query(dailyCol, where("Tanggal", "==", dateVal));
-                    const snap = await getDocs(q);
-                    const orders = [];
-                    snap.forEach(docSnap => {
-                        const data = docSnap.data();
-                        orders.push({
-                            id: docSnap.id,
-                            rider_uid: rider.uid,
-                            rider_name: rider.nama || rider.name || rider.displayName || rider.uid,
-                            ...data
-                        });
+                // 1. Dapatkan daftar master seluruh rider (Gabungan memori & database langsung)
+                // Ini mencegah bug rider hilang jika sistem belum selesai loading
+                const masterRidersMap = new Map();
+                
+                // Ambil dari memory lokal (yang sudah online/ada di kontak/saldo)
+                const memRiders = getMergedRidersForDropdown();
+                memRiders.forEach(r => masterRidersMap.set(r.uid, r));
+
+                // Ambil paksa dari database saldo (sumber paling valid untuk rider yang pernah narik)
+                // UBAH: Gunakan getDocsFromServer untuk memastikan tidak mengambil cache lokal yang usang di HP lain
+                try {
+                    const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
+                    const balancesSnap = await getDocsFromServer(balancesCol);
+                    balancesSnap.forEach(docSnap => {
+                        if (!masterRidersMap.has(docSnap.id)) {
+                            masterRidersMap.set(docSnap.id, { uid: docSnap.id, name: docSnap.data().name || docSnap.id });
+                        }
                     });
-                    return orders;
+                } catch (err) {
+                    console.warn("Peringatan: Gagal melakukan bypass ke data saldo.", err);
+                }
+
+                // AMBIL PAKSA DARI KONTAK JUGA (Jaga-jaga jika ada rider baru diinput kontak tapi belum pernah transaksi)
+                try {
+                    const contactsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_contacts');
+                    const contactsSnap = await getDocsFromServer(contactsCol);
+                    contactsSnap.forEach(docSnap => {
+                        const data = docSnap.data();
+                        if (data.uid && !masterRidersMap.has(data.uid)) {
+                            masterRidersMap.set(data.uid, { uid: data.uid, name: data.name || data.uid });
+                        }
+                    });
+                } catch(err) {}
+
+                const finalRidersToScan = Array.from(masterRidersMap.values());
+                let allFetchedOrders = [];
+
+                // 2. Tarik histori dari masing-masing laci rider secara tahan banting (Bulletproof)
+                const promises = finalRidersToScan.map(async (rider) => {
+                    try {
+                        const dailyCol = collection(db, 'artifacts', firebaseConfig.projectId, 'users', rider.uid, 'daily_orders');
+                        const q = query(dailyCol, where("Tanggal", "==", dateVal));
+                        
+                        // 3. UBAH getDocs menjadi getDocsFromServer agar mengabaikan cache lokal HP
+                        const snap = await getDocsFromServer(q);
+                        
+                        const orders = [];
+                        snap.forEach(docSnap => {
+                            const data = docSnap.data();
+                            orders.push({
+                                id: docSnap.id,
+                                rider_uid: rider.uid,
+                                rider_name: rider.name || rider.uid,
+                                ...data
+                            });
+                        });
+                        return orders;
+                    } catch (fetchErr) {
+                        // Jangan biarkan 1 error milik rider tertentu menghentikan semua rider lainnya
+                        console.warn(`Gagal memuat riwayat untuk rider ${rider.uid}`, fetchErr);
+                        return [];
+                    }
                 });
                 
                 const results = await Promise.all(promises);
                 results.forEach(res => {
                     allFetchedOrders = allFetchedOrders.concat(res);
                 });
+
+                // --- TAMBAHAN: Tarik riwayat pemesanan gabungan dari active_orders dengan status "completed" ---
+                try {
+                    const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                    const qActive = query(activeOrdersCol, where("status", "==", "completed"));
+                    const snapActive = await getDocsFromServer(qActive);
+                    
+                    snapActive.forEach(docSnap => {
+                        const data = docSnap.data();
+                        
+                        let orderDateStr = '';
+                        if (data.created_at && data.created_at.seconds) {
+                            const d = new Date(data.created_at.seconds * 1000);
+                            const mm = String(d.getMonth() + 1).padStart(2, '0');
+                            const dd = String(d.getDate()).padStart(2, '0');
+                            const yyyy = d.getFullYear();
+                            orderDateStr = `${yyyy}-${mm}-${dd}`;
+                        }
+
+                        // Hanya ambil yang sesuai dengan tanggal di kalender
+                        if (orderDateStr === dateVal) {
+                            // Mencegah duplikasi dengan yang sudah ditarik dari daily_orders
+                            const isDup = allFetchedOrders.find(o => o.id === data.daily_order_id || o.active_order_id === docSnap.id || o.id === docSnap.id);
+                            if (!isDup) {
+                                let detailText = "Orderan Biasa";
+                                if (data.items && data.items.length > 0) {
+                                    detailText = data.items.map(i => i.name).join(' | ');
+                                }
+                                
+                                allFetchedOrders.push({
+                                    id: docSnap.id,
+                                    active_order_id: docSnap.id,
+                                    daily_order_id: data.daily_order_id,
+                                    rider_uid: data.rider_uid,
+                                    rider_name: data.rider_name || data.rider_uid,
+                                    Nama_Pelanggan: data.customer_name || '-',
+                                    Nominal_Kotor: (data.fee || 0) / 1000,
+                                    Tambahan: (data.tambahan || 0) / 1000,
+                                    Status: "Selesai",
+                                    Keterangan: detailText,
+                                    Jam: data.created_at ? new Date(data.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--',
+                                    created_at: data.created_at,
+                                    is_from_active: true
+                                });
+                            }
+                        }
+                    });
+                } catch (errActive) {
+                    console.warn("Gagal memuat pesanan gabungan (completed):", errActive);
+                }
+                // --- END TAMBAHAN ---
                 
                 allDailyOrders = allFetchedOrders; 
                 window.currentHistoryData = allFetchedOrders.map(o => ({
@@ -1996,7 +2094,7 @@
                 allFetchedOrders.forEach(order => {
                     const feeStr = ((parseFloat(order.Nominal_Kotor) || 0) * 1000).toLocaleString('id-ID');
                     const tamVal = (parseFloat(order.Tambahan) || 0) * 1000;
-                    const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                    const tamStr = tamVal > 0 ? `<span class="text-[8px] text-black font-black ml-0.5">+${tamVal.toLocaleString('id-ID')}</span>` : '';
                     
                     let timeStr = order.Jam || '--:--';
                     if (order.created_at && order.created_at.seconds) {
@@ -2005,33 +2103,34 @@
                     }
 
                     html += `
-                        <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500 mb-3">
+                        <div class="bg-white rounded-xl p-2 border border-slate-200 shadow-sm flex flex-col gap-1.5 relative overflow-hidden transition-all duration-500 mb-1.5">
                             <div class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500"></div>
                             
-                            <div class="flex justify-between items-start pl-1">
-                                <div class="flex flex-col gap-1.5 overflow-hidden">
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <span class="text-[8px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 uppercase tracking-widest inline-block w-max">Selesai</span>
-                                        <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
-                                            <i class="fa-regular fa-clock text-[8px]"></i>
-                                            <span class="text-[9px] font-black text-black">${timeStr}</span>
-                                        </div>
+                            <div class="pl-1.5 flex flex-col gap-1">
+                                <div class="flex justify-between items-center w-full">
+                                    <p class="text-[11px] font-black text-black leading-tight truncate pr-2">${order.Nama_Pelanggan || '-'}</p>
+                                    <p class="text-[11px] font-black text-black leading-none shrink-0 whitespace-nowrap">Rp ${feeStr}${tamStr}</p>
+                                </div>
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[7px] font-black text-sky-600 bg-sky-50 px-1 py-0.5 rounded border border-sky-200 uppercase tracking-widest leading-none">DO</span>
+                                    <div class="flex items-center gap-1 text-slate-500">
+                                        <i class="fa-regular fa-clock text-[7px]"></i>
+                                        <span class="text-[8px] font-black text-black leading-none">${timeStr}</span>
                                     </div>
-                                    <p class="text-xs font-black text-black leading-none mt-0.5">${order.Nama_Pelanggan || '-'}</p>
                                 </div>
-                                <div class="text-right shrink-0 ml-2">
-                                    <p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p>
-                                </div>
-                            </div>
-                            <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
-                                <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Rider:</p>
-                                <p class="text-xs font-bold text-black truncate">${order.rider_name}</p>
-                                <p class="text-[9px] text-black mt-1.5 italic line-clamp-2">"${(order.Keterangan || '').replace(/ \| /g, ', ')}"</p>
                             </div>
                             
-                            <div class="grid grid-cols-2 gap-2 ml-1 mt-1">
-                                <button onclick="window.openEditOrder('${order.id}', true)" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Hapus</button>
+                            <div class="px-1.5 py-1 bg-slate-50 rounded-lg border border-slate-100 ml-1 flex flex-col gap-0.5">
+                                <div class="flex items-center gap-1">
+                                    <i class="fa-solid fa-motorcycle text-[8px] text-slate-400 shrink-0"></i>
+                                    <span class="text-[9px] font-bold text-black truncate w-full">${order.rider_name}</span>
+                                </div>
+                                <p class="text-[8px] text-slate-600 italic truncate w-full">"${(order.Keterangan || '').replace(/ \| /g, ', ')}"</p>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-1 ml-1">
+                                <button onclick="window.openEditOrder('${order.id}', true)" class="py-1 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] font-black rounded border border-amber-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-pen text-[7px]"></i> Edit</button>
+                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] font-black rounded border border-rose-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-trash text-[7px]"></i> Hapus</button>
                             </div>
                         </div>
                     `;
@@ -2119,7 +2218,8 @@
                 });
 
                 const adminCut = feeParsed.real * 0.16;
-                const matchedRider = allRiders.find(r => r.uid === riderUid);
+                const mergedRiders = getMergedRidersForDropdown();
+                const matchedRider = mergedRiders.find(r => r.uid === riderUid);
                 const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.displayName || riderUid) : riderUid;
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
                 batch.set(balanceRef, {
@@ -3091,7 +3191,7 @@
         window.openEditOrder = (id, isDaily = false) => {
             let orderData = null;
             if (isDaily) {
-                orderData = allDailyOrders.find(o => o.id === id);
+                orderData = window.currentHistoryData.find(o => o.id === id) || allDailyOrders.find(o => o.id === id);
             } else {
                 orderData = allGlobalOrders.find(o => o.id === id);
             }
@@ -3165,9 +3265,7 @@
                 const batch = writeBatch(db);
 
                 if (isDaily) {
-                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
-                    
-                    const oldData = allDailyOrders.find(o => o.id === id);
+                    const oldData = window.currentHistoryData.find(o => o.id === id) || allDailyOrders.find(o => o.id === id);
                     if (oldData) {
                         const oldFeeSaved = parseFloat(oldData.Nominal_Kotor || 0);
                         const oldFeeReal = oldFeeSaved * 1000;
@@ -3180,12 +3278,34 @@
                             batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
                         }
 
-                        batch.update(ref, {
-                            Nama_Pelanggan: name,
-                            Keterangan: details.replace(/\n/g, ' | '),
-                            Nominal_Kotor: feeParsed.saved,
-                            Tambahan: tamParsed.saved
-                        });
+                        if (oldData.is_from_active) {
+                            const activeRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id);
+                            const items = details.split('\n').filter(l => l.trim() !== '').map(l => ({ name: l.trim(), qty: 1 }));
+                            batch.update(activeRef, {
+                                customer_name: name,
+                                items: items,
+                                fee: feeParsed.real,
+                                tambahan: tamParsed.real
+                            });
+                            
+                            if (oldData.daily_order_id) {
+                                const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id);
+                                batch.update(dailyRef, {
+                                    Nama_Pelanggan: name,
+                                    Keterangan: details.replace(/\n/g, ' | '),
+                                    Nominal_Kotor: feeParsed.saved,
+                                    Tambahan: tamParsed.saved
+                                });
+                            }
+                        } else {
+                            const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id);
+                            batch.update(ref, {
+                                Nama_Pelanggan: name,
+                                Keterangan: details.replace(/\n/g, ' | '),
+                                Nominal_Kotor: feeParsed.saved,
+                                Tambahan: tamParsed.saved
+                            });
+                        }
                     }
 
                 } else {
@@ -3253,15 +3373,23 @@
                     let feeRealToRefund = 0;
 
                     if (isDaily) {
-                        const oldData = allDailyOrders.find(o => o.id === id);
+                        const oldData = window.currentHistoryData.find(o => o.id === id) || allDailyOrders.find(o => o.id === id);
                         if (oldData) {
                             feeRealToRefund = parseFloat(oldData.Nominal_Kotor || 0) * 1000;
-                        }
-                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
-                        
-                        const activeOrderLinked = allGlobalOrders.find(o => o.daily_order_id === id);
-                        if (activeOrderLinked) {
-                            batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', activeOrderLinked.id));
+                            
+                            if (oldData.is_from_active) {
+                                batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
+                                if (oldData.daily_order_id) {
+                                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id));
+                                }
+                            } else {
+                                batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', id));
+                                
+                                const activeOrderLinked = allGlobalOrders.find(o => o.daily_order_id === id);
+                                if (activeOrderLinked) {
+                                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', activeOrderLinked.id));
+                                }
+                            }
                         }
                     } else {
                         const oldData = allGlobalOrders.find(o => o.id === id);
