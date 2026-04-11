@@ -1292,9 +1292,60 @@
             
             const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             
-            const availableMainQueue = mainQueueRiders.filter(r => {
+            let availableMainQueue = mainQueueRiders.filter(r => {
                 return !busyUids.has(r.uid);
             });
+
+            // --- LOGIKA PENGUNCIAN POSISI (QUEUE LOCK) ---
+            // Berfungsi mengunci posisi agar tidak melompat ketika sinyal jelek/putus-nyambung
+            if (!window.lockedQueueOrder) {
+                try {
+                    window.lockedQueueOrder = JSON.parse(localStorage.getItem('projekgo_locked_queue')) || [];
+                } catch(e) {
+                    window.lockedQueueOrder = [];
+                }
+            }
+            
+            // 1. Bersihkan UID dari memori kunci jika rider sudah benar-benar keluar (dihapus/sedang bawa orderan)
+            const availableUidsSet = new Set(availableMainQueue.map(r => r.uid));
+            window.lockedQueueOrder = window.lockedQueueOrder.filter(uid => availableUidsSet.has(uid));
+
+            // 2. Ambil rider yang baru masuk antrean (belum ada di memori kunci)
+            const lockedUidsSet = new Set(window.lockedQueueOrder);
+            const newRidersToLock = availableMainQueue.filter(r => !lockedUidsSet.has(r.uid));
+
+            // 3. Urutkan rider baru berdasarkan timestamp database
+            newRidersToLock.sort((a, b) => {
+                let timeA = getTimestampMs(a.last_drop_time) || getTimestampMs(a.last_updated) || Date.now();
+                let timeB = getTimestampMs(b.last_drop_time) || getTimestampMs(b.last_updated) || Date.now();
+                return timeA - timeB; 
+            });
+
+            // 4. Masukkan rider baru ke antrean kunci
+            newRidersToLock.forEach(r => {
+                let rTime = getTimestampMs(r.last_drop_time);
+                // Deteksi prioritas (Order Dibatalkan Admin -> Set ke tahun 2000)
+                if (rTime > 0 && rTime < 1500000000000) { 
+                    window.lockedQueueOrder.unshift(r.uid); // Masukkan ke paling atas
+                } else {
+                    window.lockedQueueOrder.push(r.uid); // Masukkan ke paling bawah
+                }
+            });
+
+            // 5. Simpan urutan permanen ke browser agar kebal refresh
+            try {
+                localStorage.setItem('projekgo_locked_queue', JSON.stringify(window.lockedQueueOrder));
+            } catch(e) {}
+
+            // 6. Susun ulang array data rider sesuai urutan yang terkunci
+            const lockedFinalQueue = [];
+            window.lockedQueueOrder.forEach(uid => {
+                const rider = availableMainQueue.find(r => r.uid === uid);
+                if (rider) lockedFinalQueue.push(rider);
+            });
+
+            availableMainQueue = lockedFinalQueue;
+            // --- END LOGIKA PENGUNCIAN ---
 
             if(countEl) countEl.innerText = availableMainQueue.length;
 
