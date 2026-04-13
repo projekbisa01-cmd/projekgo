@@ -389,6 +389,9 @@
         body.dark-mode .sticky-history-container { background-color: #0f172a !important; }
         body.dark-mode .nav-btn.text-gray-400 { color: #64748b !important; }
 
+        /* Mencegah kilatan/flash putih pada background dasar peta Leaflet saat memuat tile di mode gelap */
+        body.dark-mode .leaflet-container { background-color: #0f172a !important; }
+
         /* PENGECUALIAN UNTUK NOTA (Harus Tetap Terang agar bisa di-download putih) */
         body.dark-mode .receipt-container,
         body.dark-mode .receipt-container .bg-white,
@@ -410,7 +413,7 @@
     <!-- BACKGROUND UMUM UNTUK HALAMAN SELAIN BERANDA -->
     <div id="general-bg" class="fixed inset-0 z-[-3] bg-cover bg-center bg-no-repeat transition-opacity duration-300 opacity-0" style="background-image: url('https://i.ibb.co.com/BKfzrDpr/5e893afb7790c0f5c0f18ee6d7d39460.jpg');"></div>
     <!-- MAP BACKGROUND (LEAFLET STATIS HEMAT DAYA) -->
-    <div id="map-background" class="fixed inset-0 z-[-2] pointer-events-none transition-opacity duration-300 opacity-100"></div>
+    <div id="map-background" class="fixed inset-0 z-[-2] transition-opacity duration-300 opacity-100"></div>
     <!-- OVERLAY KACA AGAR UI TETAP TERBACA (Efek blur dihilangkan agar peta terlihat tajam) -->
     <div id="map-overlay" class="fixed inset-0 z-[-1] bg-white/60 pointer-events-none transition-colors duration-300"></div>
 
@@ -1515,7 +1518,7 @@
         </div>
 
         <!-- HALAMAN BERANDA -->
-        <div id="page-home" class="page-container flex flex-col min-h-screen">
+        <div id="page-home" class="page-container flex flex-col min-h-screen pointer-events-none">
             <header class="p-6 bg-transparent border-none sticky top-0 z-50 shrink-0 transition-all duration-300 pointer-events-none">
                 <div class="flex justify-between items-center relative">
                     <div class="flex items-center space-x-3 pointer-events-auto z-20">
@@ -1601,8 +1604,13 @@
                 </div>
             </main>
 
+            <!-- TOMBOL RECENTER MAP (FLOATING GPS BUTTON) -->
+            <button onclick="window.recenterMap()" class="fixed bottom-[14.5rem] right-5 w-12 h-12 bg-white/95 backdrop-blur-md text-orange-600 hover:bg-orange-500 hover:text-white rounded-full shadow-[0_0_15px_rgba(255,140,0,0.4)] border border-orange-200 flex items-center justify-center z-40 active:scale-90 transition-all duration-300 pointer-events-auto group">
+                <i class="fa-solid fa-location-crosshairs text-xl group-hover:scale-110 transition-transform"></i>
+            </button>
+
             <!-- KARTU ANTREAN & TOGGLE (BOTTOM NAVBAR) -->
-            <div class="fixed bottom-0 left-0 w-full z-[45] bg-white rounded-t-[2.5rem] shadow-[0_-10px_40px_rgba(0,0,0,0.08)] border-t border-gray-100 transition-all duration-300 pb-[env(safe-area-inset-bottom)]">
+            <div class="fixed bottom-0 left-0 w-full z-[45] bg-white rounded-t-[2.5rem] shadow-[0_-10px_40px_rgba(0,0,0,0.08)] border-t border-gray-100 transition-all duration-300 pb-[env(safe-area-inset-bottom)] pointer-events-auto">
                 
                 <!-- BANNER PERINGATAN SALDO MINUS/NOL (STICKY DI ATAS TOGGLE) -->
                 <div id="global-saldo-warning" class="absolute bottom-[calc(100%+2rem)] left-1/2 transform -translate-x-1/2 w-[calc(100%-2.5rem)] max-w-md hidden bg-red-50/95 backdrop-blur-md border border-red-200 rounded-2xl p-4 items-start gap-3 shadow-2xl transition-all duration-300 z-40">
@@ -2505,85 +2513,105 @@
                         <p id="weekly-period-label" class="text-xs text-gray-500">Periode Senin - Minggu</p>
                     </div>
                     <div class="space-y-4">
-                        <div class="orange-gradient rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                        <!-- KARTU 1: PENDAPATAN BERSIH (Bisa di-minimize) -->
+                        <div class="orange-gradient rounded-3xl p-6 text-white shadow-lg relative overflow-hidden cursor-pointer active:scale-[0.98] transition-transform" onclick="window.toggleWeeklyCard('weekly-income-content', 'weekly-income-icon')">
                             <div class="relative z-10 flex flex-col">
                                 <div class="flex justify-between items-start mb-1">
                                     <p class="text-[10px] font-bold uppercase tracking-wider bg-white/20 px-2 py-1 rounded-lg inline-block">PENDAPATAN BERSIH MINGGU INI</p>
-                                    <p id="weekly-range-text" class="text-[10px] opacity-80 font-medium">-- sampai --</p>
-                                </div>
-                                <h2 id="weekly-net-total" class="text-3xl font-bold mb-3">Rp 0</h2>
-                                <div class="flex justify-between items-center mt-4 border-t border-white/20 pt-4">
-                                    <div>
-                                        <p class="text-[10px] opacity-70 mb-0.5">Pendapatan Kotor Murni</p>
-                                        <p id="weekly-gross-pure-total" class="font-bold text-sm mb-2">Rp 0</p>
-                                        <p id="weekly-adm-label" class="text-[10px] opacity-70">Adm. (20%)</p>
-                                        <p id="weekly-adm-total" class="font-bold text-sm mb-1">Rp 0</p>
-                                        <div id="weekly-installment-info" class="hidden mt-2 border-t border-white/20 pt-2">
-                                            <div class="flex justify-between items-center text-red-100">
-                                                <p class="text-[10px] font-bold uppercase mr-2"><i class="fa-solid fa-tag mr-1"></i>Cicilan:</p>
-                                                <p id="weekly-installment-val" class="font-bold text-xs">- Rp 0</p>
-                                            </div>
-                                            <p id="weekly-installment-remaining" class="text-[8px] opacity-70 mt-0.5 italic text-right">Sisa Hutang: Rp 0</p>
+                                    <div class="flex items-center gap-2">
+                                        <p id="weekly-range-text" class="text-[10px] opacity-80 font-medium">-- sampai --</p>
+                                        <div class="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center shrink-0">
+                                            <i id="weekly-income-icon" class="fa-solid fa-chevron-down text-[10px] transition-transform duration-300"></i>
                                         </div>
-                                        <div class="bg-black/10 p-2 rounded-xl mt-2 space-y-1">
-                                            <p id="weekly-adm-percent-badge" class="text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block">ADM --%</p>
-                                            <div class="flex flex-col space-y-0.5">
-                                                <div class="flex justify-between text-[8px] opacity-70">
-                                                    <span>Kotor Murni:</span>
-                                                    <span id="weekly-gross-pure-val" class="font-bold">Rp 0</span>
-                                                </div>
-                                                <div class="flex justify-between text-[8px] opacity-70">
-                                                    <span>Tambahan:</span>
-                                                    <span id="weekly-extra-val" class="font-bold">Rp 0</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <p class="text-[8px] opacity-60 font-medium mt-2 uppercase">* Pembayaran Maks Hari Rabu</p>
                                     </div>
-                                    <div class="text-right flex flex-col justify-end">
-                                        <p class="text-[10px] opacity-70">Total Order</p>
-                                        <p id="weekly-order-total" class="font-bold text-sm">0 Selesai</p>
+                                </div>
+                                <h2 id="weekly-net-total" class="text-3xl font-bold">Rp 0</h2>
+                                
+                                <!-- KONTEN YANG BISA DI-MINIMIZE -->
+                                <div id="weekly-income-content" class="max-h-0 opacity-0 overflow-hidden transition-all duration-500">
+                                    <div class="flex justify-between items-center mt-4 border-t border-white/20 pt-4">
+                                        <div>
+                                            <p class="text-[10px] opacity-70 mb-0.5">Pendapatan Kotor Murni</p>
+                                            <p id="weekly-gross-pure-total" class="font-bold text-sm mb-2">Rp 0</p>
+                                            <p id="weekly-adm-label" class="text-[10px] opacity-70">Adm. (20%)</p>
+                                            <p id="weekly-adm-total" class="font-bold text-sm mb-1">Rp 0</p>
+                                            <div id="weekly-installment-info" class="hidden mt-2 border-t border-white/20 pt-2">
+                                                <div class="flex justify-between items-center text-red-100">
+                                                    <p class="text-[10px] font-bold uppercase mr-2"><i class="fa-solid fa-tag mr-1"></i>Cicilan:</p>
+                                                    <p id="weekly-installment-val" class="font-bold text-xs">- Rp 0</p>
+                                                </div>
+                                                <p id="weekly-installment-remaining" class="text-[8px] opacity-70 mt-0.5 italic text-right">Sisa Hutang: Rp 0</p>
+                                            </div>
+                                            <div class="bg-black/10 p-2 rounded-xl mt-2 space-y-1">
+                                                <p id="weekly-adm-percent-badge" class="text-[9px] font-extrabold text-white uppercase bg-white/20 px-2 py-0.5 rounded-md inline-block">ADM --%</p>
+                                                <div class="flex flex-col space-y-0.5">
+                                                    <div class="flex justify-between text-[8px] opacity-70">
+                                                        <span>Kotor Murni:</span>
+                                                        <span id="weekly-gross-pure-val" class="font-bold">Rp 0</span>
+                                                    </div>
+                                                    <div class="flex justify-between text-[8px] opacity-70">
+                                                        <span>Tambahan:</span>
+                                                        <span id="weekly-extra-val" class="font-bold">Rp 0</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <p class="text-[8px] opacity-60 font-medium mt-2 uppercase">* Pembayaran Maks Hari Rabu</p>
+                                        </div>
+                                        <div class="text-right flex flex-col justify-end">
+                                            <p class="text-[10px] opacity-70">Total Order</p>
+                                            <p id="weekly-order-total" class="font-bold text-sm">0 Selesai</p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <div class="absolute -bottom-6 -right-6 w-24 h-24 bg-white/10 rounded-full"></div>
+                            <div class="absolute -bottom-6 -right-6 w-24 h-24 bg-white/10 rounded-full pointer-events-none"></div>
                         </div>
 
-                        <!-- KARTU REKOMENDASI LIBUR MINGGU INI -->
-                        <div id="weekly-schedule-card" class="bg-gray-900 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden border border-gray-800">
+                        <!-- KARTU 2: REKOMENDASI LIBUR MINGGU INI (Bisa di-minimize) -->
+                        <div id="weekly-schedule-card" class="bg-gray-900 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden border border-gray-800 cursor-pointer active:scale-[0.98] transition-transform" onclick="window.toggleWeeklyCard('weekly-schedule-content', 'weekly-schedule-icon')">
                             <div class="absolute -right-6 -top-6 w-24 h-24 bg-orange-500/20 rounded-full blur-2xl pointer-events-none"></div>
                             <div class="absolute -left-6 -bottom-6 w-24 h-24 bg-orange-500/10 rounded-full blur-2xl pointer-events-none"></div>
                             
                             <div class="relative z-10">
-                                <div class="flex items-center space-x-3 mb-2">
-                                    <div class="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center border border-gray-700 shrink-0 text-orange-500 shadow-inner">
-                                        <i class="fa-solid fa-calendar-day text-lg"></i>
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center border border-gray-700 shrink-0 text-orange-500 shadow-inner">
+                                            <i class="fa-solid fa-calendar-day text-lg"></i>
+                                        </div>
+                                        <div>
+                                            <h3 class="text-xs font-black uppercase tracking-widest text-white leading-tight">Rekomendasi Libur</h3>
+                                            <p class="text-[9px] text-orange-400 font-bold tracking-widest mt-0.5">MINGGU INI</p>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h3 class="text-xs font-black uppercase tracking-widest text-white leading-tight">Rekomendasi Libur</h3>
-                                        <p class="text-[9px] text-orange-400 font-bold tracking-widest mt-0.5">MINGGU INI</p>
-                                    </div>
-                                </div>
-                                
-                                <p class="text-[9px] text-gray-300 leading-relaxed font-medium mt-3 bg-gray-800/80 p-3 rounded-xl border border-gray-700/50 italic shadow-sm">
-                                    "Ini adalah rekomendasi hari libur, buat kamu yang ingin libur. Jika kamu ingin tetap masuk silakan, pendapatan kamu jadi makin meningkat."
-                                </p>
-                                
-                                <div class="mt-4">
-                                    <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                        <i class="fa-solid fa-thumbtack text-orange-500"></i> Jadwal Libur Kamu:
-                                    </p>
-                                    <div id="recommended-off-days-container" class="flex flex-wrap gap-2">
-                                        <span class="text-xs text-gray-500 font-bold italic">Memuat data...</span>
+                                    <div class="w-8 h-8 bg-gray-800 rounded-full flex items-center justify-center border border-gray-700 shrink-0">
+                                        <i id="weekly-schedule-icon" class="fa-solid fa-chevron-down text-gray-400 text-[10px] transition-transform duration-300"></i>
                                     </div>
                                 </div>
                                 
-                                <!-- TAMBAHAN TOMBOL JADWAL OFF SEMUA RIDER -->
-                                <div class="mt-4 pt-3 border-t border-gray-700/50">
-                                    <p class="text-[9px] text-gray-300 italic mb-2">"Jika kamu ingin tukeran off dengan rider lain, ini jadwal lengkap per minggunya"</p>
-                                    <button onclick="window.openAllRidersSchedule()" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-orange-400 font-bold rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-wider flex justify-center items-center gap-2 shadow-md">
-                                        <i class="fa-solid fa-calendar-days"></i> Lihat Jadwal Off Semua Rider
-                                    </button>
+                                <!-- KONTEN YANG BISA DI-MINIMIZE -->
+                                <div id="weekly-schedule-content" class="max-h-0 opacity-0 overflow-hidden transition-all duration-500">
+                                    <div class="pt-1">
+                                        <p class="text-[9px] text-gray-300 leading-relaxed font-medium mt-3 bg-gray-800/80 p-3 rounded-xl border border-gray-700/50 italic shadow-sm">
+                                            "Ini adalah rekomendasi hari libur, buat kamu yang ingin libur. Jika kamu ingin tetap masuk silakan, pendapatan kamu jadi makin meningkat."
+                                        </p>
+                                        
+                                        <div class="mt-4">
+                                            <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                                <i class="fa-solid fa-thumbtack text-orange-500"></i> Jadwal Libur Kamu:
+                                            </p>
+                                            <div id="recommended-off-days-container" class="flex flex-wrap gap-2">
+                                                <span class="text-xs text-gray-500 font-bold italic">Memuat data...</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- TAMBAHAN TOMBOL JADWAL OFF SEMUA RIDER -->
+                                        <div class="mt-4 pt-3 border-t border-gray-700/50">
+                                            <p class="text-[9px] text-gray-300 italic mb-2">"Jika kamu ingin tukeran off dengan rider lain, ini jadwal lengkap per minggunya"</p>
+                                            <button onclick="window.openAllRidersSchedule(); event.stopPropagation();" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-orange-400 font-bold rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-wider flex justify-center items-center gap-2 shadow-md">
+                                                <i class="fa-solid fa-calendar-days"></i> Lihat Jadwal Off Semua Rider
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2727,6 +2755,27 @@
         </div>
 
     <script>
+        // --- FUNGSI ACCORDION MINGGUAN (BARU) ---
+        window.toggleWeeklyCard = function(contentId, iconId) {
+            const content = document.getElementById(contentId);
+            const icon = document.getElementById(iconId);
+            
+            if (content) {
+                if (content.classList.contains('max-h-0')) {
+                    // Buka Kartu
+                    content.classList.remove('max-h-0', 'opacity-0');
+                    content.classList.add('max-h-[500px]', 'opacity-100'); // max-h dibuat besar untuk menampung seluruh isi konten
+                    if(icon) icon.classList.add('rotate-180');
+                } else {
+                    // Tutup Kartu
+                    content.classList.add('max-h-0', 'opacity-0');
+                    content.classList.remove('max-h-[500px]', 'opacity-100');
+                    if(icon) icon.classList.remove('rotate-180');
+                }
+            }
+            try { playBeep(600, 0.05); } catch(e){}
+        };
+
         // --- FUNGSI DROPDOWN MENU PENGHASILAN (BARU) ---
         window.toggleIncomeMenu = function() {
             const menu = document.getElementById('income-dropdown-menu');
@@ -2980,7 +3029,11 @@
                 }
                 if (mapOverlay) {
                     // Mode Gelap: Peta digelapkan 70% agar tidak menyilaukan mata (tanpa blur)
-                    mapOverlay.className = "fixed inset-0 z-[-1] bg-slate-900/70 pointer-events-none transition-colors duration-300";
+                    mapOverlay.className = "fixed inset-0 z-[-1] bg-slate-900/40 pointer-events-none transition-colors duration-300";
+                }
+                // Ubah Tema Peta Leaflet ke Dark
+                if (window.mapTileLayer && window.darkTileUrl) {
+                    window.mapTileLayer.setUrl(window.darkTileUrl);
                 }
             } else {
                 body.classList.remove('dark-mode');
@@ -2999,6 +3052,10 @@
                 if (mapOverlay) {
                     // Mode Terang: Peta ditutup putih transparan 60% (tanpa blur)
                     mapOverlay.className = "fixed inset-0 z-[-1] bg-white/60 pointer-events-none transition-colors duration-300";
+                }
+                // Ubah Tema Peta Leaflet ke Light
+                if (window.mapTileLayer && window.lightTileUrl) {
+                    window.mapTileLayer.setUrl(window.lightTileUrl);
                 }
             }
         };
@@ -4399,28 +4456,65 @@
         }
 
         // --- INISIALISASI PETA BACKGROUND (LEAFLET STATIS) ---
+        window.initialMapCenter = [-7.605625, 109.5155]; // Koordinat Pusat Baru Rider
+        window.initialMapZoom = 14;
+        window.lightTileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+        window.darkTileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
         function initBackgroundMap() {
             const map = L.map('map-background', {
-                center: [-7.6074, 109.4478], // Koordinat Pusat di Gombong (Sudah Sesuai)
-                zoom: 14,
-                // MATIKAN SEMUA FITUR INTERAKTIF AGAR HEMAT BATERAI
-                zoomControl: false,
-                dragging: false,
-                touchZoom: false,
-                scrollWheelZoom: false,
-                doubleClickZoom: false,
-                boxZoom: false,
+                center: window.initialMapCenter, // Koordinat Pusat (Awal Rider)
+                zoom: window.initialMapZoom,
+                // FITUR INTERAKTIF DIAKTIFKAN AGAR PETA BISA DIGESER
+                zoomControl: false, // Sembunyikan tombol +/- agar UI tetap bersih
+                dragging: true,
+                touchZoom: true,
+                scrollWheelZoom: true,
+                doubleClickZoom: true,
+                boxZoom: true,
                 keyboard: false,
                 attributionControl: false
             });
 
             // Menggunakan tile layer Standard (Lebih berwarna & terang menyerupai Google Maps)
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            const currentTileUrl = window.isDarkMode ? window.darkTileUrl : window.lightTileUrl;
+
+            window.mapTileLayer = L.tileLayer(currentTileUrl, {
                 maxZoom: 19
+            }).addTo(map);
+            
+            // --- EFEK RED MAPS GOMBONG KOTA (ZONA OPERASIONAL) ---
+            // 1. Lingkaran Zona Merah (Radius 2.5 KM)
+            L.circle(window.initialMapCenter, {
+                color: '#ef4444',      // Warna garis tepi merah
+                fillColor: '#ef4444',  // Warna isi merah
+                fillOpacity: 0.15,     // Transparansi (15%) agar jalanan tetap terlihat
+                weight: 2,             // Ketebalan garis
+                dashArray: '8, 8'      // Efek garis tepi putus-putus ala radar
+            }).addTo(map);
+
+            // 2. Titik Pusat Kota (Dot Merah Putih)
+            L.circleMarker(window.initialMapCenter, {
+                radius: 6,
+                color: '#ffffff',      // Garis tepi putih
+                weight: 2,
+                fillColor: '#ef4444',  // Isi merah solid
+                fillOpacity: 1
             }).addTo(map);
             
             window.bgMap = map;
         }
+
+        // FUNGSI KEMBALI KE TITIK AWAL RIDER
+        window.recenterMap = function() {
+            if (window.bgMap) {
+                window.bgMap.setView(window.initialMapCenter, window.initialMapZoom, {
+                    animate: true,
+                    duration: 0.8 // Animasi pergerakan dibuat lebih smooth
+                });
+                try { playBeep(880, 0.1); } catch(e){}
+            }
+        };
 
         window.installPWA = () => {
             if (deferredPrompt) {
