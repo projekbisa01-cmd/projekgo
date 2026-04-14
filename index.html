@@ -7690,14 +7690,14 @@
               
               const statusRef = collection(db, '/status_rider_aktif');
               
-              // OPTIMASI KUOTA LEVEL 1: Hanya tarik data rider yang sedang Online
-              const q = query(statusRef, where('is_online', '==', true));
+              // OPTIMASI KUOTA LEVEL 1: Hanya tarik data rider yang masuk antrean radar
+              const q = query(statusRef, where('in_main_queue', '==', true));
               
               activeQueueCountUnsubscribe = onSnapshot(q, (snapshot) => {
                   let count = 0;
                   snapshot.forEach(doc => {
                       const data = doc.data();
-                      if (data.is_available === true && data.in_main_queue === true) {
+                      if (data.in_main_queue === true) {
                           count++;
                       }
                   });
@@ -8879,8 +8879,8 @@
 
               const statusRef = collection(db, '/status_rider_aktif');
               
-              // OPTIMASI KUOTA LEVEL 1: Filter ketat agar Firebase tidak mengirim data rider yang Offline
-              const q = query(statusRef, where('is_online', '==', true));
+              // OPTIMASI KUOTA LEVEL 1: Filter hanya rider yang masuk radar antrean, abaikan status online/offline
+              const q = query(statusRef, where('in_main_queue', '==', true));
 
               queueUnsubscribe = onSnapshot(q, async (snapshot) => {
                   let onlineRiders = [];
@@ -8888,8 +8888,8 @@
                   
                   snapshot.forEach(doc => {
                       const data = doc.data();
-                      // Rider masuk antrean utama jika online, available, dan in_main_queue = true
-                      if (data.is_online === true && data.is_available === true && data.in_main_queue === true) {
+                      // Rider dihitung dalam antrean asalkan in_main_queue = true (tanpa peduli online/offline/jeda)
+                      if (data.in_main_queue === true) {
                           onlineRiders.push(data);
                       }
                       
@@ -8983,32 +8983,49 @@
                       const name = rider.name || 'Rider';
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
                       
+                      // Deteksi apakah rider benar-benar siap atau sedang jeda/hilang sinyal
+                      const isReady = rider.is_online === true && rider.is_available === true;
+                      
                       // LOGIKA GAMBAR: Ditambahkan fungsi fallback (onerror) dan referrerpolicy="no-referrer"
                       const photoHtml = rider.displayImage 
-                          ? `<div class="w-full mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-100 aspect-video relative flex flex-col items-center justify-center">
+                          ? `<div class="w-full mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-100 aspect-video relative flex flex-col items-center justify-center ${isReady ? '' : 'opacity-50 grayscale'}">
                                <img src="${rider.displayImage}" referrerpolicy="no-referrer" class="absolute inset-0 w-full h-full object-cover z-10" alt="Lokasi Rider" onerror="this.onerror=null; this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden'); this.nextElementSibling.classList.add('flex');">
                                <div class="hidden flex-col items-center justify-center w-full h-full text-gray-400 z-0 bg-gray-50">
                                    <i class="fa-solid fa-link-slash text-3xl mb-2"></i>
                                    <span class="text-[10px] font-bold uppercase tracking-wider text-center">Gambar Gagal Dimuat<br><span class="text-[8px] font-normal">(Terblokir Jaringan/Rusak)</span></span>
                                </div>
                              </div>` 
-                          : `<div class="w-full aspect-video bg-gray-50 rounded-xl mt-3 flex flex-col items-center justify-center border border-dashed border-gray-300"><i class="fa-solid fa-camera text-gray-300 text-3xl mb-2"></i><span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Belum ada foto lokasi</span></div>`;
+                          : `<div class="w-full aspect-video bg-gray-50 rounded-xl mt-3 flex flex-col items-center justify-center border border-dashed border-gray-300 ${isReady ? '' : 'opacity-50 grayscale'}"><i class="fa-solid fa-camera text-gray-300 text-3xl mb-2"></i><span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Belum ada foto lokasi</span></div>`;
+                      
+                      // Style visual berbeda untuk rider yang sedang jeda/offline
+                      const cardClasses = isMe 
+                          ? (isReady ? 'bg-orange-50 border-orange-300 shadow-md' : 'bg-orange-50/70 border-orange-200 shadow-sm opacity-80')
+                          : (isReady ? 'bg-white border-gray-200 shadow-sm' : 'bg-gray-50 border-gray-200 shadow-sm opacity-60 grayscale-[30%]');
+                          
+                      let statusBadge = '';
+                      if (isMe) {
+                          statusBadge = isReady 
+                              ? '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-white text-green-600 px-2.5 py-1 rounded-full animate-pulse uppercase tracking-wider shadow-sm border border-green-200">Sinyal Aktif</span></div>'
+                              : '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full uppercase tracking-wider shadow-sm border border-gray-200">Jeda / Off</span></div>';
+                      } else if (!isReady) {
+                          statusBadge = '<div class="flex items-center justify-center shrink-0"><span class="text-[8px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md uppercase tracking-wider border border-gray-200">Jeda</span></div>';
+                      }
                       
                       // Desain Card Per Rider (Lebih Lebar dan Bebas Potong)
                       html += `
-                          <div class="flex flex-col p-5 rounded-2xl ${isMe ? 'bg-orange-50 border border-orange-300 shadow-md' : 'bg-white border border-gray-200 shadow-sm'} w-full transition-all duration-300 relative overflow-hidden">
+                          <div class="flex flex-col p-5 rounded-2xl ${cardClasses} w-full transition-all duration-300 relative overflow-hidden">
                               ${isMe ? '<div class="absolute top-0 left-0 w-1.5 h-full bg-orange-500"></div>' : ''}
                               
                               <div class="flex items-center justify-between border-b ${isMe ? 'border-orange-200' : 'border-gray-100'} pb-3 mb-3">
                                   <div class="flex items-center gap-3 overflow-hidden">
                                       <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isMe ? 'bg-orange-500 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'} font-black text-sm">#${rank}</div>
-                                      <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${isMe ? 'ff8c00' : 'f1f5f9'}&color=${isMe ? 'fff' : '94a3b8'}" class="w-10 h-10 rounded-full border border-gray-200 shrink-0">
+                                      <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${isMe ? 'ff8c00' : 'f1f5f9'}&color=${isMe ? 'fff' : '94a3b8'}" class="w-10 h-10 rounded-full border border-gray-200 shrink-0 ${isReady ? '' : 'opacity-50 grayscale'}">
                                       <span class="text-base font-bold ${isMe ? 'text-orange-800' : 'text-gray-800'} truncate">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
                                   </div>
-                                  ${isMe ? '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-white text-green-600 px-2.5 py-1 rounded-full animate-pulse uppercase tracking-wider shadow-sm border border-green-200">Sinyal Aktif</span></div>' : ''}
+                                  ${statusBadge}
                               </div>
                               
-                              <div class="flex items-start gap-2.5">
+                              <div class="flex items-start gap-2.5 ${isReady ? '' : 'opacity-60'}">
                                   <i class="fa-solid fa-location-dot text-red-500 mt-1 text-base shrink-0"></i>
                                   <p class="text-sm font-medium text-gray-600 leading-snug w-full break-words">"${locationDesc}"</p>
                               </div>
