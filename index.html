@@ -2503,9 +2503,18 @@
                         </p>
                     </div>
 
-                    <button onclick="tampilkanJadwalLibur(currentUserUID)" class="mt-6 w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                    <button onclick="window.refreshJadwalLibur()" class="mt-6 w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
                         <i class="fa-solid fa-rotate"></i> Muat Ulang Jadwal
                     </button>
+                </div>
+
+                <!-- JADWAL SEMUA RIDER (INLINE) -->
+                <div class="mt-8 flex justify-between items-center px-1 mb-4">
+                    <h3 class="font-bold text-gray-800">Jadwal Libur Semua Rider</h3>
+                    <span class="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-full uppercase tracking-widest border border-blue-100">Minggu Ini</span>
+                </div>
+                <div id="inline-all-riders-schedule-list" class="space-y-4 pb-10 relative min-h-[150px]">
+                    <!-- Konten diisi oleh JS -->
                 </div>
 
             </main>
@@ -2920,6 +2929,20 @@
             originalSwitchPage(page, isHistoryEvent);
             if (page === 'rekomendasi-libur') {
                 tampilkanJadwalLibur(currentUserUID);
+                if (typeof window.fetchAllRidersScheduleData === 'function') {
+                    window.fetchAllRidersScheduleData('inline-all-riders-schedule-list');
+                }
+            }
+        };
+
+        window.refreshJadwalLibur = function() {
+            // Hapus cache agar data benar-benar ditarik ulang dari server
+            localStorage.removeItem('all_riders_schedule_cache');
+            localStorage.removeItem('all_riders_schedule_cache_time');
+            
+            tampilkanJadwalLibur(currentUserUID);
+            if (typeof window.fetchAllRidersScheduleData === 'function') {
+                window.fetchAllRidersScheduleData('inline-all-riders-schedule-list');
             }
         };
 
@@ -9929,11 +9952,9 @@
           // -------------------------------------------------------------
           // NEW: FUNGSI AMBIL JADWAL OFF SEMUA RIDER (DENGAN CACHE)
           // -------------------------------------------------------------
-          window.fetchAllRidersScheduleData = async () => {
-              const container = document.getElementById('all-riders-schedule-list');
+          window.fetchAllRidersScheduleData = async (targetContainerId = 'all-riders-schedule-list') => {
+              const container = document.getElementById(targetContainerId);
               if(!container) return;
-
-              container.innerHTML = `<div class="text-center py-10"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3"></i><p class="text-xs text-gray-500 font-bold">Memuat jadwal semua rider...</p></div>`;
 
               try {
                   const targetProjectId = firebaseConfig.projectId;
@@ -9946,12 +9967,19 @@
                   const cachedDataStr = localStorage.getItem(cacheKey);
 
                   let scheduleDocs = [];
+                  let useCache = false;
 
                   if (cachedTime && cachedDataStr && (now - parseInt(cachedTime) < cacheDuration)) {
                       // Gunakan Cache Lokal
                       scheduleDocs = JSON.parse(cachedDataStr);
-                  } else {
-                      // Tarik Data dari Firebase (Hanya jika Cache kedaluwarsa)
+                      useCache = true;
+                  } 
+                  
+                  if (!useCache) {
+                      // Tampilkan loading HANYA JIKA cache tidak valid/kosong
+                      container.innerHTML = `<div class="text-center py-10"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3"></i><p class="text-xs text-gray-500 font-bold">Memuat jadwal semua rider...</p></div>`;
+
+                      // Tarik Data dari Firebase
                       const scheduleRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_schedules');
                       const snapshot = await getDocs(scheduleRef);
                       
