@@ -858,14 +858,14 @@
 
             <!-- NOMINAL ADM BOX (BARU) -->
             <div class="bg-red-50 rounded-2xl p-4 mb-4 border border-red-100 shadow-inner">
-                <p class="text-[10px] text-red-500 font-bold uppercase tracking-wider mb-1">Tagihan ADM Minggu Lalu</p>
-                <h3 id="suspended-adm-amount" class="text-xs font-bold text-red-500 italic">puasa lik...?..enteni loading ya lik,tak ambil datane sit..</h3>
+                <p id="suspended-adm-title" class="text-[10px] text-red-500 font-bold uppercase tracking-wider mb-1">Total Tagihan Sistem (Minus)</p>
+                <h3 id="suspended-adm-amount" class="text-xs font-bold text-red-500 italic">Mengecek data...</h3>
             </div>
 
             <p class="text-sm text-gray-600 leading-relaxed mb-6 font-medium bg-gray-50 p-4 rounded-xl border border-gray-100">
-                "Setor ADM dulu ya om <strong id="suspended-name" class="text-orange-600"></strong>, jika sudah info ke admin, agar bisa mengakses aplikasi."
+                "Selesaikan tagihan dulu ya om <strong id="suspended-name" class="text-orange-600"></strong>, jika sudah info ke admin, agar bisa mengakses aplikasi."
             </p>
-            <a id="suspend-wa-btn" href="javascript:void(0)" onclick="openWaSelector('6281292802623', 'Halo Admin,saya sudah transfer ADM mingguan. Mohon dibuka akses aplikasi saya.')" class="w-full flex items-center justify-center py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-200 active:scale-95 transition-all">
+            <a id="suspend-wa-btn" href="javascript:void(0)" class="w-full flex items-center justify-center py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-200 active:scale-95 transition-all">
                 <i class="fa-brands fa-whatsapp text-xl mr-2"></i> Info Admin (WhatsApp)
             </a>
         </div>
@@ -5713,22 +5713,6 @@
                 prevWeeklyAdmEl.innerText = `Rp ${Math.round(prevWAdm).toLocaleString('id-ID')}`;
             }
             
-            // UPDATE TAMPILAN NOMINAL DI POPUP SUSPEND
-            const suspendedAdmEl = document.getElementById('suspended-adm-amount');
-            if(suspendedAdmEl) {
-                suspendedAdmEl.className = "text-3xl font-black text-red-600 tracking-tight";
-                suspendedAdmEl.innerText = `Rp ${Math.round(prevWAdm).toLocaleString('id-ID')}`;
-            }
-            // UPDATE LINK WHATSAPP AGAR MENYERTAKAN NOMINAL MENGGUNAKAN WA SELECTOR
-            const suspendWaBtn = document.getElementById('suspend-wa-btn');
-            if(suspendWaBtn) {
-                suspendWaBtn.href = "javascript:void(0)";
-                suspendWaBtn.onclick = (e) => {
-                    e.preventDefault();
-                    window.openWaSelector('6281292802623', `Halo Admin, saya sudah transfer ADM mingguan sebesar *Rp ${Math.round(prevWAdm).toLocaleString('id-ID')}*. Mohon dibuka akses aplikasi saya.`);
-                };
-            }
-
             document.getElementById('prev-weekly-order').innerText = `${prevWTrips} Selesai`;
             document.getElementById('prev-weekly-days').innerText = `${prevWDays.size} Hari`;
             document.getElementById('prev-weekly-gross').innerText = `Rp ${Math.round(prevWGross).toLocaleString('id-ID')}`;
@@ -9596,33 +9580,71 @@
               return;
           };
 
+          // --- FUNGSI UPDATE UI SUSPEND (SINKRON DENGAN SALDO DOMPET) ---
+          window.updateSuspensionUI = function() {
+              const overlay = document.getElementById('suspended-overlay');
+              if (!overlay) return;
+
+              if (window.isRiderSuspended) {
+                  overlay.classList.remove('hidden');
+                  overlay.classList.add('flex');
+
+                  const nameEl = document.getElementById('suspended-name');
+                  if (nameEl) nameEl.innerText = window.riderSuspendedName || "Rider";
+
+                  const suspendedAdmEl = document.getElementById('suspended-adm-amount');
+                  const suspendedTitleEl = document.getElementById('suspended-adm-title');
+                  const suspendWaBtn = document.getElementById('suspend-wa-btn');
+                  const currentSaldo = window.currentRiderWalletBalance || 0;
+
+                  // JIKA SALDO RIDER MINUS
+                  if (currentSaldo < 0) {
+                      const tagihan = Math.abs(currentSaldo);
+                      if (suspendedTitleEl) suspendedTitleEl.innerText = "Total Tagihan Sistem (Minus)";
+                      if (suspendedAdmEl) {
+                          suspendedAdmEl.className = "text-3xl font-black text-red-600 tracking-tight";
+                          suspendedAdmEl.innerText = `Rp ${tagihan.toLocaleString('id-ID')}`;
+                      }
+                      if (suspendWaBtn) {
+                          suspendWaBtn.onclick = (e) => {
+                              e.preventDefault();
+                              window.openWaSelector('6281292802623', `Halo Admin, saya sudah transfer pelunasan minus saldo sebesar *Rp ${tagihan.toLocaleString('id-ID')}*. Mohon dibuka kembali akses aplikasi saya.`);
+                          };
+                      }
+                  } 
+                  // JIKA DIBANNED TAPI SALDO AMAN (PELANGGARAN MANUAL)
+                  else {
+                      if (suspendedTitleEl) suspendedTitleEl.innerText = "Alasan Penangguhan";
+                      if (suspendedAdmEl) {
+                          suspendedAdmEl.className = "text-sm font-bold text-red-600 mt-2";
+                          suspendedAdmEl.innerText = `Pelanggaran / Manual Banned Admin`;
+                      }
+                      if (suspendWaBtn) {
+                          suspendWaBtn.onclick = (e) => {
+                              e.preventDefault();
+                              window.openWaSelector('6281292802623', `Halo Admin, akun saya ditangguhkan. Mohon info detailnya dan bagaimana cara membuka akses aplikasi saya kembali.`);
+                          };
+                      }
+                  }
+              } else {
+                  overlay.classList.add('hidden');
+                  overlay.classList.remove('flex');
+              }
+          };
+
           window.startSuspensionListener = (uid, name) => {
               if (!uid) return;
               const suspendRef = doc(db, 'artifacts', appId, 'public', 'data', 'rider_profiles', String(uid).trim().toUpperCase());
               
               onSnapshot(suspendRef, (docSnap) => {
-                  const overlay = document.getElementById('suspended-overlay');
                   if (docSnap.exists()) {
                       const data = docSnap.data();
-                      if (data.is_suspended) {
-                          if (overlay) {
-                              overlay.classList.remove('hidden');
-                              overlay.classList.add('flex');
-                          }
-                          const nameEl = document.getElementById('suspended-name');
-                          if (nameEl) nameEl.innerText = name || "Rider";
-                      } else {
-                          if (overlay) {
-                              overlay.classList.add('hidden');
-                              overlay.classList.remove('flex');
-                          }
-                      }
+                      window.isRiderSuspended = data.is_suspended === true;
+                      window.riderSuspendedName = name || "Rider";
                   } else {
-                      if (overlay) {
-                          overlay.classList.add('hidden');
-                          overlay.classList.remove('flex');
-                      }
+                      window.isRiderSuspended = false;
                   }
+                  window.updateSuspensionUI();
               });
           };
 
@@ -9761,6 +9783,10 @@
                       const data = docSnap.data();
                       const saldo = data.saldo || data.balance || 0;
                       
+                      // SIMPAN KE GLOBAL AGAR BISA DIAKSES OLEH POPUP SUSPEND
+                      window.currentRiderWalletBalance = saldo;
+                      window.updateSuspensionUI();
+                      
                       if (saldoEl) saldoEl.innerText = `Rp ${saldo.toLocaleString('id-ID')}`;
 
                       // Mengubah warna kartu berdasarkan jumlah saldo
@@ -9799,6 +9825,9 @@
                       
                   } else {
                       // Jika dokumen belum dibuat oleh admin
+                      window.currentRiderWalletBalance = 0;
+                      window.updateSuspensionUI();
+
                       if (saldoEl) {
                           saldoEl.innerText = "Rp 0";
                           saldoEl.className = "text-3xl font-black text-gray-600";
