@@ -8894,11 +8894,10 @@
               // EKSTRA PROTEKSI: Kosongkan UI secara instan saat radar mulai dinyalakan
               // Mencegah sisa antrean lama (nyangkut) berkedip sebelum data Firebase masuk
               const container = document.getElementById('radar-queue-list');
-              const myPosEl = document.getElementById('my-queue-position');
+              // myPosEl tidak dikosongkan di sini agar angka dari admin tetap tampil
               if (container) {
                   container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-6"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3 block"></i> Menghubungkan ke Radar...</div>`;
               }
-              if (myPosEl) myPosEl.innerText = '#--';
 
               const statusRef = collection(db, '/status_rider_aktif');
               
@@ -8925,34 +8924,59 @@
                   const container = document.getElementById('radar-queue-list');
                   const myPosEl = document.getElementById('my-queue-position');
                   
+                  // PENGAMAN GANDA: Langsung update Angka Antrean di sini
+                  if (myPosEl) {
+                      if (myStatus && myStatus.queue_number !== undefined && myStatus.queue_number !== null) {
+                          myPosEl.innerText = `#${myStatus.queue_number}`;
+                      } else {
+                          myPosEl.innerText = '#--';
+                      }
+                  }
+
                   if (!container) return;
                   
                   // CEK JIKA RIDER SEDANG MENUNGGU ADMIN
                   if (myStatus && myStatus.is_online && myStatus.is_available && !myStatus.in_main_queue) {
-                      container.innerHTML = `
-                          <div class="flex flex-col items-center justify-center p-6 bg-orange-50 rounded-2xl border border-orange-200 shadow-inner mt-2">
-                              <i class="fa-solid fa-hourglass-half text-3xl text-orange-400 mb-3"></i>
-                              <p class="text-xs font-bold text-orange-600 text-center leading-relaxed">
-                                  "tunggu yah antrianmu sedang disiapkan admin"
-                              </p>
-                          </div>
-                      `;
-                      if (myPosEl) myPosEl.innerText = 'Tunggu';
-                      return;
-                  }
+        window.proceedWithLogin = function(uid) {
+            currentUserUID = uid;
+            
+            // Simpan UID ke local storage SETELAH lolos keamanan
+            localStorage.setItem('rider_uid', currentUserUID); 
 
-                  // NEW: Sortir berdasarkan waktu drop pesanan terakhir (Siapa drop paling lama = paling atas)
-                  onlineRiders.sort((a, b) => {
-                      const timeA = a.last_drop_time ? a.last_drop_time.seconds : (a.last_updated ? a.last_updated.seconds : 0);
-                      const timeB = b.last_drop_time ? b.last_drop_time.seconds : (b.last_updated ? b.last_updated.seconds : 0);
-                      return timeA - timeB; // Ascending: waktu terkecil (paling lama) = antrean pertama
-                  });
-                  
-                  if (onlineRiders.length === 0) {
-                      container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-2">Belum ada rider di antrean radar.</div>`;
-                      if (myPosEl) myPosEl.innerText = '#--';
-                      return;
-                  }
+            // Trigger Listeners Global
+            if (typeof window.startSuspensionListener === 'function') window.startSuspensionListener(currentUserUID);
+            if (typeof window.startOrderListener === 'function') window.startOrderListener(currentUserUID);
+            if (typeof window.startDeviceListener === 'function') window.startDeviceListener(currentUserUID);
+            if (typeof window.startWalletListener === 'function') window.startWalletListener(currentUserUID);
+            if (typeof window.startScheduleListener === 'function') window.startScheduleListener(currentUserUID);
+            if (typeof window.startInstallmentsListener === 'function') window.startInstallmentsListener(currentUserUID);
+            if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID);
+            
+            document.getElementById('login-page').style.display = 'none'; 
+            document.getElementById('loading-overlay').style.display = 'flex';
+            fetchData();
+        }
+            // Memicu pengecekan penangguhan/kontrol rider jika modul Firebase sudah termuat
+            if (typeof window.startSuspensionListener === 'function') {
+                window.startSuspensionListener(currentUserUID, name);
+                window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
+                if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
+                if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID);
+            } else {
+                // Beri jeda kecil jika Firebase module masih memuat
+                setTimeout(() => {
+                    if (typeof window.startSuspensionListener === 'function') {
+                        window.startSuspensionListener(currentUserUID, name);
+                        window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
+                        if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
+                        if (typeof window.startMyStatusListener === 'function') window.startMyStatusListener(currentUserUID);
+                    }
+                }, 1000);
+            }
+
+            processData();
+            checkAdmPaymentStatus();
+        }
 
               // PERBAIKAN KUOTA BACA: Menghapus getDoc berulang di dalam onSnapshot yang menyebabkan kuota jebol (1.28M reads/hari).
               // Nilai last_drop_image sudah diset dan berisi URL/Base64 langsung dari status_rider_aktif saat selesai order.
@@ -8993,15 +9017,13 @@
               });
 
               let html = '';
-              let myRank = '--';
               
-              ridersWithImages.forEach((rider, index) => {
-                      const rank = index + 1;
+              ridersWithImages.forEach((rider) => {
+                      // Langsung ambil angka antrean dari field queue_number
+                      const rank = rider.queue_number !== undefined ? rider.queue_number : '--';
                       const uidClean = String(rider.uid || '').trim().toUpperCase();
                       const myUidClean = String(currentUserUID).trim().toUpperCase();
                       const isMe = uidClean === myUidClean;
-                      
-                      if (isMe) myRank = rank;
 
                       const name = rider.name || 'Rider';
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
@@ -9059,7 +9081,6 @@
                   });
                   
                   container.innerHTML = html;
-                  if (myPosEl) myPosEl.innerText = `#${myRank}`;
                   
               }, (error) => {
                   console.error("Error fetching queue:", error);
@@ -9080,9 +9101,7 @@
               if (container) {
                   container.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-satellite-dish text-4xl text-gray-200 mb-3 block"></i>Radar dimatikan.</div>';
               }
-              if (myPosEl) {
-                  myPosEl.innerText = '#--';
-              }
+              // myPosEl tidak diubah agar nomor antrean tetap tampil walaupun toggle OFF
           };
 
           // FUNGSI CEK NOTIFIKASI UNREAD
@@ -9629,6 +9648,16 @@
                       const data = docSnap.data();
                       const toggle = document.getElementById('onbid-toggle');
                       
+                      // TAMPILKAN NOMOR ANTREAN DARI ADMIN (BEKERJA WALAUPUN TOGGLE OFF)
+                      const myPosEl = document.getElementById('my-queue-position');
+                      if (myPosEl) {
+                          if (data.queue_number !== undefined && data.queue_number !== null) {
+                              myPosEl.innerText = `#${data.queue_number}`;
+                          } else {
+                              myPosEl.innerText = '#--';
+                          }
+                      }
+                      
                       // LOGIKA REMOTE KILL: Jika Firebase bilang offline, tapi toggle di layar masih menyala (true)
                       if (data.is_online === false && toggle && toggle.checked === true) {
                           console.log("Remote Force Kill: Mematikan status On-Bid dari sistem/admin.");
@@ -9884,80 +9913,24 @@
           let scheduleUnsubscribe = null;
 
           window.startScheduleListener = (uid) => {
-              if (!uid || !isAuthReady) return;
-              const cleanUid = String(uid).trim().toUpperCase();
-
+              // FUNGSI INI DINONAKTIFKAN
+              // Sesuai instruksi, jadwal libur sepenuhnya dialihkan ke Google Apps Script (Teks Murni).
+              // Tidak perlu lagi memantau / menarik data dari Firebase (rider_schedules) untuk menghemat kuota.
               if (scheduleUnsubscribe) {
                   scheduleUnsubscribe();
+                  scheduleUnsubscribe = null;
               }
-
-              // PATH DATABASE: Mengambil jadwal libur dari /artifacts/onbid-2f87a/public/data/rider_schedules/{UID}
-              const targetProjectId = firebaseConfig.projectId; // onbid-2f87a
-              const scheduleRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_schedules', cleanUid);
-
-              scheduleUnsubscribe = onSnapshot(scheduleRef, (docSnap) => {
-                  const container = document.getElementById('recommended-off-days-container');
-                  if (!container) return;
-
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      
-                      const currentLeaveDate = data.current_leave_date;
-                      
-                      if (currentLeaveDate && String(currentLeaveDate).trim() !== "") {
-                          let formattedDate = currentLeaveDate;
-                          try {
-                              let parsedDate = new Date(currentLeaveDate);
-                              // Deteksi manual jika admin memakai format DD-MM-YYYY (mengatasi Invalid Date di JS)
-                              if (isNaN(parsedDate.getTime())) {
-                                  const parts = currentLeaveDate.split(/[-/]/);
-                                  if (parts.length === 3) {
-                                      if (parts[2].length === 4) { // Format DD-MM-YYYY
-                                          parsedDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-                                      } else if (parts[0].length === 4) { // Format YYYY-MM-DD
-                                          parsedDate = new Date(`${parts[0]}-${parts[1]}-${parts[2]}`);
-                                      }
-                                  }
-                              }
-                              
-                              // Jika tanggal valid, ubah ke format Indonesia lengkap
-                              if (!isNaN(parsedDate.getTime())) {
-                                  formattedDate = parsedDate.toLocaleDateString('id-ID', {
-                                      weekday: 'long',
-                                      day: 'numeric',
-                                      month: 'long',
-                                      year: 'numeric'
-                                  });
-                              }
-                          } catch (e) {
-                              console.warn("Gagal parse format tanggal libur:", e);
-                          }
-                          
-                          // Menggunakan class capitalize agar huruf depannya saja yang besar (Senin, 6 April 2026)
-                          container.innerHTML = `<span class="bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider shadow-sm capitalize">${formattedDate}</span>`;
-                      } else {
-                          container.innerHTML = '<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800/80 px-3 py-1.5 rounded-lg border border-gray-700/50">Tidak ada jadwal libur (Full Masuk)</span>';
-                      }
-                  } else {
-                      // Jika dokumen belum dibuat oleh admin
-                      container.innerHTML = '<span class="text-[10px] text-gray-400 font-bold italic bg-gray-800/80 px-3 py-1.5 rounded-lg border border-gray-700/50">Belum diatur Admin</span>';
-                  }
-              }, (error) => {
-                  console.error("Error fetching schedule:", error);
-                  const container = document.getElementById('recommended-off-days-container');
-                  if (container) container.innerHTML = '<span class="text-[10px] text-red-400 font-bold italic bg-red-900/30 px-3 py-1.5 rounded-lg border border-red-800/50">Gagal memuat jadwal</span>';
-              });
+              console.log("Firebase Schedule Listener dinonaktifkan (Pindah ke GAS).");
           };
 
           // -------------------------------------------------------------
           // NEW: FUNGSI AMBIL JADWAL OFF SEMUA RIDER (DENGAN CACHE)
           // -------------------------------------------------------------
-          window.fetchAllRidersScheduleData = async (targetContainerId = 'all-riders-schedule-list') => {
+          window.fetchAllRidersScheduleData = async (targetContainerId = 'inline-all-riders-schedule-list') => {
               const container = document.getElementById(targetContainerId);
               if(!container) return;
 
               try {
-                  const targetProjectId = firebaseConfig.projectId;
                   const cacheKey = 'all_riders_schedule_cache';
                   const cacheTimeKey = 'all_riders_schedule_cache_time';
                   const cacheDuration = 1000 * 60 * 60 * 24 * 6; // Cache berlaku 6 Hari agar sangat hemat kuota
@@ -9979,13 +9952,23 @@
                       // Tampilkan loading HANYA JIKA cache tidak valid/kosong
                       container.innerHTML = `<div class="text-center py-10"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3"></i><p class="text-xs text-gray-500 font-bold">Memuat jadwal semua rider...</p></div>`;
 
-                      // Tarik Data dari Firebase
-                      const scheduleRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_schedules');
-                      const snapshot = await getDocs(scheduleRef);
+                      // --- PERUBAHAN: TARIK DATA DARI GOOGLE APPS SCRIPT (BUKAN FIREBASE) ---
+                      // Memanggil action=getAllSchedules untuk mengambil seluruh jadwal rider dalam bentuk teks murni
+                      const endpoint = `https://script.google.com/macros/s/AKfycby5fdgopf9gCle1qUVZpfTObuICIMZ1DZWBvuYJAct4C1yj-S52gWNaOffYCJtDq2k/exec?action=getAllSchedules`;
                       
-                      snapshot.forEach(docSnap => {
-                          scheduleDocs.push({ id: docSnap.id, data: docSnap.data() });
-                      });
+                      const response = await fetch(endpoint);
+                      if (!response.ok) throw new Error("Gagal mengambil jadwal");
+                      
+                      const responseData = await response.json();
+                      
+                      // Menangani format JSON balikan dari Apps Script (Fleksibel)
+                      if (responseData.success && Array.isArray(responseData.data)) {
+                          scheduleDocs = responseData.data;
+                      } else if (Array.isArray(responseData)) {
+                          scheduleDocs = responseData;
+                      } else {
+                          scheduleDocs = [];
+                      }
 
                       // Simpan ke Cache
                       localStorage.setItem(cacheKey, JSON.stringify(scheduleDocs));
@@ -10011,42 +9994,47 @@
 
                   let groupsMap = new Map(); 
 
-                  scheduleDocs.forEach(docItem => {
-                      const data = docItem.data;
-                      const uid = docItem.id;
+                  scheduleDocs.forEach(data => {
+                      const uid = String(data.uid || data.UID || '').trim().toUpperCase();
+                      if (!uid) return;
                       
-                      // --- PERBAIKAN: MENCEGAH UID TAMPIL SEBAGAI NAMA ---
+                      // --- MENCEGAH UID TAMPIL SEBAGAI NAMA ---
                       let info = uidToInfo[uid] || { name: '', phone: '' };
-                      let name = info.name;
+                      let name = data.nama_rider || data.rider_name || data.name || data.nama || info.name;
                       
-                      // Coba ambil dari dokumen jadwal jika di profil kosong
-                      if (!name || name === uid) {
-                          name = data.rider_name || data.nama_rider || data.name || data.nama;
-                      }
-                      
-                      // Jika tetap kosong/hanya berisi UID, paksa ganti jadi "Rider" agar privasi aman
+                      // Jika tetap kosong/hanya berisi UID, paksa ganti jadi "Rider"
                       if (!name || name === uid) {
                           name = "Rider";
                       }
                       
-                      const phone = info.phone;
+                      const phone = data.phone || data.whatsapp || info.phone;
                       const isMe = uid === (localStorage.getItem('rider_uid') || '').trim().toUpperCase();
                       
-                      // AMBIL DATA PERSIS DARI current_leave_date SAJA (Tanpa Manipulasi Hari)
-                      const leaveDate = data.current_leave_date;
+                      // AMBIL TANGGAL TEKS MURNI DARI GAS (Tanpa Parse Zona Waktu / Timestamp)
+                      // Karena bentuknya langsung teks seperti "15 April 2026" atau "Rabu, 15 April 2026"
+                      const leaveDate = data.tanggal || data.tanggal_libur || data.current_leave_date || data.leave_date || data.rekomendasi_tanggal;
+                      const leaveHari = data.hari || data.hari_libur || data.rekomendasi_hari || "";
                       
-                      if (leaveDate && String(leaveDate).trim() !== "") {
-                          const label = String(leaveDate).trim();
-                          if (!groupsMap.has(label)) {
-                              groupsMap.set(label, { label: label, riders: [] });
+                      if (leaveDate && String(leaveDate).trim() !== "" && String(leaveDate).trim() !== "-") {
+                          let rawDateStr = String(leaveDate).trim();
+                          let formattedLabel = rawDateStr;
+                          
+                          // Gabung dengan Hari jika dari script dipisah (contoh: Hari="Rabu", Tanggal="15 April 2026" -> "Rabu, 15 April 2026")
+                          if (leaveHari && !rawDateStr.toLowerCase().includes(leaveHari.toLowerCase())) {
+                              formattedLabel = `${leaveHari}, ${rawDateStr}`;
                           }
-                          if (!groupsMap.get(label).riders.some(r => r.uid === uid)) {
-                              groupsMap.get(label).riders.push({ name, uid, isMe, phone });
+
+                          if (!groupsMap.has(formattedLabel)) {
+                              groupsMap.set(formattedLabel, { label: formattedLabel, riders: [] });
+                          }
+                          if (!groupsMap.get(formattedLabel).riders.some(r => r.uid === uid)) {
+                              groupsMap.get(formattedLabel).riders.push({ name, uid, isMe, phone });
                           }
                       }
                   });
 
                   const sortedGroups = Array.from(groupsMap.values());
+                  // Urutkan berdasarkan abjad teks tanggal (karena murni teks)
                   sortedGroups.sort((a, b) => a.label.localeCompare(b.label));
 
                   if (sortedGroups.length === 0) {
@@ -10082,7 +10070,7 @@
                               <div class="bg-orange-50/80 px-4 py-2.5 border-b border-orange-100 flex items-center justify-between">
                                   <div class="flex items-center gap-2">
                                       <i class="fa-solid fa-calendar-day text-orange-500"></i>
-                                      <h4 class="font-bold text-orange-800 text-sm uppercase tracking-wide">${group.label}</h4>
+                                      <h4 class="font-bold text-orange-800 text-sm capitalize tracking-wide">${group.label}</h4>
                                   </div>
                                   <span class="text-[10px] font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-md">${group.riders.length} Rider</span>
                               </div>
@@ -10099,8 +10087,8 @@
                   container.innerHTML = html;
 
               } catch (error) {
-                  console.error("Gagal memuat jadwal semua rider:", error);
-                  container.innerHTML = `<div class="text-center py-10 text-red-400"><i class="fa-solid fa-triangle-exclamation text-4xl mb-3"></i><p class="text-xs font-bold">Gagal mengambil data.</p><button onclick="window.fetchAllRidersScheduleData()" class="mt-4 text-[10px] bg-red-50 hover:bg-red-100 transition-colors text-red-600 px-4 py-2 rounded-lg font-bold">Coba Lagi</button></div>`;
+                  console.error("Gagal memuat jadwal semua rider dari GAS:", error);
+                  container.innerHTML = `<div class="text-center py-10 text-red-400"><i class="fa-solid fa-triangle-exclamation text-4xl mb-3"></i><p class="text-xs font-bold">Gagal mengambil data jadwal.</p><button onclick="window.fetchAllRidersScheduleData()" class="mt-4 text-[10px] bg-red-50 hover:bg-red-100 transition-colors text-red-600 px-4 py-2 rounded-lg font-bold">Coba Lagi</button></div>`;
               }
           };
 
