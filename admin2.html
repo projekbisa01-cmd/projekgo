@@ -620,6 +620,7 @@
         window.currentHistoryData = []; 
         window.hideActiveBadge = false; 
         const processingMissedOrders = new Set(); 
+        let isBalancesLoaded = false;
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
@@ -684,13 +685,11 @@
         }
 
         function checkAndEnforceRiderBalances() {
-            if (allRiders.length === 0 || allRiderBalances.length === 0) return;
+            if (allRiders.length === 0 || !isBalancesLoaded) return;
             
             allRiders.forEach(rider => {
                 const balanceData = allRiderBalances.find(b => b.uid === rider.uid);
-                if (!balanceData) return;
-                
-                const saldo = parseInt(balanceData.saldo || 0);
+                const saldo = balanceData ? parseInt(balanceData.saldo || 0) : 0;
 
                 const inQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
                 const isAvailable = rider.is_available === true || rider.is_available === 'true';
@@ -1076,17 +1075,16 @@
 
                 checkOfflineRiders();
 
+                // LOGIKA ANTREAN BARU: Murni berdasarkan last_drop_time (Waktu DO atau Waktu Masuk Radar)
                 mainQueueRiders.sort((a, b) => {
                     let timeA = getTimestampMs(a.last_drop_time);
-                    if (timeA === 0) timeA = getTimestampMs(a.last_updated);
-                    
                     let timeB = getTimestampMs(b.last_drop_time);
-                    if (timeB === 0) timeB = getTimestampMs(b.last_updated);
                     
-                    if (timeA === 0) timeA = Date.now();
-                    if (timeB === 0) timeB = Date.now();
+                    // Jika waktu 0 (belum pernah DO / bug), taruh di atas
+                    if (timeA === 0) timeA = 1; 
+                    if (timeB === 0) timeB = 1;
 
-                    return timeA - timeB; 
+                    return timeA - timeB; // Ascending: Waktu Terlama = Urutan Teratas
                 });
 
                 newShiftRiders.sort((a, b) => {
@@ -1197,50 +1195,13 @@
             
             const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             
+            // Filter rider yang sedang tidak bawa orderan
             let availableMainQueue = mainQueueRiders.filter(r => {
                 return !busyUids.has(r.uid);
             });
 
-            if (!window.lockedQueueOrder) {
-                try {
-                    window.lockedQueueOrder = JSON.parse(localStorage.getItem('projekgo_locked_queue')) || [];
-                } catch(e) {
-                    window.lockedQueueOrder = [];
-                }
-            }
-            
-            const availableUidsSet = new Set(availableMainQueue.map(r => r.uid));
-            window.lockedQueueOrder = window.lockedQueueOrder.filter(uid => availableUidsSet.has(uid));
-
-            const lockedUidsSet = new Set(window.lockedQueueOrder);
-            const newRidersToLock = availableMainQueue.filter(r => !lockedUidsSet.has(r.uid));
-
-            newRidersToLock.sort((a, b) => {
-                let timeA = getTimestampMs(a.last_drop_time) || getTimestampMs(a.last_updated) || Date.now();
-                let timeB = getTimestampMs(b.last_drop_time) || getTimestampMs(b.last_updated) || Date.now();
-                return timeA - timeB; 
-            });
-
-            newRidersToLock.forEach(r => {
-                let rTime = getTimestampMs(r.last_drop_time);
-                if (rTime > 0 && rTime < 1500000000000) { 
-                    window.lockedQueueOrder.unshift(r.uid); 
-                } else {
-                    window.lockedQueueOrder.push(r.uid); 
-                }
-            });
-
-            try {
-                localStorage.setItem('projekgo_locked_queue', JSON.stringify(window.lockedQueueOrder));
-            } catch(e) {}
-
-            const lockedFinalQueue = [];
-            window.lockedQueueOrder.forEach(uid => {
-                const rider = availableMainQueue.find(r => r.uid === uid);
-                if (rider) lockedFinalQueue.push(rider);
-            });
-
-            availableMainQueue = lockedFinalQueue;
+            // HAPUS SISTEM LOCK LOCALSTORAGE YANG BIKIN LONCAT/ERROR
+            // Antrean sekarang murni mengikuti array mainQueueRiders yang sudah di-sort dengan benar di listener
 
             if(countEl) countEl.innerText = availableMainQueue.length;
 
@@ -1257,6 +1218,11 @@
             availableMainQueue.forEach((rider, index) => {
                 const isFirst = index === 0;
                 
+                const balanceData = allRiderBalances.find(b => b.uid === rider.uid);
+                const saldo = balanceData ? parseInt(balanceData.saldo || 0) : 0;
+                const isMinim = saldo > 0 && saldo < 10000;
+                const isKosong = saldo <= 0;
+
                 let ketLokasi = "Posisi / Standby";
 
                 let orderProofDesc = "";
@@ -1291,28 +1257,45 @@
                 const isAvailable = rider.is_available === true || rider.is_available === 'true';
                 
                 let statusBadge = '';
-                if (!isActuallyOnline) {
+                if (isKosong) {
+                    statusBadge = `<span class="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-red-200 ml-1.5 align-middle animate-pulse"><i class="fa-solid fa-ban"></i> SALDO 0</span>`;
+                } else if (isMinim) {
+                    statusBadge = `<span class="bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-rose-200 ml-1.5 align-middle animate-pulse" title="Saldo kritis di bawah 10rb"><i class="fa-solid fa-wallet"></i> < 10k</span>`;
+                } else if (!isActuallyOnline) {
                     statusBadge = `<span class="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-200 ml-1.5 align-middle" title="Sinyal Rider Hilang / Aplikasi Tertutup / Off-Bid"><i class="fa-solid fa-triangle-exclamation"></i> Sinyal Jelek</span>`;
                 } else if (!isAvailable) {
                     statusBadge = `<span class="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[8px] font-bold border border-slate-200 ml-1.5 align-middle" title="Rider mematikan status tersedia"><i class="fa-solid fa-pause"></i> Tidak Tersedia</span>`;
                 }
 
                 let timeOnbidStr = '--:--';
-                const timeRawMs = getTimestampMs(rider.last_drop_time) || getTimestampMs(rider.last_updated);
+                const timeRawMs = getTimestampMs(rider.last_drop_time);
                 if (timeRawMs > 0) {
                     const d = new Date(timeRawMs);
                     timeOnbidStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                 }
                 
                 const cardOpacity = (!isActuallyOnline || !isAvailable) ? 'opacity-75 bg-slate-50' : 'bg-white';
-                const rankBadgeClass = (isFirst && isActuallyOnline && isAvailable) ? 'btn-primary text-white' : 'bg-slate-100 text-slate-500';
+                
+                // Styling nomor urut berdasarkan saldo
+                let rankBadgeClass = 'bg-slate-100 text-slate-500';
+                let rankContent = index + 1;
+                
+                if (isKosong) {
+                    rankBadgeClass = 'bg-red-100 text-red-500';
+                    rankContent = '<i class="fa-solid fa-ban text-[10px]"></i>';
+                } else if (isMinim) {
+                    rankBadgeClass = 'bg-rose-100 text-rose-500';
+                    rankContent = '<i class="fa-solid fa-triangle-exclamation text-[10px]"></i>';
+                } else if (isFirst && isActuallyOnline && isAvailable) {
+                    rankBadgeClass = 'btn-primary text-white';
+                }
 
                 html += `
                     <div onclick="window.selectRider('${rider.uid}', '${displayName}')" 
                          class="rider-card cursor-pointer p-3 rounded-2xl border border-gray-100 ${cardOpacity} hover:border-sky-300 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm relative group" 
                          id="rider-card-${rider.uid}">
                         <div class="flex items-center gap-3 overflow-hidden pr-8 w-full">
-                            <div class="w-8 h-8 rounded-full ${rankBadgeClass} flex items-center justify-center font-black text-xs shrink-0">${index + 1}</div>
+                            <div class="w-8 h-8 rounded-full ${rankBadgeClass} flex items-center justify-center font-black text-xs shrink-0">${rankContent}</div>
                             <div class="overflow-hidden w-full">
                                 <p class="font-black text-black text-[12px] leading-tight truncate">${displayName} ${statusBadge}</p>
                                 
@@ -1392,11 +1375,12 @@
                     const now = new Date();
                     const promises = availableNewShift.map((rider, index) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        // Memberikan waktu Sesuai Urutan Masuk (1 detik selisih tiap rider) agar tertata rapi di paling bawah
                         const simulatedTime = new Date(now.getTime() + (index * 1000));
                         return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
                     });
                     await Promise.all(promises);
-                    window.showAlert('Berhasil', 'Rider masuk ke Antrean Radar.', 'success');
+                    window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar paling bawah secara berurutan.', 'success');
                 } catch (error) {
                     window.showAlert('Gagal', 'Terjadi kesalahan.', 'error');
                 } finally {
@@ -1411,8 +1395,9 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     const ref = doc(db, 'status_rider_aktif', uid);
+                    // Diberi waktu SEKARANG agar letaknya murni di antrean paling bawah
                     await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
-                    window.showAlert('Berhasil', `${name} masuk ke Antrean Radar.`, 'success');
+                    window.showAlert('Berhasil', `${name} diletakkan di antrean paling bawah.`, 'success');
                 } catch (error) {
                     window.showAlert('Gagal', 'Terjadi kesalahan.', 'error');
                 } finally {
@@ -2399,6 +2384,7 @@
         function startRiderBalancesListener() {
             const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
             onSnapshot(balancesCol, (snapshot) => {
+                isBalancesLoaded = true;
                 allRiderBalances = [];
                 snapshot.forEach(docSnap => {
                     allRiderBalances.push({ id: docSnap.id, ...docSnap.data() });
