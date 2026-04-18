@@ -629,6 +629,12 @@
                         </button>
                     </div>
 
+                    <!-- TOMBOL CHAT BEBAS (BARU) -->
+                    <button onclick="window.chatBebasCustomer()" class="w-full mt-3 py-3 bg-green-50 hover:bg-green-100 text-green-600 font-bold rounded-xl border border-green-200 shadow-sm active:scale-95 transition-all flex items-center justify-center gap-2">
+                        <i class="fa-regular fa-comment-dots text-lg"></i>
+                        <span class="text-[11px] uppercase tracking-wider font-bold">Chat Bebas (Tanpa Template)</span>
+                    </button>
+
                     <!-- INFO JUMLAH ANTREAN (TANPA ANIMASI) -->
                     <div class="w-full mt-3 p-3 bg-orange-50 rounded-xl border border-orange-100 flex justify-between items-center">
                         <div class="flex items-center gap-2 text-orange-600">
@@ -690,9 +696,12 @@
             </div>
         </main>
 
-        <footer class="p-5 bg-white border-t border-gray-100 fixed bottom-0 left-0 w-full z-20 shadow-[0_-10px_20px_rgba(0,0,0,0.02)]">
+        <footer class="p-5 bg-white border-t border-gray-100 fixed bottom-0 left-0 w-full z-20 shadow-[0_-10px_20px_rgba(0,0,0,0.02)] space-y-3">
             <button id="btn-finish-order" disabled class="w-full py-4 bg-gray-300 text-white font-black rounded-2xl shadow-lg transition-all text-sm uppercase tracking-widest cursor-not-allowed flex justify-center items-center gap-2">
                 <i class="fa-solid fa-lock" id="finish-lock-icon"></i> Selesaikan Order
+            </button>
+            <button id="btn-finish-and-rest" disabled class="w-full py-3 bg-gray-100 text-gray-400 font-bold rounded-2xl shadow-sm transition-all text-xs uppercase tracking-widest cursor-not-allowed flex justify-center items-center gap-2 border border-gray-200">
+                <i class="fa-solid fa-mug-hot" id="rest-lock-icon"></i> Selesai & Istirahat
             </button>
         </footer>
     </div>
@@ -8472,12 +8481,26 @@
               if (btnFinishOrder) {
                   btnFinishOrder.innerHTML = '<i class="fa-solid fa-lock" id="finish-lock-icon"></i> Selesaikan Order';
               }
+              const btnFinishAndRest = document.getElementById('btn-finish-and-rest');
+              if (btnFinishAndRest) {
+                  btnFinishAndRest.innerHTML = '<i class="fa-solid fa-mug-hot" id="rest-lock-icon"></i> Selesai & Istirahat';
+              }
               
               window.validateFinishOrder();
               
               // Bersihkan ID Aktif
               window.currentActiveOrderId = null;
           }
+
+          // FUNGSI BARU: CHAT BEBAS TANPA TEMPLATE
+          window.chatBebasCustomer = function() {
+              if (!window.currentActiveCustomerPhone || window.currentActiveCustomerPhone === "-") {
+                  alert("Nomor telepon pelanggan tidak tersedia di sistem.");
+                  return;
+              }
+              const phoneStr = window.currentActiveCustomerPhone.replace(/^0/, '62');
+              window.openWaSelector(phoneStr, ""); // Mengirim pesan kosong (string kosong)
+          };
 
           // Ekspos fungsi ke Window untuk HTML onclick/onchange
           window.previewFinishPhoto = async (input) => {
@@ -8548,6 +8571,8 @@
               const desc = descEl ? descEl.value.trim() : '';
               const btn = document.getElementById('btn-finish-order');
               const icon = document.getElementById('finish-lock-icon');
+              
+              const btnRest = document.getElementById('btn-finish-and-rest');
 
               if (!btn) return;
 
@@ -8556,11 +8581,27 @@
                   btn.classList.replace('bg-gray-300', 'bg-orange-600');
                   btn.classList.replace('cursor-not-allowed', 'active:scale-95');
                   if (icon) icon.classList.replace('fa-lock', 'fa-check-circle');
+                  
+                  if (btnRest) {
+                      btnRest.disabled = false;
+                      btnRest.classList.replace('bg-gray-100', 'bg-red-50');
+                      btnRest.classList.replace('text-gray-400', 'text-red-600');
+                      btnRest.classList.replace('border-gray-200', 'border-red-200');
+                      btnRest.classList.replace('cursor-not-allowed', 'active:scale-95');
+                  }
               } else {
                   btn.disabled = true;
                   btn.classList.replace('bg-orange-600', 'bg-gray-300');
                   btn.classList.replace('active:scale-95', 'cursor-not-allowed');
                   if (icon) icon.classList.replace('fa-check-circle', 'fa-lock');
+                  
+                  if (btnRest) {
+                      btnRest.disabled = true;
+                      btnRest.classList.replace('bg-red-50', 'bg-gray-100');
+                      btnRest.classList.replace('text-red-600', 'text-gray-400');
+                      btnRest.classList.replace('border-red-200', 'border-gray-200');
+                      btnRest.classList.replace('active:scale-95', 'cursor-not-allowed');
+                  }
               }
           };
 
@@ -8757,22 +8798,49 @@
 
           if (btnFinishOrder) {
               // UBAH: Sekarang mengarah ke Feedback WA dulu, bukan langsung pembayaran
-              btnFinishOrder.addEventListener('click', window.validateAndShowFeedbackPopup);
+              btnFinishOrder.addEventListener('click', () => {
+                  window.isRestingAfterFinish = false;
+                  window.validateAndShowFeedbackPopup();
+              });
+          }
+          
+          const btnFinishAndRest = document.getElementById('btn-finish-and-rest');
+          if (btnFinishAndRest) {
+              btnFinishAndRest.addEventListener('click', () => {
+                  window.isRestingAfterFinish = true;
+                  window.validateAndShowFeedbackPopup();
+              });
           }
 
           // --- FUNGSI ASLI UNTUK MENYELESAIKAN ORDER & KIRIM KE FIREBASE ---
           async function executeFinishOrder() {
               const desc = document.getElementById('finish-photo-desc').value.trim();
               const btnMain = document.getElementById('btn-finish-order');
-              const originalHtml = btnMain.innerHTML;
+              const btnRest = document.getElementById('btn-finish-and-rest');
               
-              btnMain.disabled = true;
-              btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
+              const isResting = window.isRestingAfterFinish === true;
+              
+              const originalHtmlMain = btnMain ? btnMain.innerHTML : '';
+              const originalHtmlRest = btnRest ? btnRest.innerHTML : '';
+              
+              if (btnMain) {
+                  btnMain.disabled = true;
+                  btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
+              }
+              if (btnRest) {
+                  btnRest.disabled = true;
+                  if (isResting) {
+                      btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
+                  }
+              }
+              
               window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
               
               try {
                   // --- LOGIKA BARU: UPLOAD FOTO KE IMGBB (GRATIS & CEPAT) ---
-                  btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                  if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                  if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                  
                   let proofImageUrl = ""; 
                   
                   try {
@@ -8804,14 +8872,22 @@
                   } catch (uploadErr) {
                       console.error("Gagal mengunggah ke ImgBB:", uploadErr);
                       alert("Gagal mengunggah foto! Pastikan koneksi internet stabil.");
-                      btnMain.disabled = false;
-                      btnMain.innerHTML = originalHtml;
+                      if (btnMain) {
+                          btnMain.disabled = false;
+                          btnMain.innerHTML = originalHtmlMain;
+                      }
+                      if (btnRest) {
+                          btnRest.disabled = false;
+                          btnRest.innerHTML = originalHtmlRest;
+                      }
                       window.isFinishingOrder = false;
                       return; // HENTIKAN PROSES! Jangan lanjutkan jika foto gagal
                   }
 
                   // 1. Update status order menjadi completed di koleksi Admin
-                  btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
+                  if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
+                  if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
+                  
                   const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
                   await updateDoc(orderRef, {
                       status: 'completed',
@@ -8821,11 +8897,24 @@
                   });
                   
                   const isToggleOn = document.getElementById('onbid-toggle').checked;
+                  let newOnbidStatus = isToggleOn;
+
+                  if (isResting) {
+                      newOnbidStatus = false;
+                      const toggle = document.getElementById('onbid-toggle');
+                      if (toggle) toggle.checked = false;
+                      if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
+                      localStorage.setItem('rider_onbid_status', 'false');
+                      if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
+                      
+                      window.isRestingAfterFinish = false; // Reset flag
+                  }
+                  
                   const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
                   await setDoc(statusRef, { 
-                      is_available: true, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
-                      is_online: isToggleOn,
-                      in_main_queue: isToggleOn,
+                      is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
+                      is_online: newOnbidStatus,
+                      in_main_queue: newOnbidStatus,
                       last_drop_time: serverTimestamp(),
                       last_drop_desc: desc,
                       last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
@@ -8861,7 +8950,7 @@
                   hideActiveOrderOverlay();
                   
                   // PENEGASAN: Pastikan memori dan Android service tidak terputus setelah order selesai
-                  if (isToggleOn) {
+                  if (newOnbidStatus) {
                       localStorage.setItem('rider_onbid_status', 'true');
                       if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
                   }
@@ -8881,16 +8970,18 @@
               } catch (e) {
                   console.error("Error update status selesai:", e);
                   alert("Gagal menyelesaikan order. Pastikan koneksi internet stabil.");
-                  btnMain.disabled = false;
-                  btnMain.innerHTML = originalHtml;
+                  if (btnMain) {
+                      btnMain.disabled = false;
+                      btnMain.innerHTML = originalHtmlMain;
+                  }
+                  if (btnRest) {
+                      btnRest.disabled = false;
+                      btnRest.innerHTML = originalHtmlRest;
+                  }
                   throw e; // PERBAIKAN: Lempar error agar submitPaymentCheck tahu proses gagal
               } finally {
                   window.isFinishingOrder = false;
               }
-          }
-
-          if (btnFinishOrder) {
-              btnFinishOrder.addEventListener('click', window.validateAndShowPaymentPopup);
           }
 
           // -------------------------------------------------------------
