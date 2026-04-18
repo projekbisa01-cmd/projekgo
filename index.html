@@ -12,7 +12,7 @@
     
     <!-- TAMBAHAN LIBRARY LEAFLET JS UNTUK PETA -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script> 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <!-- Meta untuk PWA Icon & Color -->
     <meta name="theme-color" content="#ff8c00">
@@ -531,7 +531,7 @@
             <div class="bg-orange-50 rounded-2xl p-5 mb-8 border border-orange-100 flex justify-between items-center text-left w-full shadow-inner">
                 <div>
                     <p class="text-[10px] text-orange-500 font-bold uppercase mb-1">Total Ongkos Kirim</p>
-                    <h3 id="incoming-order-fee" class="text-2xl font-black text-orange-600">Rp --</h3>
+                    <h3 id="incoming-order-fee" class="text-2xl font-black text-black">Rp --</h3>
                 </div>
                 <div id="incoming-order-fee-detail" class="text-[10px] text-orange-500 font-medium text-right">
                     <!-- Rincian -->
@@ -609,7 +609,7 @@
                     <div class="flex justify-between items-start px-2">
                         <p class="text-sm font-bold text-gray-400 mt-1">Total Ongkir</p>
                         <div class="text-right">
-                            <p id="active-order-fee" class="text-lg font-black text-orange-600">Rp --</p>
+                            <p id="active-order-fee" class="text-lg font-black text-black">Rp --</p>
                             <p id="active-order-extra-info" class="text-[10px] text-gray-500 font-bold mt-0.5"></p>
                         </div>
                     </div>
@@ -4686,28 +4686,28 @@
                 onbidToggle.checked = savedOnbidStatus;
                 updateOnbidUI(savedOnbidStatus); // Sinkronisasi otomatis UI Kontainer Radar dan Toggle
                 // Jika awal buka sudah tidak ada koneksi, langsung kunci
-                if (!navigator.onLine) onbidToggle.disabled = true;
+                if (!navigator.onLine) {
+                    onbidToggle.disabled = true;
+                    const text = document.getElementById('onbid-text');
+                    if (text) {
+                        text.innerText = "TIDAK ADA SINYAL";
+                        text.className = "text-xs font-black uppercase tracking-widest transition-colors text-red-500 animate-pulse";
+                    }
+                }
             }
 
             // DETEKSI SINYAL PUTUS (OFFLINE)
             window.addEventListener('offline', () => {
                 if (onbidToggle) {
-                    if (onbidToggle.checked) {
-                        onbidToggle.checked = false;
-                        updateOnbidUI(false);
-                        localStorage.setItem('rider_onbid_status', 'false');
-                        // Sinkronisasi ke admin jika fungsi sudah siap (meski offline, dicache firebase)
-                        if (typeof window.updateFirebaseStatus === 'function' && currentUserUID) {
-                            let rName = document.getElementById('display-rider-name').innerText;
-                            window.updateFirebaseStatus(currentUserUID, false, rName);
-                        }
-                        alert("Koneksi Internet Terputus!\n\nStatus On-Bid Anda otomatis dimatikan karena sistem kehilangan sinyal dengan Admin.");
-                    }
+                    // PERBAIKAN: Jangan matikan status On-Bid, cukup kunci tombol dan beri peringatan visual
                     onbidToggle.disabled = true; // Kunci tombol
                     const text = document.getElementById('onbid-text');
                     if (text) {
                         text.innerText = "TIDAK ADA SINYAL";
-                        text.className = "text-xs font-black uppercase tracking-widest transition-colors text-red-500";
+                        text.className = "text-xs font-black uppercase tracking-widest transition-colors text-red-500 animate-pulse";
+                    }
+                    if (typeof window.showCustomToast === 'function') {
+                        window.showCustomToast("Koneksi terputus! Mempertahankan antrean radar...");
                     }
                 }
             });
@@ -4716,7 +4716,10 @@
             window.addEventListener('online', () => {
                 if (onbidToggle) {
                     onbidToggle.disabled = false; // Buka kunci tombol
-                    updateOnbidUI(onbidToggle.checked); // Kembalikan UI normal
+                    updateOnbidUI(onbidToggle.checked); // Kembalikan UI normal (teks akan kembali ke ON-BID/OFF-BID)
+                    if (typeof window.showCustomToast === 'function') {
+                        window.showCustomToast("Sinyal kembali terhubung!");
+                    }
                 }
             });
 
@@ -8077,8 +8080,8 @@
               // Sengaja tidak ditotalkan sesuai permintaan agar rincian terlihat jelas
 
               if (extraFee > 0) {
-                  // Format: Rp Dasar + Rp Tambahan (sejajar)
-                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <span class="text-[14px] text-blue-600 font-bold ml-1">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
+                  // Format: Rp Dasar + Tambahan (Satu baris sejajar)
+                  feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')} + ${extraFee.toLocaleString('id-ID')}`;
                   if (feeDetailEl) feeDetailEl.innerHTML = ''; // Kosongkan totalnya
               } else {
                   feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
@@ -8366,7 +8369,7 @@
               // Tampilkan ongkir dipisah (tidak ditotalkan) di UI
               const feeEl = document.getElementById('active-order-fee');
               if (extraFee > 0) {
-                  feeEl.innerHTML = `Rp ${baseFee.toLocaleString('id-ID')} <br><span class="text-sm text-blue-500">+ Rp ${extraFee.toLocaleString('id-ID')} (tambahan)</span>`;
+                  feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')} + ${extraFee.toLocaleString('id-ID')}`;
               } else {
                   feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
               }
@@ -9034,7 +9037,8 @@
                   // PENGAMAN GANDA: Langsung update Angka Antrean di sini
                   if (myPosEl) {
                       const rankLabelEl = myPosEl.previousElementSibling;
-                      if (myStatus && myStatus.in_main_queue === true && myStatus.queue_number !== undefined && myStatus.queue_number !== null && myStatus.queue_number !== "") {
+                      // PERBAIKAN: Hapus syarat in_main_queue === true agar nomor antrean tetap muncul jika sudah diberi admin
+                      if (myStatus && myStatus.queue_number !== undefined && myStatus.queue_number !== null && myStatus.queue_number !== "") {
                           if (isNaN(myStatus.queue_number)) {
                               myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
                               myPosEl.innerHTML = `<span class="text-[9px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">${myStatus.queue_number}</span>`;
@@ -9480,8 +9484,11 @@
                   // NEW LOGIC: Cek status antrean saat ini terlebih dahulu sebelum update
                   const docSnap = await getDoc(statusRef);
                   let currentInMainQueue = false;
+                  let hasQueueNumber = false;
                   if (docSnap.exists()) {
-                      currentInMainQueue = docSnap.data().in_main_queue === true;
+                      const d = docSnap.data();
+                      currentInMainQueue = d.in_main_queue === true;
+                      hasQueueNumber = d.queue_number !== undefined && d.queue_number !== null && d.queue_number !== "";
                   }
 
                   const dataToUpdate = {
@@ -9496,9 +9503,10 @@
                       if (!window.currentActiveOrderId) {
                           dataToUpdate.is_available = true;
                           
-                          if (currentInMainQueue) {
-                              // JIKA SUDAH DI ANTREAN: Dilarang reset in_main_queue, last_drop_time, & queue_number
+                          if (currentInMainQueue || hasQueueNumber) {
+                              // JIKA SUDAH DI ANTREAN ATAU PUNYA NOMOR: Dilarang reset in_main_queue, last_drop_time, & queue_number
                               console.log("Rider reconnect/resume. Mempertahankan antrean sebelumnya.");
+                              dataToUpdate.in_main_queue = true; // Auto-heal jika admin lupa centang in_main_queue
                           } else {
                               // JIKA BELUM MASUK ANTREAN (Atau dari Off-bid murni):
                               dataToUpdate.in_main_queue = false; // Harus di-approve admin untuk masuk antrean radar
@@ -9783,7 +9791,8 @@
                       if (myPosEl) {
                           const rankLabelEl = myPosEl.previousElementSibling;
                           
-                          if (data.in_main_queue === true && data.queue_number !== undefined && data.queue_number !== null && data.queue_number !== "") {
+                          // PERBAIKAN: Hapus syarat in_main_queue === true agar nomor antrean langsung muncul
+                          if (data.queue_number !== undefined && data.queue_number !== null && data.queue_number !== "") {
                               // Jika admin mengirimkan text (misal: "Antrean ditahan admin"), bukan angka
                               if (isNaN(data.queue_number)) {
                                   myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
