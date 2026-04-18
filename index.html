@@ -1691,7 +1691,7 @@
                             <p class="text-[10px] text-green-600 font-bold uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
                                 <span class="w-2 h-2 bg-green-500 rounded-full shadow-sm shadow-green-300"></span> Online & Siap
                             </p>
-                            <h3 class="font-bold text-gray-800 text-sm leading-tight mb-3">Menunggu orderan dari Admin...</h3>
+                            <h3 id="radar-status-text" class="font-bold text-gray-800 text-sm leading-tight mb-3">Menunggu orderan dari Admin...</h3>
                             
                             <button onclick="switchPage('queue-list')" class="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold rounded-xl shadow-sm border border-indigo-100 active:scale-95 transition-all text-[11px] uppercase tracking-wider flex items-center justify-center gap-2">
                                 <i class="fa-solid fa-satellite-dish"></i> Cek Antrean
@@ -9029,11 +9029,12 @@
                   
                   const container = document.getElementById('radar-queue-list');
                   const myPosEl = document.getElementById('my-queue-position');
+                  const radarStatusTextEl = document.getElementById('radar-status-text');
                   
                   // PENGAMAN GANDA: Langsung update Angka Antrean di sini
-                  if (myPosEl && myStatus) {
+                  if (myPosEl) {
                       const rankLabelEl = myPosEl.previousElementSibling;
-                      if (myStatus.queue_number !== undefined && myStatus.queue_number !== null && myStatus.queue_number !== "") {
+                      if (myStatus && myStatus.in_main_queue === true && myStatus.queue_number !== undefined && myStatus.queue_number !== null && myStatus.queue_number !== "") {
                           if (isNaN(myStatus.queue_number)) {
                               myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
                               myPosEl.innerHTML = `<span class="text-[9px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">${myStatus.queue_number}</span>`;
@@ -9043,6 +9044,12 @@
                               myPosEl.innerText = `#${myStatus.queue_number}`;
                               if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
                           }
+                          if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
+                      } else {
+                          myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
+                          if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
+                          myPosEl.innerHTML = `<span class="text-[8px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">Masih Diproses Admin</span>`;
+                          if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu antrean di proses admin..";
                       }
                   }
 
@@ -9469,6 +9476,14 @@
               if(!uid) return;
               try {
                   const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
+                  
+                  // NEW LOGIC: Cek status antrean saat ini terlebih dahulu sebelum update
+                  const docSnap = await getDoc(statusRef);
+                  let currentInMainQueue = false;
+                  if (docSnap.exists()) {
+                      currentInMainQueue = docSnap.data().in_main_queue === true;
+                  }
+
                   const dataToUpdate = {
                       uid: String(uid).trim(),
                       name: riderName,
@@ -9477,11 +9492,19 @@
                   };
                   
                   if (isOnline) {
-                      // NEW: Hanya beri status tersedia jika dia tidak sedang mengantar order berjalan
+                      // Hanya beri status tersedia jika dia tidak sedang mengantar order berjalan
                       if (!window.currentActiveOrderId) {
                           dataToUpdate.is_available = true;
-                          dataToUpdate.in_main_queue = false; // Harus di-approve admin untuk masuk antrean radar
-                          dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean
+                          
+                          if (currentInMainQueue) {
+                              // JIKA SUDAH DI ANTREAN: Dilarang reset in_main_queue, last_drop_time, & queue_number
+                              console.log("Rider reconnect/resume. Mempertahankan antrean sebelumnya.");
+                          } else {
+                              // JIKA BELUM MASUK ANTREAN (Atau dari Off-bid murni):
+                              dataToUpdate.in_main_queue = false; // Harus di-approve admin untuk masuk antrean radar
+                              dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean
+                              dataToUpdate.queue_number = null; // Menghapus nomor lama agar tidak nyangkut
+                          }
                       }
                   } else {
                       dataToUpdate.is_available = false; // Matikan status dari antrean
@@ -9755,10 +9778,12 @@
                       
                       // TAMPILKAN NOMOR ANTREAN DARI ADMIN (BEKERJA WALAUPUN TOGGLE OFF)
                       const myPosEl = document.getElementById('my-queue-position');
+                      const radarStatusTextEl = document.getElementById('radar-status-text');
+                      
                       if (myPosEl) {
                           const rankLabelEl = myPosEl.previousElementSibling;
                           
-                          if (data.queue_number !== undefined && data.queue_number !== null && data.queue_number !== "") {
+                          if (data.in_main_queue === true && data.queue_number !== undefined && data.queue_number !== null && data.queue_number !== "") {
                               // Jika admin mengirimkan text (misal: "Antrean ditahan admin"), bukan angka
                               if (isNaN(data.queue_number)) {
                                   myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
@@ -9769,10 +9794,12 @@
                                   if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
                                   myPosEl.innerText = `#${data.queue_number}`;
                               }
+                              if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
                           } else {
-                              myPosEl.className = "text-2xl font-black text-gray-800 leading-none";
-                              if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
-                              myPosEl.innerText = '#--';
+                              myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
+                              if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
+                              myPosEl.innerHTML = `<span class="text-[8px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">Masih Diproses Admin</span>`;
+                              if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu antrean di proses admin..";
                           }
                       }
                       
