@@ -1665,12 +1665,15 @@
                             </button>
                         </div>
 
-                        <!-- Status Radar Kanan -->
+                        <!-- Status Radar Kanan (Diganti jadi Posisi Antrean) -->
                         <div class="flex flex-col items-center justify-center shrink-0 border-l border-gray-100 pl-5">
-                            <div class="w-14 h-14 bg-gray-50 rounded-full flex items-center justify-center mb-2 shadow-inner border border-gray-200 relative overflow-hidden">
-                                <i class="fa-solid fa-power-off text-2xl text-gray-300"></i>
+                            <div class="relative w-14 h-14 bg-gray-50 rounded-full flex flex-col items-center justify-center mb-2 shadow-inner border border-gray-200 overflow-hidden">
+                                <span class="text-[8px] text-gray-400 font-bold uppercase mb-0.5 mt-1">Rank</span>
+                                <div id="my-queue-position-offline" class="text-xl font-black text-gray-300 leading-none tracking-tighter">
+                                    #--
+                                </div>
                             </div>
-                            <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest text-center leading-tight">Radar<br>Mati</p>
+                            <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest text-center leading-tight">Posisi<br>Kamu</p>
                         </div>
 
                     </div>
@@ -2870,6 +2873,32 @@
             const shiftBtn = document.getElementById('main-shift-btn');
             if (shiftBtn && shiftBtn.disabled) return;
 
+            // --- LOGIKA FILTER JAM SHIFT YANG SUDAH LEWAT ---
+            const now = new Date();
+            const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+            document.querySelectorAll('.shift-badge').forEach(badge => {
+                const shiftTimeText = badge.innerText.trim();
+                const parts = shiftTimeText.split(':');
+                
+                if (parts.length === 2) {
+                    const shiftMinutes = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+                    
+                    if (currentMinutes > shiftMinutes) {
+                        // Waktu sudah lewat, matikan tombol (Abu-abu)
+                        badge.disabled = true;
+                        badge.classList.remove('bg-white', 'text-gray-700', 'active:scale-95', 'bg-blue-50', 'text-blue-700', 'border-blue-500');
+                        badge.classList.add('bg-gray-100', 'text-gray-400', 'cursor-not-allowed', 'opacity-60');
+                    } else {
+                        // Waktu belum lewat, pastikan tombol nyala
+                        badge.disabled = false;
+                        badge.classList.add('bg-white', 'text-gray-700', 'active:scale-95');
+                        badge.classList.remove('bg-gray-100', 'text-gray-400', 'cursor-not-allowed', 'opacity-60', 'bg-blue-50', 'text-blue-700', 'border-blue-500');
+                    }
+                }
+            });
+            // ------------------------------------------------
+
             const modal = document.getElementById('shift-modal');
             const content = document.getElementById('shift-content');
             if(modal && content) {
@@ -2962,18 +2991,25 @@
             // 3. KONTROL TOMBOL AKTIF LAGI (Syarat Utama: Shift & Antrean harus ABU-ABU)
             const activeBtn = document.getElementById('main-active-btn');
             if (activeBtn) {
-                if (isShiftEnabled || isQueueEnabled) {
-                    // Jika Shift ATAU Antrean masih MENYALA, matikan Aktif Lagi (Abu-abu)
+                const hasActiveOrder = window._hasActiveDocOrder || window._hasActiveQueryOrder;
+
+                if (isShiftEnabled || isQueueEnabled || hasActiveOrder) {
+                    // Jika Shift ATAU Antrean masih MENYALA, ATAU lagi bawa orderan -> matikan Aktif Lagi (Abu-abu)
                     activeBtn.disabled = true;
                     activeBtn.className = "flex-1 py-3.5 bg-gray-300 text-gray-500 font-black rounded-full shadow-none cursor-not-allowed transition-all text-[9px] sm:text-[10px] uppercase tracking-wider flex items-center justify-center gap-1 border-[3px] border-white/80 backdrop-blur-sm";
-                    activeBtn.innerHTML = '<i class="fa-solid fa-toggle-on text-sm"></i> <span>Aktif Lagi</span>';
+                    
+                    if (hasActiveOrder) {
+                        activeBtn.innerHTML = '<i class="fa-solid fa-motorcycle text-sm"></i> <span>Di Jalan</span>';
+                    } else {
+                        activeBtn.innerHTML = '<i class="fa-solid fa-toggle-on text-sm"></i> <span>Aktif Lagi</span>';
+                    }
                 } else {
                     // Jika Shift DAN Antrean sudah ABU-ABU, nyalakan Aktif Lagi (Hijau)
                     activeBtn.disabled = false;
                     activeBtn.className = "flex-1 py-3.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-black rounded-full shadow-[0_8px_20px_rgba(34,197,94,0.4)] active:scale-95 transition-all text-[9px] sm:text-[10px] uppercase tracking-wider flex items-center justify-center gap-1 border-[3px] border-white/80 backdrop-blur-sm";
                     
                     // Ganti teks jika rider sudah full online di sistem DAN tidak kena penalty antrean
-                    if (window.currentRiderStatus && window.currentRiderStatus.is_available === true && !isPenaltyTimeout) {
+                    if (window.currentRiderStatus && window.currentRiderStatus.is_available === true && window.currentRiderStatus.is_online === true && !isPenaltyTimeout) {
                         activeBtn.innerHTML = '<i class="fa-solid fa-wifi"></i> <span>Online</span>';
                     } else {
                         activeBtn.innerHTML = '<i class="fa-solid fa-toggle-on text-sm"></i> <span>Aktif Lagi</span>';
@@ -2983,11 +3019,20 @@
         };
 
         window.selectShift = async function(time, btnElement) {
+            // Proteksi tambahan: Mencegah klik jika tombol sudah abu-abu (disable)
+            if (btnElement && btnElement.disabled) {
+                if (typeof window.showCustomToast === 'function') window.showCustomToast("Jam shift ini sudah terlewat.");
+                return;
+            }
+
             // Hapus efek aktif dari semua badge
             document.querySelectorAll('.shift-badge').forEach(btn => {
-                btn.classList.remove('bg-blue-50', 'border-blue-500', 'text-blue-700');
-                btn.classList.add('bg-white', 'border-gray-200', 'text-gray-700');
+                if (!btn.disabled) {
+                    btn.classList.remove('bg-blue-50', 'border-blue-500', 'text-blue-700');
+                    btn.classList.add('bg-white', 'border-gray-200', 'text-gray-700');
+                }
             });
+            
             // Tambahkan efek aktif ke badge yang diklik
             if(btnElement) {
                 btnElement.classList.remove('bg-white', 'border-gray-200', 'text-gray-700');
@@ -8925,19 +8970,32 @@
                   
                   const container = document.getElementById('radar-queue-list');
                   const myPosEl = document.getElementById('my-queue-position');
+                  const myPosOfflineEl = document.getElementById('my-queue-position-offline');
                   
                   // 3. UPDATE ANGKA RAKSASA DI RADAR
                   if (myPosEl) {
                       if (myStatus && myStatus.is_available === true) {
                           myPosEl.className = "text-[3rem] font-black text-orange-600 leading-none tracking-tighter";
-                          myPosEl.innerText = myCalculatedRank;
+                          myPosEl.innerText = `#${myCalculatedRank}`;
+                          if (myPosOfflineEl) {
+                              myPosOfflineEl.className = "text-xl font-black text-orange-600 leading-none tracking-tighter";
+                              myPosOfflineEl.innerText = `#${myCalculatedRank}`;
+                          }
                       } else if (myStatus && myStatus.is_available === false) {
                           // Jika rider di antrean tapi sedang proses orderan (abu-abu)
                           myPosEl.className = "text-[3rem] font-black text-gray-400 leading-none tracking-tighter";
-                          myPosEl.innerText = myCalculatedRank;
+                          myPosEl.innerText = `#${myCalculatedRank}`;
+                          if (myPosOfflineEl) {
+                              myPosOfflineEl.className = "text-xl font-black text-gray-400 leading-none tracking-tighter";
+                              myPosOfflineEl.innerText = `#${myCalculatedRank}`;
+                          }
                       } else {
                           myPosEl.className = "text-[3rem] font-black text-gray-300 leading-none tracking-tighter";
-                          myPosEl.innerText = '--';
+                          myPosEl.innerText = '#--';
+                          if (myPosOfflineEl) {
+                              myPosOfflineEl.className = "text-xl font-black text-gray-300 leading-none tracking-tighter";
+                              myPosOfflineEl.innerText = '#--';
+                          }
                       }
                   }
 
@@ -9577,7 +9635,10 @@
               }
 
               // Jangan lakukan update jika memang sudah Online dan tidak dalam pemulihan penalty
-              if (window.currentRiderStatus && window.currentRiderStatus.is_available === true && !isRecoveringFromPenalty) {
+              if (window.currentRiderStatus && 
+                  window.currentRiderStatus.is_available === true && 
+                  window.currentRiderStatus.is_online === true && 
+                  !isRecoveringFromPenalty) {
                   if(typeof window.showCustomToast === 'function') window.showCustomToast("Kamu sudah terhubung & Online.");
                   return;
               }
@@ -9588,10 +9649,11 @@
               
               try {
                   const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                  await updateDoc(statusRef, {
+                  // Menggunakan setDoc dengan merge agar tidak error "No document to update" walau doc hilang
+                  await setDoc(statusRef, {
                       is_available: true,
                       is_online: true
-                  });
+                  }, { merge: true });
                   
                   if (typeof window.updateTripleButtonsUI === 'function') window.updateTripleButtonsUI();
 
@@ -9633,26 +9695,32 @@
 
                       // TAMPILKAN NOMOR ANTREAN DARI ADMIN (BEKERJA WALAUPUN TOGGLE OFF)
                       const myPosEl = document.getElementById('my-queue-position');
-                      if (myPosEl) {
-                          const rankLabelEl = myPosEl.previousElementSibling;
+                      const myPosOfflineEl = document.getElementById('my-queue-position-offline');
+                      
+                      const updateQueueUI = (el, isMain) => {
+                          if (!el) return;
+                          const rankLabelEl = el.previousElementSibling;
                           
                           if (data.queue_number !== undefined && data.queue_number !== null && data.queue_number !== "") {
                               // Jika admin mengirimkan text (misal: "Antrean ditahan admin"), bukan angka
                               if (isNaN(data.queue_number)) {
-                                  myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
-                                  myPosEl.innerHTML = `<span class="text-[9px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">${data.queue_number}</span>`;
+                                  el.className = isMain ? "flex items-center justify-center w-full h-full pb-1" : "flex items-center justify-center w-full h-full p-1";
+                                  el.innerHTML = `<span class="text-[9px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">${data.queue_number}</span>`;
                                   if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
                               } else {
-                                  myPosEl.className = "text-[3rem] font-black text-orange-600 leading-none tracking-tighter";
+                                  el.className = isMain ? "text-[3rem] font-black text-orange-600 leading-none tracking-tighter" : "text-xl font-black text-orange-600 leading-none tracking-tighter";
                                   if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
-                                  myPosEl.innerText = `#${data.queue_number}`;
+                                  el.innerText = `#${data.queue_number}`;
                               }
                           } else {
-                              myPosEl.className = "text-[3rem] font-black text-gray-300 leading-none tracking-tighter";
+                              el.className = isMain ? "text-[3rem] font-black text-gray-300 leading-none tracking-tighter" : "text-xl font-black text-gray-300 leading-none tracking-tighter";
                               if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
-                              myPosEl.innerText = '#--';
+                              el.innerText = isMain ? '#--' : '#--';
                           }
-                      }
+                      };
+
+                      updateQueueUI(myPosEl, true);
+                      updateQueueUI(myPosOfflineEl, false);
 
                       // TOGGLE RADAR ONLINE / OFFLINE BERDASARKAN in_main_queue
                       const radarOffline = document.getElementById('radar-offline');
