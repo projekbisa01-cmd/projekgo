@@ -9029,14 +9029,38 @@
                           myStatus = data;
                       }
                   });
+
+                  // URUTKAN ANTREAN SECARA LOKAL BERDASARKAN WAKTU SELESAI (last_drop_time)
+                  onlineRiders.sort((a, b) => {
+                      const timeA = a.last_drop_time?.seconds || 0;
+                      const timeB = b.last_drop_time?.seconds || 0;
+                      return timeA - timeB;
+                  });
+
+                  // KALKULASI RANKING PRIBADI RIDER
+                  const myPosEl = document.getElementById('my-queue-position');
+                  const radarStatusTextEl = document.getElementById('radar-status-text');
+                  const rankLabelEl = myPosEl ? myPosEl.previousElementSibling : null;
+
+                  if (myStatus && myStatus.in_main_queue) {
+                      // Ambil nomor yang diketik admin ATAU hitung urutan secara otomatis
+                      const qNumRaw = myStatus.queue_number;
+                      const hasAdminNum = qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null";
+                      
+                      if (!hasAdminNum) {
+                          // Jika admin tidak mengetik manual, hitung posisinya secara otomatis
+                          const myCalculatedRank = onlineRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
+                          
+                          if (myPosEl && myCalculatedRank > 0) {
+                              myPosEl.className = "text-2xl font-black text-gray-800 leading-none";
+                              if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
+                              myPosEl.innerText = `#${myCalculatedRank}`;
+                          }
+                          if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
+                      }
+                  }
                   
                   const container = document.getElementById('radar-queue-list');
-                  
-                  // PERBAIKAN: Blok kode yang menimpa/menghapus nomor antrean (myPosEl) 
-                  // dihapus dari sini agar 100% dikendalikan oleh fungsi startMyStatusListener 
-                  // yang lebih akurat membaca data pribadi tanpa filter radar.
-                  
-                  if (!container) return;
                   
                   // CEK JIKA RIDER SEDANG MENUNGGU ADMIN
                   if (myStatus && myStatus.is_online && myStatus.is_available && !myStatus.in_main_queue) {
@@ -9083,10 +9107,12 @@
 
               let html = '';
               
-              ridersWithImages.forEach((rider) => {
-                      // Langsung ambil angka antrean dari field queue_number
+              ridersWithImages.forEach((rider, index) => {
+                      // Prioritaskan angka dari admin, jika kosong gunakan urutan otomatis (index + 1)
                       const qNumRaw = rider.queue_number;
-                      const rank = (qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null") ? qNumRaw : '--';
+                      const hasAdminNum = qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null";
+                      const rank = hasAdminNum ? qNumRaw : (index + 1);
+                      
                       const uidClean = String(rider.uid || '').trim().toUpperCase();
                       const myUidClean = String(currentUserUID).trim().toUpperCase();
                       const isMe = uidClean === myUidClean;
@@ -9785,12 +9811,14 @@
                                   myPosEl.innerText = `#${qNum}`;
                               }
                               if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
-                          } else {
+                          } else if (data.in_main_queue !== true) {
+                              // Tampilkan 'Masih Diproses Admin' HANYA JIKA rider belum dimasukkan ke antrean utama
                               myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
                               if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
                               myPosEl.innerHTML = `<span class="text-[8px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">Masih Diproses Admin</span>`;
                               if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu antrean di proses admin..";
                           }
+                          // Jika data.in_main_queue === true tapi qNum kosong, angka akan dihitung otomatis oleh startQueueListener
                       }
                       
                       // LOGIKA REMOTE KILL: Jika Firebase bilang offline, tapi toggle di layar masih menyala (true)
