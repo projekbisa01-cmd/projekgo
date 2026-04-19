@@ -143,6 +143,11 @@
                         <div class="overflow-hidden">
                             <p id="display-name-text" class="text-3xl font-black text-white truncate animate-berdetak leading-tight"></p>
                         </div>
+                        <!-- Tambahan Lokasi Rider -->
+                        <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
+                            <i class="fa-solid fa-location-dot text-[9px] text-blue-300 shrink-0"></i>
+                            <p id="display-location-text" class="text-[10px] font-bold text-blue-100 uppercase truncate"></p>
+                        </div>
                     </div>
                 </div>
                 <button onclick="clearSelection()" class="w-9 h-9 shrink-0 rounded-full bg-blue-700 text-blue-200 hover:bg-rose-500 hover:text-white flex items-center justify-center transition-colors shadow-sm border border-blue-500 hover:border-rose-400">
@@ -405,6 +410,38 @@
         <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
             <h2 class="font-black text-black text-[11px] uppercase tracking-wider mb-2 border-b border-gray-100 pb-2"><i class="fa-solid fa-wallet text-sky-500 mr-1.5"></i> Kelola Saldo / Kredit</h2>
             <p class="text-[9px] text-slate-500 leading-relaxed mb-3">Sistem potong saldo otomatis 16% <b class="text-emerald-500">(AKTIF)</b>. Saldo rider akan terpotong 16% dari ongkir secara otomatis. Gunakan tombol Edit pada kartu rider di bawah untuk Top Up atau koreksi manual.</p>
+
+            <!-- INFORMASI SALDO & POTONGAN (BARU DITAMBAHKAN) -->
+            <div class="bg-slate-800 border border-slate-700 p-4 rounded-2xl flex justify-between items-center shadow-sm mb-3 mt-4">
+                <div>
+                    <p class="text-[9px] font-bold text-slate-300 uppercase tracking-widest mb-1" title="Total uang deposit seluruh rider yang ada di sistem">Total Dompet Keseluruhan Rider</p>
+                    <p id="stat-total-dompet" class="text-xl font-black text-white">Rp 0</p>
+                </div>
+                <div class="w-10 h-10 bg-slate-700 text-sky-400 rounded-full flex items-center justify-center text-lg shadow-inner">
+                    <i class="fa-solid fa-wallet"></i>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex flex-col justify-center">
+                    <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Terpotong (Hari Ini)</p>
+                    <p id="stat-potongan-hari" class="text-sm font-black text-indigo-700">Rp 0</p>
+                </div>
+                <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex flex-col justify-center">
+                    <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Terpotong (Mgg Ini)</p>
+                    <p id="stat-potongan-minggu" class="text-sm font-black text-indigo-700">Rp 0</p>
+                </div>
+                <div class="col-span-2 bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex justify-between items-center">
+                    <div>
+                        <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Total Terpotong (Bulan Ini)</p>
+                        <p id="stat-potongan-bulan" class="text-base font-black text-indigo-700">Rp 0</p>
+                    </div>
+                    <button onclick="window.calculateSaldoStats()" class="w-8 h-8 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs hover:bg-indigo-500 hover:text-white transition-colors shadow-sm" title="Refresh Data Potongan">
+                        <i id="icon-refresh-potongan" class="fa-solid fa-rotate-right"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- END INFORMASI SALDO -->
         </section>
 
         <section>
@@ -688,7 +725,8 @@
             if (allRiders.length === 0 || !isBalancesLoaded) return;
             
             allRiders.forEach(rider => {
-                const balanceData = allRiderBalances.find(b => b.uid === rider.uid);
+                // PERBAIKAN: Gunakan b.id bukan b.uid agar selalu cocok dengan ID dokumen dan tambahkan trim()
+                const balanceData = allRiderBalances.find(b => String(b.id).trim() === String(rider.uid).trim());
                 const saldo = balanceData ? parseInt(balanceData.saldo || 0) : 0;
 
                 const inQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
@@ -782,6 +820,10 @@
             if (page === 'customers') {
                 window.loadCustomers();
             }
+
+            if (page === 'saldo') {
+                window.calculateSaldoStats();
+            }
         };
 
         window.updateDayName = () => {
@@ -813,7 +855,8 @@
                 mergedRidersMap.set(r.uid, { uid: r.uid, name: r.nama || r.name || r.displayName || r.uid });
             });
             allRiderBalances.forEach(r => {
-                if (!mergedRidersMap.has(r.uid)) mergedRidersMap.set(r.uid, { uid: r.uid, name: r.name || r.uid });
+                // PERBAIKAN: Gunakan r.id
+                if (!mergedRidersMap.has(r.id)) mergedRidersMap.set(r.id, { uid: r.id, name: r.name || r.id });
             });
 
             return Array.from(mergedRidersMap.values()).sort((a,b) => a.name.localeCompare(b.name));
@@ -898,6 +941,60 @@
                 });
             }, 1000);
         }
+
+        window.calculateSaldoStats = async () => {
+            const icon = document.getElementById('icon-refresh-potongan');
+            if (icon) icon.classList.add('fa-spin');
+
+            try {
+                // Tarik data histori dari server khusus yang completed saja
+                const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                const qCompleted = query(activeOrdersCol, where("status", "==", "completed"));
+                const snapCompleted = await getDocsFromServer(qCompleted);
+
+                const now = new Date();
+                
+                // Setel batasan waktu untuk Hari, Minggu, Bulan
+                const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                
+                const dayOfWeek = now.getDay() === 0 ? 6 : now.getDay() - 1; // Senin = 0, Minggu = 6
+                const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
+                
+                const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+                let potHari = 0;
+                let potMinggu = 0;
+                let potBulan = 0;
+
+                snapCompleted.forEach(docSnap => {
+                    const data = docSnap.data();
+                    let orderMs = 0;
+                    
+                    const ts = data.finished_at || data.created_at;
+                    if (ts && ts.seconds) {
+                        orderMs = ts.seconds * 1000;
+                    }
+
+                    if (orderMs > 0) {
+                        const feeReal = parseFloat(data.fee || 0);
+                        const adminCut = Math.round(feeReal * 0.16);
+
+                        if (orderMs >= startOfDay) potHari += adminCut;
+                        if (orderMs >= startOfWeek) potMinggu += adminCut;
+                        if (orderMs >= startOfMonth) potBulan += adminCut;
+                    }
+                });
+
+                document.getElementById('stat-potongan-hari').innerText = `Rp ${potHari.toLocaleString('id-ID')}`;
+                document.getElementById('stat-potongan-minggu').innerText = `Rp ${potMinggu.toLocaleString('id-ID')}`;
+                document.getElementById('stat-potongan-bulan').innerText = `Rp ${potBulan.toLocaleString('id-ID')}`;
+
+            } catch(e) {
+                console.error("Gagal hitung stat potongan:", e);
+            } finally {
+                if (icon) icon.classList.remove('fa-spin');
+            }
+        };
 
         window.loadCustomers = async () => {
             const container = document.getElementById('customers-list');
@@ -1219,7 +1316,8 @@
             availableMainQueue.forEach((rider, index) => {
                 const isFirst = index === 0;
                 
-                const balanceData = allRiderBalances.find(b => b.uid === rider.uid);
+                // PERBAIKAN: Tambah trim() untuk memastikan ID cocok persis
+                const balanceData = allRiderBalances.find(b => String(b.id).trim() === String(rider.uid).trim());
                 const saldo = balanceData ? parseInt(balanceData.saldo || 0) : 0;
                 const isMinim = saldo > 0 && saldo < 10000;
                 const isKosong = saldo <= 0;
@@ -1415,6 +1513,41 @@
             const selectedEl = document.getElementById(`rider-card-${uid}`);
             if(selectedEl) selectedEl.classList.add('selected');
             document.getElementById('display-name-text').innerText = name;
+
+            // --- Mulai Logika Penarikan Lokasi Rider ---
+            let ketLokasi = "Posisi / Standby";
+            const rider = allRiders.find(r => r.uid === uid);
+            if (rider) {
+                let orderProofDesc = "";
+                const riderOrders = allGlobalOrders.filter(o => o.rider_uid === uid && o.proof_desc);
+                if (riderOrders.length > 0) {
+                    riderOrders.sort((a, b) => {
+                        const timeA = getTimestampMs(a.updated_at) || getTimestampMs(a.finished_at) || getTimestampMs(a.created_at);
+                        const timeB = getTimestampMs(b.updated_at) || getTimestampMs(b.finished_at) || getTimestampMs(b.created_at);
+                        return timeB - timeA;
+                    });
+                    orderProofDesc = riderOrders[0].proof_desc;
+                }
+
+                if (rider.proof_desc && String(rider.proof_desc).trim() !== "") {
+                    ketLokasi = rider.proof_desc;
+                } else if (orderProofDesc && String(orderProofDesc).trim() !== "") {
+                    ketLokasi = orderProofDesc;
+                } else if (rider.location && String(rider.location).trim() !== "") {
+                    ketLokasi = rider.location;
+                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
+                    ketLokasi = rider.last_drop_desc;
+                }
+                
+                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
+                    ketLokasi = "Posisi / Standby";
+                }
+            }
+            
+            const locEl = document.getElementById('display-location-text');
+            if (locEl) locEl.innerText = ketLokasi;
+            // --- Akhir Logika Penarikan Lokasi Rider ---
+
             document.getElementById('selected-rider-display').classList.remove('hidden');
         };
 
@@ -1905,6 +2038,19 @@
                     console.warn("Gagal memuat pesanan gabungan (completed):", errActive);
                 }
                 
+                // Urutkan dari Pagi ke Malam (Ascending) sebelum diekspor ke Excel dan UI
+                allFetchedOrders.sort((a,b) => {
+                    const timeA = a.created_at ? (a.created_at.seconds || 0) : 0;
+                    const timeB = b.created_at ? (b.created_at.seconds || 0) : 0;
+                    
+                    if (timeA !== timeB) return timeA - timeB;
+                    
+                    // Fallback berdasar teks jam jika waktu detiknya sama
+                    const jamA = a.Jam || "00:00";
+                    const jamB = b.Jam || "00:00";
+                    return jamA.localeCompare(jamB);
+                });
+
                 allDailyOrders = allFetchedOrders; 
                 window.currentHistoryData = allFetchedOrders.map(o => ({
                     id: o.id,
@@ -1935,12 +2081,6 @@
                     container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
                     return;
                 }
-
-                allFetchedOrders.sort((a,b) => {
-                    const timeA = a.created_at ? (a.created_at.seconds || 0) : 0;
-                    const timeB = b.created_at ? (b.created_at.seconds || 0) : 0;
-                    return timeB - timeA;
-                });
 
                 let html = '';
                 allFetchedOrders.forEach(order => {
@@ -2161,7 +2301,9 @@
 
         window.exportToCSV = () => {
             if (!window.currentHistoryData || window.currentHistoryData.length === 0) {
-                window.showAlert('Kosong', 'Tidak ada data untuk diekspor pada tanggal ini.', 'warning');
+                if (typeof window.showAlert === 'function') {
+                    window.showAlert('Kosong', 'Tidak ada data untuk diekspor pada tanggal ini.', 'warning');
+                }
                 return;
             }
 
@@ -2170,29 +2312,62 @@
             let totalOngkir = 0;
             let totalTambahan = 0;
             
-            let csvContent = "data:text/csv;charset=utf-8,";
-            csvContent += "TANGGAL,JAM,NAMA PELANGGAN,RIDER,ONGKIR,TAMBAHAN,TOTAL,KETERANGAN\n";
+            let csvRows = [];
+            // Beri tahu Excel secara eksplisit bahwa kita menggunakan pemisah titik koma (;)
+            csvRows.push("sep=;");
+            
+            // Header CSV (Format baru sesuai permintaan: Kolom ke-2 dibiarkan kosong)
+            csvRows.push(["UID", "", "NAMA RIDER", "TANGGAL", "JAM", "NOMINAL KOTOR", "TAMBAHAN"].join(";"));
 
             window.currentHistoryData.forEach(o => {
-                const ongkir = o.fee || 0;
-                const tambahan = o.tambahan || 0;
+                // Konversi dibagi 1000 (misal: 9000 jadi 9, 8500 jadi 8.5)
+                const ongkir = parseFloat(((o.fee || 0) / 1000).toFixed(2));
+                const tambahan = parseFloat(((o.tambahan || 0) / 1000).toFixed(2));
+                
                 totalOngkir += ongkir;
                 totalTambahan += tambahan;
-                const total = ongkir + tambahan;
                 
-                let row = `"${o.Tanggal || ''}","${o.Jam || ''}","${o.Nama_Pelanggan || ''}","${o.rider_name || ''}",${ongkir},${tambahan},${total},"${(o.Keterangan || '').replace(/"/g, '""')}"`;
-                csvContent += row + "\r\n";
+                // Helper untuk membersihkan string agar aman masuk kolom Excel
+                const safeString = (str) => `"${String(str || '').replace(/"/g, '""')}"`;
+                
+                // Konversi Jam (misal: "06:30" atau "06.30" menjadi 630)
+                let rawJam = o.Jam || '';
+                let cleanJam = rawJam.replace(/[^0-9]/g, ''); // Buang semua karakter selain angka
+                let finalJam = cleanJam ? parseInt(cleanJam, 10) : '""'; // Jadikan angka murni
+                
+                let row = [
+                    safeString(o.rider_uid || ''),   // UID
+                    '""',                            // Cell kosong
+                    safeString(o.rider_name || ''),  // Nama_Rider
+                    safeString(o.Tanggal || dateVal),// Tanggal
+                    finalJam,                        // Jam (Format baru)
+                    ongkir,                          // Nominal_Kotor
+                    tambahan                         // Tambahan
+                ];
+                
+                csvRows.push(row.join(";"));
             });
 
-            csvContent += `\n"TOTAL",,,,${totalOngkir},${totalTambahan},${totalOngkir + totalTambahan},""\n`;
+            // Jarak Baris Kosong & Total (Total juga ikut berformat baru)
+            csvRows.push("");
+            csvRows.push(["\"TOTAL\"", "\"\"", "\"\"", "\"\"", "\"\"", parseFloat(totalOngkir.toFixed(2)), parseFloat(totalTambahan.toFixed(2))].join(";"));
 
-            const encodedUri = encodeURI(csvContent);
+            const csvContent = csvRows.join("\r\n");
+
+            // Menggunakan metode Blob (Paling aman untuk data besar & karakter spesial)
+            // Tambahkan BOM \uFEFF agar Excel otomatis membacanya sebagai UTF-8 (Teks tidak berantakan)
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute("href", url);
             link.setAttribute("download", `Rekap_PROJEKGO_${dateVal}.csv`);
+            link.style.visibility = 'hidden';
+            
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            URL.revokeObjectURL(url); // Bersihkan memori URL
         };
         
         window.scrollToBookmark = () => {
@@ -2394,6 +2569,10 @@
                 if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
                 
                 checkAndEnforceRiderBalances();
+
+                // PERBAIKAN: Refresh UI Antrean agar badge saldo di radar otomatis terupdate saat data saldo masuk/berubah!
+                if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
+                if (typeof updateNewShiftUI === 'function') updateNewShiftUI();
             });
         }
 
@@ -2516,11 +2695,20 @@
             if(!container) return;
             const searchQuery = (document.getElementById('saldo-search')?.value || '').toLowerCase();
 
+            // Hitung Total Dompet Keseluruhan Rider
+            let totalSisaSaldo = 0;
+            allRiderBalances.forEach(b => {
+                totalSisaSaldo += parseInt(b.saldo || 0);
+            });
+            const dompetEl = document.getElementById('stat-total-dompet');
+            if (dompetEl) dompetEl.innerText = `Rp ${totalSisaSaldo.toLocaleString('id-ID')}`;
+
             let filtered = [...allRiderBalances];
             if (searchQuery) {
                 filtered = filtered.filter(c =>
                     (c.name || '').toLowerCase().includes(searchQuery) ||
-                    (c.uid || '').toLowerCase().includes(searchQuery)
+                    // PERBAIKAN: Gunakan c.id
+                    (c.id || '').toLowerCase().includes(searchQuery)
                 );
             }
 
@@ -2555,20 +2743,20 @@
                         <div class="flex justify-between items-center w-full">
                             <div class="flex flex-col">
                                 <div class="flex items-center gap-1.5 mb-0.5">
-                                    <span class="font-black text-black text-sm uppercase">${b.name || b.uid}</span>
+                                    <span class="font-black text-black text-sm uppercase">${b.name || b.id}</span>
                                     ${isLow ? '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm">SALDO MINIM</span>' : ''}
                                 </div>
-                                <span class="text-[9px] text-slate-500 font-bold">${b.uid}</span>
+                                <span class="text-[9px] text-slate-500 font-bold">${b.id}</span>
                             </div>
                             <div class="flex flex-col items-end gap-2 shrink-0">
                                 <div class="px-3 py-1.5 rounded-lg border font-black text-sm ${saldoClass} w-full text-center shadow-sm">
                                     Rp ${saldo.toLocaleString('id-ID')}
                                 </div>
                                 <div class="grid grid-cols-2 gap-1.5 w-full">
-                                    <button onclick="window.openRiwayatSaldo('${b.uid}')" class="bg-slate-50 text-slate-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-slate-200 transition-colors border border-slate-200 flex items-center justify-center gap-1.5 shadow-sm" title="Lihat Riwayat Edit">
+                                    <button onclick="window.openRiwayatSaldo('${b.id}')" class="bg-slate-50 text-slate-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-slate-200 transition-colors border border-slate-200 flex items-center justify-center gap-1.5 shadow-sm" title="Lihat Riwayat Edit">
                                         <i class="fa-solid fa-clock-rotate-left"></i>
                                     </button>
-                                    <button onclick="window.openSaldoModal('${b.uid}', '${(b.name || b.uid).replace(/'/g, "\\'")}', ${saldo})" class="bg-sky-100 text-sky-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-sky-500 hover:text-white transition-colors border border-sky-200 flex items-center justify-center gap-1.5 shadow-sm" title="Edit Saldo">
+                                    <button onclick="window.openSaldoModal('${b.id}', '${(b.name || b.id).replace(/'/g, "\\'")}', ${saldo})" class="bg-sky-100 text-sky-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-sky-500 hover:text-white transition-colors border border-sky-200 flex items-center justify-center gap-1.5 shadow-sm" title="Edit Saldo">
                                         <i class="fa-solid fa-pen"></i> Edit
                                     </button>
                                 </div>
@@ -2581,7 +2769,8 @@
         };
 
         window.openRiwayatSaldo = (uid) => {
-            const currentData = allRiderBalances.find(r => r.uid === uid) || {};
+            // PERBAIKAN: Gunakan r.id
+            const currentData = allRiderBalances.find(r => r.id === uid) || {};
             const logs = currentData.edit_logs || [];
             const name = currentData.name || uid;
 
@@ -2668,7 +2857,8 @@
             const rName = matchedRider ? (matchedRider.nama || matchedRider.name || matchedRider.uid) : uid;
 
             // Logika Penyimpanan Riwayat Edit
-            const currentData = allRiderBalances.find(r => r.uid === uid) || {};
+            // PERBAIKAN: Gunakan r.id
+            const currentData = allRiderBalances.find(r => r.id === uid) || {};
             const currentSaldo = parseInt(currentData.saldo || 0);
             let newSaldo = currentSaldo;
             let actionName = "";
