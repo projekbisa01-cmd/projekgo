@@ -9577,7 +9577,6 @@
                   const docSnap = await getDoc(statusRef);
                   let currentInMainQueue = false;
                   let hasQueueNumber = false;
-                  let isWithin20Minutes = true;
                   let diffMinutes = 0;
 
                   if (docSnap.exists()) {
@@ -9589,7 +9588,6 @@
                       if (d.last_updated) {
                           const lastUpdatedMs = d.last_updated.seconds ? d.last_updated.seconds * 1000 : (typeof d.last_updated === 'number' ? d.last_updated : Date.now());
                           diffMinutes = (Date.now() - lastUpdatedMs) / (1000 * 60);
-                          isWithin20Minutes = diffMinutes <= 20;
                       }
                   }
 
@@ -9606,20 +9604,27 @@
                           dataToUpdate.is_available = true;
                           
                           if (currentInMainQueue || hasQueueNumber) {
-                              if (isWithin20Minutes) {
-                                  // JIKA < 20 MENIT: Pertahankan posisi antrean
+                              if (diffMinutes <= 20) {
+                                  // JIKA <= 20 MENIT: Pertahankan posisi antrean
                                   console.log(`Rider reconnect cepat (${Math.round(diffMinutes)} mnt). Mempertahankan antrean sebelumnya.`);
                                   dataToUpdate.in_main_queue = true; // Auto-heal
-                              } else {
-                                  // JIKA > 20 MENIT: Reset posisi ke bawah
-                                  console.log(`Rider reconnect lama (${Math.round(diffMinutes)} mnt). Mereset antrean ke bawah.`);
+                              } else if (diffMinutes <= 60) {
+                                  // JIKA 20 - 60 MENIT: Reset posisi ke bawah (Hukuman)
+                                  console.log(`Rider reconnect telat (${Math.round(diffMinutes)} mnt). Mereset antrean ke bawah.`);
                                   dataToUpdate.in_main_queue = true; // Tetap di radar
                                   dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean baru (paling bawah)
-                                  dataToUpdate.last_drop_desc = "Reconnect lebih dari 20 menit"; // Info tambahan
+                                  dataToUpdate.last_drop_desc = `Reconnect setelah ${Math.round(diffMinutes)} menit`; // Info tambahan
                                   dataToUpdate.queue_number = null; // Hapus nomor prioritas admin
+                              } else {
+                                  // JIKA > 60 MENIT: Keluarkan dari radar (Butuh ACC Admin)
+                                  console.log(`Rider reconnect sangat telat (${Math.round(diffMinutes)} mnt). Memerlukan ACC Admin.`);
+                                  dataToUpdate.in_main_queue = false; // Dikeluarkan dari radar utama
+                                  dataToUpdate.last_drop_desc = `Reconnect > 60 menit (Butuh ACC Admin)`;
+                                  dataToUpdate.queue_number = null; 
                               }
                           } else {
-                              // JIKA BELUM MASUK ANTREAN (Atau dari Off-bid murni):
+                              // JIKA BELUM MASUK ANTREAN (Pertama kali On-bid atau dari Off-bid murni):
+                              console.log(`Rider baru On-bid. Memerlukan ACC admin.`);
                               dataToUpdate.in_main_queue = false; // Harus di-approve admin untuk masuk antrean radar
                               dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean
                               dataToUpdate.queue_number = null; // Menghapus nomor lama agar tidak nyangkut
