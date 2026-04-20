@@ -1245,37 +1245,7 @@
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                     const isNowActive = isOnline && isAvailable;
 
-                    // --- TAMBAHAN LOGIKA AUTO-MASUK (OPSI B) ---
-                    if (isNowActive && !inMainQueue) {
-                        // Gunakan last_updated (waktu mati) atau last_drop_time
-                        const lastTimeMs = getTimestampMs(data.last_updated) || getTimestampMs(data.last_drop_time);
-                        
-                        if (lastTimeMs > 0) {
-                            const diffMins = (Date.now() - lastTimeMs) / (1000 * 60);
-                            
-                            if (diffMins >= -5 && diffMins <= 60) {
-                                const ref = doc(db, 'status_rider_aktif', uid);
-                                
-                                if (diffMins <= 20) {
-                                    // Off 0 - 20 Menit: Masuk otomatis, posisi AMAN (last_drop_time tidak direset)
-                                    setDoc(ref, { 
-                                        in_main_queue: true, 
-                                        last_drop_desc: "Auto-Masuk (< 20 Menit)" 
-                                    }, { merge: true });
-                                } else {
-                                    // Off 21 - 60 Menit: Masuk otomatis, posisi DIHUKUM (turun ke paling bawah)
-                                    setDoc(ref, { 
-                                        in_main_queue: true, 
-                                        last_drop_time: serverTimestamp(),
-                                        last_drop_desc: "Auto-Masuk (Terlambat > 20 Menit)" 
-                                    }, { merge: true });
-                                }
-                            }
-                            // Jika diffMins > 60: Biarkan menyangkut di Menunggu Verifikasi
-                        }
-                    }
-                    
-                    // --- KONDISI 2: Rider reconnect (Mati lalu nyala) dan posisinya MASIH di dalam antrean ---
+                    // --- REVISI LOGIKA ANTI-RESET & AUTO-MASUK (OPSI B) ---
                     if (change.type === 'modified') {
                         const prevRider = allRiders.find(r => r.uid === uid);
                         if (prevRider) {
@@ -1283,9 +1253,8 @@
                             const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
                             const wasActive = wasOnline && wasAvailable;
 
-                            // Jika sebelumnya offline/terputus lalu kembali aktif, dan statusnya masih di antrean
-                            if (!wasActive && isNowActive && inMainQueue) {
-                                // Ambil waktu kapan terakhir dia mati (status offlinenya terekam)
+                            // JIKA RIDER BERALIH DARI OFFLINE KE ONLINE (Nyalakan On-Bid)
+                            if (!wasActive && isNowActive) {
                                 const offlineSinceMs = getTimestampMs(prevRider.last_updated);
                                 
                                 if (offlineSinceMs > 0) {
@@ -1293,22 +1262,28 @@
                                     const ref = doc(db, 'status_rider_aktif', uid);
                                     
                                     if (diffMins > 60) {
-                                        // Matinya > 1 jam tapi nyangkut di antrean -> Keluarkan ke Menunggu Verifikasi
+                                        // > 1 Jam: Tolak masuk antrean utama, harus diverifikasi manual
                                         setDoc(ref, { 
                                             in_main_queue: false, 
                                             last_drop_desc: "Terputus > 1 Jam (Verifikasi Ulang)",
                                             last_updated: serverTimestamp()
                                         }, { merge: true });
                                     } else if (diffMins > 20) {
-                                        // Matinya 21 - 60 menit -> Posisi reset ke urutan paling bawah
+                                        // 21-60 Menit: Masuk antrean, tapi HUKUM posisi (direset ke waktu sekarang)
                                         setDoc(ref, { 
+                                            in_main_queue: true,
                                             last_drop_time: serverTimestamp(), 
                                             last_drop_desc: "Terputus > 20 Menit (Posisi Direset)",
                                             last_updated: serverTimestamp()
                                         }, { merge: true });
-                                    } else if (diffMins >= -5) {
-                                        // Matinya <= 20 menit -> Posisi aman
+                                    } else {
+                                        // 0-20 Menit: AMAN. 
+                                        // ANTI-RESET: Jika aplikasi rider otomatis menimpa last_drop_time saat onbid,
+                                        // sistem Admin langsung MENIMPA BALIK menggunakan data history lama Admin!
+                                        const retainedDropTime = prevRider.last_drop_time || data.last_drop_time;
                                         setDoc(ref, { 
+                                            in_main_queue: true,
+                                            last_drop_time: retainedDropTime, // KEMBALIKAN KE WAKTU LAMA
                                             last_drop_desc: "Reconnect Aman (< 20 Menit)",
                                             last_updated: serverTimestamp()
                                         }, { merge: true });
@@ -1316,8 +1291,24 @@
                                 }
                             }
                         }
+                    } else if (change.type === 'added') {
+                        // Fallback jika Admin Web baru direfresh dan mendeteksi ada rider menggantung di luar antrean
+                        if (isNowActive && !inMainQueue) {
+                            const lastTimeMs = getTimestampMs(data.last_updated) || getTimestampMs(data.last_drop_time);
+                            if (lastTimeMs > 0) {
+                                const diffMins = (Date.now() - lastTimeMs) / (1000 * 60);
+                                if (diffMins >= -5 && diffMins <= 60) {
+                                    const ref = doc(db, 'status_rider_aktif', uid);
+                                    if (diffMins <= 20) {
+                                        setDoc(ref, { in_main_queue: true, last_drop_desc: "Auto-Masuk (< 20 Menit)" }, { merge: true });
+                                    } else {
+                                        setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Auto-Masuk (Terlambat > 20 Menit)" }, { merge: true });
+                                    }
+                                }
+                            }
+                        }
                     }
-                    // --- AKHIR KONDISI 2 ---
+                    // --- AKHIR KONDISI REVISI ---
                 });
 
                 newShiftRiders = [];
