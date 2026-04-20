@@ -1252,9 +1252,11 @@
                             const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
                             const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
                             const wasActive = wasOnline && wasAvailable;
+                            const wasInMainQueue = prevRider.in_main_queue === true || prevRider.in_main_queue === 'true';
 
-                            // JIKA RIDER BERALIH DARI OFFLINE KE ONLINE (Nyalakan On-Bid)
-                            if (!wasActive && isNowActive) {
+                            // SYARAT UTAMA: Hanya proses jika dia beralih dari mati ke nyala, 
+                            // DAN sebelumnya dia MEMANG SUDAH di antrean utama.
+                            if (!wasActive && isNowActive && wasInMainQueue) {
                                 const offlineSinceMs = getTimestampMs(prevRider.last_updated);
                                 
                                 if (offlineSinceMs > 0) {
@@ -1291,23 +1293,8 @@
                                 }
                             }
                         }
-                    } else if (change.type === 'added') {
-                        // Fallback jika Admin Web baru direfresh dan mendeteksi ada rider menggantung di luar antrean
-                        if (isNowActive && !inMainQueue) {
-                            const lastTimeMs = getTimestampMs(data.last_updated) || getTimestampMs(data.last_drop_time);
-                            if (lastTimeMs > 0) {
-                                const diffMins = (Date.now() - lastTimeMs) / (1000 * 60);
-                                if (diffMins >= -5 && diffMins <= 60) {
-                                    const ref = doc(db, 'status_rider_aktif', uid);
-                                    if (diffMins <= 20) {
-                                        setDoc(ref, { in_main_queue: true, last_drop_desc: "Auto-Masuk (< 20 Menit)" }, { merge: true });
-                                    } else {
-                                        setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Auto-Masuk (Terlambat > 20 Menit)" }, { merge: true });
-                                    }
-                                }
-                            }
-                        }
                     }
+                    // Kita HAPUS blok fallback "added" yang diam-diam menarik rider baru secara otomatis
                     // --- AKHIR KONDISI REVISI ---
                 });
 
