@@ -1254,7 +1254,43 @@
                             }
                         }
                     }
-                    // --- AKHIR TAMBAHAN LOGIKA ---
+                    
+                    // --- KONDISI 2: Rider reconnect (Mati lalu nyala) dan posisinya MASIH di dalam antrean ---
+                    if (change.type === 'modified') {
+                        const prevRider = allRiders.find(r => r.uid === uid);
+                        if (prevRider) {
+                            const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
+                            const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
+                            const wasActive = wasOnline && wasAvailable;
+
+                            // Jika sebelumnya offline/terputus lalu kembali aktif, dan statusnya masih di antrean
+                            if (!wasActive && isNowActive && inMainQueue) {
+                                // Ambil waktu kapan terakhir dia mati (status offlinenya terekam)
+                                const offlineSinceMs = getTimestampMs(prevRider.last_updated);
+                                
+                                if (offlineSinceMs > 0) {
+                                    const diffMins = (Date.now() - offlineSinceMs) / (1000 * 60);
+                                    const ref = doc(db, 'status_rider_aktif', uid);
+                                    
+                                    if (diffMins > 20) {
+                                        // Matinya lebih dari 20 menit -> Posisi reset ke urutan paling bawah (last_drop_time di-reset)
+                                        setDoc(ref, { 
+                                            last_drop_time: serverTimestamp(), 
+                                            last_drop_desc: "Terputus > 20 Menit (Posisi Direset)",
+                                            last_updated: serverTimestamp()
+                                        }, { merge: true });
+                                    } else if (diffMins >= 0) {
+                                        // Matinya kurang dari 20 menit -> Posisi aman, JANGAN ubah last_drop_time
+                                        setDoc(ref, { 
+                                            last_drop_desc: "Reconnect Aman (< 20 Menit)",
+                                            last_updated: serverTimestamp()
+                                        }, { merge: true });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // --- AKHIR KONDISI 2 ---
                 });
 
                 newShiftRiders = [];
