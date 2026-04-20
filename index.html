@@ -9017,58 +9017,49 @@
               const q = query(statusRef, where('in_main_queue', '==', true));
 
               queueUnsubscribe = onSnapshot(q, async (snapshot) => {
-                  let onlineRiders = [];
-                  let myStatus = null;
-                  
-                  snapshot.forEach(doc => {
-                      const data = doc.data();
-                      // Rider dihitung dalam antrean asalkan in_main_queue = true (tanpa peduli online/offline/jeda)
-                      if (data.in_main_queue === true) {
-                          onlineRiders.push(data);
-                      }
-                      
-                      // Simpan status diri sendiri
-                      if (String(data.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) {
-                          myStatus = data;
+                  // 1. Kumpulkan rider yang ada di antrean utama
+                  let mainQueueRiders = [];
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      data.uid = docSnap.id;
+                      if (data.in_main_queue === true || data.in_main_queue === 'true') {
+                          mainQueueRiders.push(data);
                       }
                   });
 
-                  // URUTKAN ANTREAN SECARA LOKAL BERDASARKAN WAKTU SELESAI (last_drop_time)
-                  onlineRiders.sort((a, b) => {
-                      const timeA = a.last_drop_time?.seconds || 0;
-                      const timeB = b.last_drop_time?.seconds || 0;
+                  // 2. Fungsi helper penarik waktu
+                  function getTimestampMs(field) {
+                      if (!field) return 0;
+                      if (typeof field.toMillis === 'function') return field.toMillis();
+                      if (field.seconds) return field.seconds * 1000;
+                      return 0;
+                  }
+
+                  // 3. Urutkan ASCENDING (Waktu terlama = Peringkat 1)
+                  mainQueueRiders.sort((a, b) => {
+                      let timeA = getTimestampMs(a.last_drop_time);
+                      let timeB = getTimestampMs(b.last_drop_time);
+                      if (timeA === 0) timeA = 1;
+                      if (timeB === 0) timeB = 1;
                       return timeA - timeB;
                   });
 
-                  // KALKULASI RANKING PRIBADI RIDER
+                  // 4. Hitung peringkat rider lokal
+                  const myCalculatedRank = mainQueueRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
+                  
+                  // 5. Tampilkan ke UI (Hanya jika tidak force_kill)
                   const myPosEl = document.getElementById('my-queue-position');
-                  const radarStatusTextEl = document.getElementById('radar-status-text');
-                  const rankLabelEl = myPosEl ? myPosEl.previousElementSibling : null;
+                  const myStatus = mainQueueRiders.find(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase());
 
-                  if (myStatus && myStatus.in_main_queue) {
-                      // Ambil nomor yang diketik admin ATAU hitung urutan secara otomatis
-                      const qNumRaw = myStatus.queue_number;
-                      const hasAdminNum = qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null";
-                      
-                      if (!hasAdminNum) {
-                          // Jika admin tidak mengetik manual, hitung posisinya secara otomatis
-                          const myCalculatedRank = onlineRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
-                          
-                          if (myPosEl && myCalculatedRank > 0) {
-                              myPosEl.className = "text-2xl font-black text-gray-800 leading-none";
-                              if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
-                              myPosEl.innerText = `#${myCalculatedRank}`;
-                          }
-                          if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
+                  if (myPosEl && myStatus && myStatus.force_kill !== true) {
+                      if (myCalculatedRank > 0) {
+                          myPosEl.innerText = `#${myCalculatedRank}`;
+                          // Sesuaikan nama class ini dengan gaya asli di aplikasi (text-gray-800 agar tidak hilang di background putih)
+                          myPosEl.className = "text-2xl font-black text-gray-800 leading-none"; 
                       }
                   }
-                  
-                  const container = document.getElementById('radar-queue-list');
-                  
-                  // CEK JIKA RIDER SEDANG MENUNGGU ADMIN
-                  if (myStatus && myStatus.is_online && myStatus.is_available && !myStatus.in_main_queue) {
-                      // Rider sedang menunggu admin memasukkan ke antrean
-                  }
+
+                  let onlineRiders = mainQueueRiders;
 
               // PERBAIKAN KUOTA BACA: Menghapus getDoc berulang di dalam onSnapshot yang menyebabkan kuota jebol (1.28M reads/hari).
               // Nilai last_drop_image sudah diset dan berisi URL/Base64 langsung dari status_rider_aktif saat selesai order.
@@ -9797,31 +9788,18 @@
                       const myPosEl = document.getElementById('my-queue-position');
                       const radarStatusTextEl = document.getElementById('radar-status-text');
                       
+                      const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
+                      const isOnline = data.is_online === true || data.is_online === 'true';
+                      const isAvailable = data.is_available === true || data.is_available === 'true';
+                      
                       if (myPosEl) {
-                          const rankLabelEl = myPosEl.previousElementSibling;
-                          
-                          // PERBAIKAN: Hapus syarat in_main_queue === true agar nomor antrean langsung muncul
-                          const qNum = data.queue_number;
-                          if (qNum !== undefined && qNum !== null && String(qNum).trim() !== "" && String(qNum).trim().toLowerCase() !== "null") {
-                              // Jika admin mengirimkan text (misal: "Antrean ditahan admin"), bukan angka
-                              if (isNaN(qNum)) {
-                                  myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
-                                  myPosEl.innerHTML = `<span class="text-[9px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">${qNum}</span>`;
-                                  if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
-                              } else {
-                                  myPosEl.className = "text-2xl font-black text-gray-800 leading-none";
-                                  if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'block';
-                                  myPosEl.innerText = `#${qNum}`;
-                              }
-                              if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu orderan dari Admin...";
-                          } else if (data.in_main_queue !== true) {
-                              // Tampilkan 'Masih Diproses Admin' HANYA JIKA rider belum dimasukkan ke antrean utama
-                              myPosEl.className = "flex items-center justify-center w-full h-full pb-1";
-                              if (rankLabelEl && rankLabelEl.tagName.toLowerCase() === 'span') rankLabelEl.style.display = 'none';
-                              myPosEl.innerHTML = `<span class="text-[8px] leading-[1.2] text-center text-orange-600 font-bold px-1 mt-1">Masih Diproses Admin</span>`;
-                              if (radarStatusTextEl) radarStatusTextEl.innerText = "Menunggu antrean di proses admin..";
+                          if (data.force_kill === true) {
+                              myPosEl.innerHTML = `<span class="text-[9px] font-bold text-red-200 text-center block leading-tight">DIBEKUKAN<br>(Cek Saldo)</span>`;
+                          } else if (!inMainQueue && isOnline && isAvailable) {
+                              myPosEl.innerHTML = `<span class="text-[9px] font-bold text-sky-200 text-center block leading-tight">Menunggu<br>Verifikasi</span>`;
+                          } else if (!isOnline || !isAvailable) {
+                              myPosEl.innerHTML = `<span class="text-[10px] font-bold text-slate-300">OFF</span>`;
                           }
-                          // Jika data.in_main_queue === true tapi qNum kosong, angka akan dihitung otomatis oleh startQueueListener
                       }
                       
                       // LOGIKA REMOTE KILL: Jika Firebase bilang offline, tapi toggle di layar masih menyala (true)
