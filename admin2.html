@@ -725,8 +725,8 @@
             if (allRiders.length === 0 || !isBalancesLoaded) return;
             
             allRiders.forEach(rider => {
-                // PERBAIKAN: Gunakan b.id bukan b.uid agar selalu cocok dengan ID dokumen dan tambahkan trim()
-                const balanceData = allRiderBalances.find(b => String(b.id).trim() === String(rider.uid).trim());
+                // PERBAIKAN 1: Tambahkan toUpperCase() agar pencocokan UID aman dari perbedaan huruf besar/kecil
+                const balanceData = allRiderBalances.find(b => String(b.id).trim().toUpperCase() === String(rider.uid).trim().toUpperCase());
                 const saldo = balanceData ? parseInt(balanceData.saldo || 0) : 0;
 
                 const inQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
@@ -751,18 +751,24 @@
                     }
                 } 
                 else if (saldo > 0) {
-                    if (rider.force_kill === true && (rider.last_drop_desc || "").includes("Saldo Rp 0")) {
+                    // PERBAIKAN FINAL: Langsung lepaskan force_kill apa pun alasannya selama saldo > 0 
+                    // (kecuali jika admin secara manual klik tombol "Paksa Offline" yang menghasilkan keterangan "Dikeluarkan Paksa")
+                    const isForceKilled = rider.force_kill === true || rider.force_kill === 'true';
+                    const desc = (rider.last_drop_desc || "").toLowerCase();
+                    const isKickedByAdmin = desc.includes("dikeluarkan paksa");
+
+                    if (isForceKilled && !isKickedByAdmin) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        
+                        // KITA UBAH PARAMETER force_kill KEMBALI MENJADI false AGAR APLIKASI RIDER BISA DIBUKA
                         setDoc(ref, {
-                            is_online: true,       
-                            is_available: true,    
-                            in_main_queue: false,  
                             force_kill: false,     
                             last_drop_desc: "Aktif Kembali (Menunggu Verifikasi)",
+                            proof_desc: "",
                             last_updated: serverTimestamp()
-                        }, { merge: true }).catch(e => console.error("Gagal auto-rejoin:", e));
+                        }, { merge: true }).catch(e => console.error("Gagal melepas status DIBEKUKAN:", e));
                         
-                        sendPushNotification(rider.uid, "✅ SALDO TERISI ✅", "Saldo berhasil ditambah. Kamu masuk antrean tunggu, silakan hubungi admin untuk verifikasi masuk radar.");
+                        sendPushNotification(rider.uid, "✅ DIBEKUKAN DICABUT ✅", "Saldo dompet sudah aman. Silakan masuk antrean radar kembali.");
                     }
                 }
             });
