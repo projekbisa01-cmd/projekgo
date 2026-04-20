@@ -425,20 +425,46 @@
             <div class="grid grid-cols-2 gap-2 mt-2">
                 <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex flex-col justify-center">
                     <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Terpotong (Hari Ini)</p>
-                    <p id="stat-potongan-hari" class="text-sm font-black text-indigo-700">Rp 0</p>
+                    <div class="flex items-end gap-1.5">
+                        <p id="stat-potongan-hari" class="text-sm font-black text-indigo-700 leading-none">Rp 0</p>
+                        <span id="stat-count-hari" class="text-[9px] font-bold text-indigo-500 leading-none mb-0.5">(0 Order)</span>
+                    </div>
                 </div>
                 <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex flex-col justify-center">
                     <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Terpotong (Mgg Ini)</p>
-                    <p id="stat-potongan-minggu" class="text-sm font-black text-indigo-700">Rp 0</p>
+                    <div class="flex items-end gap-1.5">
+                        <p id="stat-potongan-minggu" class="text-sm font-black text-indigo-700 leading-none">Rp 0</p>
+                        <span id="stat-count-minggu" class="text-[9px] font-bold text-indigo-500 leading-none mb-0.5">(0 Order)</span>
+                    </div>
                 </div>
                 <div class="col-span-2 bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex justify-between items-center">
                     <div>
                         <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Total Terpotong (Bulan Ini)</p>
-                        <p id="stat-potongan-bulan" class="text-base font-black text-indigo-700">Rp 0</p>
+                        <div class="flex items-end gap-2">
+                            <p id="stat-potongan-bulan" class="text-base font-black text-indigo-700 leading-none">Rp 0</p>
+                            <span id="stat-count-bulan" class="text-[10px] font-bold text-indigo-500 leading-none mb-0.5">(0 Order)</span>
+                        </div>
                     </div>
                     <button onclick="window.calculateSaldoStats()" class="w-8 h-8 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs hover:bg-indigo-500 hover:text-white transition-colors shadow-sm" title="Refresh Data Potongan">
                         <i id="icon-refresh-potongan" class="fa-solid fa-rotate-right"></i>
                     </button>
+                </div>
+            </div>
+
+            <!-- CEK RIWAYAT PER TANGGAL (BARU) -->
+            <div class="bg-indigo-50 border border-indigo-100 p-3 rounded-xl mt-2 mb-2">
+                <div class="flex justify-between items-center mb-2">
+                    <p class="text-[9px] font-bold text-indigo-800 uppercase tracking-widest"><i class="fa-solid fa-calendar-day mr-1"></i> Cek Riwayat per Tanggal</p>
+                </div>
+                <div class="flex gap-2 items-center">
+                    <input type="date" id="saldo-history-date" onchange="window.calculateSaldoHistoryByDate()" class="w-full bg-white border border-indigo-200 rounded-lg p-2 text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-inner">
+                </div>
+                <div class="mt-2 flex justify-between items-center bg-white p-2.5 rounded-lg border border-indigo-100 shadow-sm">
+                    <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Total Terpotong:</span>
+                    <div class="flex items-end gap-1.5">
+                        <p id="stat-potongan-custom" class="text-base font-black text-indigo-700 leading-none">Rp 0</p>
+                        <span id="stat-count-custom" class="text-[9px] font-bold text-indigo-500 leading-none mb-0.5">(0 Order)</span>
+                    </div>
                 </div>
             </div>
             <!-- END INFORMASI SALDO -->
@@ -851,6 +877,12 @@
             if (!field) return 0;
             if (typeof field.toMillis === 'function') return field.toMillis();
             if (field.seconds) return field.seconds * 1000;
+            if (typeof field.toDate === 'function') return field.toDate().getTime();
+            if (field instanceof Date) return field.getTime();
+            if (typeof field === 'string' || typeof field === 'number') {
+                const parsed = new Date(field).getTime();
+                if (!isNaN(parsed)) return parsed;
+            }
             return 0;
         }
 
@@ -958,8 +990,23 @@
                 const qCompleted = query(activeOrdersCol, where("status", "==", "completed"));
                 const snapCompleted = await getDocsFromServer(qCompleted);
 
+                // Cache data order ke memori agar filter per tanggal instan & tidak boros kuota database
+                window._cachedCompletedOrders = [];
+                snapCompleted.forEach(docSnap => {
+                    window._cachedCompletedOrders.push(docSnap.data());
+                });
+
                 const now = new Date();
                 
+                // Set default tanggal custom ke hari ini jika belum diisi
+                const dateInput = document.getElementById('saldo-history-date');
+                if (dateInput && !dateInput.value) {
+                    const dd = String(now.getDate()).padStart(2, '0');
+                    const mm = String(now.getMonth() + 1).padStart(2, '0');
+                    const yyyy = now.getFullYear();
+                    dateInput.value = `${yyyy}-${mm}-${dd}`;
+                }
+
                 // Setel batasan waktu untuk Hari, Minggu, Bulan
                 const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
                 
@@ -968,12 +1015,11 @@
                 
                 const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
-                let potHari = 0;
-                let potMinggu = 0;
-                let potBulan = 0;
+                let potHari = 0, orderHari = 0;
+                let potMinggu = 0, orderMinggu = 0;
+                let potBulan = 0, orderBulan = 0;
 
-                snapCompleted.forEach(docSnap => {
-                    const data = docSnap.data();
+                window._cachedCompletedOrders.forEach(data => {
                     let orderMs = 0;
                     
                     const ts = data.finished_at || data.created_at;
@@ -985,21 +1031,67 @@
                         const feeReal = parseFloat(data.fee || 0);
                         const adminCut = Math.round(feeReal * 0.16);
 
-                        if (orderMs >= startOfDay) potHari += adminCut;
-                        if (orderMs >= startOfWeek) potMinggu += adminCut;
-                        if (orderMs >= startOfMonth) potBulan += adminCut;
+                        if (orderMs >= startOfDay) { potHari += adminCut; orderHari++; }
+                        if (orderMs >= startOfWeek) { potMinggu += adminCut; orderMinggu++; }
+                        if (orderMs >= startOfMonth) { potBulan += adminCut; orderBulan++; }
                     }
                 });
 
                 document.getElementById('stat-potongan-hari').innerText = `Rp ${potHari.toLocaleString('id-ID')}`;
+                document.getElementById('stat-count-hari').innerText = `(${orderHari} Order)`;
+                
                 document.getElementById('stat-potongan-minggu').innerText = `Rp ${potMinggu.toLocaleString('id-ID')}`;
+                document.getElementById('stat-count-minggu').innerText = `(${orderMinggu} Order)`;
+                
                 document.getElementById('stat-potongan-bulan').innerText = `Rp ${potBulan.toLocaleString('id-ID')}`;
+                document.getElementById('stat-count-bulan').innerText = `(${orderBulan} Order)`;
+
+                // Hitung juga untuk tanggal spesifik (jika ada)
+                if (typeof window.calculateSaldoHistoryByDate === 'function') {
+                    window.calculateSaldoHistoryByDate();
+                }
 
             } catch(e) {
                 console.error("Gagal hitung stat potongan:", e);
             } finally {
                 if (icon) icon.classList.remove('fa-spin');
             }
+        };
+
+        window.calculateSaldoHistoryByDate = () => {
+            const dateVal = document.getElementById('saldo-history-date').value;
+            if (!dateVal || !window._cachedCompletedOrders) return;
+
+            // Pisahkan YYYY-MM-DD
+            const parts = dateVal.split('-');
+            const year = parseInt(parts[0]);
+            const month = parseInt(parts[1]) - 1; // Bulan di JS dimulai dari 0
+            const day = parseInt(parts[2]);
+
+            // Ambil batas awal 00:00:00 dan akhir 23:59:59 dari tanggal yang dipilih
+            const startOfCustom = new Date(year, month, day).getTime();
+            const endOfCustom = new Date(year, month, day + 1).getTime() - 1;
+
+            let potCustom = 0, orderCustom = 0;
+
+            window._cachedCompletedOrders.forEach(data => {
+                let orderMs = 0;
+                const ts = data.finished_at || data.created_at;
+                if (ts && ts.seconds) {
+                    orderMs = ts.seconds * 1000;
+                }
+
+                // Cek apakah order masuk di tanggal spesifik tersebut
+                if (orderMs >= startOfCustom && orderMs <= endOfCustom) {
+                    const feeReal = parseFloat(data.fee || 0);
+                    const adminCut = Math.round(feeReal * 0.16);
+                    potCustom += adminCut;
+                    orderCustom++;
+                }
+            });
+
+            document.getElementById('stat-potongan-custom').innerText = `Rp ${potCustom.toLocaleString('id-ID')}`;
+            document.getElementById('stat-count-custom').innerText = `(${orderCustom} Order)`;
         };
 
         window.loadCustomers = async () => {
@@ -1144,13 +1236,25 @@
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                     const isNowActive = isOnline && isAvailable;
 
-                    if (change.type === "added") {
-                        window.riderStates[uid] = isNowActive;
+                    // --- TAMBAHAN LOGIKA TOLERANSI 1 JAM (Berdasarkan last_drop_time) ---
+                    if (isNowActive && !inMainQueue) {
+                        const lastDropMs = getTimestampMs(data.last_drop_time);
+                        
+                        // Pastikan rider memiliki riwayat last drop time
+                        if (lastDropMs > 0) {
+                            // Hitung selisih waktu sekarang dengan waktu terakhir DO / Masuk shift
+                            const diffMins = (Date.now() - lastDropMs) / (1000 * 60);
+                            
+                            // PERBAIKAN BUG: Pastikan diffMins tidak negatif ekstrem.
+                            // Jika jam HP/Laptop admin terlambat dari jam server, nilainya bisa negatif.
+                            // Kita batas dari -5 sampai 60 menit saja.
+                            if (diffMins >= -5 && diffMins <= 60) {
+                                const ref = doc(db, 'status_rider_aktif', uid);
+                                setDoc(ref, { in_main_queue: true, last_drop_desc: "Auto-Masuk (< 1 Jam)" }, { merge: true });
+                            }
+                        }
                     }
-
-                    if (change.type === "modified") {
-                        window.riderStates[uid] = isNowActive;
-                    }
+                    // --- AKHIR TAMBAHAN LOGIKA ---
                 });
 
                 newShiftRiders = [];
@@ -1201,6 +1305,7 @@
                 updateMainQueueUI();
                 
                 checkAndEnforceRiderBalances();
+                if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
                 
             }, (error) => {
                 console.error("Error Firebase:", error);
@@ -2294,6 +2399,7 @@
             if(formContainer.classList.contains('hidden')) {
                 formContainer.classList.remove('hidden');
                 icon.classList.add('rotate-180');
+                window.updateManualRiderSelect();
             } else {
                 formContainer.classList.add('hidden');
                 icon.classList.remove('rotate-180');
@@ -2590,6 +2696,7 @@
                 // PERBAIKAN: Refresh UI Antrean agar badge saldo di radar otomatis terupdate saat data saldo masuk/berubah!
                 if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
                 if (typeof updateNewShiftUI === 'function') updateNewShiftUI();
+                if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
             });
         }
 
