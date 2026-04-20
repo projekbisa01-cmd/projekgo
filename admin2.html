@@ -1306,11 +1306,36 @@
                     const data = docSnap.data();
                     const uid = docSnap.id; 
                     data.uid = uid;
-                    allRiders.push(data);
                     
                     const isOnline = data.is_online === true || data.is_online === 'true';
                     const isAvailable = data.is_available === true || data.is_available === 'true';
-                    const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
+                    let inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
+
+                    // --- PENGAMAN SHIFT BARU (AUTO-KICK SISA KEMARIN) ---
+                    // Mencegah rider yang datanya "nyangkut" dari shift kemarin agar tidak otomatis masuk radar utama
+                    if (inMainQueue) {
+                        const lastDropMs = getTimestampMs(data.last_drop_time);
+                        const desc = (data.last_drop_desc || "").toLowerCase();
+                        const isKompensasi = desc.includes("kompensasi") || desc.includes("prioritas") || desc.includes("batal");
+
+                        // Jika waktu terakhir order sudah > 10 jam yang lalu dan bukan status kompensasi admin, paksa keluar antrean
+                        if (lastDropMs > 0 && !isKompensasi) {
+                            const diffHours = (Date.now() - lastDropMs) / (1000 * 60 * 60);
+                            if (diffHours > 10) { 
+                                inMainQueue = false; // Timpa state lokal agar langsung pindah UI
+                                data.in_main_queue = false;
+                                
+                                // Update database agar permanen
+                                updateDoc(doc(db, 'status_rider_aktif', uid), {
+                                    in_main_queue: false,
+                                    last_drop_desc: "Shift Baru (Perlu Verifikasi)"
+                                }).catch(e => console.warn(e));
+                            }
+                        }
+                    }
+                    // --- AKHIR PENGAMAN ---
+
+                    allRiders.push(data);
 
                     window.riderStates[uid] = isOnline && isAvailable;
 
