@@ -9137,8 +9137,11 @@
                       return timeA - timeB;
                   });
 
-                  // 4. Hitung peringkat rider lokal
-                  const myCalculatedRank = mainQueueRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
+                  // FILTER: Ambil hanya rider yang benar-benar siap (online & available)
+                  let readyQueueRiders = mainQueueRiders.filter(r => r.is_online === true && r.is_available === true);
+
+                  // 4. Hitung peringkat rider lokal berdasarkan antrean yang siap saja
+                  const myCalculatedRank = readyQueueRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
                   
                   // 5. Tampilkan ke UI (Hanya jika tidak force_kill)
                   const myPosEl = document.getElementById('my-queue-position');
@@ -9152,11 +9155,9 @@
                       }
                   }
 
-                  let onlineRiders = mainQueueRiders;
-
               // PERBAIKAN KUOTA BACA: Menghapus getDoc berulang di dalam onSnapshot yang menyebabkan kuota jebol (1.28M reads/hari).
               // Nilai last_drop_image sudah diset dan berisi URL/Base64 langsung dari status_rider_aktif saat selesai order.
-              const ridersWithImages = onlineRiders.map((rider) => {
+              const ridersWithImages = readyQueueRiders.map((rider) => {
                   let imageSrc = rider.last_drop_image || null;
 
                   // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
@@ -9193,12 +9194,14 @@
               });
 
               let html = '';
+              let displayIndex = 1; // Counter manual untuk urutan angka yang tampil
               
-              ridersWithImages.forEach((rider, index) => {
-                      // Prioritaskan angka dari admin, jika kosong gunakan urutan otomatis (index + 1)
+              ridersWithImages.forEach((rider) => {
+                      // Prioritaskan angka dari admin, jika kosong gunakan urutan otomatis dari displayIndex
                       const qNumRaw = rider.queue_number;
                       const hasAdminNum = qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null";
-                      const rank = hasAdminNum ? qNumRaw : (index + 1);
+                      const rank = hasAdminNum ? qNumRaw : displayIndex;
+                      displayIndex++; // Tambah counter hanya untuk rider yang ditampilkan
                       
                       const uidClean = String(rider.uid || '').trim().toUpperCase();
                       const myUidClean = String(currentUserUID).trim().toUpperCase();
@@ -9207,11 +9210,7 @@
                       const name = rider.name || 'Rider';
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
                       
-                      // Deteksi apakah rider benar-benar siap atau sedang jeda/hilang sinyal
-                      const isReady = rider.is_online === true && rider.is_available === true;
-                      
-                      // JIKA RIDER TIDAK READY (SEDANG BAWA ORDER ATAU JEDA), JANGAN DITAMPILKAN DI DAFTAR
-                      if (!isReady) return;
+                      const isReady = true; // Semua rider di dalam array ini sudah dipastikan ready karena filter di atas
                       
                       // LOGIKA GAMBAR: Ditambahkan fungsi fallback (onerror) dan referrerpolicy="no-referrer"
                       const photoHtml = rider.displayImage 
