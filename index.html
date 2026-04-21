@@ -609,11 +609,8 @@
 
                 <div class="space-y-4">
                     <div class="bg-gray-50 p-4 rounded-2xl border border-gray-100">
-                        <div class="flex justify-between items-center border-b border-gray-200 pb-2 mb-3">
+                        <div class="border-b border-gray-200 pb-2 mb-3">
                             <p class="text-[10px] text-gray-400 font-bold uppercase">Daftar Pesanan</p>
-                            <button id="btn-copy-order" class="text-gray-400 hover:text-orange-500 transition-colors active:scale-90" title="Salin Pesanan">
-                                <i class="fa-regular fa-copy"></i>
-                            </button>
                         </div>
                         <ul id="active-order-items" class="space-y-0.5 text-sm font-bold text-gray-700">
                             <!-- Diisi oleh JS -->
@@ -7896,8 +7893,19 @@
                       let fDate = '';
                       let fTime = String(data.Jam || data.jam || '').trim();
                       let dObj = null;
+                      let timeObj = null; // Khusus untuk mengekstrak jam (prioritas created_at)
 
                       // 1. Cek apakah field adalah Firebase Timestamp Object
+                      // Prioritaskan created_at untuk Jam (Waktu pesanan diinput Admin)
+                      if (data.created_at?.seconds) {
+                          timeObj = new Date(data.created_at.seconds * 1000);
+                      } else if (data.timestamp?.seconds) {
+                          timeObj = new Date(data.timestamp.seconds * 1000);
+                      } else if (data.finished_at?.seconds) {
+                          timeObj = new Date(data.finished_at.seconds * 1000);
+                      }
+
+                      // Untuk Tanggal tetap ambil yang tersedia (Selesai/Dibuat)
                       if (data.finished_at?.seconds || data.timestamp?.seconds || data.created_at?.seconds) {
                           const ts = data.finished_at || data.timestamp || data.created_at;
                           dObj = new Date(ts.seconds * 1000);
@@ -7911,7 +7919,6 @@
                           const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
                           const parts = formatter.formatToParts(dObj);
                           fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
-                          if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                       } else {
                           const rawStr = String(data.Tanggal || data.tanggal || '').trim();
                           if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
@@ -7926,6 +7933,13 @@
                               const parts = formatter.formatToParts(new Date());
                               fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
                           }
+                      }
+
+                      // 3. Eksekusi Format Jam (Gunakan timeObj yang memprioritaskan created_at)
+                      if (timeObj) {
+                          fTime = timeObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                      } else if (!fTime && dObj) {
+                          fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                       }
                     
                       // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
@@ -8185,16 +8199,30 @@
                   if (feeDetailEl) feeDetailEl.innerHTML = '';
               }
 
-              // Render list pesanan di popup orderan masuk (Aman dari Array Object)
+              // Render list pesanan di popup orderan masuk (Aman dari Array Object & String Spasi/Enter)
               if (itemsListEl) {
+                  let itemsArray = [];
                   if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                      itemsListEl.innerHTML = data.items.map(item => {
+                      itemsArray = data.items;
+                  } else if (data.items_string || data.List_Pesanan || data.Keterangan) {
+                      const str = data.items_string || data.List_Pesanan || data.Keterangan;
+                      itemsArray = String(str).split('\n');
+                  }
+
+                  if (itemsArray.length > 0) {
+                      itemsListEl.innerHTML = itemsArray.map(item => {
                           const itemName = typeof item === 'object' ? (item.name || 'Item') : String(item);
-                          const cleanName = itemName.replace(/^[\-\•\·\s]+/, '');
+                          const rawName = itemName.replace(/\r/g, ''); // Hapus carriage return
+                          const cleanName = rawName.replace(/^[\-\•\·\s]+/, '');
+                          
+                          if (rawName.trim() === '') {
+                              return `<li class="h-3 w-full"></li>`; // Baris kosong
+                          }
+                          
                           const isNumberFirst = /^\d/.test(cleanName);
                           const prefix = isNumberFirst ? '- ' : '';
-                          const indentClass = isNumberFirst ? 'ml-2 text-gray-600 font-medium text-xs leading-tight' : 'text-gray-800 font-bold text-xs mt-1 leading-tight';
-                          return `<li class="pb-0.5"><div class="${indentClass}">${prefix}${cleanName}</div></li>`;
+                          const indentClass = isNumberFirst ? 'ml-2 text-gray-600 font-medium text-xs leading-relaxed' : 'text-gray-800 font-bold text-xs mt-1 leading-relaxed';
+                          return `<li class="pb-1"><div class="${indentClass}">${prefix}${cleanName}</div></li>`;
                       }).join('');
                   } else {
                       itemsListEl.innerHTML = `<li class="text-gray-400 italic text-xs">- Pesanan dari admin (tanpa rincian item)</li>`;
@@ -8468,7 +8496,7 @@
                   extraInfoEl.innerText = "";
               }
 
-              // List Item (Aman dari Array Object Admin)
+              // List Item (Aman dari Array Object Admin & Format Baris Baru)
               const listEl = document.getElementById('active-order-items');
               let copyText = `*PROJEKGO DELIVERY ORDER*\n`;
               copyText += `Admin CS: 081292802623\n`;
@@ -8476,18 +8504,34 @@
               
               let detailPesananWA = `\n\n*Detail Pesanan:*\n`;
 
+              let itemsArray = [];
               if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                  listEl.innerHTML = data.items.map(item => {
+                  itemsArray = data.items;
+              } else if (data.items_string || data.List_Pesanan || data.Keterangan) {
+                  const str = data.items_string || data.List_Pesanan || data.Keterangan;
+                  itemsArray = String(str).split('\n');
+              }
+
+              if (itemsArray.length > 0) {
+                  listEl.innerHTML = itemsArray.map(item => {
                       const itemName = typeof item === 'object' ? (item.name || 'Item') : String(item);
-                      const cleanName = itemName.replace(/^[\-\•\·\s]+/, '');
+                      const rawName = itemName.replace(/\r/g, ''); // Hapus carriage return
+                      const cleanName = rawName.replace(/^[\-\•\·\s]+/, '');
+                      
+                      if (rawName.trim() === '') {
+                          copyText += `\n`;
+                          detailPesananWA += `\n`;
+                          return `<li class="h-3 w-full"></li>`; // Baris kosong
+                      }
+
                       const isNumberFirst = /^\d/.test(cleanName);
                       const prefix = isNumberFirst ? '- ' : '';
-                      const indentClass = isNumberFirst ? 'ml-2 text-gray-600 font-medium text-xs leading-tight' : 'text-gray-800 font-bold text-xs mt-1 leading-tight';
+                      const indentClass = isNumberFirst ? 'ml-2 text-gray-600 font-medium text-xs leading-relaxed' : 'text-gray-800 font-bold text-xs mt-1 leading-relaxed';
                       
                       copyText += `${prefix}${cleanName}\n`;
                       detailPesananWA += `${prefix}${cleanName}\n`;
                       
-                      return `<li class="pb-0.5"><div class="${indentClass}">${prefix}${cleanName}</div></li>`;
+                      return `<li class="pb-1"><div class="${indentClass}">${prefix}${cleanName}</div></li>`;
                   }).join('');
               } else {
                   listEl.innerHTML = `<li class="text-gray-400 italic text-xs">- Pesanan dari admin</li>`;
@@ -8511,40 +8555,6 @@
                       e.preventDefault();
                       window.openWaSelector(phoneStr, waMessage);
                   };
-              }
-
-              // Logika Tombol Copy
-              const btnCopy = document.getElementById('btn-copy-order');
-              if (btnCopy) {
-                  const newBtnCopy = btnCopy.cloneNode(true);
-                  btnCopy.parentNode.replaceChild(newBtnCopy, btnCopy);
-                  
-                  newBtnCopy.addEventListener('click', () => {
-                      let finalCopyText = copyText;
-                      finalCopyText += `----------------------\n*Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
-                      if (extraFee > 0) {
-                          finalCopyText += ` + Rp ${extraFee.toLocaleString('id-ID')} (tambahan)`;
-                      }
-                      
-                      const textArea = document.createElement("textarea");
-                      textArea.value = finalCopyText;
-                      textArea.style.position = "fixed";
-                      textArea.style.top = "0";
-                      textArea.style.left = "0";
-                      textArea.style.opacity = "0";
-                      document.body.appendChild(textArea);
-                      textArea.focus();
-                      textArea.select();
-                      try {
-                          document.execCommand('copy');
-                          newBtnCopy.innerHTML = '<i class="fa-solid fa-check text-green-500"></i>';
-                          setTimeout(() => { newBtnCopy.innerHTML = '<i class="fa-regular fa-copy"></i>'; }, 2000);
-                      } catch (err) {
-                          console.error('Gagal menyalin', err);
-                          alert('Gagal menyalin pesanan ke clipboard.');
-                      }
-                      document.body.removeChild(textArea);
-                  });
               }
 
               // Tampilkan Overlay (mengunci layar)
@@ -10152,8 +10162,19 @@
 
                   let html = '';
                   userHistory.forEach(data => {
-                      const dateStr = data.Tanggal || data.tanggal || '-';
-                      const timeStr = data.Jam || data.jam || '-';
+                      let dateStr = data.Tanggal || data.tanggal || '-';
+                      let timeStr = data.Jam || data.jam || '-';
+                      
+                      // Prioritaskan created_at untuk tampilan jam dompet
+                      if (data.created_at?.seconds) {
+                          const d = new Date(data.created_at.seconds * 1000);
+                          timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                          if (dateStr === '-') dateStr = `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getFullYear()}`;
+                      } else if (data.finished_at?.seconds) {
+                          const d = new Date(data.finished_at.seconds * 1000);
+                          if (timeStr === '-') timeStr = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                          if (dateStr === '-') dateStr = `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getFullYear()}`;
+                      }
                       
                       let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
                       let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
