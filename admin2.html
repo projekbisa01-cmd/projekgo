@@ -154,9 +154,9 @@
                             <p id="display-name-text" class="text-3xl font-black text-white truncate animate-berdetak leading-tight"></p>
                         </div>
                         <!-- Tambahan Lokasi Rider -->
-                        <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
-                            <i class="fa-solid fa-location-dot text-[9px] text-blue-300 shrink-0"></i>
-                            <p id="display-location-text" class="text-[10px] font-bold text-blue-100 uppercase truncate"></p>
+                        <div class="flex items-center gap-1.5 mt-1 overflow-hidden w-full">
+                            <i class="fa-solid fa-location-dot text-[10px] text-blue-300 shrink-0"></i>
+                            <p id="display-location-text" class="text-[11px] font-bold text-blue-100 uppercase truncate"></p>
                         </div>
                     </div>
                 </div>
@@ -771,16 +771,15 @@
                 if (saldo <= 0) {
                     if (inQueue || isAvailable || isOnline) {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        setDoc(ref, {
+                        updateDoc(ref, {
                             is_online: false,      
                             is_available: false,   
                             in_main_queue: false,  
                             force_kill: true,
                             last_drop_time: new Date("2000-01-01T00:00:00Z"),      
-                            last_drop_desc: "Saldo Rp 0 / Minus. Silakan Top Up.",
-                            proof_desc: "",        
+                            last_drop_desc: "Saldo Rp 0 / Minus. Silakan Top Up.",      
                             last_updated: serverTimestamp()
-                        }, { merge: true }).catch(e => console.error("Gagal auto-kick:", e));
+                        }).catch(e => console.error("Gagal auto-kick:", e));
                         
                         sendPushNotification(rider.uid, "⚠️ SALDO KOSONG / MINUS ⚠️", "Aplikasi dipaksa offline. Isi dulu dompet kredit nya agar bisa masuk antrean lagi.");
                     }
@@ -796,12 +795,11 @@
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
                         
                         // KITA UBAH PARAMETER force_kill KEMBALI MENJADI false AGAR APLIKASI RIDER BISA DIBUKA
-                        setDoc(ref, {
+                        updateDoc(ref, {
                             force_kill: false,     
                             last_drop_desc: "Aktif Kembali (Menunggu Verifikasi)",
-                            proof_desc: "",
                             last_updated: serverTimestamp()
-                        }, { merge: true }).catch(e => console.error("Gagal melepas status DIBEKUKAN:", e));
+                        }).catch(e => console.error("Gagal melepas status DIBEKUKAN:", e));
                         
                         sendPushNotification(rider.uid, "✅ DIBEKUKAN DICABUT ✅", "Saldo dompet sudah aman. Silakan masuk antrean radar kembali.");
                     }
@@ -1251,12 +1249,18 @@
                         if (prevRider) {
                             const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
                             const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
-                            const wasActive = wasOnline && wasAvailable;
                             const wasInMainQueue = prevRider.in_main_queue === true || prevRider.in_main_queue === 'true';
 
-                            // SYARAT UTAMA: Hanya proses jika dia beralih dari mati ke nyala, 
-                            // DAN sebelumnya dia MEMANG SUDAH di antrean utama.
-                            if (!wasActive && isNowActive && wasInMainQueue) {
+                            // PERBAIKAN: Deteksi apakah rider baru saja menyelesaikan order (DO)
+                            // Jika is_available berubah dari false (sibuk) menjadi true (tersedia), ini adalah DO.
+                            const isJustFinishedOrder = !wasAvailable && isAvailable;
+
+                            // SYARAT UTAMA RECONNECT AMAN: 
+                            // 1. Sebelumnya sinyal BENAR-BENAR MATI/OFFLINE (!wasOnline)
+                            // 2. Sekarang Aktif (isNowActive)
+                            // 3. Sebelumnya sudah ada di antrean
+                            // 4. JANGAN jalankan jika ini adalah proses selesai DO (!isJustFinishedOrder)
+                            if (!wasOnline && isNowActive && wasInMainQueue && !isJustFinishedOrder) {
                                 const offlineSinceMs = getTimestampMs(prevRider.last_updated);
                                 
                                 if (offlineSinceMs > 0) {
@@ -1265,30 +1269,30 @@
                                     
                                     if (diffMins > 60) {
                                         // > 1 Jam: Tolak masuk antrean utama, harus diverifikasi manual
-                                        setDoc(ref, { 
+                                        updateDoc(ref, { 
                                             in_main_queue: false, 
                                             last_drop_desc: "Terputus > 1 Jam (Verifikasi Ulang)",
                                             last_updated: serverTimestamp()
-                                        }, { merge: true });
+                                        });
                                     } else if (diffMins > 20) {
                                         // 21-60 Menit: Masuk antrean, tapi HUKUM posisi (direset ke waktu sekarang)
-                                        setDoc(ref, { 
+                                        updateDoc(ref, { 
                                             in_main_queue: true,
                                             last_drop_time: serverTimestamp(), 
                                             last_drop_desc: "Terputus > 20 Menit (Posisi Direset)",
                                             last_updated: serverTimestamp()
-                                        }, { merge: true });
+                                        });
                                     } else {
                                         // 0-20 Menit: AMAN. 
                                         // ANTI-RESET: Jika aplikasi rider otomatis menimpa last_drop_time saat onbid,
                                         // sistem Admin langsung MENIMPA BALIK menggunakan data history lama Admin!
                                         const retainedDropTime = prevRider.last_drop_time || data.last_drop_time;
-                                        setDoc(ref, { 
+                                        updateDoc(ref, { 
                                             in_main_queue: true,
                                             last_drop_time: retainedDropTime, // KEMBALIKAN KE WAKTU LAMA
                                             last_drop_desc: "Reconnect Aman (< 20 Menit)",
                                             last_updated: serverTimestamp()
-                                        }, { merge: true });
+                                        });
                                     }
                                 }
                             }
@@ -1415,12 +1419,6 @@
                     ketLokasi = orderProofDesc;
                 } else if (rider.location && String(rider.location).trim() !== "") {
                     ketLokasi = rider.location;
-                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
-                    ketLokasi = rider.last_drop_desc;
-                }
-                
-                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
-                    ketLokasi = "Menunggu Verifikasi";
                 }
 
                 const realName = rider.nama || rider.name || rider.displayName;
@@ -1439,8 +1437,8 @@
                             <div class="overflow-hidden">
                                 <p class="font-black text-black text-[11px] leading-tight">${displayName}</p>
                                 <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
-                                    <i class="fa-solid fa-location-dot text-[8px] text-rose-500 shrink-0"></i>
-                                    <p class="text-[9px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
+                                    <i class="fa-solid fa-location-dot text-[9px] text-rose-500 shrink-0"></i>
+                                    <p class="text-[10px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
                                 </div>
                                 <div class="flex items-center gap-1.5 mt-1">
                                     <div class="flex items-center gap-1 shrink-0 bg-white px-1.5 py-0.5 rounded text-indigo-600 border border-indigo-100 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
@@ -1518,12 +1516,6 @@
                     ketLokasi = orderProofDesc;
                 } else if (rider.location && String(rider.location).trim() !== "") {
                     ketLokasi = rider.location;
-                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
-                    ketLokasi = rider.last_drop_desc;
-                }
-                
-                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
-                    ketLokasi = "Posisi / Standby";
                 }
                 
                 const realName = rider.nama || rider.name || rider.displayName;
@@ -1575,9 +1567,9 @@
                             <div class="overflow-hidden w-full">
                                 <p class="font-black text-black text-[12px] leading-tight truncate">${displayName} ${statusBadge}</p>
                                 
-                                <div class="flex items-center gap-1 mt-0.5 overflow-hidden w-full">
-                                    <i class="fa-solid fa-location-dot text-[9px] text-rose-500 shrink-0"></i>
-                                    <p class="text-[9px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
+                                <div class="flex items-center gap-1.5 mt-0.5 overflow-hidden w-full">
+                                    <i class="fa-solid fa-location-dot text-[10px] text-rose-500 shrink-0"></i>
+                                    <p class="text-[10px] font-bold text-slate-700 uppercase truncate">${ketLokasi}</p>
                                 </div>
 
                                 <div class="flex items-center gap-2 mt-1">
@@ -1622,22 +1614,21 @@
                     const ref = doc(db, 'status_rider_aktif', uid);
                     
                     // 1. Tembak sinyal force_kill: true agar aplikasi rider mati
-                    await setDoc(ref, { 
+                    await updateDoc(ref, { 
                         is_online: false, 
                         is_available: false, 
                         in_main_queue: false, 
                         force_kill: true, 
                         last_drop_time: new Date("2000-01-01T00:00:00Z"),
                         last_updated: serverTimestamp(),
-                        last_drop_desc: "Dikeluarkan Paksa oleh Admin", 
-                        proof_desc: "" 
-                    }, { merge: true });
+                        last_drop_desc: "Dikeluarkan Paksa oleh Admin"
+                    });
 
                     // 2. Beri jeda 2.5 detik agar HP rider sempat bereaksi membaca sinyal, 
                     // lalu otomatis kembalikan force_kill menjadi false
                     setTimeout(async () => {
                         try {
-                            await setDoc(ref, { force_kill: false }, { merge: true });
+                            await updateDoc(ref, { force_kill: false });
                         } catch(e) { console.error("Gagal reset force_kill:", e); }
                     }, 2500);
 
@@ -1665,7 +1656,7 @@
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
                         // Memberikan waktu Sesuai Urutan Masuk (1 detik selisih tiap rider) agar tertata rapi di paling bawah
                         const simulatedTime = new Date(now.getTime() + (index * 1000));
-                        return setDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
+                        return updateDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, last_drop_desc: "Standby di Basecamp" });
                     });
                     await Promise.all(promises);
                     window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar paling bawah secara berurutan.', 'success');
@@ -1684,7 +1675,7 @@
                 try {
                     const ref = doc(db, 'status_rider_aktif', uid);
                     // Diberi waktu SEKARANG agar letaknya murni di antrean paling bawah
-                    await setDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Standby di Basecamp", proof_desc: "" }, { merge: true });
+                    await updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Standby di Basecamp" });
                     window.showAlert('Berhasil', `${name} diletakkan di antrean paling bawah.`, 'success');
                 } catch (error) {
                     window.showAlert('Gagal', 'Terjadi kesalahan.', 'error');
@@ -1723,12 +1714,6 @@
                     ketLokasi = orderProofDesc;
                 } else if (rider.location && String(rider.location).trim() !== "") {
                     ketLokasi = rider.location;
-                } else if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
-                    ketLokasi = rider.last_drop_desc;
-                }
-                
-                if (ketLokasi.toLowerCase().includes("aktif kembali")) {
-                    ketLokasi = "Posisi / Standby";
                 }
             }
             
@@ -2723,13 +2708,12 @@
 
                     if (order.rider_uid) {
                         const riderRef = doc(db, 'status_rider_aktif', order.rider_uid);
-                        batch.set(riderRef, { 
+                        batch.update(riderRef, { 
                             in_main_queue: true, 
                             is_available: true, 
                             last_drop_time: new Date("2000-01-01T00:00:00Z"),
-                            last_drop_desc: "Prioritas: Dibatalkan Admin",
-                            proof_desc: ""
-                        }, { merge: true });
+                            last_drop_desc: "Prioritas: Dibatalkan Admin"
+                        });
                     }
                     
                     await batch.commit();
