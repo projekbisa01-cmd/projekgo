@@ -4875,9 +4875,6 @@
             const errorMsg = document.getElementById('login-error-msg');
             const uid = input.value.trim().toUpperCase();
             
-            // DIHAPUS: Meminta Izin Notifikasi diam-diam di sini
-            // Sekarang diganti dengan UI Custom yang dipanggil setelah masuk aplikasi
-
             if (!uid) { errorMsg.innerText = "Silakan masukkan UID Anda."; errorMsg.classList.remove('hidden'); return; }
             errorMsg.classList.add('hidden'); 
             
@@ -4887,55 +4884,10 @@
             btn.disabled = true;
 
             try {
-                let isUidValid = false;
-                let prefetchedData = null;
-                let prefetchedAll = null;
-
-                // 1. Cek cache lokal untuk Auto-Login (Agar masuk instan jika sudah pernah login)
-                const cacheKey = `rider_data_${uid}`;
-                const cached = localStorage.getItem(cacheKey);
-                if (cached) {
-                    try {
-                        const parsedCache = JSON.parse(cached);
-                        if (parsedCache && parsedCache.length > 0) isUidValid = true;
-                    } catch(e) {}
-                }
-
-                // 2. Jika tidak ada cache (Login Manual Baru), Verifikasi ke Google Script
-                if (!isUidValid) {
-                    const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
-                    if (!response.ok) throw new Error("Koneksi gagal.");
-                    const data = await response.json();
-                    const items = Array.isArray(data) ? data : [];
-                    
-                    const uidLower = uid.toLowerCase();
-                    const newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
-                    
-                    if (newData.length > 0) {
-                        isUidValid = true;
-                        prefetchedData = newData;
-                        prefetchedAll = items;
-                    }
-                }
-
-                if (!isUidValid) {
-                    // UID TIDAK ADA DI DATABASE SCRIPT - TOLAK LANGSUNG SEBELUM MASUK FIREBASE
-                    errorMsg.innerText = `UID "${uid}" tidak terdaftar. Akses ditolak.`; 
-                    errorMsg.classList.remove('hidden');
-                    btn.innerHTML = originalText;
-                    btn.disabled = false;
-                    input.value = ''; // Kosongkan input agar user bisa ketik ulang
-                    localStorage.removeItem('rider_uid'); 
-                    return; // Stop proses disini
-                }
-
-                // 3. JIKA UID VALID, BARU LANJUTKAN KE FIREBASE UNTUK DEVICE BINDING
-                btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa Keamanan...';
-
-                // Tunggu Firebase siap diinisialisasi
+                // OPTIMASI: Tunggu Firebase siap diinisialisasi
                 if (!window.isFirebaseReady) {
-                    for(let i=0; i<10; i++) {
-                        await new Promise(r => setTimeout(r, 500));
+                    for(let i=0; i<50; i++) { // Cek 50 kali (total max 5 detik)
+                        await new Promise(r => setTimeout(r, 100)); // Jeda 100ms
                         if(window.isFirebaseReady) break;
                     }
                     if(!window.isFirebaseReady) {
@@ -4946,20 +4898,44 @@
                     }
                 }
 
-                // Validasi Perangkat (Single Device Login) - DINONAKTIFKAN SEMENTARA UNTUK MEMPERMUDAH LOGIN
-                if (prefetchedData) window.prefetchedRiderData = prefetchedData;
-                if (prefetchedAll) window.prefetchedAllData = prefetchedAll;
+                // 1. Cek cache lokal untuk Auto-Login (Sangat Cepat)
+                const cacheKey = `rider_data_${uid}`;
+                const cached = localStorage.getItem(cacheKey);
+                let hasCache = false;
+                if (cached) {
+                    try {
+                        const parsedCache = JSON.parse(cached);
+                        if (parsedCache && parsedCache.length > 0) hasCache = true;
+                    } catch(e) {}
+                }
+
+                // 2. VERIFIKASI UID SEPENUHNYA VIA FIRESTORE (Sangat Cepat - Menggantikan Fetch Google Sheets)
+                if (!hasCache && typeof window.verifyRiderUidFirestore === 'function') {
+                    const isUidValid = await window.verifyRiderUidFirestore(uid);
+                    
+                    if (!isUidValid) {
+                        errorMsg.innerText = `UID "${uid}" tidak terdaftar di sistem. Akses ditolak.`; 
+                        errorMsg.classList.remove('hidden');
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        input.value = ''; // Kosongkan input agar user bisa ketik ulang
+                        localStorage.removeItem('rider_uid'); 
+                        return; // Stop proses disini
+                    }
+                }
+
+                // 3. JIKA UID VALID (ATAU ADA CACHE), LANJUTKAN KE SISTEM PIN FIREBASE
+                btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa Keamanan...';
                 
-                // PANGGIL SISTEM PIN FIREBASE (PENGGANTI DEVICE BINDING)
                 if (typeof window.checkRiderPin === 'function') {
                     window.checkRiderPin(uid);
                 } else {
-                    window.proceedWithLogin(uid); // Fallback jika Firebase belum siap
+                    window.proceedWithLogin(uid); // Fallback jika Firebase PIN module belum siap
                 }
                 
             } catch (error) {
                 console.error("Login Error:", error);
-                errorMsg.innerText = "Koneksi ke server gagal. Periksa jaringan Anda."; 
+                errorMsg.innerText = "Koneksi ke server Firebase gagal. Periksa jaringan Anda."; 
                 errorMsg.classList.remove('hidden');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -7572,6 +7548,37 @@
           let queuePending = false; // Penanda load radar queue jika auth belum siap
           window.isFirebaseReady = false; // Flag global untuk menahan UI login
           window.isFinishingOrder = false; // Flag status rider menekan Selesai
+
+          // -------------------------------------------------------------
+          // NEW: FUNGSI VERIFIKASI UID LANGSUNG KE FIRESTORE (INSTAN LOGIN)
+          // -------------------------------------------------------------
+          window.verifyRiderUidFirestore = async (uid) => {
+              try {
+                  const cleanUid = String(uid).trim().toUpperCase();
+                  const targetProjectId = firebaseConfig.projectId;
+                  
+                  // CEK 1: Apakah UID sudah pernah mendaftarkan PIN? (Paling cepat & akurat)
+                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', cleanUid, 'security', 'pin_data');
+                  const pinSnap = await getDoc(pinRef);
+                  if (pinSnap.exists()) return true;
+                  
+                  // CEK 2: Apakah profil rider sudah dibuatkan oleh Admin di Firestore?
+                  const profileRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', cleanUid);
+                  const profileSnap = await getDoc(profileRef);
+                  if (profileSnap.exists()) return true;
+                  
+                  // CEK 3: Apakah UID ada di radar / antrean aktif?
+                  const statusRef = doc(db, '/status_rider_aktif', cleanUid);
+                  const statusSnap = await getDoc(statusRef);
+                  if (statusSnap.exists()) return true;
+                  
+                  // Jika tidak ditemukan di ketiga koleksi di atas, berarti UID bodong
+                  return false;
+              } catch (e) {
+                  console.error("Verifikasi Firestore Gagal:", e);
+                  throw e;
+              }
+          };
 
           onAuthStateChanged(auth, (user) => {
               if (user) { 
