@@ -567,6 +567,7 @@
                         </div>
                     </div>
                 </div>
+            </div> <!-- Ini penutup div space-y-3 yang terlewat -->
 
             <div class="flex gap-2 mt-5">
                 <button onclick="document.getElementById('edit-modal').classList.add('hidden'); document.getElementById('edit-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-600 hover:bg-slate-200 font-black rounded-xl text-[10px] uppercase transition-colors">Batal</button>
@@ -2787,6 +2788,22 @@
             });
         };
 
+        // Fungsi Global Wrapper Anti-Error untuk Modal Saldo
+        window.actionRiwayatModal = (encodedUid) => {
+            try {
+                const uid = decodeURIComponent(encodedUid);
+                window.openRiwayatSaldo(uid);
+            } catch(e) { console.error("Error decode riwayat", e); }
+        };
+
+        window.actionSaldoModal = (encodedUid) => {
+            try {
+                const uid = decodeURIComponent(encodedUid);
+                window.openSaldoModal(uid);
+            } catch(e) { console.error("Error decode saldo", e); }
+        };
+
+        // MULAI PERBAIKAN: Fungsi direbuild dengan metode data-uid yang kebal dari error karakter
         window.renderRiderBalances = () => {
             const container = document.getElementById('riders-saldo-list');
             const countEl = document.getElementById('stat-saldo-count');
@@ -2832,29 +2849,32 @@
             filtered.forEach(b => {
                 const saldo = parseInt(b.saldo || 0);
                 const isLow = saldo < 10000;
-                const saldoClass = isLow ? 'text-rose-600 bg-rose-50 border-rose-200' : 'textemerald-600 bg-emerald-50 border-emerald-200';
+                const saldoClass = isLow ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200';
                 const cardClass = isLow ? 'bg-rose-50 border-rose-200 shadow-md ring-1 ring-rose-300' : 'bg-white border-gray-100 shadow-sm';
+                
+                // Gunakan URI encode agar kebal 100% dari enter/kutip/spasi yang merusak kode HTML
+                const safeEncodedUid = encodeURIComponent(String(b.id || ''));
 
                 html += `
                     <div class="rounded-xl p-3.5 border flex flex-col mt-2 transition-all ${cardClass}">
                         <div class="flex justify-between items-center w-full">
-                            <div class="flex flex-col">
+                            <div class="flex flex-col overflow-hidden">
                                 <div class="flex items-center gap-1.5 mb-0.5">
-                                    <span class="font-black text-black text-sm uppercase">${b.name || b.id}</span>
-                                    ${isLow ? '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm">SALDO MINIM</span>' : ''}
+                                    <span class="font-black text-black text-sm uppercase truncate">${b.name || b.id}</span>
+                                    ${isLow ? '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm shrink-0">SALDO MINIM</span>' : ''}
                                 </div>
-                                <span class="text-[9px] text-slate-500 font-bold">${b.id}</span>
+                                <span class="text-[9px] text-slate-500 font-bold truncate">${b.id}</span>
                             </div>
-                            <div class="flex flex-col items-end gap-2 shrink-0">
+                            <div class="flex flex-col items-end gap-2 shrink-0 z-10 relative ml-2">
                                 <div class="px-3 py-1.5 rounded-lg border font-black text-sm ${saldoClass} w-full text-center shadow-sm">
                                     Rp ${saldo.toLocaleString('id-ID')}
                                 </div>
                                 <div class="grid grid-cols-2 gap-1.5 w-full">
-                                    <button onclick="window.openRiwayatSaldo('${b.id}')" class="bg-slate-50 text-slate-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-slate-200 transition-colors border border-slate-200 flex items-center justify-center gap-1.5 shadow-sm" title="Lihat Riwayat Edit">
-                                        <i class="fa-solid fa-clock-rotate-left"></i>
+                                    <button type="button" onclick="window.actionRiwayatModal('${safeEncodedUid}')" class="bg-slate-50 text-slate-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-slate-200 transition-colors border border-slate-200 flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer relative z-20" title="Lihat Riwayat Edit">
+                                        <i class="fa-solid fa-clock-rotate-left pointer-events-none"></i>
                                     </button>
-                                    <button onclick="window.openSaldoModal('${b.id}', '${(b.name || b.id).replace(/'/g, "\\'")}', ${saldo})" class="bg-sky-100 text-sky-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-sky-500 hover:text-white transition-colors border border-sky-200 flex items-center justify-center gap-1.5 shadow-sm" title="Edit Saldo">
-                                        <i class="fa-solid fa-pen"></i> Edit
+                                    <button type="button" onclick="window.actionSaldoModal('${safeEncodedUid}')" class="bg-sky-100 text-sky-600 px-2 py-1.5 rounded-lg text-[9px] font-black uppercase hover:bg-sky-500 hover:text-white transition-colors border border-sky-200 flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer relative z-20" title="Edit Saldo">
+                                        <i class="fa-solid fa-pen pointer-events-none"></i> <span class="pointer-events-none">Edit</span>
                                     </button>
                                 </div>
                             </div>
@@ -2865,8 +2885,9 @@
             container.innerHTML = html;
         };
 
-        window.openRiwayatSaldo = (uid) => {
-            const currentData = allRiderBalances.find(r => r.id === uid) || {};
+        window.openRiwayatSaldo = (rawUid) => {
+            const uid = String(rawUid);
+            const currentData = allRiderBalances.find(r => String(r.id) === uid) || {};
             const logs = currentData.edit_logs || [];
             const name = currentData.name || uid;
 
@@ -2922,10 +2943,15 @@
             modal.classList.add('flex');
         };
 
-        window.openSaldoModal = (uid, name, currentSaldo) => {
+        window.openSaldoModal = (rawUid) => {
+            const uid = String(rawUid);
+            const currentData = allRiderBalances.find(r => String(r.id) === uid) || {};
+            const name = currentData.name || uid;
+            const currentSaldo = parseInt(currentData.saldo || 0);
+
             document.getElementById('saldo-modal-uid').value = uid;
             document.getElementById('saldo-modal-name').innerText = name;
-            document.getElementById('saldo-modal-current').innerText = 'Rp ' + parseInt(currentSaldo).toLocaleString('id-ID');
+            document.getElementById('saldo-modal-current').innerText = 'Rp ' + currentSaldo.toLocaleString('id-ID');
             document.getElementById('saldo-modal-amount').value = '';
             
             const modal = document.getElementById('saldo-modal');
