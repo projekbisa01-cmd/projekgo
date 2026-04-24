@@ -7986,7 +7986,11 @@
                       const data = doc.data();
                       // Filter di JS agar aman dari perbedaan boolean (true) atau string ("true")
                       const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
-                      if (inMainQueue && data.is_online === true && data.is_available === true) {
+                      const uidClean = String(doc.id).trim().toUpperCase();
+                      const isBusy = busyUids.has(uidClean); // Cek apakah rider ada di daftar sibuk (active_orders)
+
+                      // HANYA hitung rider yang online, available, DAN TIDAK SIBUK bawa orderan
+                      if (inMainQueue && data.is_online === true && data.is_available === true && !isBusy) {
                           count++;
                       }
                   });
@@ -9251,12 +9255,14 @@
                       return 0;
                   }
 
-                  // 3. FILTER & AMBIL DATA RIDER SIBUK:
-                  // Ambil hanya rider yang benar-benar siap (online & available) DAN TIDAK SIBUK (UID tidak ada di busyUids)
+                  // 3. FILTER & AMBIL DATA RIDER SIBUK (SUDAH DITERAPKAN):
+                  // Menyembunyikan rider dari daftar antrean jika mereka sedang bawa orderan (ada di busyUids)
                   let readyQueueRiders = mainQueueRiders.filter(r => {
                       const isReady = r.is_online === true && r.is_available === true;
-                      const isNotBusy = !busyUids.has(String(r.uid).trim().toUpperCase());
-                      return isReady && isNotBusy;
+                      const isBusy = busyUids.has(String(r.uid).trim().toUpperCase());
+                      
+                      // Rider HANYA akan masuk ke antrean UI jika isReady true DAN isBusy false
+                      return isReady && !isBusy;
                   });
 
                   // 4. Urutkan ASCENDING (Waktu terlama = Peringkat 1) berdasarkan last_drop_time
@@ -9404,7 +9410,10 @@
                       html = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-users-slash text-4xl text-gray-200 mb-3 block"></i>Belum ada rider yang stand-by di antrean.<br><span class="text-[8px] text-gray-400 mt-2 block">*Sistem hanya menampilkan rider yang sinyalnya menyala.</span></div>';
                   }
                   
-                  container.innerHTML = html;
+                  const container = document.getElementById('radar-queue-list');
+                  if (container) {
+                      container.innerHTML = html;
+                  }
                  } catch (err) {
                      console.error("Critical Error saat merender antrean:", err);
                      const container = document.getElementById('radar-queue-list');
