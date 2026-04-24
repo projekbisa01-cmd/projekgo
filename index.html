@@ -4601,14 +4601,36 @@
         }
 
         // --- SISTEM PWA (PROGRESSIVE WEB APP) DYNAMIC INJECTION ---
-        // Variabel deferredPrompt dipertahankan jika sewaktu-waktu dipanggil manual
         let deferredPrompt;
+        let pwaNagInterval;
 
         function checkIsPwaInstalled() {
             return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
         }
 
-        // FUNGSI showPwaPromptAggressively DAN pwaNagInterval TELAH DIHAPUS (OPTIMASI BATERAI)
+        function showPwaPromptAggressively() {
+            if (checkIsPwaInstalled()) return; // Berhenti mengganggu jika sudah di-install
+            
+            const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+            
+            if (isIos()) {
+                const popup = document.getElementById('install-pwa-ios-popup');
+                const content = document.getElementById('install-pwa-ios-content');
+                if(popup && popup.classList.contains('hidden')) {
+                    popup.classList.remove('hidden');
+                    popup.classList.add('flex');
+                    setTimeout(() => { popup.classList.remove('opacity-0'); content.classList.remove('translate-y-full'); }, 50);
+                }
+            } else if (deferredPrompt) {
+                const popup = document.getElementById('install-pwa-popup');
+                const content = document.getElementById('install-pwa-content');
+                if(popup && popup.classList.contains('hidden')) {
+                    popup.classList.remove('hidden');
+                    popup.classList.add('flex');
+                    setTimeout(() => { popup.classList.remove('opacity-0'); content.classList.remove('scale-90'); }, 50);
+                }
+            }
+        }
 
         function initPWA() {
             // Inject Manifest Dinamis agar bisa install tanpa file fisik manifest.json
@@ -4647,11 +4669,33 @@
                     });
             }
 
-            // Logic Prompt Install Android (Disimpan hanya untuk tangkap event, TANPA interval agresif)
+            // Hentikan interval jika aplikasi sudah diinstall
+            window.addEventListener('appinstalled', () => {
+                if(pwaNagInterval) clearInterval(pwaNagInterval);
+                const popupAndroid = document.getElementById('install-pwa-popup');
+                if(popupAndroid) popupAndroid.classList.add('hidden');
+            });
+
+            // Logic Prompt Install Android
             window.addEventListener('beforeinstallprompt', (e) => {
                 e.preventDefault();
                 deferredPrompt = e;
+                
+                // Agresif: Langsung tampilkan, dan set interval jika belum ada
+                setTimeout(showPwaPromptAggressively, 1000);
+                if (!pwaNagInterval) {
+                    pwaNagInterval = setInterval(showPwaPromptAggressively, 10000); // Muncul tiap 10 detik!
+                }
             });
+
+            // Logic Prompt Install iOS (Apple)
+            const isIos = () => /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+            if (isIos() && !checkIsPwaInstalled()) {
+                setTimeout(showPwaPromptAggressively, 1000);
+                if (!pwaNagInterval) {
+                    pwaNagInterval = setInterval(showPwaPromptAggressively, 10000); // Muncul tiap 10 detik!
+                }
+            }
         }
 
         // --- INISIALISASI PETA BACKGROUND (LEAFLET STATIS) ---
@@ -5272,8 +5316,8 @@
             const currentHour = now.getHours();
             const currentDate = getJakartaDateString();
             
-            // Jadwal sinkronisasi Spreadsheet (Hanya Jam 23:00 / 11 Malam)
-            const syncSchedule = [23];
+            // Jadwal sinkronisasi Spreadsheet (Jam 11, 14, 18, 22)
+            const syncSchedule = [11, 14, 18, 22];
             let targetSyncHour = -1;
 
             // Cari jadwal sinkronisasi terakhir yang sudah terlewati hari ini
@@ -5299,8 +5343,8 @@
             }
         }
 
-        // Cek jadwal sinkronisasi setiap 30 menit (Jauh lebih hemat baterai dari 1 menit)
-        setInterval(checkScheduledSync, 1800000);
+        // Cek apakah sudah masuk jadwal sinkronisasi setiap 1 menit (Baterai lebih awet)
+        setInterval(checkScheduledSync, 60000);
 
         // Cek jadwal sinkronisasi secara pintar ketika aplikasi dibuka kembali
         document.addEventListener("visibilitychange", () => {
@@ -6646,23 +6690,9 @@
             if (page === 'home') {
                 if (mapBg) { mapBg.classList.remove('opacity-0'); mapBg.classList.add('opacity-100'); }
                 if (generalBg) { generalBg.classList.remove('opacity-100'); generalBg.classList.add('opacity-0'); }
-                
-                // OPTIMASI PETA: Aktifkan interaksi saat kembali ke Beranda
-                if (window.bgMap) {
-                    window.bgMap.dragging.enable();
-                    window.bgMap.touchZoom.enable();
-                    window.bgMap.scrollWheelZoom.enable();
-                }
             } else {
                 if (mapBg) { mapBg.classList.remove('opacity-100'); mapBg.classList.add('opacity-0'); }
                 if (generalBg) { generalBg.classList.remove('opacity-0'); generalBg.classList.add('opacity-100'); }
-                
-                // OPTIMASI PETA: Matikan total sensor sentuhan peta saat di halaman lain
-                if (window.bgMap) {
-                    window.bgMap.dragging.disable();
-                    window.bgMap.touchZoom.disable();
-                    window.bgMap.scrollWheelZoom.disable();
-                }
             }
 
             // PERUBAHAN UTAMA: Halaman diganti SECARA INSTAN tanpa menunggu setTimeout dan tanpa Loading Layar Penuh!
@@ -9376,7 +9406,7 @@
                       let statusBadge = '';
                       if (isMe) {
                           statusBadge = isReady 
-                              ? '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-white text-green-600 px-2.5 py-1 rounded-full uppercase tracking-wider shadow-sm border border-green-200"><i class="fa-solid fa-circle text-[6px] text-green-500 mr-1"></i> Sinyal Aktif</span></div>'
+                              ? '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-white text-green-600 px-2.5 py-1 rounded-full animate-pulse uppercase tracking-wider shadow-sm border border-green-200">Sinyal Aktif</span></div>'
                               : '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full uppercase tracking-wider shadow-sm border border-gray-200">Jeda / Off</span></div>';
                       } else if (!isReady) {
                           statusBadge = '<div class="flex items-center justify-center shrink-0"><span class="text-[8px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md uppercase tracking-wider border border-gray-200">Jeda</span></div>';
