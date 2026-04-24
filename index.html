@@ -9226,31 +9226,16 @@
           // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
           // -------------------------------------------------------------
           let queueUnsubscribe = null;
+          let busyRidersUnsubscribe = null;
+          let latestStatusSnapshot = null;
+          let busyUids = new Set();
 
-          window.startQueueListener = () => {
-              if (!isAuthReady) {
-                  queuePending = true;
-                  return;
-              }
-              
-              if (queueUnsubscribe) return; // Mencegah multiple listeners
-
-              // EKSTRA PROTEKSI: Kosongkan UI secara instan saat radar mulai dinyalakan
-              // Mencegah sisa antrean lama (nyangkut) berkedip sebelum data Firebase masuk
-              const container = document.getElementById('radar-queue-list');
-              // myPosEl tidak dikosongkan di sini agar angka dari admin tetap tampil
-              if (container) {
-                  container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-6"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3 block"></i> Menghubungkan ke Radar...</div>`;
-              }
-
-              const statusRef = collection(db, '/status_rider_aktif');
-              
-              // UBAH: Tarik semua data lalu filter di JS (Mencegah error tipe data dari Firebase)
-              queueUnsubscribe = onSnapshot(statusRef, async (snapshot) => {
-                 try {
+          const processAndRenderQueue = () => {
+              if (!latestStatusSnapshot) return;
+              try {
                   // 1. Kumpulkan rider yang ada di antrean utama
                   let mainQueueRiders = [];
-                  snapshot.forEach(docSnap => {
+                  latestStatusSnapshot.forEach(docSnap => {
                       const data = docSnap.data();
                       data.uid = docSnap.id;
                       if (data.in_main_queue === true || data.in_main_queue === 'true') {
@@ -9266,8 +9251,16 @@
                       return 0;
                   }
 
-                  // 3. Urutkan ASCENDING (Waktu terlama = Peringkat 1)
-                  mainQueueRiders.sort((a, b) => {
+                  // 3. FILTER & AMBIL DATA RIDER SIBUK:
+                  // Ambil hanya rider yang benar-benar siap (online & available) DAN TIDAK SIBUK (UID tidak ada di busyUids)
+                  let readyQueueRiders = mainQueueRiders.filter(r => {
+                      const isReady = r.is_online === true && r.is_available === true;
+                      const isNotBusy = !busyUids.has(String(r.uid).trim().toUpperCase());
+                      return isReady && isNotBusy;
+                  });
+
+                  // 4. Urutkan ASCENDING (Waktu terlama = Peringkat 1) berdasarkan last_drop_time
+                  readyQueueRiders.sort((a, b) => {
                       let timeA = getTimestampMs(a.last_drop_time);
                       let timeB = getTimestampMs(b.last_drop_time);
                       if (timeA === 0) timeA = 1;
@@ -9275,21 +9268,21 @@
                       return timeA - timeB;
                   });
 
-                  // FILTER: Ambil hanya rider yang benar-benar siap (online & available)
-                  let readyQueueRiders = mainQueueRiders.filter(r => r.is_online === true && r.is_available === true);
-
-                  // 4. Hitung peringkat rider lokal berdasarkan antrean yang siap saja
+                  // 5. Hitung peringkat rider lokal berdasarkan antrean yang sudah difilter dan diurutkan
                   const myCalculatedRank = readyQueueRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
                   
-                  // 5. Tampilkan ke UI (Hanya jika tidak force_kill)
+                  // 6. Tampilkan ke UI (Hanya jika tidak force_kill)
                   const myPosEl = document.getElementById('my-queue-position');
                   const myStatus = mainQueueRiders.find(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase());
 
                   if (myPosEl && myStatus && myStatus.force_kill !== true) {
                       if (myCalculatedRank > 0) {
                           myPosEl.innerText = `#${myCalculatedRank}`;
-                          // Sesuaikan nama class ini dengan gaya asli di aplikasi (text-gray-800 agar tidak hilang di background putih)
                           myPosEl.className = "text-2xl font-black text-gray-800 leading-none"; 
+                      } else {
+                          // Jika rider sibuk (ada di busyUids) dan tidak ada di readyQueueRiders
+                          myPosEl.innerText = `-`;
+                          myPosEl.className = "text-2xl font-black text-gray-400 leading-none"; 
                       }
                   }
 
@@ -9414,10 +9407,52 @@
                   container.innerHTML = html;
                  } catch (err) {
                      console.error("Critical Error saat merender antrean:", err);
+                     const container = document.getElementById('radar-queue-list');
                      if (container) {
                          container.innerHTML = `<div class="text-red-500 text-center text-xs py-8 font-bold"><i class="fa-solid fa-bug text-2xl mb-2 block"></i>Gagal memproses data antrean.<br><span class="text-[9px] font-normal text-gray-500">Sistem mendeteksi ada data error. Klik ikon refresh di sudut kanan atas.</span></div>`;
                      }
                  }
+          };
+
+          window.startQueueListener = () => {
+              if (!isAuthReady) {
+                  queuePending = true;
+                  return;
+              }
+              
+              if (queueUnsubscribe) return; // Mencegah multiple listeners
+
+              // EKSTRA PROTEKSI: Kosongkan UI secara instan saat radar mulai dinyalakan
+              // Mencegah sisa antrean lama (nyangkut) berkedip sebelum data Firebase masuk
+              const container = document.getElementById('radar-queue-list');
+              // myPosEl tidak dikosongkan di sini agar angka dari admin tetap tampil
+              if (container) {
+                  container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-6"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3 block"></i> Menghubungkan ke Radar...</div>`;
+              }
+
+              // 1. LISTENER UNTUK DATA RIDER SIBUK DARI ACTIVE_ORDERS
+              const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
+              busyRidersUnsubscribe = onSnapshot(ordersRef, (snapshot) => {
+                  busyUids.clear();
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      const status = String(data.status || '').trim().toLowerCase();
+                      if (status === 'assigned' || status === 'processing') {
+                          if (data.rider_uid) {
+                              busyUids.add(String(data.rider_uid).trim().toUpperCase());
+                          }
+                      }
+                  });
+                  processAndRenderQueue(); // Trigger render jika status sibuk berubah
+              }, (error) => {
+                  console.error("Error fetching busy riders:", error);
+              });
+
+              // 2. LISTENER UNTUK STATUS RIDER AKTIF
+              const statusRef = collection(db, '/status_rider_aktif');
+              queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
+                  latestStatusSnapshot = snapshot;
+                  processAndRenderQueue(); // Trigger render jika status online/offline berubah
               }, (error) => {
                   console.error("Error fetching queue:", error);
                   const container = document.getElementById('radar-queue-list');
@@ -9433,6 +9468,13 @@
                   queueUnsubscribe();
                   queueUnsubscribe = null;
               }
+              if (busyRidersUnsubscribe) {
+                  busyRidersUnsubscribe();
+                  busyRidersUnsubscribe = null;
+              }
+              latestStatusSnapshot = null;
+              busyUids.clear();
+              
               const container = document.getElementById('radar-queue-list');
               const myPosEl = document.getElementById('my-queue-position');
               
