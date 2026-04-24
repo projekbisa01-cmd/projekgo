@@ -481,15 +481,24 @@
                 </div>
                 <div class="mt-2 flex flex-col gap-1.5 bg-white p-2.5 rounded-lg border border-indigo-100 shadow-sm">
                     <div class="flex justify-between items-center border-b border-gray-50 pb-1.5">
-                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Total Kas Masuk:</span>
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Kas Masuk (Tgl Dipilih):</span>
                         <div class="flex items-end gap-1.5">
                             <p id="stat-potongan-custom" class="text-sm font-black text-indigo-700 leading-none">Rp 0</p>
                             <span id="stat-count-custom" class="text-[9px] font-bold text-indigo-500 leading-none mb-0.5">(0 Trx)</span>
                         </div>
                     </div>
                     <div class="flex justify-between items-center">
-                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Total Omset:</span>
-                        <p id="stat-omset-custom" class="text-sm font-black text-slate-700 leading-none">Rp 0</p>
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">GOOGLE SHEET PEMBANDING:</span>
+                        <div class="flex items-end gap-1.5">
+                            <p id="stat-omset-custom" class="text-sm font-black text-slate-700 leading-none">Rp 0</p>
+                            <span id="stat-gs-count" class="text-[9px] font-bold text-slate-500 leading-none mb-0.5 hidden"></span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center border-t border-gray-50 pt-1.5 mt-0.5">
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Selisih:</span>
+                        <div class="flex items-end gap-1.5">
+                            <p id="stat-selisih-custom" class="text-sm font-black text-slate-700 leading-none">Rp 0</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1077,7 +1086,7 @@
             }
         };
 
-        window.calculateSaldoHistoryByDate = () => {
+        window.calculateSaldoHistoryByDate = async () => {
             const dateVal = document.getElementById('saldo-history-date').value;
             if (!dateVal || !window._cachedLedger) return;
 
@@ -1092,10 +1101,7 @@
             let potCustom = 0, orderCustom = 0, omsetCustom = 0;
 
             window._cachedLedger.forEach(data => {
-                let orderMs = 0;
-                if (data.created_at && data.created_at.seconds) {
-                    orderMs = data.created_at.seconds * 1000;
-                }
+                let orderMs = getTimestampMs(data.created_at);
 
                 if (orderMs >= startOfCustom && orderMs <= endOfCustom) {
                     const amt = parseFloat(data.amount || 0);
@@ -1106,9 +1112,166 @@
                 }
             });
 
-            document.getElementById('stat-potongan-custom').innerText = `Rp ${Math.round(potCustom).toLocaleString('id-ID')}`;
+            let potCustomRounded = Math.round(potCustom);
+            document.getElementById('stat-potongan-custom').innerText = `Rp ${potCustomRounded.toLocaleString('id-ID')}`;
             document.getElementById('stat-count-custom').innerText = `(${orderCustom} Trx)`;
-            document.getElementById('stat-omset-custom').innerText = `Rp ${omsetCustom.toLocaleString('id-ID')}`;
+            
+            const omsetEl = document.getElementById('stat-omset-custom');
+            const gsCountEl = document.getElementById('stat-gs-count');
+            const selisihEl = document.getElementById('stat-selisih-custom');
+
+            omsetEl.innerText = "Memeriksa...";
+            omsetEl.className = "text-[10px] font-bold text-slate-500 italic animate-pulse";
+            omsetEl.title = "Memuat data...";
+            if (gsCountEl) gsCountEl.innerText = "";
+            if (selisihEl) {
+                selisihEl.innerText = "...";
+                selisihEl.className = "text-[10px] font-bold text-slate-500 italic animate-pulse leading-none";
+            }
+
+            try {
+                // 1. Definisikan URL GAS dan Konstanta Potongan Admin
+                const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
+                const ADM_RATE = 0.16; // 16%
+
+                // 2. Fungsi mendapatkan tanggal sesuai zona waktu Jakarta (WIB) berdasarkan input UI
+                const getJKTDate = (dateString) => {
+                    const date = new Date(dateString);
+                    const d = new Intl.DateTimeFormat('en-US', { 
+                        timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' 
+                    }).formatToParts(date);
+                    
+                    const m = d.find(p => p.type === 'month').value; 
+                    const day = d.find(p => p.type === 'day').value; 
+                    const y = d.find(p => p.type === 'year').value;
+                    return `${m}-${day}-${y}`; // Format: MM-DD-YYYY
+                };
+
+                // 3. Fungsi menormalkan data tanggal dari Google Sheets
+                const parseToJKTKey = (val) => {
+                    if (!val) return "";
+                    let d;
+                    // Cek jika formatnya angka serial Excel/Google Sheets
+                    if (typeof val === 'number' || (!isNaN(val) && Number(val) > 20000)) { 
+                        d = new Date((Number(val) - 25569) * 86400 * 1000); 
+                    } else { 
+                        // Fallback aman untuk format DD/MM/YYYY
+                        const strDate = String(val).trim();
+                        const parts = strDate.split(/[-/]/);
+                        if(parts.length === 3 && parts[2].length === 4) d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00Z`);
+                        else d = new Date(val); 
+                    }
+                    if (isNaN(d.getTime())) return String(val).trim(); 
+                    
+                    const dParts = new Intl.DateTimeFormat('en-US', {
+                        timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit'
+                    }).formatToParts(d);
+                    
+                    const m = dParts.find(p => p.type === 'month').value; 
+                    const dayStr = dParts.find(p => p.type === 'day').value; 
+                    const y = dParts.find(p => p.type === 'year').value;
+                    return `${m}-${dayStr}-${y}`; 
+                };
+
+                // 4. Proses Utama Eksekusi & Pencarian Data
+                const todayKey = getJKTDate(dateVal);
+                const response = await fetch(SCRIPT_URL + "?tanggal=" + dateVal);
+                const allData = await response.json();
+
+                let totalTrip = 0;
+                let totalKotor = 0;
+                let totalBersih = 0;
+                let foundAny = false;
+
+                const dataArray = Array.isArray(allData) ? allData : [];
+
+                // Looping / Cari Data Sesuai Skrip JS Anda
+                dataArray.forEach(row => {
+                    const dateKey = parseToJKTKey(row.Tanggal);
+                    const isSelesai = String(row.Status || '').trim().toLowerCase() === 'selesai';
+
+                    if (dateKey === todayKey && isSelesai) {
+                        foundAny = true;
+                        totalTrip++;
+                        
+                        let nomKotor = parseFloat(String(row.Nominal_Kotor || '0').replace(/[^0-9.-]/g, '')) || 0;
+                        let tambahan = parseFloat(String(row.Tambahan || '0').replace(/[^0-9.-]/g, '')) || 0;
+                        
+                        // Menyesuaikan jika di Sheet tersimpan angka 15 (artinya 15.000)
+                        if (nomKotor > 0 && nomKotor < 1000) nomKotor = nomKotor * 1000;
+                        if (tambahan > 0 && tambahan < 1000) tambahan = tambahan * 1000;
+                        
+                        let nominalKotor = nomKotor + tambahan;
+                        
+                        totalKotor += nominalKotor;
+                        
+                        // Hitung pendapatan bersih (16%) HANYA dari Nominal_Kotor (Tanpa Tambahan)
+                        totalBersih += Math.round(nomKotor * ADM_RATE);
+                    }
+                });
+
+                const hasil = {
+                    tanggal: todayKey,
+                    jumlahTrip: totalTrip,
+                    pendapatanKotor: totalKotor,
+                    pendapatanBersihAdmin: totalBersih
+                };
+
+                // 5. Render ke elemen HTML Sesuai Permintaan
+                if (foundAny) {
+                    omsetEl.innerText = `Rp ${hasil.pendapatanBersihAdmin.toLocaleString('id-ID')}`;
+                    
+                    if (gsCountEl) {
+                        gsCountEl.innerText = `(${hasil.jumlahTrip} Trx)`;
+                        gsCountEl.classList.remove('hidden');
+                    }
+                    
+                    if (selisihEl) {
+                        let selisihNominal = Math.abs(potCustomRounded - hasil.pendapatanBersihAdmin);
+                        selisihEl.innerText = `Rp ${selisihNominal.toLocaleString('id-ID')}`;
+                        if (selisihNominal === 0) {
+                            selisihEl.className = "text-[12px] font-black text-emerald-600 leading-none";
+                        } else {
+                            selisihEl.className = "text-[12px] font-black text-rose-600 leading-none";
+                        }
+                    }
+                    
+                    // Cek apakah data trip (jumlah Trx) dan nominal sinkron dengan Aplikasi
+                    if (potCustomRounded === hasil.pendapatanBersihAdmin && orderCustom === hasil.jumlahTrip) {
+                        omsetEl.className = "text-[11px] font-black text-emerald-700 bg-emerald-100 px-2 py-1 rounded shadow-sm border border-emerald-200 transition-all";
+                        omsetEl.title = `Data Sinkron! Pendapatan Kotor Sheet: Rp ${hasil.pendapatanKotor.toLocaleString('id-ID')}`;
+                        if(gsCountEl) gsCountEl.className = "text-[9px] font-bold text-emerald-600 leading-none mb-0.5 ml-1";
+                    } else {
+                        omsetEl.className = "text-[11px] font-black text-rose-700 bg-rose-100 px-2 py-1 rounded shadow-sm border border-rose-200 transition-all";
+                        omsetEl.title = `Selisih! Apps: Rp ${potCustomRounded.toLocaleString('id-ID')} (${orderCustom} Trx) | Sheet Bersih: Rp ${hasil.pendapatanBersihAdmin.toLocaleString('id-ID')} | Sheet Kotor: Rp ${hasil.pendapatanKotor.toLocaleString('id-ID')}`;
+                        if(gsCountEl) gsCountEl.className = "text-[9px] font-bold text-rose-600 leading-none mb-0.5 ml-1";
+                    }
+                } else {
+                    omsetEl.innerText = "Tidak Ditemukan";
+                    omsetEl.className = "text-[10px] font-black text-rose-700 bg-rose-100 px-2 py-1 rounded shadow-sm border border-rose-200 transition-all";
+                    omsetEl.title = "Data untuk tanggal ini tidak ada di Sheet / Belum ada status 'Selesai'";
+                    if (gsCountEl) {
+                        gsCountEl.innerText = "(0 Trx)";
+                        gsCountEl.classList.remove('hidden');
+                        gsCountEl.className = "text-[9px] font-bold text-rose-600 leading-none mb-0.5 ml-1";
+                    }
+                    if (selisihEl) {
+                        selisihEl.innerText = "-";
+                        selisihEl.className = "text-[12px] font-black text-slate-400 leading-none";
+                    }
+                }
+                
+            } catch (error) {
+                console.error("Gagal load pembanding:", error);
+                omsetEl.innerText = "Gagal Memuat";
+                omsetEl.className = "text-[10px] font-black text-rose-700 bg-rose-100 px-2 py-1 rounded shadow-sm border border-rose-200 transition-all";
+                omsetEl.title = "Gagal terhubung ke Google Sheet. Cek koneksi Anda.";
+                if(gsCountEl) gsCountEl.innerText = "";
+                if (selisihEl) {
+                    selisihEl.innerText = "-";
+                    selisihEl.className = "text-[12px] font-black text-slate-400 leading-none";
+                }
+            }
         };
 
         window.loadCustomers = async () => {
