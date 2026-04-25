@@ -710,6 +710,7 @@
                 startRiderBalancesListener(); 
                 startCloudRecapsListener();
                 startLiveTimers(); 
+                startDailyBalanceTrackerListener();
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
@@ -832,7 +833,6 @@
             }
             if (page === 'history') window.renderHistoryOrders();
             if (page === 'customers') window.loadCustomers();
-            if (page === 'saldo') window.calculateSaldoStats();
             if (page === 'rider-off') window.renderOfflineRiders();
         };
 
@@ -1001,74 +1001,6 @@
             }, 1000);
         }
 
-        window.calculateSaldoStats = async () => {
-            const icon = document.getElementById('icon-refresh-potongan');
-            if (icon) icon.classList.add('fa-spin');
-
-            try {
-                // Baca ledger Admin khusus
-                const ledgerCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan');
-                const snapLedger = await getDocsFromServer(ledgerCol);
-
-                window._cachedLedger = [];
-                snapLedger.forEach(docSnap => window._cachedLedger.push(docSnap.data()));
-
-                const now = new Date();
-                const dateInput = document.getElementById('saldo-history-date');
-                if (dateInput && !dateInput.value) {
-                    const dd = String(now.getDate()).padStart(2, '0');
-                    const mm = String(now.getMonth() + 1).padStart(2, '0');
-                    const yyyy = now.getFullYear();
-                    dateInput.value = `${yyyy}-${mm}-${dd}`;
-                }
-
-                const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-                const dayOfWeek = now.getDay() === 0 ? 6 : now.getDay() - 1;
-                const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
-                const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-                let potHari = 0, orderHari = 0, omsetHari = 0;
-                let potMinggu = 0, orderMinggu = 0, omsetMinggu = 0;
-                let potBulan = 0, orderBulan = 0, omsetBulan = 0;
-
-                window._cachedLedger.forEach(data => {
-                    let orderMs = 0;
-                    if (data.created_at && data.created_at.seconds) {
-                        orderMs = data.created_at.seconds * 1000;
-                    }
-
-                    if (orderMs > 0) {
-                        const amt = parseFloat(data.amount || 0); // Positif=Kas Bertambah, Negatif=Refund
-                        const oms = parseFloat(data.omset_order || 0);
-
-                        if (orderMs >= startOfDay) { 
-                            potHari += amt; 
-                            omsetHari += oms;
-                            if (amt > 0) orderHari++; 
-                        }
-                        if (orderMs >= startOfWeek) { 
-                            potMinggu += amt; 
-                            omsetMinggu += oms;
-                            if (amt > 0) orderMinggu++; 
-                        }
-                        if (orderMs >= startOfMonth) { 
-                            potBulan += amt; 
-                            omsetBulan += oms;
-                            if (amt > 0) orderBulan++; 
-                        }
-                    }
-                });
-
-            } catch(e) {
-                console.error("Gagal hitung stat ledger kas:", e);
-            } finally {
-                if (icon) icon.classList.remove('fa-spin');
-            }
-        };
-
-        window.calculateSaldoHistoryByDate = () => {
-        };
-
         window.loadCustomers = async () => {
             const container = document.getElementById('customers-list');
             container.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[10px] text-slate-500 font-bold">Memuat data analisis dari Google Sheet...</p></div>';
@@ -1196,6 +1128,30 @@
                                     else updateDoc(ref, { in_main_queue: true, last_drop_time: prevRider.last_drop_time || data.last_drop_time, last_drop_desc: "Reconnect Aman (< 20 Menit)", proof_desc: retainedLocation, last_updated: serverTimestamp() });
                                 }
                             }
+
+                            // LOGIKA BARU: RIDER OFF ISTIRAHAT KEMUDIAN ONBID LAGI (MASUK ANTREAN)
+                            const descLower = (data.last_drop_desc || "").toLowerCase();
+                            const isAdminOverride = descLower.includes("standby di basecamp") || descLower.includes("kompensasi") || descLower.includes("prioritas") || descLower.includes("batal");
+                            
+                            // 1. Trigger mendeteksi perubahan in_main_queue dari False ke True
+                            if (!wasInMainQueue && inMainQueue && isNowActive && !isAdminOverride) {
+                                const lastDropMs = getTimestampMs(prevRider.last_drop_time);
+                                const retainedLocation = window.getKetLokasi(prevRider);
+                                
+                                if (lastDropMs > 0) {
+                                    // 2. Pengecekan selisih waktu sekarang vs foto terakhir
+                                    const diffMins = (Date.now() - lastDropMs) / (1000 * 60);
+                                    const ref = doc(db, 'status_rider_aktif', uid);
+                                    
+                                    if (diffMins > 30) {
+                                        // 4. Eksekusi > 30 Menit: Tolak dan lemparkan kembali ke Shift Baru / Verifikasi
+                                        updateDoc(ref, { in_main_queue: false, last_drop_desc: "Off > 30 Menit (Verifikasi Ulang)", proof_desc: retainedLocation, last_updated: serverTimestamp() });
+                                    } else {
+                                        // 3. Eksekusi < 30 Menit: Masuk Antrean, TAPI posisinya dilempar ke paling bawah
+                                        updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Selesai Istirahat (< 30 Menit)", proof_desc: retainedLocation, last_updated: serverTimestamp() });
+                                    }
+                                }
+                            }
                         }
                     }
                 });
@@ -1298,6 +1254,36 @@
             const countEl = document.getElementById('stat-online-riders');
             const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             let availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
+
+            // SINKRONISASI ANGKA ANTREAN (QUEUE NUMBER) KE DATABASE
+            try {
+                const batch = writeBatch(db);
+                let hasQueueUpdates = false;
+                const newQueueNumbers = new Map();
+                
+                // Beri nomor antrean mulai dari 1 untuk yang sedang standby
+                availableMainQueue.forEach((rider, index) => {
+                    newQueueNumbers.set(rider.uid, index + 1);
+                });
+                
+                // Update ke database, jika tidak standby berikan nomor 0
+                allRiders.forEach(rider => {
+                    const expectedNumber = newQueueNumbers.has(rider.uid) ? newQueueNumbers.get(rider.uid) : 0;
+                    if (rider.queue_number !== expectedNumber) {
+                        const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        batch.update(ref, { queue_number: expectedNumber });
+                        hasQueueUpdates = true;
+                        rider.queue_number = expectedNumber; // Simpan di memori lokal agar tidak memicu infinite loop
+                    }
+                });
+                
+                if (hasQueueUpdates) {
+                    batch.commit().catch(e => {});
+                }
+            } catch (e) {
+                console.warn("Queue update error:", e);
+            }
+            // AKHIR SINKRONISASI ANGKA ANTREAN
 
             if(countEl) countEl.innerText = availableMainQueue.length;
 
@@ -1924,6 +1910,9 @@
             const totalAdminEl = document.getElementById('history-total-admin');
             const dateVal = document.getElementById('history-date').value; 
             
+            // SINKRONISASI FILTER CLOUD DENGAN TANGGAL YANG DIPILIH
+            if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+
             if(!container) return;
             if(!dateVal) { if (typeof window.showAlert === 'function') window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender.', 'warning'); return; }
 
@@ -1935,42 +1924,50 @@
                 const memRiders = getMergedRidersForDropdown();
                 memRiders.forEach(r => masterRidersMap.set(r.uid, r));
 
-                try {
-                    const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
-                    const balancesSnap = await getDocsFromServer(balancesCol);
-                    balancesSnap.forEach(docSnap => { if (!masterRidersMap.has(docSnap.id)) masterRidersMap.set(docSnap.id, { uid: docSnap.id, name: docSnap.data().name || docSnap.id }); });
-                } catch (err) {}
+                // OPTIMASI 1: Ambil data saldo rider dari memori, tidak perlu fetch ulang dari Firebase
+                allRiderBalances.forEach(b => { 
+                    if (!masterRidersMap.has(b.id)) masterRidersMap.set(b.id, { uid: b.id, name: b.name || b.id }); 
+                });
 
                 let allFetchedOrders = [];
 
                 try {
+                    // OPTIMASI 2: Range Query untuk filter tanggal di sisi server Firebase
+                    const selectedDate = new Date(dateVal);
+                    const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
+                    const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
+
                     const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
-                    const qActive = query(activeOrdersCol, where("status", "==", "completed"));
+                    const qActive = query(
+                        activeOrdersCol, 
+                        where("status", "==", "completed"),
+                        where("created_at", ">=", startOfDay),
+                        where("created_at", "<=", endOfDay)
+                    );
                     const snapActive = await getDocsFromServer(qActive);
                     
                     snapActive.forEach(docSnap => {
                         const data = docSnap.data();
-                        let orderDateStr = '';
                         const ts = data.finished_at || data.created_at;
-                        if (ts && ts.seconds) {
-                            const d = new Date(ts.seconds * 1000);
-                            orderDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                        }
-
-                        if (orderDateStr === dateVal) {
-                            let detailText = "Orderan Biasa";
-                            if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
-                            
-                            allFetchedOrders.push({
-                                id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
-                                rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
-                                Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
-                                Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                                created_at: ts, admin_created_at: data.created_at, is_from_active: true
-                            });
-                        }
+                        
+                        // Data sudah 100% difilter oleh server Firebase, tidak perlu "if (orderDateStr === dateVal)" lagi
+                        let detailText = "Orderan Biasa";
+                        if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
+                        
+                        allFetchedOrders.push({
+                            id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
+                            rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
+                            Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
+                            Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
+                            created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                        });
                     });
-                } catch (errActive) {}
+                } catch (errActive) {
+                    console.error("Fetch history error:", errActive);
+                    if (String(errActive).includes("index") || String(errActive).includes("failed-precondition")) {
+                        window.showAlert('Indeks Diperlukan', 'Firebase memerlukan Composite Index untuk fitur ini. Silakan buka Console (Inspect Element) Browser dan klik link pembuatan indeks yang berwarna merah dari Firebase.', 'error');
+                    }
+                }
                 
                 allFetchedOrders.sort((a,b) => {
                     let timeA = 0;
@@ -2448,19 +2445,51 @@
                 if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
             });
         }
+        
+        function startDailyBalanceTrackerListener() {
+            const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+            onSnapshot(trackerRef, (docSnap) => {
+                const today = new Date();
+                const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                
+                if (docSnap.exists() && docSnap.data().shift_date === dateStr) {
+                    window.dailyBalanceTracker = docSnap.data();
+                    if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                        window.renderHistoryOrders();
+                    }
+                } else {
+                    const initTracker = () => {
+                        if (isBalancesLoaded && typeof window._currentTotalSaldo !== 'undefined') {
+                            setDoc(trackerRef, {
+                                shift_date: dateStr,
+                                saldo_jam_6: window._currentTotalSaldo || 0,
+                                top_up: 0,
+                                updated_at: serverTimestamp()
+                            }).catch(e=>{});
+                        } else {
+                            setTimeout(initTracker, 2000);
+                        }
+                    };
+                    initTracker();
+                }
+            });
+        }
 
         window.renderCloudRecaps = () => {
             const container = document.getElementById('cloud-recaps-list');
             if(!container) return;
 
-            if(allCloudRecaps.length === 0) {
-                container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada rekap yang disimpan ke cloud.</p>';
+            const dateVal = document.getElementById('history-date')?.value;
+            const filteredRecaps = allCloudRecaps.filter(r => r.tanggal === dateVal);
+
+            if(filteredRecaps.length === 0) {
+                container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada rekap di cloud untuk tanggal ini.</p>';
                 return;
             }
 
-            allCloudRecaps.sort((a,b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+            filteredRecaps.sort((a,b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
             let html = '';
-            allCloudRecaps.forEach(rekap => {
+            filteredRecaps.forEach(rekap => {
                 const dateParts = (rekap.tanggal || '').split('-');
                 let dateFormatted = rekap.tanggal;
                 if(dateParts.length === 3) dateFormatted = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
@@ -2527,6 +2556,7 @@
 
             let totalSisaSaldo = 0;
             allRiderBalances.forEach(b => { totalSisaSaldo += parseInt(b.saldo || 0); });
+            window._currentTotalSaldo = totalSisaSaldo;
             const dompetEl = document.getElementById('stat-total-dompet');
             if (dompetEl) dompetEl.innerText = `Rp ${totalSisaSaldo.toLocaleString('id-ID')}`;
 
@@ -2666,6 +2696,16 @@
                         rider_uid: uid, rider_name: rName, amount: amount, omset_order: 0, 
                         type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
                     });
+                }
+                
+                let topUpDiff = 0;
+                if (actionType === 'add') topUpDiff = amount;
+                else if (actionType === 'sub') topUpDiff = -amount;
+                else if (actionType === 'set') topUpDiff = amount - currentSaldo;
+
+                if (topUpDiff !== 0) {
+                    const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+                    await setDoc(trackerRef, { top_up: increment(topUpDiff) }, { merge: true }).catch(e=>{});
                 }
                 
                 if (typeof window.showAlert === 'function') window.showAlert('Berhasil', 'Saldo berhasil diupdate.', 'success');
