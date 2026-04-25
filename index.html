@@ -7666,7 +7666,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
       import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
@@ -7682,7 +7682,12 @@
       try {
           const app = initializeApp(firebaseConfig);
           const auth = getAuth(app);
-          const db = getFirestore(app);
+          
+          // PERBAIKAN: MENGAKTIFKAN OFFLINE CACHE FIREBASE (MENGURANGI READ DRASTIS)
+          const db = initializeFirestore(app, {
+              localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()})
+          });
+          
           const storage = getStorage(app); // INISIALISASI STORAGE
           
           // PERBAIKAN 1: Lindungi inisialisasi Messaging agar tidak bikin crash seluruh aplikasi
@@ -7702,51 +7707,19 @@
           window.isFirebaseReady = false; // Flag global untuk menahan UI login
           window.isFinishingOrder = false; // Flag status rider menekan Selesai
 
-          // -------------------------------------------------------------
-          // NEW: FUNGSI VERIFIKASI UID LANGSUNG KE FIRESTORE (INSTAN LOGIN)
-          // -------------------------------------------------------------
-          window.verifyRiderUidFirestore = async (uid) => {
-              try {
-                  const cleanUid = String(uid).trim().toUpperCase();
-                  const targetProjectId = firebaseConfig.projectId;
-                  
-                  // CEK 1: Apakah UID sudah pernah mendaftarkan PIN? (Paling cepat & akurat)
-                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', cleanUid, 'security', 'pin_data');
-                  const pinSnap = await getDoc(pinRef);
-                  if (pinSnap.exists()) return true;
-                  
-                  // CEK 2: Apakah profil rider sudah dibuatkan oleh Admin di Firestore?
-                  const profileRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', cleanUid);
-                  const profileSnap = await getDoc(profileRef);
-                  if (profileSnap.exists()) return true;
-                  
-                  // CEK 3: Apakah UID ada di radar / antrean aktif?
-                  const statusRef = doc(db, '/status_rider_aktif', cleanUid);
-                  const statusSnap = await getDoc(statusRef);
-                  if (statusSnap.exists()) return true;
-                  
-                  // Jika tidak ditemukan di ketiga koleksi di atas, berarti UID bodong
-                  return false;
-              } catch (e) {
-                  console.error("Verifikasi Firestore Gagal:", e);
-                  throw e;
-              }
-          };
-
           onAuthStateChanged(auth, (user) => {
-              if (user) { 
-                  console.log("Firebase Auth: Ready (Anonymous)"); 
+              if (user) {
                   isAuthReady = true;
                   window.isFirebaseReady = true;
                   // Cek notifikasi setelah login berhasil
-                  window.checkUnreadAdminInfo();
+                  if (typeof window.checkUnreadAdminInfo === 'function') window.checkUnreadAdminInfo();
                   
                   // CEK DAN MINTA IZIN NOTIFIKASI DENGAN CUSTOM UI
                   setTimeout(() => {
-                      updateNotificationUI();
+                      if (typeof updateNotificationUI === 'function') updateNotificationUI();
                       // Optimasi Baterai: Mengganti setInterval 2 detik dengan Event Listener
                       document.addEventListener("visibilitychange", () => {
-                          if (!document.hidden) updateNotificationUI();
+                          if (!document.hidden && typeof updateNotificationUI === 'function') updateNotificationUI();
                       });
                   }, 2000); // Beri jeda 2 detik setelah login agar loading selesai
                   
@@ -7778,7 +7751,7 @@
                   // Minta izin Push Notification dan simpan Token FCM
                   const uidForFCM = window.pendingSuspensionCheck ? window.pendingSuspensionCheck.uid : localStorage.getItem('rider_uid');
                   if (uidForFCM) {
-                      window.setupFCMToken(uidForFCM);
+                      if (typeof window.setupFCMToken === 'function') window.setupFCMToken(uidForFCM);
                   }
 
                   // Menjalankan queue radar jika status ONBID = true
@@ -7823,9 +7796,149 @@
           initAuth();
 
           // -------------------------------------------------------------
+          // NEW: FUNGSI SISTEM PIN RIDER
+          // -------------------------------------------------------------
+          window.checkRiderPin = function(uid) {
+              window.tempLoginUid = uid; 
+              
+              // Ubah tampilan dari input UID ke input PIN
+              document.getElementById('login-input-section').classList.add('hidden');
+              document.getElementById('pin-section').classList.remove('hidden');
+              document.getElementById('pin-input').value = '';
+              document.getElementById('pin-error-msg').classList.add('hidden');
+              
+              // Sembunyikan error message utama jika ada
+              const mainErrorMsg = document.getElementById('login-error-msg');
+              if(mainErrorMsg) mainErrorMsg.classList.add('hidden');
+          };
+
+          window.cancelPin = function() {
+              window.tempLoginUid = null;
+              
+              // Kembalikan ke tampilan input UID
+              document.getElementById('pin-section').classList.add('hidden');
+              document.getElementById('login-input-section').classList.remove('hidden');
+              
+              // Reset tombol login
+              const btn = document.getElementById('login-btn');
+              if(btn) {
+                  btn.innerHTML = 'Buka Dashboard';
+                  btn.disabled = false;
+              }
+              document.getElementById('pin-error-msg').classList.add('hidden');
+          };
+
+          window.submitPin = async function() {
+              const pinInput = document.getElementById('pin-input').value;
+              const errorMsg = document.getElementById('pin-error-msg');
+              const btn = document.getElementById('submit-pin-btn');
+              const uid = window.tempLoginUid;
+
+              if (!uid) return;
+              
+              if (pinInput.length < 6) {
+                  errorMsg.innerText = "PIN harus 6 digit!";
+                  errorMsg.classList.remove('hidden');
+                  return;
+              }
+
+              const originalBtnHtml = btn.innerHTML;
+              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa...';
+              btn.disabled = true;
+              errorMsg.classList.add('hidden');
+
+              try {
+                  const targetProjectId = firebaseConfig.projectId;
+                  
+                  // PERBAIKAN: Mengarahkan path PIN ke /users/{uid}/security/pin_data
+                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', String(uid).trim().toUpperCase(), 'security', 'pin_data');
+                  const pinSnap = await getDoc(pinRef);
+
+                  let isValid = false;
+
+                  if (pinSnap.exists()) {
+                      const data = pinSnap.data();
+                      // Cek PIN di database, jika belum diset oleh Admin maka pakai default '123456'
+                      const savedPin = data.pin || data.PIN || "123456"; 
+                      
+                      if (pinInput === String(savedPin)) {
+                          isValid = true;
+                      }
+                  } else {
+                      // Jika dokumen security/pin_data belum ada, beri akses dengan PIN default '123456'
+                      if (pinInput === "123456") {
+                          isValid = true;
+                      }
+                  }
+
+                  if (isValid) {
+                      // Lolos keamanan
+                      document.getElementById('pin-section').classList.add('hidden');
+                      btn.innerHTML = originalBtnHtml;
+                      btn.disabled = false;
+                      
+                      // Teruskan ke fungsi bypass login utama
+                      window.proceedWithLogin(uid);
+                  } else {
+                      // PIN salah
+                      errorMsg.innerText = "PIN Salah! Silakan coba lagi.";
+                      errorMsg.classList.remove('hidden');
+                      btn.innerHTML = originalBtnHtml;
+                      btn.disabled = false;
+                      document.getElementById('pin-input').value = '';
+                  }
+
+              } catch (error) {
+                  console.error("Error checking PIN:", error);
+                  errorMsg.innerText = "Gagal memverifikasi keamanan. Pastikan koneksi internet stabil.";
+                  errorMsg.classList.remove('hidden');
+                  btn.innerHTML = originalBtnHtml;
+                  btn.disabled = false;
+              }
+          };
+
+          // -------------------------------------------------------------
+          // NEW: FUNGSI UPDATE STATUS KE FIREBASE (ON-BID / OFF-BID)
+          // -------------------------------------------------------------
+          window.updateFirebaseStatus = async (uid, isOnline, riderName) => {
+              if (!uid || !isAuthReady) return;
+              
+              try {
+                  const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
+                  
+                  if (isOnline) {
+                      // Masuk ke antrean Radar
+                      await setDoc(statusRef, {
+                          uid: String(uid).trim(),
+                          name: riderName !== 'Memuat...' ? riderName : 'Rider',
+                          is_online: true,
+                          is_available: true,
+                          in_main_queue: true,
+                          // Update waktu agar rider masuk di urutan paling bawah saat baru On-Bid
+                          last_drop_time: serverTimestamp(),
+                          last_drop_desc: "Mulai On-Bid (Menunggu Order)"
+                      }, { merge: true });
+                      console.log("Status Firebase: ON-BID berhasil diperbarui.");
+                  } else {
+                      // Keluar dari antrean Radar
+                      await setDoc(statusRef, {
+                          is_online: false,
+                          is_available: false,
+                          in_main_queue: false,
+                          last_drop_desc: "Sedang Istirahat / Off-Bid"
+                      }, { merge: true });
+                      console.log("Status Firebase: OFF-BID berhasil diperbarui.");
+                  }
+              } catch (error) {
+                  console.error("Gagal update status On-Bid Firebase:", error);
+              }
+          };
+
+          // -------------------------------------------------------------
           // NEW: SISTEM AUTO-REPORT ANOMALI KE ADMIN
           // -------------------------------------------------------------
           window.autoReportAnomaly = async (type, item, nominal) => {
+              const currentUserUID = localStorage.getItem('rider_uid');
               if (!currentUserUID || !window.isFirebaseReady) return;
               
               // Gunakan kombinasi ID untuk mencegah spam laporan ganda jika aplikasi direfresh berkali-kali
@@ -7996,18 +8109,14 @@
               
               const statusRef = collection(db, '/status_rider_aktif');
               
-              // UBAH: Tarik semua data lalu filter di JS (Mencegah error tipe data dari Admin)
+              // UBAH: Sangat Hemat Kuota! Hanya menghitung yang diberi nomor oleh Admin
               activeQueueCountUnsubscribe = onSnapshot(statusRef, (snapshot) => {
                   let count = 0;
                   snapshot.forEach(doc => {
                       const data = doc.data();
-                      // Filter di JS agar aman dari perbedaan boolean (true) atau string ("true")
-                      const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
-                      const uidClean = String(doc.id).trim().toUpperCase();
-                      const isBusy = busyUids.has(uidClean); // Cek apakah rider ada di daftar sibuk (active_orders)
-
-                      // HANYA hitung rider yang online, available, DAN TIDAK SIBUK bawa orderan
-                      if (inMainQueue && data.is_online === true && data.is_available === true && !isBusy) {
+                      const qNum = Number(data.queue_number) || 0;
+                      // HANYA hitung rider yang diberi nomor urut oleh admin
+                      if (qNum > 0) {
                           count++;
                       }
                   });
@@ -8098,7 +8207,7 @@
                       if (nExtra > 500) nExtra = nExtra / 1000;
 
                       // Proteksi agar "Memuat..." tidak tersimpan sebagai nama rider
-                      let fallbackName = document.getElementById('display-rider-name').innerText;
+                      let fallbackName = document.getElementById('display-rider-name') ? document.getElementById('display-rider-name').innerText : 'Rider';
                       if (fallbackName === 'Memuat...' || !fallbackName) {
                           fallbackName = 'Rider';
                       }
@@ -8166,11 +8275,11 @@
                   const status = String(data.status || '').trim().toLowerCase();
 
                   if (status === "assigned") {
-                      showIncomingOrderPopup(data, docId);
+                      if(typeof window.showIncomingOrderPopup === 'function') window.showIncomingOrderPopup(data, docId);
                   } else if (status === "processing") {
-                      showActiveOrderOverlay(data, docId);
+                      if(typeof window.showActiveOrderOverlay === 'function') window.showActiveOrderOverlay(data, docId);
                   } else if (status === "completed" && window.currentActiveOrderId === docId) {
-                      hideActiveOrderOverlay();
+                      if(typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
                   } else if (status !== "assigned" && status !== "processing" && status !== "completed") {
                       // Tangkap semua status lain: canceled, cancelled, batal, dibatalkan, cancel, dll.
                       if (window.currentActiveOrderId === docId || window.currentIncomingOrderId === docId) {
@@ -8183,12 +8292,13 @@
               const handleCanceledOrderProcess = () => {
                   let wasActiveTask = false;
                   let wasRinging = false;
+                  const currentUserUID = localStorage.getItem('rider_uid');
 
                   // 1. Cek LANGSUNG dari elemen layar "Tugas Berjalan" (Akurat 100%)
                   const overlay = document.getElementById('active-order-overlay');
                   if (overlay && !overlay.classList.contains('hidden')) {
                       wasActiveTask = true;
-                      if (typeof hideActiveOrderOverlay === 'function') hideActiveOrderOverlay();
+                      if (typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
                   }
 
                   // 2. Cek LANGSUNG dari elemen Pop-up "Orderan Baru"
@@ -8231,7 +8341,7 @@
                       
                       // PENEGASAN: Kembalikan Rider ke Antrean Secara Otomatis (Reset Database Firestore)
                       const toggleEl = document.getElementById('onbid-toggle');
-                      if (toggleEl && toggleEl.checked) {
+                      if (toggleEl && toggleEl.checked && currentUserUID) {
                           localStorage.setItem('rider_onbid_status', 'true');
                           if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
                           
@@ -8327,7 +8437,7 @@
           };
 
           // --- LOGIKA UI ORDERAN ---
-          function showIncomingOrderPopup(data, docId) {
+          window.showIncomingOrderPopup = function(data, docId) {
               const popup = document.getElementById('incoming-order-popup');
               const feeEl = document.getElementById('incoming-order-fee');
               const feeDetailEl = document.getElementById('incoming-order-fee-detail');
@@ -8375,8 +8485,10 @@
                   }
               }
 
-              popup.classList.remove('hidden');
-              popup.classList.add('flex');
+              if(popup) {
+                  popup.classList.remove('hidden');
+                  popup.classList.add('flex');
+              }
 
               // --- PERBAIKAN LOGIKA TIMER, AUDIO, DAN NOTIFIKASI ---
               const currentPingTime = data.last_ping ? data.last_ping.seconds : 0;
@@ -8397,7 +8509,7 @@
               if (isFirstTime || isPinged) {
                   
                   // --- TRIGGER NOTIFIKASI ANDROID (WEBVIEW) ---
-                  if (window.AndroidInterface) {
+                  if (window.AndroidInterface && window.AndroidInterface.triggerOrderNotification) {
                       window.AndroidInterface.triggerOrderNotification(
                           "ORDERAN MASUK! 🛵", 
                           "Ada pesanan baru, segera buka aplikasi!"
@@ -8457,60 +8569,66 @@
                   }
               }
 
-              btnAccept.onclick = async () => {
-                  btnAccept.disabled = true;
-                  btnAccept.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menerima...';
-                  
-                  window.currentIncomingOrderId = null; 
-                  localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori
-                  
-                  try {
-                      const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
-                      await updateDoc(orderRef, {
-                          status: 'processing',
-                          accepted_at: serverTimestamp()
-                      });
+              if(btnAccept) {
+                  btnAccept.onclick = async () => {
+                      btnAccept.disabled = true;
+                      btnAccept.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menerima...';
+                      const currentUserUID = localStorage.getItem('rider_uid');
+                      window.currentIncomingOrderId = null; 
+                      localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori
                       
-                      // NEW: Set Rider jadi TIDAK TERSEDIA di antrean
-                      const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                      await setDoc(statusRef, { is_available: false }, { merge: true });
-                      
-                      popup.classList.add('hidden');
-                      popup.classList.remove('flex');
-
-                      // Hentikan nada dering dan getar
-                      if(window.incomingOrderAudio) {
-                          window.incomingOrderAudio.pause();
-                          window.incomingOrderAudio.currentTime = 0;
-                      }
-                      if ("vibrate" in navigator) navigator.vibrate(0);
-                      if (window.vibrateInterval) {
-                          clearInterval(window.vibrateInterval);
-                          window.vibrateInterval = null;
-                      }
-
-                      // Tutup Notifikasi Sistem jika diterima
-                      if ('serviceWorker' in navigator) {
-                          navigator.serviceWorker.ready.then(registration => {
-                              registration.getNotifications({tag: 'order-masuk-' + docId}).then(notifications => {
-                                  notifications.forEach(notification => notification.close());
-                              });
+                      try {
+                          const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
+                          await updateDoc(orderRef, {
+                              status: 'processing',
+                              accepted_at: serverTimestamp()
                           });
-                      }
+                          
+                          // NEW: Set Rider jadi TIDAK TERSEDIA di antrean
+                          if (currentUserUID) {
+                              const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                              await setDoc(statusRef, { is_available: false }, { merge: true });
+                          }
+                          
+                          if (popup) {
+                              popup.classList.add('hidden');
+                              popup.classList.remove('flex');
+                          }
 
-                  } catch (e) {
-                      console.error("Error menerima order:", e);
-                      alert("Gagal menerima order. Cek koneksi Anda.");
-                  } finally {
-                      btnAccept.disabled = false;
-                      btnAccept.innerHTML = '<i class="fa-solid fa-motorcycle mr-2"></i> Ok Gasspoll!';
-                  }
-              };
-          }
+                          // Hentikan nada dering dan getar
+                          if(window.incomingOrderAudio) {
+                              window.incomingOrderAudio.pause();
+                              window.incomingOrderAudio.currentTime = 0;
+                          }
+                          if ("vibrate" in navigator) navigator.vibrate(0);
+                          if (window.vibrateInterval) {
+                              clearInterval(window.vibrateInterval);
+                              window.vibrateInterval = null;
+                          }
+
+                          // Tutup Notifikasi Sistem jika diterima
+                          if ('serviceWorker' in navigator) {
+                              navigator.serviceWorker.ready.then(registration => {
+                                  registration.getNotifications({tag: 'order-masuk-' + docId}).then(notifications => {
+                                      notifications.forEach(notification => notification.close());
+                                  });
+                              });
+                          }
+
+                      } catch (e) {
+                          console.error("Error menerima order:", e);
+                          alert("Gagal menerima order. Cek koneksi Anda.");
+                      } finally {
+                          btnAccept.disabled = false;
+                          btnAccept.innerHTML = '<i class="fa-solid fa-motorcycle mr-2"></i> Ok Gasspoll!';
+                      }
+                  };
+              }
+          };
 
           window.handleMissedOrder = async (docId) => {
               window.isMissingOrder = true; // Flag agar tidak muncul alert "Dibatalkan admin"
-              
+              const currentUserUID = localStorage.getItem('rider_uid');
               localStorage.removeItem(`order_start_${docId}`); // CLEAN UP TIMER DARI MEMORI
 
               // Sembunyikan popup order masuk
@@ -8554,6 +8672,7 @@
                   try { playBeep(300, 0.5); } catch(e){}
               }
 
+              if (!currentUserUID) return;
               try {
                   // 1. Update status order menjadi missed agar admin tahu dilewati
                   const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
@@ -8592,7 +8711,7 @@
               }
           };
 
-          function showActiveOrderOverlay(data, docId) {
+          window.showActiveOrderOverlay = function(data, docId) {
               window.currentActiveOrderId = docId;
               window.currentActiveOrderItems = data.items || []; // Simpan list pesanan secara global
               
@@ -8608,15 +8727,19 @@
               }
               
               const overlay = document.getElementById('active-order-overlay');
+              if (!overlay) return;
               
               // Set Info
               const activeHeader = document.querySelector('#active-order-overlay header h1');
               if(activeHeader) activeHeader.innerText = "Tugas Berjalan";
 
-              document.getElementById('active-customer-name').innerText = data.customer_name || "Pelanggan";
-              document.getElementById('active-customer-phone').innerText = data.customer_phone || "-";
+              const customerNameEl = document.getElementById('active-customer-name');
+              const customerPhoneEl = document.getElementById('active-customer-phone');
+              if(customerNameEl) customerNameEl.innerText = data.customer_name || "Pelanggan";
+              if(customerPhoneEl) customerPhoneEl.innerText = data.customer_phone || "-";
               
-              const riderNameForWA = document.getElementById('display-rider-name').innerText || "Rider";
+              const displayRiderNameEl = document.getElementById('display-rider-name');
+              const riderNameForWA = displayRiderNameEl ? displayRiderNameEl.innerText : "Rider";
               let waMessage = `Halo kak, saya Rider PROJEKGO ${riderNameForWA} sedang menuju lokasi penjual/jemput untuk memproses pesanan,mohon ditunggu yah kak.`;
               const phoneStr = data.customer_phone?.replace(/^0/, '62') || "";
               
@@ -8630,10 +8753,12 @@
 
               // Tampilkan ongkir dipisah (tidak ditotalkan) di UI
               const feeEl = document.getElementById('active-order-fee');
-              if (extraFee > 0) {
-                  feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')} + ${extraFee.toLocaleString('id-ID')}`;
-              } else {
-                  feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
+              if(feeEl) {
+                  if (extraFee > 0) {
+                      feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')} + ${extraFee.toLocaleString('id-ID')}`;
+                  } else {
+                      feeEl.innerText = `Rp ${baseFee.toLocaleString('id-ID')}`;
+                  }
               }
               
               // Sembunyikan info total
@@ -8650,42 +8775,44 @@
               
               let detailPesananWA = `\n\n*Detail Pesanan:*\n`;
 
-              if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                  listEl.innerHTML = data.items.map(item => {
-                      const rawName = typeof item === 'object' ? (item.name || '') : String(item);
-                      const trimmedRaw = rawName.trim();
-                      const cleanName = trimmedRaw.replace(/^[\-\•\·\s]+/, '').trim();
-                      
-                      if (!cleanName) {
-                          // Jika kosong, tambahkan enter saja ke text WA agar rapi, dan UI render jarak kosong
-                          copyText += `\n`;
-                          detailPesananWA += `\n`;
-                          return `<li class="pb-0.5"><div class="h-2"></div></li>`;
-                      }
-                      
-                      // Logika identasi: diawali angka ATAU diawali '-' (pada text mentah) ATAU diakhiri angka
-                      const shouldIndent = /^\d/.test(cleanName) || /^[\-\•\·]/.test(trimmedRaw) || /\d$/.test(cleanName);
-                      const prefix = shouldIndent ? '- ' : '';
-                      
-                      // Penyesuaian class agar jarak lebih rapat dan proporsional (font size dan line height disesuaikan)
-                      const textClass = shouldIndent 
-                          ? 'ml-3 text-gray-600 font-medium text-sm leading-snug flex items-start gap-1.5' 
-                          : 'text-gray-800 font-bold text-[15px] mt-1.5 leading-snug';
-                      
-                      // Tampilan HTML untuk bullet identasi agar rapi jika text panjang (membungkus baris)
-                      const displayHtml = shouldIndent
-                          ? `<span class="text-gray-400 font-bold mt-[1px]">-</span> <span>${cleanName}</span>`
-                          : `${cleanName}`;
-                      
-                      copyText += `${prefix}${cleanName}\n`;
-                      detailPesananWA += `${prefix}${cleanName}\n`;
-                      
-                      return `<li class="pb-0.5"><div class="${textClass}">${displayHtml}</div></li>`;
-                  }).join('');
-              } else {
-                  listEl.innerHTML = `<li class="text-gray-500 italic text-base">- Pesanan dari admin</li>`;
-                  copyText += `- Pesanan dari admin\n`;
-                  detailPesananWA += `- Pesanan dari admin\n`;
+              if (listEl) {
+                  if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+                      listEl.innerHTML = data.items.map(item => {
+                          const rawName = typeof item === 'object' ? (item.name || '') : String(item);
+                          const trimmedRaw = rawName.trim();
+                          const cleanName = trimmedRaw.replace(/^[\-\•\·\s]+/, '').trim();
+                          
+                          if (!cleanName) {
+                              // Jika kosong, tambahkan enter saja ke text WA agar rapi, dan UI render jarak kosong
+                              copyText += `\n`;
+                              detailPesananWA += `\n`;
+                              return `<li class="pb-0.5"><div class="h-2"></div></li>`;
+                          }
+                          
+                          // Logika identasi: diawali angka ATAU diawali '-' (pada text mentah) ATAU diakhiri angka
+                          const shouldIndent = /^\d/.test(cleanName) || /^[\-\•\·]/.test(trimmedRaw) || /\d$/.test(cleanName);
+                          const prefix = shouldIndent ? '- ' : '';
+                          
+                          // Penyesuaian class agar jarak lebih rapat dan proporsional (font size dan line height disesuaikan)
+                          const textClass = shouldIndent 
+                              ? 'ml-3 text-gray-600 font-medium text-sm leading-snug flex items-start gap-1.5' 
+                              : 'text-gray-800 font-bold text-[15px] mt-1.5 leading-snug';
+                          
+                          // Tampilan HTML untuk bullet identasi agar rapi jika text panjang (membungkus baris)
+                          const displayHtml = shouldIndent
+                              ? `<span class="text-gray-400 font-bold mt-[1px]">-</span> <span>${cleanName}</span>`
+                              : `${cleanName}`;
+                          
+                          copyText += `${prefix}${cleanName}\n`;
+                          detailPesananWA += `${prefix}${cleanName}\n`;
+                          
+                          return `<li class="pb-0.5"><div class="${textClass}">${displayHtml}</div></li>`;
+                      }).join('');
+                  } else {
+                      listEl.innerHTML = `<li class="text-gray-500 italic text-base">- Pesanan dari admin</li>`;
+                      copyText += `- Pesanan dari admin\n`;
+                      detailPesananWA += `- Pesanan dari admin\n`;
+                  }
               }
 
               // Gabungkan pesan WA dengan detail pesanan
@@ -8723,10 +8850,12 @@
               }
           } 
 
-          function hideActiveOrderOverlay() {
+          window.hideActiveOrderOverlay = function() {
               const overlay = document.getElementById('active-order-overlay');
-              overlay.classList.add('hidden');
-              overlay.classList.remove('flex');
+              if(overlay) {
+                  overlay.classList.add('hidden');
+                  overlay.classList.remove('flex');
+              }
               
               // Reset tampilan selalu ke Step 1
               if (typeof window.goToPage === 'function') window.goToPage(1);
@@ -8737,9 +8866,14 @@
               }
               
               // Reset Form Foto
-              document.getElementById('finish-photo-preview').classList.add('hidden');
-              document.getElementById('finish-photo-preview').src = "";
-              document.getElementById('finish-photo-placeholder').classList.remove('hidden');
+              const finishPreview = document.getElementById('finish-photo-preview');
+              if(finishPreview) {
+                  finishPreview.classList.add('hidden');
+                  finishPreview.src = "";
+              }
+              
+              const finishPlaceholder = document.getElementById('finish-photo-placeholder');
+              if(finishPlaceholder) finishPlaceholder.classList.remove('hidden');
               
               const removeBtn = document.getElementById('btn-remove-photo');
               if (removeBtn) {
@@ -8747,7 +8881,9 @@
                   removeBtn.classList.remove('flex');
               }
               
-              document.getElementById('finish-photo-desc').value = "";
+              const finishDesc = document.getElementById('finish-photo-desc');
+              if(finishDesc) finishDesc.value = "";
+              
               document.querySelectorAll('.finish-photo-input').forEach(input => input.value = "");
               finishPhotoBase64 = null;
               
@@ -8761,311 +8897,15 @@
                   btnFinishAndRest.innerHTML = '<i class="fa-solid fa-lock" id="rest-lock-icon"></i> Selesai & Off/Istirahat';
               }
               
-              window.validateFinishOrder();
+              if(typeof window.validateFinishOrder === 'function') window.validateFinishOrder();
               
               // Bersihkan ID Aktif
               window.currentActiveOrderId = null;
           }
 
-          // Ekspos fungsi ke Window untuk HTML onclick/onchange
-          window.previewFinishPhoto = async (input) => {
-              const preview = document.getElementById('finish-photo-preview');
-              const placeholder = document.getElementById('finish-photo-placeholder');
-              const removeBtn = document.getElementById('btn-remove-photo');
-
-              if (input.files && input.files[0]) {
-                  try {
-                      // 1. Tampilkan langsung secara instan agar gambar langsung masuk ke field preview
-                      const objectUrl = URL.createObjectURL(input.files[0]);
-                      preview.src = objectUrl;
-                      preview.classList.remove('hidden');
-                      placeholder.classList.add('hidden');
-                      
-                      if (removeBtn) {
-                          removeBtn.classList.remove('hidden');
-                          removeBtn.classList.add('flex');
-                      }
-
-                      // 2. Kompres gambar di background (fungsi asli tetap berjalan)
-                      const base64Str = await compressImage(input.files[0], 800, 0.7);
-                      finishPhotoBase64 = base64Str;
-                      
-                  } catch (e) {
-                      console.error("Gagal memproses foto", e);
-                      alert("Gagal memproses foto, coba lagi.");
-                      input.value = ""; // Reset input jika gagal
-                  }
-              } else {
-                  finishPhotoBase64 = null;
-                  preview.classList.add('hidden');
-                  placeholder.classList.remove('hidden');
-                  
-                  if (removeBtn) {
-                      removeBtn.classList.add('hidden');
-                      removeBtn.classList.remove('flex');
-                  }
-              }
-              window.validateFinishOrder();
-          };
-
-          // FUNGSI BARU UNTUK MENGHAPUS FOTO DAN MENGULANGI PILIHAN
-          window.removeFinishPhoto = () => {
-              finishPhotoBase64 = null;
-              
-              const preview = document.getElementById('finish-photo-preview');
-              const placeholder = document.getElementById('finish-photo-placeholder');
-              const removeBtn = document.getElementById('btn-remove-photo');
-              
-              preview.src = "";
-              preview.classList.add('hidden');
-              placeholder.classList.remove('hidden');
-              
-              if (removeBtn) {
-                  removeBtn.classList.add('hidden');
-                  removeBtn.classList.remove('flex');
-              }
-              
-              // Reset semua input file
-              document.querySelectorAll('.finish-photo-input').forEach(input => input.value = "");
-              
-              window.validateFinishOrder();
-          };
-
-          window.validateFinishOrder = () => {
-              const descEl = document.getElementById('finish-photo-desc');
-              const desc = descEl ? descEl.value.trim() : '';
-              const btn = document.getElementById('btn-finish-order');
-              const icon = document.getElementById('finish-lock-icon');
-              
-              const btnRest = document.getElementById('btn-finish-and-rest');
-              const iconRest = document.getElementById('rest-lock-icon');
-
-              if (!btn) return;
-
-              if (finishPhotoBase64 && desc.length > 0) {
-                  btn.disabled = false;
-                  btn.classList.replace('bg-gray-300', 'bg-orange-600');
-                  btn.classList.replace('cursor-not-allowed', 'active:scale-95');
-                  if (icon) icon.classList.replace('fa-lock', 'fa-check-circle');
-                  
-                  if (btnRest) {
-                      btnRest.disabled = false;
-                      btnRest.classList.replace('bg-gray-100', 'bg-red-50');
-                      btnRest.classList.replace('text-gray-400', 'text-red-600');
-                      btnRest.classList.replace('border-gray-200', 'border-red-200');
-                      btnRest.classList.replace('cursor-not-allowed', 'active:scale-95');
-                      if (iconRest) iconRest.classList.replace('fa-lock', 'fa-power-off');
-                  }
-              } else {
-                  btn.disabled = true;
-                  btn.classList.replace('bg-orange-600', 'bg-gray-300');
-                  btn.classList.replace('active:scale-95', 'cursor-not-allowed');
-                  if (icon) icon.classList.replace('fa-check-circle', 'fa-lock');
-                  
-                  if (btnRest) {
-                      btnRest.disabled = true;
-                      btnRest.classList.replace('bg-red-50', 'bg-gray-100');
-                      btnRest.classList.replace('text-red-600', 'text-gray-400');
-                      btnRest.classList.replace('border-red-200', 'border-gray-200');
-                      btnRest.classList.replace('active:scale-95', 'cursor-not-allowed');
-                      if (iconRest) iconRest.classList.replace('fa-power-off', 'fa-lock');
-                  }
-              }
-          };
-
-          // Tambahkan listener ke tombol Finish Order (Aman dari error jika elemen tidak ada)
+          // Menambahkan listener tombol di luar fungsi agar tidak double
           const btnFinishOrder = document.getElementById('btn-finish-order');
-          
-          // --- FUNGSI BARU: POPUP WA FEEDBACK (MENGGANTIKAN LANGSUNG KE PEMBAYARAN) ---
-          window.validateAndShowFeedbackPopup = function() {
-              const desc = document.getElementById('finish-photo-desc').value.trim();
-
-              if (!window.currentActiveOrderId) return;
-              
-              if (!finishPhotoBase64) {
-                  alert("Sistem Menolak: Wajib melampirkan foto bukti penyelesaian terlebih dahulu!");
-                  return;
-              }
-              
-              if (desc === "") {
-                  alert("Sistem Menolak: Keterangan foto (contoh: 'Pesanan ditaruh di meja') wajib diisi!");
-                  return;
-              }
-
-              const btn = document.getElementById('btn-finish-order');
-              if (btn && btn.disabled) return;
-
-              // --- PERBAIKAN: CEK MEMORI STATUS (FLAG) ---
-              // Jika Rider sudah pernah klik Kirim WA untuk order ini, langsung tembak ke Form Pembayaran
-              const waSentFlag = sessionStorage.getItem(`wa_sent_${window.currentActiveOrderId}`);
-              if (waSentFlag === 'true') {
-                  window.showPaymentPopupInternal();
-                  return;
-              }
-
-              // Tampilkan popup feedback WA
-              const popup = document.getElementById('feedback-wa-popup');
-              const content = popup.children[0];
-              popup.classList.remove('hidden');
-              popup.classList.add('flex');
-              setTimeout(() => {
-                  popup.classList.remove('opacity-0');
-                  content.classList.remove('scale-90');
-                  content.classList.add('scale-100');
-              }, 10);
-          };
-
-          // FUNGSI UNTUK KIRIM WA FEEDBACK DAN LANJUT KE PEMBAYARAN
-          window.sendFeedbackWAAndContinue = function() {
-              // 1. Ambil link berdasarkan UID
-              const uidKey = (currentUserUID || "").trim().toUpperCase();
-              const feedbackLink = RIDER_FEEDBACK_LINKS[uidKey] || 'https://bit.ly/projekgorating'; // Fallback jika tidak ada
-
-              // 2. Susun pesan WA sesuai permintaan
-              const waMessage = `Halo Kak! 👋 Terima kasih sudah mempercayakan pengantaran pesanannya kepada PROJEKGO hari ini. Kepuasan Kakak adalah prioritas utama kami. 😊\n\nAgar kami bisa terus memberikan pelayanan yang lebih baik lagi, kami sangat mengharapkan kritik dan saran dari Kakak, khususnya mengenai kecepatan pengiriman dan keamanan produk.\n\nYuk, luangkan waktu sejenak untuk memberikan penilaian melalui tautan berikut:\n🔗 ${feedbackLink}\n\nSetiap masukan dari Kakak sangat berarti bagi kami. Terima kasih banyak atas dukungannya! 🙏`;
-
-              // 3. Ambil nomor telepon pelanggan dari data yang sedang aktif
-              const phoneStr = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
-
-              // --- PERBAIKAN: TANDAI BAHWA RIDER SUDAH KLIK KIRIM WA UNTUK ORDER INI ---
-              sessionStorage.setItem(`wa_sent_${window.currentActiveOrderId}`, 'true');
-
-              // 4. Sembunyikan popup feedback
-              const feedbackPopup = document.getElementById('feedback-wa-popup');
-              const feedbackContent = feedbackPopup.children[0];
-              feedbackPopup.classList.add('opacity-0');
-              feedbackContent.classList.remove('scale-100');
-              feedbackContent.classList.add('scale-90');
-              
-              setTimeout(() => {
-                  feedbackPopup.classList.remove('flex');
-                  feedbackPopup.classList.add('hidden');
-                  
-                  // 5. Buka WA dan Lanjut ke Pembayaran (Logika Khusus Native vs Web)
-                  if (window.AndroidInterface && window.AndroidInterface.openWhatsApp) {
-                      // NATIVE ANDROID: Buka WA secara langsung
-                      window.AndroidInterface.openWhatsApp(phoneStr, waMessage);
-                      // Form Pembayaran langsung muncul di background (stand-by saat rider kembali ke app)
-                      window.showPaymentPopupInternal();
-                  } else {
-                      // WEB FALLBACK: Tahan form pembayaran agar tidak menimpa popup pilihan WA
-                      window.pendingPaymentPopupAfterWa = true;
-                      window.openWaSelector(phoneStr, waMessage);
-                  }
-              }, 300);
-          };
-
-          // FUNGSI INTERNAL UNTUK MENAMPILKAN POPUP PEMBAYARAN SAJA
-          window.showPaymentPopupInternal = function() {
-              // Reset Form Pembayaran
-              document.querySelectorAll('input[name="payment_method"]').forEach(r => r.checked = false);
-              document.querySelectorAll('.payment-radio-label').forEach(l => l.classList.remove('border-orange-500', 'bg-orange-50'));
-              document.getElementById('transfer-nominal-container').classList.add('hidden');
-              document.getElementById('payment-nominal-input').value = "";
-              window.validatePaymentCheck();
-              
-              // Tampilkan popup
-              const popup = document.getElementById('payment-check-popup');
-              const content = popup.children[0];
-              popup.classList.remove('hidden');
-              popup.classList.add('flex');
-              setTimeout(() => {
-                  popup.classList.remove('opacity-0');
-                  content.classList.remove('scale-90');
-                  content.classList.add('scale-100');
-              }, 10);
-          };
-
-          // --- FUNGSI VALIDASI DAN SUBMIT PEMBAYARAN ---
-          window.validatePaymentCheck = function() {
-              const selected = document.querySelector('input[name="payment_method"]:checked');
-              const nominal = document.getElementById('payment-nominal-input').value;
-              const btn = document.getElementById('btn-confirm-payment');
-              const icon = document.getElementById('payment-lock-icon');
-              
-              let isValid = false;
-              if (selected) {
-                  if (selected.value === 'Tunai') {
-                      isValid = true;
-                  } else if (selected.value === 'Transfer' && nominal.trim() !== '') {
-                      isValid = true;
-                  }
-              }
-              
-              if (btn) {
-                  if (isValid) {
-                      btn.disabled = false;
-                      btn.classList.replace('bg-gray-300', 'bg-orange-600');
-                      btn.classList.replace('cursor-not-allowed', 'active:scale-95');
-                      if (icon) icon.classList.replace('fa-lock', 'fa-check-circle');
-                  } else {
-                      btn.disabled = true;
-                      btn.classList.replace('bg-orange-600', 'bg-gray-300');
-                      btn.classList.replace('active:scale-95', 'cursor-not-allowed');
-                      if (icon) icon.classList.replace('fa-check-circle', 'fa-lock');
-                  }
-              }
-          };
-
-          window.handlePaymentMethodChange = function(value) {
-              document.querySelectorAll('.payment-radio-label').forEach(l => l.classList.remove('border-orange-500', 'bg-orange-50'));
-              const selectedInput = document.querySelector(`input[name="payment_method"][value="${value}"]`);
-              if(selectedInput) {
-                  selectedInput.parentElement.classList.add('border-orange-500', 'bg-orange-50');
-              }
-
-              const nominalContainer = document.getElementById('transfer-nominal-container');
-              if (value === 'Transfer') {
-                  nominalContainer.classList.remove('hidden');
-                  nominalContainer.classList.add('block');
-              } else {
-                  nominalContainer.classList.add('hidden');
-                  nominalContainer.classList.remove('block');
-                  document.getElementById('payment-nominal-input').value = '';
-              }
-              window.validatePaymentCheck();
-          };
-
-          window.submitPaymentCheck = async function() {
-              const selected = document.querySelector('input[name="payment_method"]:checked');
-              const nominal = document.getElementById('payment-nominal-input').value;
-              const btn = document.getElementById('btn-confirm-payment');
-              
-              window.tempPaymentData = {
-                  type: selected.value,
-                  nominal: parseInt(nominal.replace(/\./g, '')) || 0
-              };
-              
-              const originalText = btn.innerHTML;
-              btn.disabled = true;
-              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses...';
-              
-              try {
-                  // Jalankan fungsi penyelesaian order
-                  await executeFinishOrder();
-                  
-                  // Jika selesai dan berhasil (executeFinishOrder akan menutup active-order-overlay), tutup popup pembayaran juga
-                  const popup = document.getElementById('payment-check-popup');
-                  const content = popup.children[0];
-                  popup.classList.add('opacity-0');
-                  content.classList.remove('scale-100');
-                  content.classList.add('scale-90');
-                  setTimeout(() => {
-                      popup.classList.add('hidden');
-                      popup.classList.remove('flex');
-                      btn.disabled = false;
-                      btn.innerHTML = originalText;
-                  }, 300);
-                  
-              } catch (e) {
-                  console.error(e);
-                  btn.disabled = false;
-                  btn.innerHTML = originalText;
-              }
-          };
-
           if (btnFinishOrder) {
-              // UBAH: Sekarang mengarah ke Feedback WA dulu, bukan langsung pembayaran
               btnFinishOrder.addEventListener('click', () => {
                   window.isRestingAfterFinish = false;
                   window.validateAndShowFeedbackPopup();
@@ -9082,6 +8922,7 @@
 
           // --- FUNGSI ASLI UNTUK MENYELESAIKAN ORDER & KIRIM KE FIREBASE ---
           async function executeFinishOrder() {
+              const currentUserUID = localStorage.getItem('rider_uid');
               const desc = document.getElementById('finish-photo-desc').value.trim();
               const btnMain = document.getElementById('btn-finish-order');
               const btnRest = document.getElementById('btn-finish-and-rest');
@@ -9154,13 +8995,13 @@
                       proof_image: proofImageUrl // SEKARANG MENYIMPAN URL YANG RINGAN
                   });
                   
-                  const isToggleOn = document.getElementById('onbid-toggle').checked;
+                  const toggleEl = document.getElementById('onbid-toggle');
+                  const isToggleOn = toggleEl ? toggleEl.checked : false;
                   let newOnbidStatus = isToggleOn;
 
                   if (isResting) {
                       newOnbidStatus = false;
-                      const toggle = document.getElementById('onbid-toggle');
-                      if (toggle) toggle.checked = false;
+                      if (toggleEl) toggleEl.checked = false;
                       if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
                       localStorage.setItem('rider_onbid_status', 'false');
                       if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
@@ -9168,20 +9009,22 @@
                       window.isRestingAfterFinish = false; // Reset flag
                   }
                   
-                  const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                  await setDoc(statusRef, { 
-                      is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
-                      is_online: newOnbidStatus,
-                      in_main_queue: newOnbidStatus,
-                      last_drop_time: serverTimestamp(),
-                      last_drop_desc: desc,
-                      proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
-                      last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
-                      last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
-                  }, { merge: true });
+                  if (currentUserUID) {
+                      const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                      await setDoc(statusRef, { 
+                          is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
+                          is_online: newOnbidStatus,
+                          in_main_queue: newOnbidStatus,
+                          last_drop_time: serverTimestamp(),
+                          last_drop_desc: desc,
+                          proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
+                          last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
+                          last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
+                      }, { merge: true });
+                  }
                   
                   // --- SIMPAN RIWAYAT PEMBAYARAN TRANSFER (CROSCEK LOKAL) ---
-                  if (window.tempPaymentData) {
+                  if (window.tempPaymentData && currentUserUID) {
                       const dateStr = getJakartaDateString();
                       const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                       const totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
@@ -9206,7 +9049,7 @@
                       }
                   }
 
-                  hideActiveOrderOverlay();
+                  if(typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
                   
                   // PENEGASAN: Pastikan memori dan Android service tidak terputus setelah order selesai
                   if (newOnbidStatus) {
@@ -9222,7 +9065,7 @@
                   } else if (typeof window.showOrderSuccessPopup === 'function') {
                       window.showOrderSuccessPopup();
                   } else {
-                      playBeep(880, 0.1);
+                      try { playBeep(880, 0.1); } catch(e){}
                       alert("Order Selesai! Cek menu Riwayat Hari Ini.");
                   }
                   
@@ -9247,133 +9090,107 @@
           // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
           // -------------------------------------------------------------
           let queueUnsubscribe = null;
-          let busyRidersUnsubscribe = null;
           let latestStatusSnapshot = null;
-          let busyUids = new Set();
 
-          const processAndRenderQueue = () => {
+          window.processAndRenderQueue = () => {
               if (!latestStatusSnapshot) return;
               try {
-                  // 1. Kumpulkan rider yang ada di antrean utama
-                  let mainQueueRiders = [];
+                  const currentUserUID = localStorage.getItem('rider_uid');
+                  let allRiders = [];
+                  
                   latestStatusSnapshot.forEach(docSnap => {
                       const data = docSnap.data();
                       data.uid = docSnap.id;
-                      if (data.in_main_queue === true || data.in_main_queue === 'true') {
-                          mainQueueRiders.push(data);
-                      }
+                      allRiders.push(data);
                   });
 
-                  // 2. Fungsi helper penarik waktu
-                  function getTimestampMs(field) {
-                      if (!field) return 0;
-                      if (typeof field.toMillis === 'function') return field.toMillis();
-                      if (field.seconds) return field.seconds * 1000;
-                      return 0;
-                  }
-
-                  // 3. FILTER & AMBIL DATA RIDER SIBUK (SUDAH DITERAPKAN):
-                  // Menyembunyikan rider dari daftar antrean jika mereka sedang bawa orderan (ada di busyUids)
-                  let readyQueueRiders = mainQueueRiders.filter(r => {
-                      const isReady = r.is_online === true && r.is_available === true;
-                      const isBusy = busyUids.has(String(r.uid).trim().toUpperCase());
+                  // 1. URUTKAN RIDER: Berdasarkan queue_number dari Admin
+                  allRiders.sort((a, b) => {
+                      const qA = Number(a.queue_number) || 0;
+                      const qB = Number(b.queue_number) || 0;
                       
-                      // Rider HANYA akan masuk ke antrean UI jika isReady true DAN isBusy false
-                      return isReady && !isBusy;
+                      // Jika keduanya punya nomor, urutkan 1, 2, 3 dst.
+                      if (qA > 0 && qB > 0) return qA - qB;
+                      // Yang punya nomor taruh di atas
+                      if (qA > 0 && qB === 0) return -1;
+                      if (qA === 0 && qB > 0) return 1;
+                      
+                      // Jika keduanya 0 (Menunggu verifikasi), urutkan berdasarkan waktu terakhir
+                      function getTs(field) {
+                          if (!field) return 0;
+                          if (typeof field.toMillis === 'function') return field.toMillis();
+                          if (field.seconds) return field.seconds * 1000;
+                          return 0;
+                      }
+                      return getTs(a.last_drop_time) - getTs(b.last_drop_time);
                   });
 
-                  // 4. Urutkan ASCENDING (Waktu terlama = Peringkat 1) berdasarkan last_drop_time
-                  readyQueueRiders.sort((a, b) => {
-                      let timeA = getTimestampMs(a.last_drop_time);
-                      let timeB = getTimestampMs(b.last_drop_time);
-                      if (timeA === 0) timeA = 1;
-                      if (timeB === 0) timeB = 1;
-                      return timeA - timeB;
+                  // 2. FILTER: HANYA TAMPILKAN RIDER YANG PUNYA NOMOR ANTREAN (> 0)
+                  // (Sembunyikan semua rider abu-abu / menunggu verifikasi)
+                  let visibleRiders = allRiders.filter(r => {
+                      const qNum = Number(r.queue_number) || 0;
+                      return qNum > 0; 
                   });
 
-                  // 5. Hitung peringkat rider lokal berdasarkan antrean yang sudah difilter dan diurutkan
-                  const myCalculatedRank = readyQueueRiders.findIndex(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) + 1;
-                  
-                  // 6. Tampilkan ke UI (Hanya jika tidak force_kill)
+                  // 3. UPDATE POSISI SAYA (DI NAVBAR BAWAH)
                   const myPosEl = document.getElementById('my-queue-position');
-                  const myStatus = mainQueueRiders.find(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase());
+                  const myStatus = currentUserUID ? allRiders.find(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) : null;
 
                   if (myPosEl && myStatus && myStatus.force_kill !== true) {
-                      if (myCalculatedRank > 0) {
-                          myPosEl.innerText = `#${myCalculatedRank}`;
+                      const myQ = Number(myStatus.queue_number) || 0;
+                      if (myQ > 0) {
+                          myPosEl.innerHTML = `#${myQ}`;
                           myPosEl.className = "text-2xl font-black text-gray-800 leading-none"; 
                       } else {
-                          // Jika rider sibuk (ada di busyUids) dan tidak ada di readyQueueRiders
-                          myPosEl.innerText = `-`;
-                          myPosEl.className = "text-2xl font-black text-gray-400 leading-none"; 
+                          // Jika antrean 0 (sibuk / off / verifikasi)
+                          myPosEl.innerHTML = `<span class="text-[9px] font-bold text-gray-400 text-center block leading-tight">Menunggu<br>Verifikasi</span>`;
+                          myPosEl.className = "flex items-center justify-center w-full h-full"; 
                       }
                   }
 
-              // PERBAIKAN KUOTA BACA: Menghapus getDoc berulang di dalam onSnapshot yang menyebabkan kuota jebol (1.28M reads/hari).
-              // Nilai last_drop_image sudah diset dan berisi URL/Base64 langsung dari status_rider_aktif saat selesai order.
-              const ridersWithImages = readyQueueRiders.map((rider) => {
-                  let imageSrc = rider.last_drop_image || null;
+                  // 4. PROSES GAMBAR BASE64 / URL
+                  const ridersWithImages = visibleRiders.map((rider) => {
+                      let imageSrc = rider.last_drop_image || null;
 
-                  // --- LOGIKA CERDAS: MENDUKUNG URL STORAGE DAN BASE64 LAMA ---
-                  if (imageSrc && typeof imageSrc === 'string') {
-                      imageSrc = imageSrc.trim(); // Bersihkan spasi
-                      
-                      // Cegah string "null" atau "undefined" yang tersimpan sebagai text
-                      if (imageSrc === '' || imageSrc === 'null' || imageSrc === 'undefined') {
-                          imageSrc = null;
-                      } else if (imageSrc.includes('ibb.co')) {
-                          // PENYEMPURNAAN LINK IMGBB: Pastikan pakai http dan amankan domain
-                          if (!imageSrc.startsWith('http')) {
-                              imageSrc = 'https://' + imageSrc;
-                          }
-                          imageSrc = imageSrc.replace('ibb.co/', 'ibb.co.com/');
-                      } else if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
-                          // URL Biasa, biarkan saja
-                      } else if (imageSrc.length > 100) {
-                          // LOGIKA FALLBACK UNTUK BASE64 LAMA (Hanya dieksekusi jika string panjang)
-                          let pureBase64 = imageSrc;
-                          if (imageSrc.includes('base64,')) {
-                              pureBase64 = imageSrc.split('base64,')[1];
-                          } else if (imageSrc.startsWith('data:image')) {
-                              pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
-                          }
-                          
-                          pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
-                          
-                          if (pureBase64.length > 0) {
-                              imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                      if (imageSrc && typeof imageSrc === 'string') {
+                          imageSrc = imageSrc.trim();
+                          if (imageSrc === '' || imageSrc === 'null' || imageSrc === 'undefined') {
+                              imageSrc = null;
+                          } else if (imageSrc.includes('ibb.co')) {
+                              if (!imageSrc.startsWith('http')) imageSrc = 'https://' + imageSrc;
+                              imageSrc = imageSrc.replace('ibb.co/', 'ibb.co.com/');
+                          } else if (imageSrc.startsWith('http://') || imageSrc.startsWith('https://')) {
+                              // URL Valid
+                          } else if (imageSrc.length > 100) {
+                              let pureBase64 = imageSrc;
+                              if (imageSrc.includes('base64,')) pureBase64 = imageSrc.split('base64,')[1];
+                              else if (imageSrc.startsWith('data:image')) pureBase64 = imageSrc.substring(imageSrc.indexOf(',') + 1);
+                              pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
+                              if (pureBase64.length > 0) imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                              else imageSrc = null;
                           } else {
                               imageSrc = null;
                           }
-                      } else {
-                          // Teks biasa tapi bukan URL (kemungkinan salah ketik dari admin)
-                          imageSrc = null;
                       }
-                  }
 
-                  return { ...rider, displayImage: imageSrc };
-              });
+                      return { ...rider, displayImage: imageSrc };
+                  });
 
-              let html = '';
-              let displayIndex = 1; // Counter manual untuk urutan angka yang tampil
-              
-              ridersWithImages.forEach((rider) => {
-                      // Prioritaskan angka dari admin, jika kosong gunakan urutan otomatis dari displayIndex
-                      const qNumRaw = rider.queue_number;
-                      const hasAdminNum = qNumRaw !== undefined && qNumRaw !== null && String(qNumRaw).trim() !== "" && String(qNumRaw).trim().toLowerCase() !== "null";
-                      const rank = hasAdminNum ? qNumRaw : displayIndex;
-                      displayIndex++; // Tambah counter hanya untuk rider yang ditampilkan
-                      
+                  // 5. BANGUN UI KARTU RIDER
+                  let html = '';
+                  
+                  ridersWithImages.forEach((rider) => {
+                      const qNum = Number(rider.queue_number) || 0;
                       const uidClean = String(rider.uid || '').trim().toUpperCase();
-                      const myUidClean = String(currentUserUID).trim().toUpperCase();
+                      const myUidClean = String(currentUserUID || '').trim().toUpperCase();
                       const isMe = uidClean === myUidClean;
 
                       const name = rider.name || 'Rider';
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
                       
-                      const isReady = true; // Semua rider di dalam array ini sudah dipastikan ready karena filter di atas
+                      // Logika Status: Jika qNum > 0 berarti Ready/Aktif. Jika 0 berarti abu-abu (Sibuk/Off/Verifikasi)
+                      const isReady = qNum > 0; 
                       
-                      // LOGIKA GAMBAR: Ditambahkan fungsi fallback (onerror) dan referrerpolicy="no-referrer"
                       const photoHtml = rider.displayImage 
                           ? `<div class="w-full mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-100 aspect-video relative flex flex-col items-center justify-center ${isReady ? '' : 'opacity-50 grayscale'}">
                                <img src="${rider.displayImage}" referrerpolicy="no-referrer" class="absolute inset-0 w-full h-full object-cover z-10" alt="Lokasi Rider" onerror="this.onerror=null; this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden'); this.nextElementSibling.classList.add('flex');">
@@ -9384,28 +9201,25 @@
                              </div>` 
                           : `<div class="w-full aspect-video bg-gray-50 rounded-xl mt-3 flex flex-col items-center justify-center border border-dashed border-gray-300 ${isReady ? '' : 'opacity-50 grayscale'}"><i class="fa-solid fa-camera text-gray-300 text-3xl mb-2"></i><span class="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Belum ada foto lokasi</span></div>`;
                       
-                      // Style visual berbeda untuk rider yang sedang jeda/offline
+                      // Perbedaan warna kartu antara Rider Aktif (>0) dan Verifikasi (0)
                       const cardClasses = isMe 
                           ? (isReady ? 'bg-orange-50 border-orange-300 shadow-md' : 'bg-orange-50/70 border-orange-200 shadow-sm opacity-80')
                           : (isReady ? 'bg-white border-gray-200 shadow-sm' : 'bg-gray-50 border-gray-200 shadow-sm opacity-60 grayscale-[30%]');
                           
+                      // Lencana Status Teks Berdasarkan Queue Number
                       let statusBadge = '';
-                      if (isMe) {
-                          statusBadge = isReady 
-                              ? '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-white text-green-600 px-2.5 py-1 rounded-full uppercase tracking-wider shadow-sm border border-green-200"><i class="fa-solid fa-circle text-[6px] text-green-500 mr-1"></i> Sinyal Aktif</span></div>'
-                              : '<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full uppercase tracking-wider shadow-sm border border-gray-200">Jeda / Off</span></div>';
-                      } else if (!isReady) {
-                          statusBadge = '<div class="flex items-center justify-center shrink-0"><span class="text-[8px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md uppercase tracking-wider border border-gray-200">Jeda</span></div>';
+                      if (isReady) {
+                          statusBadge = `<div class="flex items-center justify-center shrink-0"><span class="text-[10px] font-black bg-orange-100 text-orange-600 px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm border border-orange-200">Posisi Antrean: ${qNum}</span></div>`;
+                      } else {
+                          statusBadge = `<div class="flex items-center justify-center shrink-0"><span class="text-[9px] font-bold bg-gray-100 text-gray-500 px-2.5 py-1 rounded-lg uppercase tracking-wider shadow-sm border border-gray-200 text-center leading-tight">Antrian Menunggu<br>Verifikasi ADMIN</span></div>`;
                       }
                       
-                      // Desain Card Per Rider (Lebih Lebar dan Bebas Potong)
                       html += `
                           <div class="flex flex-col p-5 rounded-2xl ${cardClasses} w-full transition-all duration-300 relative overflow-hidden">
                               ${isMe ? '<div class="absolute top-0 left-0 w-1.5 h-full bg-orange-500"></div>' : ''}
                               
                               <div class="flex items-center justify-between border-b ${isMe ? 'border-orange-200' : 'border-gray-100'} pb-3 mb-3">
                                   <div class="flex items-center gap-3 overflow-hidden">
-                                      <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isMe ? 'bg-orange-500 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'} font-black text-sm">#${rank}</div>
                                       <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${isMe ? 'ff8c00' : 'f1f5f9'}&color=${isMe ? 'fff' : '94a3b8'}" class="w-10 h-10 rounded-full border border-gray-200 shrink-0 ${isReady ? '' : 'opacity-50 grayscale'}">
                                       <span class="text-base font-bold ${isMe ? 'text-orange-800' : 'text-gray-800'} truncate">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
                                   </div>
@@ -9422,22 +9236,21 @@
                       `;
                   });
                   
-                  // Fallback jika semua rider sedang bawa orderan / tidak ada yang stand-by
                   if (html === '') {
-                      html = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-users-slash text-4xl text-gray-200 mb-3 block"></i>Belum ada rider yang stand-by di antrean.<br><span class="text-[8px] text-gray-400 mt-2 block">*Sistem hanya menampilkan rider yang sinyalnya menyala.</span></div>';
+                      html = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-users-slash text-4xl text-gray-200 mb-3 block"></i>Belum ada data radar.<br><span class="text-[8px] text-gray-400 mt-2 block">*Admin belum memasukkan rider ke dalam antrean.</span></div>';
                   }
                   
                   const container = document.getElementById('radar-queue-list');
                   if (container) {
                       container.innerHTML = html;
                   }
-                 } catch (err) {
-                     console.error("Critical Error saat merender antrean:", err);
-                     const container = document.getElementById('radar-queue-list');
-                     if (container) {
-                         container.innerHTML = `<div class="text-red-500 text-center text-xs py-8 font-bold"><i class="fa-solid fa-bug text-2xl mb-2 block"></i>Gagal memproses data antrean.<br><span class="text-[9px] font-normal text-gray-500">Sistem mendeteksi ada data error. Klik ikon refresh di sudut kanan atas.</span></div>`;
-                     }
-                 }
+              } catch (err) {
+                  console.error("Critical Error saat merender antrean:", err);
+                  const container = document.getElementById('radar-queue-list');
+                  if (container) {
+                      container.innerHTML = `<div class="text-red-500 text-center text-xs py-8 font-bold"><i class="fa-solid fa-bug text-2xl mb-2 block"></i>Gagal memproses data antrean.<br><span class="text-[9px] font-normal text-gray-500">Sistem mendeteksi ada data error. Klik ikon refresh di sudut kanan atas.</span></div>`;
+                  }
+              }
           };
 
           window.startQueueListener = () => {
@@ -9448,37 +9261,18 @@
               
               if (queueUnsubscribe) return; // Mencegah multiple listeners
 
-              // EKSTRA PROTEKSI: Kosongkan UI secara instan saat radar mulai dinyalakan
-              // Mencegah sisa antrean lama (nyangkut) berkedip sebelum data Firebase masuk
               const container = document.getElementById('radar-queue-list');
-              // myPosEl tidak dikosongkan di sini agar angka dari admin tetap tampil
               if (container) {
                   container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-6"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3 block"></i> Menghubungkan ke Radar...</div>`;
               }
 
-              // 1. LISTENER UNTUK DATA RIDER SIBUK DARI ACTIVE_ORDERS
-              const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'active_orders');
-              busyRidersUnsubscribe = onSnapshot(ordersRef, (snapshot) => {
-                  busyUids.clear();
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
-                      const status = String(data.status || '').trim().toLowerCase();
-                      if (status === 'assigned' || status === 'processing') {
-                          if (data.rider_uid) {
-                              busyUids.add(String(data.rider_uid).trim().toUpperCase());
-                          }
-                      }
-                  });
-                  processAndRenderQueue(); // Trigger render jika status sibuk berubah
-              }, (error) => {
-                  console.error("Error fetching busy riders:", error);
-              });
-
-              // 2. LISTENER UNTUK STATUS RIDER AKTIF
+              // PENGHEMATAN KUOTA: Listener 'busy_riders' dari active_orders telah DIBUANG sepenuhnya!
+              // Radar sekarang murni hanya 1 tarikan data dari status_rider_aktif
+              
               const statusRef = collection(db, '/status_rider_aktif');
               queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
                   latestStatusSnapshot = snapshot;
-                  processAndRenderQueue(); // Trigger render jika status online/offline berubah
+                  if (typeof window.processAndRenderQueue === 'function') window.processAndRenderQueue(); 
               }, (error) => {
                   console.error("Error fetching queue:", error);
                   const container = document.getElementById('radar-queue-list');
@@ -9494,554 +9288,16 @@
                   queueUnsubscribe();
                   queueUnsubscribe = null;
               }
-              if (busyRidersUnsubscribe) {
-                  busyRidersUnsubscribe();
-                  busyRidersUnsubscribe = null;
-              }
               latestStatusSnapshot = null;
-              busyUids.clear();
               
               const container = document.getElementById('radar-queue-list');
-              const myPosEl = document.getElementById('my-queue-position');
-              
-              // PENEGASAN: Bersihkan memori tampilan antrean ke status kosong
-              // Menghapus daftar nama dan mereset antrean agar bersih saat dinyalakan lagi
               if (container) {
                   container.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-satellite-dish text-4xl text-gray-200 mb-3 block"></i>Radar dimatikan.</div>';
               }
-              // myPosEl tidak diubah agar nomor antrean tetap tampil walaupun toggle OFF
-          };
-
-          // FUNGSI CEK NOTIFIKASI UNREAD
-          window.checkUnreadAdminInfo = async () => {
-              try {
-                  const querySnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'admin_announcements'));
-                  const totalDocs = querySnapshot.size;
-                  
-                  const lastReadCount = parseInt(localStorage.getItem('admin_info_last_read_count') || '0');
-                  
-                  const badge = document.getElementById('admin-info-badge');
-                  
-                  if (totalDocs > lastReadCount) {
-                      const unreadCount = totalDocs - lastReadCount;
-                      if(badge) {
-                          badge.innerText = unreadCount > 9 ? '9+' : unreadCount;
-                          badge.classList.remove('hidden');
-                          badge.classList.add('animate-bounce');
-                          setTimeout(() => badge.classList.remove('animate-bounce'), 2000);
-                      }
-                  } else {
-                      if(badge) badge.classList.add('hidden');
-                  }
-                  
-                  window.currentTotalAdminDocs = totalDocs;
-                  
-              } catch (e) {
-                  console.error("Gagal cek notifikasi:", e);
-              }
-          };
-
-          // FUNGSI LOAD INFO ADMIN
-          window.loadAdminInfo = async () => {
-              const container = document.getElementById('info-admin-container');
-              if(!container) return;
-              
-              if(container.children.length === 0 || container.innerHTML.includes('Sedang mengambil')) {
-                   container.innerHTML = `
-                    <div class="text-center py-20 text-gray-400">
-                        <div class="inline-block w-8 h-8 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin mb-3"></div>
-                        <p class="text-xs font-medium animate-pulse">Sedang mengambil data terbaru...</p>
-                    </div>`;
-              }
-
-              try {
-                  const querySnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'admin_announcements'));
-                  const docs = [];
-                  querySnapshot.forEach((doc) => {
-                      docs.push({ id: doc.id, ...doc.data() });
-                  });
-                  
-                  if (docs.length > 0) {
-                      localStorage.setItem('admin_info_last_read_count', docs.length);
-                      window.currentTotalAdminDocs = docs.length;
-                  }
-
-                  docs.sort((a, b) => {
-                      const tA = a.created_at?.seconds || 0;
-                      const tB = b.created_at?.seconds || 0;
-                      return tB - tA;
-                  });
-                  
-                  if (docs.length === 0) {
-                       container.innerHTML = `
-                        <div class="flex flex-col items-center justify-center py-20 text-gray-400 opacity-70">
-                            <i class="fa-regular fa-newspaper text-5xl mb-4"></i>
-                            <p class="text-sm font-bold">Belum ada informasi terbaru</p>
-                            <p class="text-[10px]">Cek lagi nanti ya!</p>
-                        </div>`;
-                       return;
-                  }
-
-                  let html = '';
-                  docs.forEach(item => {
-                      let dateStr = "";
-                      if(item.created_at) {
-                          const d = new Date(item.created_at.seconds * 1000);
-                          dateStr = d.toLocaleDateString('id-ID', {day:'numeric', month:'short', year:'numeric'});
-                      }
-
-                      item.dateFormatted = dateStr;
-                      const itemDataString = encodeURIComponent(JSON.stringify(item));
-
-                      html += `
-                          <div onclick="window.openAdminInfoDetail('${itemDataString}')" class="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-3 flex gap-4 cursor-pointer hover:bg-gray-50 transition-all active:scale-98 group relative overflow-hidden">
-                              
-                              ${item.image_base64 ? 
-                                `<div class="w-20 h-20 flex-shrink-0 bg-gray-100 rounded-xl overflow-hidden border border-gray-100">
-                                    <img src="${item.image_base64}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" loading="lazy">
-                                 </div>` : 
-                                `<div class="w-20 h-20 flex-shrink-0 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-300 border border-indigo-100">
-                                    <i class="fa-solid fa-newspaper text-2xl"></i>
-                                 </div>`
-                              }
-                              
-                              <div class="flex-1 flex flex-col justify-center">
-                                  <div class="flex justify-between items-start mb-1">
-                                    <span class="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md uppercase tracking-wide border border-indigo-100">${item.category || 'INFO'}</span>
-                                    <span class="text-[9px] text-gray-400">${dateStr}</span>
-                                  </div>
-                                  <h3 class="font-bold text-sm text-gray-800 leading-snug line-clamp-2 mb-1 group-hover:text-indigo-600 transition-colors">${item.title || 'Informasi Admin'}</h3>
-                                  <p class="text-[10px] text-gray-500 font-medium flex items-center gap-1">
-                                      Baca selengkapnya <i class="fa-solid fa-arrow-right text-[8px]"></i>
-                                  </p>
-                              </div>
-                              
-                              <div class="absolute right-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-300">
-                                  <i class="fa-solid fa-chevron-right"></i>
-                              </div>
-                          </div>
-                      `;
-                  });
-                  container.innerHTML = html;
-
-              } catch (e) {
-                  console.error("Fetch Info Error:", e);
-                  container.innerHTML = `
-                    <div class="text-center py-10 text-red-400">
-                        <i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i>
-                        <p class="text-sm font-bold">Gagal memuat informasi</p>
-                        <button onclick="window.loadAdminInfo()" class="mt-4 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold">Coba Lagi</button>
-                    </div>
-                  `;
-              }
-          };
-
-          // FUNGSI BUKA DETAIL INFO
-          window.openAdminInfoDetail = (itemDataString) => {
-              try {
-                  const item = JSON.parse(decodeURIComponent(itemDataString));
-                  const modal = document.getElementById('admin-info-detail-modal');
-                  const content = document.getElementById('admin-info-detail-content');
-                  
-                  if(!modal || !content) return;
-
-                  let formattedContent = '';
-                  if(item.content) {
-                      const safeText = item.content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                      formattedContent = safeText.replace(/\n/g, '<br>');
-                  }
-
-                  content.innerHTML = `
-                      ${item.image_base64 ? 
-                          `<div class="w-full bg-gray-900 flex justify-center items-center relative shadow-inner">
-                              <img src="${item.image_base64}" class="w-full h-auto max-h-[70vh] object-contain">
-                           </div>` : ''
-                      }
-                      
-                      <div class="p-6">
-                          <div class="flex items-center gap-2 mb-3">
-                              <span class="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md uppercase tracking-widest border border-indigo-100">${item.category || 'INFO'}</span>
-                              <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock mr-1"></i>${item.dateFormatted}</span>
-                          </div>
-                          
-                          <h2 class="text-2xl font-extrabold text-gray-800 leading-tight mb-6">${item.title || 'Tanpa Judul'}</h2>
-                          
-                          <div class="text-sm text-gray-700 leading-relaxed space-y-4">
-                              ${formattedContent || '<p class="italic text-gray-400">Tidak ada deskripsi.</p>'}
-                          </div>
-                      </div>
-                  `;
-                  
-                  modal.classList.remove('hidden');
-                  modal.classList.add('flex');
-                  modal.style.animation = 'fadeIn 0.2s ease-out forwards';
-                  
-              } catch (e) {
-                  console.error("Gagal membuka detail:", e);
-              }
-          };
-
-          // FUNGSI TUTUP DETAIL INFO
-          window.closeAdminInfoDetail = () => {
-              const modal = document.getElementById('admin-info-detail-modal');
-              if(modal) {
-                  modal.classList.add('hidden');
-                  modal.classList.remove('flex');
-                  document.getElementById('admin-info-detail-content').innerHTML = '';
-              }
-          };
-
-          // FUNGSI UPLOAD MENU KE FIRESTORE
-          window.handleMenuUpload = async () => {
-               const restoName = document.getElementById('menu-resto-name').value.trim();
-               const fileInput = document.getElementById('menu-file-input');
-               const statusMsg = document.getElementById('upload-status-msg');
-               const btn = document.getElementById('btn-send-menu');
-               
-               if (!currentUserUID) {
-                   alert("Silakan login terlebih dahulu.");
-                   return;
-               }
-
-               if (!restoName) {
-                   statusMsg.innerText = "Mohon isi nama resto/warung!";
-                   statusMsg.className = "text-center text-xs font-bold text-red-500 block";
-                   return;
-               }
-
-               if (!fileInput.files || fileInput.files.length === 0) {
-                   statusMsg.innerText = "Mohon pilih minimal 1 foto menu!";
-                   statusMsg.className = "text-center text-xs font-bold text-red-500 block";
-                   return;
-               }
-
-               if (fileInput.files.length > 5) {
-                   statusMsg.innerText = "Maksimal 5 foto per pengiriman!";
-                   statusMsg.className = "text-center text-xs font-bold text-red-500 block";
-                   return;
-               }
-
-               btn.disabled = true;
-               btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i><span>Mengirim Data...</span>';
-               btn.classList.add('bg-gray-400', 'cursor-not-allowed');
-               btn.classList.remove('bg-orange-600', 'active:scale-95');
-               statusMsg.innerText = "Sedang memproses gambar, mohon tunggu...";
-               statusMsg.className = "text-center text-xs font-bold text-blue-500 block animate-pulse";
-
-               try {
-                   const rName = document.getElementById('display-rider-name').innerText || "Rider";
-                   
-                   // --- LOGIKA BARU: MENGGUNAKAN FIREBASE STORAGE UNTUK MENU ---
-                   const imageUrls = []; 
-
-                   for (let i = 0; i < fileInput.files.length; i++) {
-                       const file = fileInput.files[i];
-                       
-                       // Update status agar rider tahu prosesnya
-                       statusMsg.innerText = `Mengunggah foto ${i + 1} dari ${fileInput.files.length}...`;
-                       
-                       // 1. Kompres gambar
-                       const compressedBase64 = await compressImage(file, 800, 0.7);
-                       const pureBase64 = compressedBase64.split(',')[1];
-                       
-                       // 2. Upload ke Firebase Storage
-                       const storagePath = `artifacts/${appId}/public/data/menu_uploads/${currentUserUID}_${Date.now()}_${i}.jpg`;
-                       const imageRef = ref(storage, storagePath);
-                       
-                       await uploadString(imageRef, pureBase64, 'base64', {
-                           contentType: 'image/jpeg',
-                       });
-                       
-                       // 3. Simpan URL jika sukses
-                       const downloadUrl = await getDownloadURL(imageRef);
-                       imageUrls.push(downloadUrl);
-                   }
-
-                   statusMsg.innerText = "Menyimpan data ke sistem Admin...";
-
-                   // 5. Simpan HANYA Link URL ke Firestore (Sangat ringan!)
-                   await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'menu_uploads'), {
-                       rider_uid: currentUserUID,
-                       rider_name: rName,
-                       resto_name: restoName,
-                       images: imageUrls, 
-                       status: 'pending',
-                       created_at: serverTimestamp()
-                   });
-
-                   statusMsg.innerText = "Yeay! Foto menu berhasil dikirim ke Admin.";
-                   statusMsg.className = "text-center text-xs font-bold text-green-600 block";
-                   playBeep(880, 0.1);
-                   
-                   setTimeout(() => {
-                       resetMenuUploadForm();
-                   }, 2000);
-
-               } catch (error) {
-                   console.error("Error uploading menu:", error);
-                   statusMsg.innerText = "Gagal mengirim data. Coba lagi nanti.";
-                   statusMsg.className = "text-center text-xs font-bold text-red-500 block";
-                   
-                   btn.disabled = false;
-                   btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span>Kirim ke Admin</span>';
-                   btn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-                   btn.classList.add('bg-orange-600');
-               }
-          };
-
-          // FUNGSI UPDATE STATUS ONBID KE FIRESTORE (Untuk Pemantauan Korlap)
-          window.updateFirebaseStatus = async (uid, isOnline, riderName) => {
-              if(!uid) return;
-              try {
-                  const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
-                  
-                  // NEW LOGIC: Cek status antrean saat ini terlebih dahulu sebelum update
-                  const docSnap = await getDoc(statusRef);
-                  let currentInMainQueue = false;
-                  let hasQueueNumber = false;
-                  let diffMinutes = 0;
-
-                  if (docSnap.exists()) {
-                      const d = docSnap.data();
-                      currentInMainQueue = d.in_main_queue === true;
-                      hasQueueNumber = d.queue_number !== undefined && d.queue_number !== null && d.queue_number !== "";
-                      
-                      // Cek waktu terakhir offline/update
-                      if (d.last_updated) {
-                          const lastUpdatedMs = d.last_updated.seconds ? d.last_updated.seconds * 1000 : (typeof d.last_updated === 'number' ? d.last_updated : Date.now());
-                          diffMinutes = (Date.now() - lastUpdatedMs) / (1000 * 60);
-                      }
-                  }
-
-                  const dataToUpdate = {
-                      uid: String(uid).trim(),
-                      name: riderName,
-                      is_online: isOnline,
-                      last_updated: serverTimestamp() // Ini untuk mendeteksi kapan tombol di klik
-                  };
-                  
-                  if (isOnline) {
-                      // Hanya beri status tersedia jika dia tidak sedang mengantar order berjalan
-                      if (!window.currentActiveOrderId) {
-                          dataToUpdate.is_available = true;
-                          
-                          if (currentInMainQueue || hasQueueNumber) {
-                              if (diffMinutes <= 20) {
-                                  // JIKA <= 20 MENIT: Pertahankan posisi antrean
-                                  console.log(`Rider reconnect cepat (${Math.round(diffMinutes)} mnt). Mempertahankan antrean sebelumnya.`);
-                                  dataToUpdate.in_main_queue = true; // Auto-heal
-                              } else if (diffMinutes <= 60) {
-                                  // JIKA 20 - 60 MENIT: Reset posisi ke bawah (Hukuman)
-                                  console.log(`Rider reconnect telat (${Math.round(diffMinutes)} mnt). Mereset antrean ke bawah.`);
-                                  dataToUpdate.in_main_queue = true; // Tetap di radar
-                                  dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean baru (paling bawah)
-                                  dataToUpdate.last_drop_desc = `Reconnect setelah ${Math.round(diffMinutes)} menit`; // Info tambahan
-                                  dataToUpdate.queue_number = null; // Hapus nomor prioritas admin
-                              } else {
-                                  // JIKA > 60 MENIT: Keluarkan dari radar (Butuh ACC Admin)
-                                  console.log(`Rider reconnect sangat telat (${Math.round(diffMinutes)} mnt). Memerlukan ACC Admin.`);
-                                  dataToUpdate.in_main_queue = false; // Dikeluarkan dari radar utama
-                                  dataToUpdate.last_drop_desc = `Reconnect > 60 menit (Butuh ACC Admin)`;
-                                  dataToUpdate.queue_number = null; 
-                              }
-                          } else {
-                              // JIKA BELUM MASUK ANTREAN (Pertama kali On-bid atau dari Off-bid murni):
-                              console.log(`Rider baru On-bid. Memerlukan ACC admin.`);
-                              dataToUpdate.in_main_queue = false; // Harus di-approve admin untuk masuk antrean radar
-                              dataToUpdate.last_drop_time = serverTimestamp(); // Atur titik antrean
-                              dataToUpdate.queue_number = null; // Menghapus nomor lama agar tidak nyangkut
-                          }
-                      }
-                  } else {
-                      dataToUpdate.is_available = false; // Matikan status dari antrean
-                      // in_main_queue tidak diubah di sini (biarkan bernilai true).
-                      // Menunggu Rider mengkonfirmasi keluar antrean melalui popup slider.
-                  }
-
-                  await setDoc(statusRef, dataToUpdate, { merge: true });
-              } catch (e) {
-                  console.error("Gagal update status firebase:", e);
-              }
-          };
-
-          // FUNGSI UNTUK REVERT STATUS JIKA BATAL OFF-BID
-          window.revertOffbidStatus = async () => {
-              const uid = localStorage.getItem('rider_uid');
-              if(!uid) return;
-              try {
-                  const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
-                  await setDoc(statusRef, {
-                      is_online: true,
-                      is_available: true,
-                      last_updated: serverTimestamp()
-                  }, { merge: true });
-              } catch(e) {
-                  console.error("Gagal revert status:", e);
-              }
-          };
-
-          // FUNGSI UNTUK KONFIRMASI KELUAR ANTREAN
-          window.confirmExitQueue = async () => {
-              const uid = localStorage.getItem('rider_uid');
-              if(!uid) return;
-              try {
-                  const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
-                  await setDoc(statusRef, {
-                      in_main_queue: false,
-                      last_updated: serverTimestamp()
-                  }, { merge: true });
-              } catch(e) {
-                  console.error("Gagal keluar antrean:", e);
-              }
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM KEAMANAN PIN 6-DIGIT (MENGGANTIKAN DEVICE BINDING)
-          // -------------------------------------------------------------
-          window.checkRiderPin = async (uid) => {
-              const btn = document.getElementById('login-btn');
-              const originalText = btn.innerHTML;
-              
-              try {
-                  const targetProjectId = firebaseConfig.projectId;
-                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', String(uid).trim().toUpperCase(), 'security', 'pin_data');
-                  const pinSnap = await getDoc(pinRef);
-                  
-                  document.getElementById('login-input-section').classList.add('hidden');
-                  document.getElementById('pin-section').classList.add('hidden');
-                  document.getElementById('pin-error-msg').classList.add('hidden');
-                  
-                  if (pinSnap.exists() && pinSnap.data().pin) {
-                      // MINTA PIN (Sudah pernah buat, Langsung Login)
-                      window.currentLoginMode = 'verify';
-                      window.expectedPin = pinSnap.data().pin;
-                      document.getElementById('pin-section').classList.remove('hidden');
-                      document.getElementById('pin-title').innerText = "Masukkan PIN";
-                      document.getElementById('pin-desc').innerText = "Masukkan 6 digit PIN keamanan akun Anda.";
-                      document.getElementById('pin-input').value = '';
-                      setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
-                  } else {
-                      // BUAT PIN BARU (LANGSUNG TANPA PLAT NOMOR)
-                      document.getElementById('pin-section').classList.remove('hidden');
-                      
-                      window.currentLoginMode = 'create';
-                      document.getElementById('pin-title').innerText = "Buat PIN Baru";
-                      document.getElementById('pin-desc').innerText = "Buat 6 digit PIN rahasia untuk akun Anda.";
-                      document.getElementById('pin-input').value = '';
-                      setTimeout(() => { document.getElementById('pin-input').focus(); }, 100);
-                  }
-                  
-              } catch (error) {
-                  console.error("PIN Check Error:", error);
-                  window.proceedWithLogin(uid);
-              }
-              btn.innerHTML = originalText;
-          };
-
-          window.submitPin = async () => {
-              const inputVal = document.getElementById('pin-input').value;
-              const errorMsg = document.getElementById('pin-error-msg');
-              const uid = document.getElementById('uid-input').value.trim().toUpperCase();
-              const btn = document.getElementById('submit-pin-btn');
-              
-              if (inputVal.length !== 6 || isNaN(inputVal)) {
-                  errorMsg.innerText = "PIN harus tepat 6 digit angka!";
-                  errorMsg.classList.remove('hidden');
-                  return;
-              }
-              
-              errorMsg.classList.add('hidden');
-              const originalHtml = btn.innerHTML;
-              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i>';
-              btn.disabled = true;
-              
-              if (window.currentLoginMode === 'verify') {
-                  if (inputVal === window.expectedPin) {
-                      window.proceedWithLogin(uid); // PIN Benar -> Masuk
-                  } else {
-                      errorMsg.innerText = "PIN Salah! Silakan coba lagi.";
-                      errorMsg.classList.remove('hidden');
-                      btn.innerHTML = originalHtml;
-                      btn.disabled = false;
-                  }
-              } else if (window.currentLoginMode === 'create') {
-                  try {
-                      // Simpan PIN Baru ke Firebase
-                      const targetProjectId = firebaseConfig.projectId;
-                      const pinRef = doc(db, 'artifacts', targetProjectId, 'users', uid, 'security', 'pin_data');
-                      await setDoc(pinRef, {
-                          pin: inputVal,
-                          created_at: serverTimestamp()
-                      });
-                      window.proceedWithLogin(uid); // Berhasil Simpan -> Masuk
-                  } catch(e) {
-                      console.error(e);
-                      errorMsg.innerText = "Gagal menyimpan PIN. Periksa koneksi internet.";
-                      errorMsg.classList.remove('hidden');
-                      btn.innerHTML = originalHtml;
-                      btn.disabled = false;
-                  }
-              }
-          };
-
-          window.cancelPin = () => {
-              document.getElementById('pin-section').classList.add('hidden');
-              document.getElementById('login-input-section').classList.remove('hidden');
-              document.getElementById('pin-input').value = '';
-              document.getElementById('pin-error-msg').classList.add('hidden');
-          };
-
-          // -------------------------------------------------------------
-          // FITUR LAMA (DEVICE BINDING) - KITA TIMPA / MATIKAN
-          // -------------------------------------------------------------
-          window.checkDeviceBinding = async (uid, deviceId) => {
-              try {
-                  const deviceRef = doc(db, 'artifacts', appId, 'users', String(uid).trim().toUpperCase(), 'device_binding', 'info');
-                  const docSnap = await getDoc(deviceRef);
-                  
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      if (data.deviceId === deviceId) {
-                          return 'allowed';
-                      } else {
-                          return 'conflict';
-                      }
-                  } else {
-                      // Pertama kali login di device ini
-                      await setDoc(deviceRef, {
-                          deviceId: deviceId,
-                          last_login: serverTimestamp()
-                      }, { merge: true });
-                      return 'allowed';
-                  }
-              } catch (error) {
-                  console.error("Device Binding Check Error:", error);
-                  return 'allowed'; // Fallback diizinkan jika error koneksi
-              }
-          };
-
-          window.forceTakeoverDevice = async (uid, deviceId) => {
-              try {
-                  const deviceRef = doc(db, 'artifacts', appId, 'users', String(uid).trim().toUpperCase(), 'device_binding', 'info');
-                  await setDoc(deviceRef, {
-                      deviceId: deviceId,
-                      last_login: serverTimestamp()
-                  }, { merge: true });
-                  return true;
-              } catch (error) {
-                  console.error("Force Takeover Error:", error);
-                  return false;
-              }
-          };
-
-          window.startDeviceListener = (uid) => {
-              // FITUR DEVICE BINDING DINONAKTIFKAN SEMENTARA
-              // Sengaja di-return/dihentikan agar rider tidak auto-logout saat login di HP lain
-              return;
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER BANNED RIDER (DARI ADMIN)
+          // FUNGSI LISTENER RIDER BAN / STATUS KHUSUS
           // -------------------------------------------------------------
           let suspensionUnsubscribe = null;
 
@@ -10054,7 +9310,6 @@
               }
 
               const targetProjectId = firebaseConfig.projectId;
-              // Membaca dari koleksi suspended_riders dengan ID dokumen = UID Rider
               const suspendedRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'suspended_riders', cleanUid);
 
               suspensionUnsubscribe = onSnapshot(suspendedRef, (docSnap) => {
@@ -10101,7 +9356,7 @@
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER STATUS RIDER PRIBADI (REMOTE FORCE KILL)
+          // FUNGSI LISTENER STATUS RIDER PRIBADI
           // -------------------------------------------------------------
           let myStatusUnsubscribe = null;
 
@@ -10109,12 +9364,10 @@
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim();
 
-              // Mencegah memory leak dengan menonaktifkan listener lama jika fungsi dipanggil ulang
               if (myStatusUnsubscribe) {
                   myStatusUnsubscribe();
               }
 
-              // Path menunjuk ke status individu rider yang login saat ini
               const statusRef = doc(db, '/status_rider_aktif', cleanUid);
 
               myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
@@ -10122,9 +9375,7 @@
                       const data = docSnap.data();
                       const toggle = document.getElementById('onbid-toggle');
                       
-                      // TAMPILKAN NOMOR ANTREAN DARI ADMIN (BEKERJA WALAUPUN TOGGLE OFF)
                       const myPosEl = document.getElementById('my-queue-position');
-                      const radarStatusTextEl = document.getElementById('radar-status-text');
                       
                       const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                       const isOnline = data.is_online === true || data.is_online === 'true';
@@ -10144,36 +9395,28 @@
                       if (data.is_online === false && toggle && toggle.checked === true) {
                           console.log("Remote Force Kill: Mematikan status On-Bid dari sistem/admin.");
                           
-                          // 1. Ubah paksa tombol toggle menjadi mati (false)
                           toggle.checked = false;
                           
-                          // 2. Panggil fungsi UI untuk merubah tampilan menjadi OFFLINE / menyembunyikan radar
                           if (typeof updateOnbidUI === 'function') {
                               updateOnbidUI(false);
                           }
                           
-                          // 3. Simpan status offline ini ke memori lokal HP (localStorage)
                           localStorage.setItem('rider_onbid_status', 'false');
                           
-                          // (Opsional) Teruskan status mati ke Native Android Bridge jika diakses via Aplikasi
                           if (window.AndroidInterface) {
                               window.AndroidInterface.updateOnBidStatus(false);
                           }
                           
-                          // 4. Putar suara peringatan (beep pelan/nada rendah)
                           try {
-                              playBeep(300, 0.3); // Nada peringatan rendah berdurasi 0.3 detik
+                              playBeep(300, 0.3); // Nada peringatan rendah
                           } catch (e) {}
                           
-                          // Tampilkan notifikasi peringatan non-blocking kepada user
                           if (typeof window.showCustomToast === 'function') {
-                              // Tampilkan pesan khusus jika dimatikan karena Force Kill (Saldo/Pelanggaran)
                               window.showCustomToast(data.force_kill ? "Radar dimatikan paksa (Cek Saldo/Pelanggaran)." : "Status On-Bid dimatikan oleh Sistem.");
                           } else {
                               alert("Sistem telah mematikan status On-Bid Anda.");
                           }
 
-                          // 5. Ekstra Proteksi: Hentikan juga listener antrean/radar yang sedang berjalan
                           if (typeof window.stopQueueListener === 'function') {
                               window.stopQueueListener();
                           }
@@ -10202,7 +9445,6 @@
                               window.showCustomToast("Saldo terisi, Radar otomatis diaktifkan kembali!");
                           }
                           
-                          // Pastikan listener antrean dinyalakan ulang
                           if (typeof window.startQueueListener === 'function') {
                               window.startQueueListener();
                           }
@@ -10214,7 +9456,7 @@
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER SALDO DOMPET RIDER
+          // FUNGSI LISTENER SALDO DOMPET
           // -------------------------------------------------------------
           let walletUnsubscribe = null;
           let walletHistoryUnsubscribe = null;
@@ -10241,8 +9483,7 @@
                   walletHistoryUnsubscribe();
               }
 
-              // PATH DATABASE: Mengambil saldo dari /artifacts/onbid-2f87a/public/data/rider_balances/{UID}
-              const targetProjectId = firebaseConfig.projectId; // onbid-2f87a
+              const targetProjectId = firebaseConfig.projectId; 
               const balanceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_balances', cleanUid);
 
               walletUnsubscribe = onSnapshot(balanceRef, (docSnap) => {
@@ -10279,12 +9520,21 @@
                           }
                       }
                       
-                      // LOGIKA BANNER PERINGATAN SALDO
+                      // LOGIKA BANNER PERINGATAN SALDO & FORCE-KILL
                       const saldoBanner = document.getElementById('global-saldo-warning');
                       if (saldoBanner) {
                           if (saldo <= 0) {
                               saldoBanner.classList.remove('hidden');
                               saldoBanner.classList.add('flex');
+                              
+                              // FORCE KILL / MATIKAN ONBID SECARA LOKAL KARENA SALDO HABIS
+                              const toggle = document.getElementById('onbid-toggle');
+                              if (toggle && toggle.checked) {
+                                  toggle.checked = false;
+                                  if (typeof window.toggleOnbid === 'function') {
+                                      window.toggleOnbid(true); // Param 'true' untuk forceExit keluar antrean
+                                  }
+                              }
                           } else {
                               saldoBanner.classList.add('hidden');
                               saldoBanner.classList.remove('flex');
@@ -10294,7 +9544,6 @@
                       }
                       
                   } else {
-                      // Jika dokumen belum dibuat oleh admin
                       window.currentRiderWalletBalance = 0;
 
                       if (saldoEl) {
@@ -10309,7 +9558,6 @@
                           cardEl.className = "bg-gray-50 rounded-2xl p-5 border border-gray-200 shadow-sm relative overflow-hidden transition-all duration-300";
                       }
                       
-                      // Munculkan peringatan topup karena saldo belum ada (terbaca 0)
                       const saldoBanner = document.getElementById('global-saldo-warning');
                       if (saldoBanner) {
                           saldoBanner.classList.remove('hidden');
@@ -10323,10 +9571,6 @@
                   if (saldoEl) saldoEl.innerText = "Error";
               });
 
-              // -------------------------------------------------------------
-              // NEW: MENGAMBIL RIWAYAT ORDER (KOTOR) UNTUK DOMPET
-              // -------------------------------------------------------------
-              // Menggunakan path spesifik per UID (Private Data)
               const historyCol = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
 
               walletHistoryUnsubscribe = onSnapshot(historyCol, (snapshot) => {
@@ -10336,7 +9580,6 @@
                   let userHistory = [];
                   snapshot.forEach(docSnap => {
                       const data = docSnap.data();
-                      // Filter: Pastikan hanya mengambil data dengan Status "Selesai"
                       const status = String(data.Status || data.status || '').trim().toLowerCase();
                       if (status === 'selesai') {
                           userHistory.push(data);
@@ -10348,7 +9591,6 @@
                       return;
                   }
 
-                  // Sort descending di memori berdasarkan created_at (waktu terbaru di atas)
                   userHistory.sort((a, b) => {
                       const timeA = a.created_at?.seconds || 0;
                       const timeB = b.created_at?.seconds || 0;
@@ -10363,7 +9605,6 @@
                       let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
                       let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
                       
-                      // Format jika nilai kotor dalam bentuk pecahan (misal: 15 = Rp 15.000)
                       if (kotor > 0 && kotor <= 500) kotor = kotor * 1000;
                       if (extra > 0 && extra <= 500) extra = extra * 1000;
 
@@ -10371,7 +9612,6 @@
                       const status = data.Status || data.status || 'Selesai';
                       const isDone = status.toLowerCase() === 'selesai';
 
-                      // MENGHITUNG JUMLAH POTONGAN (ADM RATE * NOMINAL KOTOR)
                       const admRate = typeof window.getAdmRate === 'function' && dateStr !== '-' ? window.getAdmRate(dateStr) : 0.16;
                       const potongan = isDone ? Math.round(kotor * admRate) : 0;
 
@@ -10406,23 +9646,7 @@
           };
 
           // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER JADWAL LIBUR MINGGUAN
-          // -------------------------------------------------------------
-          let scheduleUnsubscribe = null;
-
-          window.startScheduleListener = (uid) => {
-              // FUNGSI INI DINONAKTIFKAN
-              // Sesuai instruksi, jadwal libur sepenuhnya dialihkan ke Google Apps Script (Teks Murni).
-              // Tidak perlu lagi memantau / menarik data dari Firebase (rider_schedules) untuk menghemat kuota.
-              if (scheduleUnsubscribe) {
-                  scheduleUnsubscribe();
-                  scheduleUnsubscribe = null;
-              }
-              console.log("Firebase Schedule Listener dinonaktifkan (Pindah ke GAS).");
-          };
-
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER RIWAYAT CICILAN JAKET / ATRIBUT
+          // FUNGSI LISTENER CICILAN JAKET
           // -------------------------------------------------------------
           let installmentsUnsubscribe = null;
 
@@ -10434,7 +9658,6 @@
                   installmentsUnsubscribe();
               }
 
-              // PATH DATABASE: Mengambil cicilan dari /artifacts/onbid-2f87a/public/data/rider_installments/{UID}
               const targetProjectId = "onbid-2f87a";
               const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', cleanUid);
 
@@ -10442,7 +9665,6 @@
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       
-                      // Fallback start_date jika tidak ada (Default 19 Jan 2026)
                       let startDate = new Date(2026, 0, 19); 
                       if (data.start_date) {
                           if (data.start_date.seconds) {
@@ -10453,7 +9675,6 @@
                           }
                       }
 
-                      // Menyimpan ke memori global
                       window.firebaseInstallmentsData[cleanUid] = {
                           weekly: data.weekly_amount || data.weekly || 0,
                           total_remaining: data.total_amount || data.total_debt || data.total_remaining || 0,
@@ -10461,7 +9682,6 @@
                           is_from_firebase: true
                       };
                   } else {
-                      // Jika belum ada data cicilan atau dokumen kosong
                       window.firebaseInstallmentsData[cleanUid] = {
                           weekly: 0,
                           total_remaining: 0,
@@ -10470,7 +9690,6 @@
                       };
                   }
 
-                  // TRIGGER RE-RENDER UI: Update halaman mingguan dan halaman detail cicilan
                   if (typeof window.processData === 'function' && window.rawData && window.rawData.length > 0) {
                       window.processData();
                   }
@@ -10486,29 +9705,27 @@
               });
           };
 
-          // -------------------------------------------------------------
-          // NEW: SISTEM TIDUR PULAS FIREBASE (HEMAT BATERAI)
-          // -------------------------------------------------------------
+          window.startScheduleListener = (uid) => {
+              // Dinonaktifkan sesuai perintah
+          };
+
+          /* // LOGIKA INI DIMATIKAN AGAR BIAYA READ FIREBASE TIDAK MEMBENGKAK
           document.addEventListener("visibilitychange", () => {
-              const uid = currentUserUID || localStorage.getItem('rider_uid');
+              const uid = localStorage.getItem('rider_uid');
               if (!uid || !window.isFirebaseReady) return;
 
               if (document.hidden) {
-                  // Layar mati / aplikasi di-minimize: Matikan listener berat
                   if (typeof window.stopQueueListener === 'function') window.stopQueueListener();
                   if (typeof window.stopWalletListener === 'function') window.stopWalletListener();
-                  console.log("Mode Hemat Baterai: Radar & Dompet dimatikan sementara.");
               } else {
-                  // Layar menyala / aplikasi dibuka kembali: Nyalakan listener
                   const onbidToggle = document.getElementById('onbid-toggle');
-                  // Nyalakan radar hanya jika status On-Bid sedang aktif
                   if (onbidToggle && onbidToggle.checked) {
                       if (typeof window.startQueueListener === 'function') window.startQueueListener();
                   }
                   if (typeof window.startWalletListener === 'function') window.startWalletListener(uid);
-                  console.log("Mode Aktif: Radar & Dompet dinyalakan kembali.");
               }
           });
+          */
 
       } catch (e) { console.error("Firebase Init Error:", e); }
     </script>
