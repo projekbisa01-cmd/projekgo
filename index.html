@@ -7666,7 +7666,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { getFirestore, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
       import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
@@ -7682,7 +7682,12 @@
       try {
           const app = initializeApp(firebaseConfig);
           const auth = getAuth(app);
-          const db = getFirestore(app);
+          
+          // PERBAIKAN: MENGAKTIFKAN OFFLINE CACHE FIREBASE (MENGURANGI READ DRASTIS)
+          const db = initializeFirestore(app, {
+              localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()})
+          });
+          
           const storage = getStorage(app); // INISIALISASI STORAGE
           
           // PERBAIKAN 1: Lindungi inisialisasi Messaging agar tidak bikin crash seluruh aplikasi
@@ -7703,39 +7708,39 @@
           window.isFinishingOrder = false; // Flag status rider menekan Selesai
 
           // -------------------------------------------------------------
-          // NEW: FUNGSI VERIFIKASI UID LANGSUNG KE FIRESTORE (INSTAN LOGIN)
+          // NEW: SISTEM TIDUR PULAS FIREBASE (HEMAT BATERAI) - DINONAKTIFKAN
           // -------------------------------------------------------------
-          window.verifyRiderUidFirestore = async (uid) => {
-              try {
-                  const cleanUid = String(uid).trim().toUpperCase();
-                  const targetProjectId = firebaseConfig.projectId;
-                  
-                  // CEK 1: Apakah UID sudah pernah mendaftarkan PIN? (Paling cepat & akurat)
-                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', cleanUid, 'security', 'pin_data');
-                  const pinSnap = await getDoc(pinRef);
-                  if (pinSnap.exists()) return true;
-                  
-                  // CEK 2: Apakah profil rider sudah dibuatkan oleh Admin di Firestore?
-                  const profileRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', cleanUid);
-                  const profileSnap = await getDoc(profileRef);
-                  if (profileSnap.exists()) return true;
-                  
-                  // CEK 3: Apakah UID ada di radar / antrean aktif?
-                  const statusRef = doc(db, '/status_rider_aktif', cleanUid);
-                  const statusSnap = await getDoc(statusRef);
-                  if (statusSnap.exists()) return true;
-                  
-                  // Jika tidak ditemukan di ketiga koleksi di atas, berarti UID bodong
-                  return false;
-              } catch (e) {
-                  console.error("Verifikasi Firestore Gagal:", e);
-                  throw e;
-              }
-          };
+          
+          /* // LOGIKA INI DIMATIKAN (DI-KOMENTAR) AGAR BIAYA READ FIREBASE TIDAK MEMBENGKAK
+          // Dengan membiarkan listener tetap hidup, Firebase hanya menagih "Delta Read" (perubahan saja)
+          // dan Local Cache akan menangani loading instan saat layar menyala kembali.
+          
+          document.addEventListener("visibilitychange", () => {
+              const uid = currentUserUID || localStorage.getItem('rider_uid');
+              if (!uid || !window.isFirebaseReady) return;
 
-          onAuthStateChanged(auth, (user) => {
-              if (user) { 
-                  console.log("Firebase Auth: Ready (Anonymous)"); 
+              if (document.hidden) {
+                  // Layar mati / aplikasi di-minimize: Matikan listener berat
+                  if (typeof window.stopQueueListener === 'function') window.stopQueueListener();
+                  if (typeof window.stopWalletListener === 'function') window.stopWalletListener();
+                  console.log("Mode Hemat Baterai: Radar & Dompet dimatikan sementara.");
+              } else {
+                  // Layar menyala / aplikasi dibuka kembali: Nyalakan listener
+                  const onbidToggle = document.getElementById('onbid-toggle');
+                  // Nyalakan radar hanya jika status On-Bid sedang aktif
+                  if (onbidToggle && onbidToggle.checked) {
+                      if (typeof window.startQueueListener === 'function') window.startQueueListener();
+                  }
+                  if (typeof window.startWalletListener === 'function') window.startWalletListener(uid);
+                  console.log("Mode Aktif: Radar & Dompet dinyalakan kembali.");
+              }
+          });
+          */
+
+      } catch (e) { console.error("Firebase Init Error:", e); }
+    </script>
+</body>
+</html>
                   isAuthReady = true;
                   window.isFirebaseReady = true;
                   // Cek notifikasi setelah login berhasil
@@ -10489,6 +10494,10 @@
           // -------------------------------------------------------------
           // NEW: SISTEM TIDUR PULAS FIREBASE (HEMAT BATERAI)
           // -------------------------------------------------------------
+          
+          /* // LOGIKA INI DIMATIKAN AGAR BIAYA READ FIREBASE TIDAK MEMBENGKAK
+          // Dengan membiarkan listener tetap hidup, Firebase hanya menagih "Delta Read" (perubahan saja)
+          // dan Local Cache akan menangani loading instan saat layar menyala kembali.
           document.addEventListener("visibilitychange", () => {
               const uid = currentUserUID || localStorage.getItem('rider_uid');
               if (!uid || !window.isFirebaseReady) return;
@@ -10509,6 +10518,7 @@
                   console.log("Mode Aktif: Radar & Dompet dinyalakan kembali.");
               }
           });
+          */
 
       } catch (e) { console.error("Firebase Init Error:", e); }
     </script>
