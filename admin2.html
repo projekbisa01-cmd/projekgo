@@ -710,6 +710,7 @@
                 startRiderBalancesListener(); 
                 startCloudRecapsListener();
                 startLiveTimers(); 
+                startDailyBalanceTrackerListener();
                 
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
@@ -832,7 +833,6 @@
             }
             if (page === 'history') window.renderHistoryOrders();
             if (page === 'customers') window.loadCustomers();
-            if (page === 'saldo') window.calculateSaldoStats();
             if (page === 'rider-off') window.renderOfflineRiders();
         };
 
@@ -1000,71 +1000,6 @@
                 });
             }, 1000);
         }
-
-        window.calculateSaldoStats = async () => {
-            const icon = document.getElementById('icon-refresh-potongan');
-            if (icon) icon.classList.add('fa-spin');
-
-            try {
-                // Baca ledger Admin khusus
-                const ledgerCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan');
-                const snapLedger = await getDocsFromServer(ledgerCol);
-
-                window._cachedLedger = [];
-                snapLedger.forEach(docSnap => window._cachedLedger.push(docSnap.data()));
-
-                const now = new Date();
-                const dateInput = document.getElementById('saldo-history-date');
-                if (dateInput && !dateInput.value) {
-                    const dd = String(now.getDate()).padStart(2, '0');
-                    const mm = String(now.getMonth() + 1).padStart(2, '0');
-                    const yyyy = now.getFullYear();
-                    dateInput.value = `${yyyy}-${mm}-${dd}`;
-                }
-
-                const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-                const dayOfWeek = now.getDay() === 0 ? 6 : now.getDay() - 1;
-                const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
-                const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-                let potHari = 0, orderHari = 0, omsetHari = 0;
-                let potMinggu = 0, orderMinggu = 0, omsetMinggu = 0;
-                let potBulan = 0, orderBulan = 0, omsetBulan = 0;
-
-                window._cachedLedger.forEach(data => {
-                    let orderMs = 0;
-                    if (data.created_at && data.created_at.seconds) {
-                        orderMs = data.created_at.seconds * 1000;
-                    }
-
-                    if (orderMs > 0) {
-                        const amt = parseFloat(data.amount || 0); // Positif=Kas Bertambah, Negatif=Refund
-                        const oms = parseFloat(data.omset_order || 0);
-
-                        if (orderMs >= startOfDay) { 
-                            potHari += amt; 
-                            omsetHari += oms;
-                            if (amt > 0) orderHari++; 
-                        }
-                        if (orderMs >= startOfWeek) { 
-                            potMinggu += amt; 
-                            omsetMinggu += oms;
-                            if (amt > 0) orderMinggu++; 
-                        }
-                        if (orderMs >= startOfMonth) { 
-                            potBulan += amt; 
-                            omsetBulan += oms;
-                            if (amt > 0) orderBulan++; 
-                        }
-                    }
-                });
-
-            } catch(e) {
-                console.error("Gagal hitung stat ledger kas:", e);
-            } finally {
-                if (icon) icon.classList.remove('fa-spin');
-            }
-        };
 
         window.calculateSaldoHistoryByDate = () => {
         };
@@ -1924,6 +1859,9 @@
             const totalAdminEl = document.getElementById('history-total-admin');
             const dateVal = document.getElementById('history-date').value; 
             
+            // SINKRONISASI FILTER CLOUD DENGAN TANGGAL YANG DIPILIH
+            if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+
             if(!container) return;
             if(!dateVal) { if (typeof window.showAlert === 'function') window.showAlert('Pilih Tanggal', 'Silakan tentukan tanggal di kalender.', 'warning'); return; }
 
@@ -2449,18 +2387,50 @@
             });
         }
 
+        function startDailyBalanceTrackerListener() {
+            const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+            onSnapshot(trackerRef, (docSnap) => {
+                const today = new Date();
+                const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                
+                if (docSnap.exists() && docSnap.data().shift_date === dateStr) {
+                    window.dailyBalanceTracker = docSnap.data();
+                    if (!document.getElementById('page-history').classList.contains('hidden-page')) {
+                        window.renderHistoryOrders();
+                    }
+                } else {
+                    const initTracker = () => {
+                        if (isBalancesLoaded && typeof window._currentTotalSaldo !== 'undefined') {
+                            setDoc(trackerRef, {
+                                shift_date: dateStr,
+                                saldo_jam_6: window._currentTotalSaldo || 0,
+                                top_up: 0,
+                                updated_at: serverTimestamp()
+                            }).catch(e=>{});
+                        } else {
+                            setTimeout(initTracker, 2000);
+                        }
+                    };
+                    initTracker();
+                }
+            });
+        }
+
         window.renderCloudRecaps = () => {
             const container = document.getElementById('cloud-recaps-list');
             if(!container) return;
 
-            if(allCloudRecaps.length === 0) {
-                container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada rekap yang disimpan ke cloud.</p>';
+            const dateVal = document.getElementById('history-date')?.value;
+            const filteredRecaps = allCloudRecaps.filter(r => r.tanggal === dateVal);
+
+            if(filteredRecaps.length === 0) {
+                container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada rekap di cloud untuk tanggal ini.</p>';
                 return;
             }
 
-            allCloudRecaps.sort((a,b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+            filteredRecaps.sort((a,b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
             let html = '';
-            allCloudRecaps.forEach(rekap => {
+            filteredRecaps.forEach(rekap => {
                 const dateParts = (rekap.tanggal || '').split('-');
                 let dateFormatted = rekap.tanggal;
                 if(dateParts.length === 3) dateFormatted = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
@@ -2527,6 +2497,7 @@
 
             let totalSisaSaldo = 0;
             allRiderBalances.forEach(b => { totalSisaSaldo += parseInt(b.saldo || 0); });
+            window._currentTotalSaldo = totalSisaSaldo;
             const dompetEl = document.getElementById('stat-total-dompet');
             if (dompetEl) dompetEl.innerText = `Rp ${totalSisaSaldo.toLocaleString('id-ID')}`;
 
@@ -2666,6 +2637,16 @@
                         rider_uid: uid, rider_name: rName, amount: amount, omset_order: 0, 
                         type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
                     });
+                }
+                
+                let topUpDiff = 0;
+                if (actionType === 'add') topUpDiff = amount;
+                else if (actionType === 'sub') topUpDiff = -amount;
+                else if (actionType === 'set') topUpDiff = amount - currentSaldo;
+
+                if (topUpDiff !== 0) {
+                    const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+                    await setDoc(trackerRef, { top_up: increment(topUpDiff) }, { merge: true }).catch(e=>{});
                 }
                 
                 if (typeof window.showAlert === 'function') window.showAlert('Berhasil', 'Saldo berhasil diupdate.', 'success');
