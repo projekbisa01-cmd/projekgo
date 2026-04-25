@@ -210,6 +210,15 @@
 
     </main>
 
+    <main id="page-pending" class="hidden-page max-w-md mx-auto p-4 space-y-4">
+        <section>
+            <h2 class="font-black text-black text-[11px] uppercase tracking-tight mb-2 px-1 border-b border-gray-200 pb-2">Orderan Tertunda / Pending (<span id="stat-pending-orders">0</span>)</h2>
+            <p class="text-[9px] text-slate-500 mb-3 px-1 leading-relaxed">Orderan ini belum di-share ke rider mana pun. Sistem akan otomatis membagikan orderan ini secara berurutan ketika ada rider yang masuk ke antrean radar aktif.</p>
+            <div id="pending-orders-list" class="space-y-3 pb-6">
+            </div>
+        </section>
+    </main>
+
     <main id="page-active" class="hidden-page max-w-md mx-auto p-4 space-y-4">
         <section>
             <h2 class="font-black text-black text-[11px] uppercase tracking-tight mb-3 px-1 border-b border-gray-200 pb-2">Pantauan Order Aktif (<span id="stat-active-orders">0</span>)</h2>
@@ -479,10 +488,17 @@
     </main>
 
     <nav class="fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 z-50 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-        <div class="grid grid-cols-3 h-16 max-w-md mx-auto">
+        <div class="grid grid-cols-4 h-16 max-w-md mx-auto">
             <button onclick="switchPage('dispatch')" id="nav-dispatch" class="nav-btn flex flex-col items-center justify-center space-y-1 text-sky-600 transition-colors relative">
                 <i class="fa-solid fa-motorcycle text-lg mb-0.5 transition-transform duration-200"></i>
                 <span class="text-[8px] font-black uppercase tracking-wider">Dispatch</span>
+            </button>
+            <button onclick="switchPage('pending')" id="nav-pending" class="nav-btn flex flex-col items-center justify-center space-y-1 text-gray-400 hover:text-slate-700 transition-colors relative">
+                <div class="relative">
+                    <i class="fa-solid fa-clock-rotate-left text-lg mb-0.5 transition-transform duration-200"></i>
+                    <span id="nav-badge-pending" class="absolute -top-1.5 -right-3 bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full hidden shadow-sm border border-white">0</span>
+                </div>
+                <span class="text-[8px] font-black uppercase tracking-wider">Pending</span>
             </button>
             <button onclick="switchPage('active')" id="nav-active" class="nav-btn flex flex-col items-center justify-center space-y-1 text-gray-400 hover:text-slate-700 transition-colors relative">
                 <div class="relative">
@@ -787,7 +803,7 @@
         };
 
         window.switchPage = (page) => {
-            const pages = ['dispatch', 'active', 'history', 'saldo', 'customers', 'lainnya', 'rider-off'];
+            const pages = ['dispatch', 'pending', 'active', 'history', 'saldo', 'customers', 'lainnya', 'rider-off'];
             pages.forEach(p => {
                 const btn = document.getElementById(`nav-${p}`);
                 const pageEl = document.getElementById(`page-${p}`);
@@ -803,7 +819,7 @@
 
             const subPages = ['saldo', 'customers', 'lainnya', 'rider-off'];
             if (subPages.includes(page)) {
-                ['dispatch', 'active', 'history'].forEach(bp => {
+                ['dispatch', 'pending', 'active', 'history'].forEach(bp => {
                     const b = document.getElementById(`nav-${bp}`);
                     if (b && b.classList.contains('text-sky-600')) b.classList.replace('text-sky-600', 'text-gray-400');
                 });
@@ -1226,6 +1242,12 @@
 
                 updateNewShiftUI(); updateMainQueueUI(); checkAndEnforceRiderBalances();
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
+
+                // Cek apakah ada orderan pending yang bisa otomatis dibagikan
+                const pendingOrders = allGlobalOrders.filter(o => o.status === 'unassigned').sort((a,b) => (a.created_at?.seconds || 0) - (b.created_at?.seconds || 0));
+                if (pendingOrders.length > 0) {
+                    window.autoAssignPendingOrder(pendingOrders[0].id);
+                }
             }, (error) => {});
         }
 
@@ -1431,6 +1453,74 @@
             document.querySelectorAll('.rider-card').forEach(el => el.classList.remove('selected'));
         };
 
+        window.autoAssignPendingOrder = async (orderId) => {
+            if (processingMissedOrders.has(orderId)) return;
+            processingMissedOrders.add(orderId);
+            
+            try {
+                // Beri jeda sedikit agar antrean tersinkronisasi
+                await new Promise(r => setTimeout(r, 500));
+                
+                const order = allGlobalOrders.find(o => o.id === orderId);
+                if (!order || order.status !== 'unassigned') return; 
+
+                const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
+                const availableMainQueue = mainQueueRiders.filter(r => 
+                    (r.is_online === true || r.is_online === 'true') && 
+                    (r.is_available === true || r.is_available === 'true') && 
+                    !busyUids.has(r.uid)
+                );
+
+                if (availableMainQueue.length === 0) return; // Belum ada rider yang standby
+
+                const nextRider = availableMainQueue[0];
+                const rName = nextRider.nama || nextRider.name || nextRider.displayName;
+                const nextRiderName = rName && String(rName).trim() !== '' ? rName : nextRider.uid;
+
+                const now = new Date();
+                const Tanggal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const Jam = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+                let detailKeterangan = "Orderan Biasa";
+                if (order.items && order.items.length > 0) detailKeterangan = order.items.map(i => i.name).join('\n');
+
+                const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
+                const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+
+                await runTransaction(db, async (transaction) => {
+                    const orderDoc = await transaction.get(orderRef);
+                    if (!orderDoc.exists()) throw "Order tidak ditemukan";
+                    const currentData = orderDoc.data();
+                    if (currentData.status !== 'unassigned') throw "Sudah dialihkan";
+
+                    // Note: Tidak perlu refund karena belum assigned ke siapapun
+                    if (currentData.fee) {
+                        const cutAmount = Math.round(currentData.fee * 0.16);
+                        const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
+                        transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
+
+                        const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        transaction.set(ledgerRefCut, { rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending)', created_at: serverTimestamp() });
+                    }
+
+                    transaction.set(newDailyOrderRef, {
+                        UID: nextRider.uid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
+                        Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
+                        Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
+                        created_at: serverTimestamp()
+                    });
+
+                    transaction.update(orderRef, {
+                        rider_uid: nextRider.uid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
+                        status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                    });
+                });
+                
+                sendPushNotification(nextRider.uid, "🔥 ORDERAN MASUK 🔥", "Orderan otomatis dibagikan dari daftar tunggu!");
+            } catch(e) { console.warn("Auto assign pending error", e); } 
+            finally { setTimeout(() => processingMissedOrders.delete(orderId), 2000); }
+        };
+
         window.autoReassignMissedOrder = async (order) => {
             if (processingMissedOrders.has(order.id)) return;
             processingMissedOrders.add(order.id);
@@ -1627,19 +1717,77 @@
                     newGlobalOrders.push(data);
                     if ((data.status === 'assigned' || data.status === 'processing') && !allGlobalOrders.find(o => o.id === data.id)) hasNewOrder = true;
                     if (data.status === 'missed') window.autoReassignMissedOrder(data);
+                    if (data.status === 'unassigned') window.autoAssignPendingOrder(data.id);
                 });
 
                 allGlobalOrders = newGlobalOrders;
                 if (hasNewOrder && document.getElementById('page-active').classList.contains('hidden-page')) window.hideActiveBadge = false;
                 renderActiveOrders();
+                if (typeof window.renderPendingOrders === 'function') window.renderPendingOrders();
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) window.renderHistoryOrders();
                 updateNewShiftUI(); updateMainQueueUI();
             });
         }
 
+        window.renderPendingOrders = () => {
+            const container = document.getElementById('pending-orders-list');
+            if(!container) return;
+            const pendingOrders = allGlobalOrders.filter(o => o.status === 'unassigned');
+            const countEl = document.getElementById('stat-pending-orders');
+            if (countEl) countEl.innerText = pendingOrders.length;
+            
+            const badge = document.getElementById('nav-badge-pending');
+            if (badge) {
+                if (pendingOrders.length > 0) { badge.innerText = pendingOrders.length; badge.classList.remove('hidden'); } 
+                else { badge.classList.add('hidden'); }
+            }
+
+            if (pendingOrders.length === 0) {
+                container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl border border-dashed border-gray-200">Tidak ada orderan tertunda.</p>`;
+                return;
+            }
+
+            let html = '';
+            pendingOrders.sort((a, b) => (a.created_at?.seconds || 0) - (b.created_at?.seconds || 0));
+            pendingOrders.forEach(order => {
+                const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
+                const tamVal = parseInt(order.tambahan || 0);
+                const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
+                const itemsText = order.items ? order.items.map(i => i.name).join('\n') : 'Order Biasa';
+                const custNameStr = order.customer_name ? ` | ${order.customer_name}` : '';
+
+                let timeStr = '--:--';
+                if (order.created_at && order.created_at.seconds) timeStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+                html += `
+                    <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500 mb-2">
+                        <div class="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>
+                        <div class="flex justify-between items-start pl-1">
+                            <div class="flex flex-col gap-1.5 overflow-hidden">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 uppercase tracking-widest inline-block w-max"><i class="fa-solid fa-hourglass-half mr-1"></i>Menunggu Rider Aktif</span>
+                                    <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100"><i class="fa-regular fa-clock text-[8px]"></i><span class="text-[9px] font-black text-black">${timeStr}</span></div>
+                                </div>
+                                <p class="text-xs font-black text-black leading-none mt-0.5">WA: ${order.customer_phone}${custNameStr}</p>
+                            </div>
+                            <div class="text-right shrink-0 ml-2"><p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p></div>
+                        </div>
+                        <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
+                            <p class="text-[9px] text-black italic whitespace-pre-wrap">"${itemsText}"</p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 ml-1 mt-1">
+                            <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-sky-50 hover:bg-sky-100 text-sky-600 text-[9px] font-black rounded-lg uppercase transition-all border border-sky-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                            <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
+                        </div>
+                    </div>`;
+            });
+            container.innerHTML = html;
+        };
+
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
-            const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing' || o.status === 'missed' || o.status === 'unassigned');
+            // Keluarkan unassigned dari pantauan aktif agar hanya muncul di tab Pending
+            const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing' || o.status === 'missed');
             document.getElementById('stat-active-orders').innerText = activeOrders.length;
             const badge = document.getElementById('nav-badge-active');
             const isOnActivePage = !document.getElementById('page-active').classList.contains('hidden-page');
@@ -2094,7 +2242,21 @@
             const rawTambahan = document.getElementById('order-tambahan').value.trim().toLowerCase();
             const details = document.getElementById('order-details').value;
 
-            if (!riderUid || !phone || !details.trim() || !rawFee) { window.showAlert('Lengkapi Form', 'Pilih rider dari antrean utama, isi WA, rincian, dan ongkir.', 'warning'); return; }
+            const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
+            const availableMainQueue = mainQueueRiders.filter(r => 
+                (r.is_online === true || r.is_online === 'true') && 
+                (r.is_available === true || r.is_available === 'true') && 
+                !busyUids.has(r.uid)
+            );
+
+            if (!phone || !details.trim() || !rawFee) { window.showAlert('Lengkapi Form', 'Isi WA, rincian, dan ongkir.', 'warning'); return; }
+
+            if (!riderUid) {
+                if (availableMainQueue.length > 0) {
+                    window.showAlert('Pilih Rider', 'Ada rider yang tersedia. Silakan pilih rider dari antrean radar aktif.', 'warning'); 
+                    return;
+                }
+            }
 
             const parseNominal = (rawStr) => {
                 let str = String(rawStr).toLowerCase().replace(',', '.');
@@ -2112,36 +2274,51 @@
 
             try {
                 const batch = writeBatch(db);
-                const now = new Date();
-                const Tanggal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-                const Jam = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
                 const items = details.split('\n').map(l => ({ name: l, qty: 1 }));
                 const orderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
-                const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
 
-                batch.set(orderRef, {
-                    rider_uid: riderUid, rider_name: riderName, customer_phone: phone, customer_name: custName,
-                    fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'assigned', is_nyambi: false,
-                    created_at: serverTimestamp(), daily_order_id: dailyOrdersRef.id, missed_by: null, last_ping: serverTimestamp() 
-                });
+                if (riderUid) {
+                    const now = new Date();
+                    const Tanggal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                    const Jam = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-                batch.set(dailyOrdersRef, {
-                    UID: riderUid, Nama_Rider: riderName, Tanggal: Tanggal, Jam: Jam, Nama_Pelanggan: custName,
-                    Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp()
-                });
+                    const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
 
-                const adminCut = Math.round(feeParsed.real * 0.16);
-                const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                batch.set(balanceRef, { uid: riderUid, name: riderName, saldo: increment(-adminCut), updated_at: serverTimestamp() }, { merge: true });
+                    batch.set(orderRef, {
+                        rider_uid: riderUid, rider_name: riderName, customer_phone: phone, customer_name: custName,
+                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'assigned', is_nyambi: false,
+                        created_at: serverTimestamp(), daily_order_id: dailyOrdersRef.id, missed_by: null, last_ping: serverTimestamp() 
+                    });
 
-                // TULIS KE BUKU KAS LEDGER
-                const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                batch.set(ledgerRef, {
-                    rider_uid: riderUid, rider_name: riderName,
-                    amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
-                    type: 'auto_order', desc: `Potongan Sistem - ${custName || phone}`, created_at: serverTimestamp()
-                });
+                    batch.set(dailyOrdersRef, {
+                        UID: riderUid, Nama_Rider: riderName, Tanggal: Tanggal, Jam: Jam, Nama_Pelanggan: custName,
+                        Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp()
+                    });
+
+                    const adminCut = Math.round(feeParsed.real * 0.16);
+                    const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
+                    batch.set(balanceRef, { uid: riderUid, name: riderName, saldo: increment(-adminCut), updated_at: serverTimestamp() }, { merge: true });
+
+                    // TULIS KE BUKU KAS LEDGER
+                    const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                    batch.set(ledgerRef, {
+                        rider_uid: riderUid, rider_name: riderName,
+                        amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
+                        type: 'auto_order', desc: `Potongan Sistem - ${custName || phone}`, created_at: serverTimestamp()
+                    });
+
+                    sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
+                    window.showAlert('Berhasil!', `Dikirim ke HP ${riderName}. Data riwayat harian rider otomatis bertambah.`, 'success');
+                } else {
+                    // LOGIKA UNTUK MENYIMPAN KE DAFTAR PENDING (UNASSIGNED)
+                    batch.set(orderRef, {
+                        rider_uid: null, rider_name: null, customer_phone: phone, customer_name: custName,
+                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false,
+                        created_at: serverTimestamp(), missed_by: null 
+                    });
+                    
+                    window.showAlert('Disimpan ke Pending', 'Rider tidak ada/kosong. Orderan masuk ke tab Pending (Belum di Share). Akan otomatis di-share jika ada rider on-bid.', 'info');
+                }
 
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
@@ -2149,13 +2326,11 @@
                 }
 
                 await batch.commit();
-                sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
 
                 document.getElementById('cust-phone').value = ''; document.getElementById('cust-name').value = '';
                 document.getElementById('order-details').value = ''; document.getElementById('order-fee').value = '';
                 document.getElementById('order-tambahan').value = ''; window.clearSelection();
                 
-                window.showAlert('Berhasil!', `Dikirim ke HP ${riderName}. Data riwayat harian rider otomatis bertambah.`, 'success');
             } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
         };
 
