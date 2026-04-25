@@ -1840,13 +1840,13 @@
                             <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas Terakhir:</p>
                             <div class="flex items-center justify-between gap-2">
                                 <p class="text-xs font-bold text-black truncate">${order.rider_name || 'Tidak Ada'}</p>
-                                ${!isProcessing && !isMissed ? `<div class="flex items-center gap-1.5 shrink-0"><button onclick="window.manualReassignOrder('${order.id}')" class="px-2.5 h-7 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-indigo-500 hover:text-white transition-colors border border-indigo-200" title="Alihkan ke Rider Berikutnya"><i class="fa-solid fa-shuffle text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Alihkan</span></button></div>` : ''}
+                                ${!isMissed ? `<div class="flex items-center gap-1.5 shrink-0"><button onclick="window.sendToPending('${order.id}')" class="px-2.5 h-7 bg-amber-50 text-amber-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-amber-500 hover:text-white transition-colors border border-amber-200" title="Tarik ke Pending"><i class="fa-solid fa-rotate-left text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Pending</span></button><button onclick="window.manualReassignOrder('${order.id}')" class="px-2.5 h-7 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-indigo-500 hover:text-white transition-colors border border-indigo-200" title="Alihkan ke Rider Berikutnya"><i class="fa-solid fa-shuffle text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Alihkan</span></button></div>` : ''}
                             </div>
                             <p class="text-[9px] text-black mt-1.5 italic whitespace-pre-wrap">"${itemsText}"</p>
                         </div>
-                        <div class="grid ${!isProcessing && !isMissed ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
+                        <div class="grid ${!isMissed ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
                             <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                            ${!isProcessing && !isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
+                            ${!isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
                             <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>`;
@@ -2380,6 +2380,49 @@
                     
                     window.showAlert('Berhasil', 'Orderan dibatalkan. Rider kembali ke antrean teratas dan potongan 16% berhasil di-refund.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat membatalkan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+            });
+        };
+
+        window.sendToPending = (id) => {
+            const order = allGlobalOrders.find(o => o.id === id);
+            if (!order) return;
+
+            window.showConfirm('Tarik ke Pending?', 'Yakin ingin menarik orderan ini dari rider dan memasukkannya ke antrean Pending? (Saldo rider yang terpotong akan dikembalikan otomatis)', async () => {
+                const loader = document.getElementById('loading-overlay');
+                loader.classList.remove('hidden'); loader.classList.add('flex');
+                try {
+                    const batch = writeBatch(db);
+
+                    if (order.rider_uid && order.fee) {
+                        const refundAmount = Math.round(order.fee * 0.16);
+                        const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
+                        batch.set(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
+
+                        // REFUND DI BUKU KAS
+                        const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        batch.set(ledgerRef, {
+                            rider_uid: order.rider_uid, amount: -refundAmount, omset_order: -(order.fee + (order.tambahan || 0)), 
+                            type: 'refund_pending', desc: `Refund Tarik ke Pending`, created_at: serverTimestamp()
+                        });
+                    }
+
+                    batch.update(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), {
+                        status: 'unassigned',
+                        rider_uid: null,
+                        rider_name: null,
+                        daily_order_id: null,
+                        missed_by: null
+                    });
+
+                    if (order.daily_order_id && order.rider_uid) {
+                        batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
+                    }
+                    
+                    await batch.commit();
+                    if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan yang sedang kamu proses telah ditarik oleh Admin karena suatu kendala. (Saldo dikembalikan)");
+                    
+                    window.showAlert('Berhasil', 'Orderan berhasil dipindahkan ke tab Pending. Saldo potongan rider telah dikembalikan otomatis.', 'success');
+                } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat memindahkan ke pending.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
 
