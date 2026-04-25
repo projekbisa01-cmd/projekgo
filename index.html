@@ -3085,20 +3085,22 @@
         // FUNGSI KAMERA, PREVIEW FOTO, DAN VALIDASI PENYELESAIAN ORDER
         // =========================================================
 
-        window.previewFinishPhoto = function(input) {
+        window.previewFinishPhoto = async function(input) {
             if (input.files && input.files[0]) {
                 const file = input.files[0];
-                const reader = new FileReader();
                 
-                reader.onload = function(e) {
-                    // Simpan base64 ke variabel global agar bisa di-upload ke Firebase nanti
-                    window.finishPhotoBase64 = e.target.result;
+                try {
+                    // Panggil fungsi kompresi (maksimal lebar 800px, kualitas 70%) agar file ringan (< 500kb)
+                    const compressedBase64 = await compressImage(file, 800, 0.7);
+                    
+                    // Simpan base64 hasil kompresi ke variabel global agar bisa di-upload ke Firebase nanti
+                    window.finishPhotoBase64 = compressedBase64;
                     
                     // Sembunyikan placeholder, tampilkan gambar & tombol hapus
                     document.getElementById('finish-photo-placeholder').classList.add('hidden');
                     
                     const previewImg = document.getElementById('finish-photo-preview');
-                    previewImg.src = e.target.result;
+                    previewImg.src = compressedBase64;
                     previewImg.classList.remove('hidden');
                     
                     const removeBtn = document.getElementById('btn-remove-photo');
@@ -3106,8 +3108,10 @@
                     removeBtn.classList.add('flex');
                     
                     window.validateFinishOrder();
+                } catch (error) {
+                    console.error("Gagal mengkompresi gambar:", error);
+                    alert("Gagal memproses gambar. Silakan coba lagi.");
                 }
-                reader.readAsDataURL(file);
             }
         };
 
@@ -8545,7 +8549,6 @@
           let activeOrderUnsubscribeQuery = null;
           window.currentActiveOrderId = null;
           window.currentIncomingOrderId = null; // Ditambahkan untuk melacak ID pop-up aktif
-          let finishPhotoBase64 = null;
           
           window.isMissingOrder = false;
 
@@ -9172,7 +9175,7 @@
               if(finishDesc) finishDesc.value = "";
               
               document.querySelectorAll('.finish-photo-input').forEach(input => input.value = "");
-              finishPhotoBase64 = null;
+              window.finishPhotoBase64 = null;
               
               // Restore konten tombol agar icon tidak null saat divalidasi
               const btnFinishOrder = document.getElementById('btn-finish-order');
@@ -9241,7 +9244,7 @@
                   
                   try {
                       // Buang bagian depan (header) dari Base64
-                      const pureBase64 = finishPhotoBase64.split(',')[1];
+                      const pureBase64 = window.finishPhotoBase64.split(',')[1];
                       
                       // Tentukan lokasi penyimpanan di Firebase Storage
                       const storagePath = `artifacts/${appId}/public/data/order_proofs/${window.currentActiveOrderId}_${Date.now()}.jpg`;
