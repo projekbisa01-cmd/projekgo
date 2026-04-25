@@ -1830,10 +1830,11 @@
                             </div>
                             <p class="text-[9px] text-black mt-1.5 italic whitespace-pre-wrap">"${itemsText}"</p>
                         </div>
-                        <div class="grid ${!isMissed ? 'grid-cols-3' : 'grid-cols-2'} gap-2 ml-1 mt-1">
-                            <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                            ${!isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
-                            <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
+                        <div class="grid ${!isMissed ? 'grid-cols-4' : 'grid-cols-2'} gap-1.5 ml-1 mt-1">
+                            <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                            ${!isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
+                            ${!isMissed ? `<button onclick="window.completeOrderByAdmin('${order.id}')" class="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-emerald-200"><i class="fa-solid fa-check-double"></i> Selesai</button>` : ''}
+                            <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
                         </div>
                     </div>`;
             });
@@ -2338,6 +2339,44 @@
                 if (order && order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ PANGGILAN ADMIN ⚠️", "Segera cek aplikasi! Admin memanggilmu.");
                 window.showAlert('Up Berhasil', 'Sinyal pemanggilan ulang telah dikirim ke Rider.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
+        };
+
+        window.completeOrderByAdmin = (id) => {
+            const order = allGlobalOrders.find(o => o.id === id);
+            if (!order) return;
+
+            window.showConfirm('Selesaikan Order?', 'Bantu rider menyelesaikan orderan ini secara manual? Orderan akan masuk ke Riwayat.', async () => {
+                const loader = document.getElementById('loading-overlay');
+                loader.classList.remove('hidden'); loader.classList.add('flex');
+                try {
+                    const batch = writeBatch(db);
+                    
+                    const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id);
+                    batch.update(orderRef, {
+                        status: 'completed',
+                        finished_at: serverTimestamp()
+                    });
+
+                    if (order.rider_uid) {
+                        const rdr = allRiders.find(r => r.uid === order.rider_uid);
+                        const riderRef = doc(db, 'status_rider_aktif', order.rider_uid);
+                        const retainedLoc = rdr ? window.getKetLokasi(rdr) : "Posisi / Standby";
+                        batch.update(riderRef, {
+                            in_main_queue: true,
+                            is_available: true,
+                            last_drop_time: serverTimestamp(),
+                            last_drop_desc: "Selesai (Bantuan Admin)",
+                            proof_desc: retainedLoc,
+                            last_updated: serverTimestamp()
+                        });
+                    }
+
+                    await batch.commit();
+                    if (order.rider_uid) sendPushNotification(order.rider_uid, "✅ ORDERAN SELESAI ✅", "Orderan telah diselesaikan oleh Admin. Kamu kembali ke antrean radar.");
+                    
+                    window.showAlert('Berhasil', 'Orderan berhasil diselesaikan dan masuk ke Histori.', 'success');
+                } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat menyelesaikan order.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+            });
         };
 
         window.deleteOrder = (id) => {
