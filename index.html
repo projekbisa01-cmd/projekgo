@@ -561,7 +561,7 @@
         <div class="hidden">
             <h3 id="incoming-order-fee"></h3>
             <p id="incoming-order-fee-detail"></p>
-            <ul id="incoming-order-items"></ul>
+            <div id="incoming-order-items" class="whitespace-pre-wrap"></div>
             <h2 id="incoming-customer-name"></h2>
         </div>
     </div>
@@ -630,9 +630,10 @@
                             <span class="text-xs font-medium tracking-wide">SALIN</span>
                         </button>
                     </div>
-                    <ul id="active-order-items" class="space-y-1 text-[15px] font-normal text-white flex-1 overflow-y-auto custom-scrollbar pr-1 leading-tight">
-                        <!-- Diisi oleh JS -->
-                    </ul>
+                    <!-- Diubah menjadi div dengan whitespace-pre-wrap agar bisa langsung merender Teks Siap Saji -->
+                    <div id="active-order-items" class="text-[15px] font-normal text-white flex-1 overflow-y-auto custom-scrollbar pr-1 leading-relaxed whitespace-pre-wrap">
+                        <!-- Diisi teks langsung oleh JS -->
+                    </div>
                 </div>
 
                 <!-- Glowing Separator -->
@@ -2953,13 +2954,20 @@
             }
 
             let copyText = "Daftar Pesanan:\n";
-            window.currentActiveOrderItems.forEach(item => {
-                const rawName = typeof item === 'object' ? (item.name || '') : String(item);
-                const cleanName = String(rawName).replace(/^[\-\•\·\s]+/, '').trim();
-                if (cleanName) {
-                    copyText += `- ${cleanName}\n`;
-                }
-            });
+            
+            // Logika Baru: Cek apakah datanya berupa Text String (Siap Saji)
+            if (typeof window.currentActiveOrderItems === 'string') {
+                copyText += window.currentActiveOrderItems;
+            } else if (Array.isArray(window.currentActiveOrderItems)) {
+                // Logika Lama (Fallback array)
+                window.currentActiveOrderItems.forEach(item => {
+                    const rawName = typeof item === 'object' ? (item.name || '') : String(item);
+                    const cleanName = String(rawName).replace(/^[\-\•\·\s]+/, '').trim();
+                    if (cleanName) {
+                        copyText += `- ${cleanName}\n`;
+                    }
+                });
+            }
 
             // Gunakan metode fallback document.execCommand yang lebih aman di dalam WebView/iFrame
             try {
@@ -8695,21 +8703,26 @@
                   }
               }
 
-              // Render list pesanan di popup orderan masuk (Aman dari Array Object)
+              // Menerima Data Teks Siap Saji dari Admin
+              const textSiapSajiPopup = data.pesanan_text || data.items_string || data.List_Pesanan;
+
               if (itemsListEl) {
-                  if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+                  if (typeof textSiapSajiPopup === 'string' && textSiapSajiPopup.trim() !== '') {
+                      itemsListEl.innerText = textSiapSajiPopup;
+                  }
+                  else if (data.items && Array.isArray(data.items) && data.items.length > 0) {
                       itemsListEl.innerHTML = data.items.map(item => {
                           const rawName = typeof item === 'object' ? (item.name || '') : String(item);
                           const cleanName = String(rawName).replace(/^[\-\•\·\s]+/, '').trim();
                           
                           if (!cleanName) {
-                              return `<li class="pb-0.5"><div class="h-2"></div></li>`;
+                              return `<div class="h-2"></div>`;
                           }
                           
-                          return `<li class="pb-0.5"><div class="text-white font-bold text-[15px] leading-snug">${cleanName}</div></li>`;
+                          return `<div class="text-white font-bold text-[15px] leading-snug">${cleanName}</div>`;
                       }).join('');
                   } else {
-                      itemsListEl.innerHTML = `<li class="text-gray-400 italic text-[15px]">- Pesanan dari admin (tanpa rincian item)</li>`;
+                      itemsListEl.innerHTML = `<div class="text-gray-400 italic text-[15px]">- Pesanan dari admin (tanpa rincian item)</div>`;
                   }
               }
 
@@ -9004,49 +9017,42 @@
                   extraInfoEl.innerText = "";
               }
 
-              // List Item (Aman dari Array Object Admin)
+              // --- LOGIKA BARU: INJEKSI DATA TEKS LANGSUNG (SANGAT RINGAN) ---
               const listEl = document.getElementById('active-order-items');
-              let copyText = `*PROJEKGO DELIVERY ORDER*\n`;
-              copyText += `Admin CS: 081292802623\n`;
-              copyText += `----------------------\n*Daftar Pesanan:*\n`;
-              
+              let copyText = `*PROJEKGO DELIVERY ORDER*\nAdmin CS: 081292802623\n----------------------\n*Daftar Pesanan:*\n`;
               let detailPesananWA = `\n\n*Detail Pesanan:*\n`;
+              
+              // Cek apakah Admin mengirimkan data siap saji (String text)
+              // Kita beri dukungan nama field: pesanan_text (bisa disesuaikan admin nanti)
+              const textSiapSaji = data.pesanan_text || data.items_string || data.List_Pesanan;
 
               if (listEl) {
-                  if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                      listEl.innerHTML = data.items.map(item => {
-                          const rawName = typeof item === 'object' ? (item.name || '') : String(item);
-                          const trimmedRaw = rawName.trim();
-                          const cleanName = trimmedRaw.replace(/^[\-\•\·\s]+/, '').trim();
-                          
-                          if (!cleanName) {
-                              copyText += `\n`;
-                              detailPesananWA += `\n`;
-                              return `<li class="pb-0.5"><div class="h-2"></div></li>`;
-                          }
-                          
-                          // LOGIKA PENENTUAN BULLET BERDASARKAN SYARAT
-                          // 1. Ada angka di depan (^\d)
-                          // 2. Ada "-" di depan (^\-)
-                          // 3. Ada angka di belakang (\d\s*$)
-                          // 4. Ada kata satuan di belakang ((pcs|butir|biji|buah|porsi)\s*$)
-                          const isBulletItem = /(^\d)|(^\-)|(\d\s*$)|((pcs|butir|biji|buah|porsi)\s*$)/i.test(trimmedRaw);
-                          
-                          if (isBulletItem) {
+                  if (typeof textSiapSaji === 'string' && textSiapSaji.trim() !== '') {
+                      // METODE BARU: Langsung injeksi string. UI akan mengikuti enter (\n) dari admin
+                      listEl.innerText = textSiapSaji;
+                      copyText += textSiapSaji + '\n';
+                      detailPesananWA += textSiapSaji + '\n';
+                      window.currentActiveOrderItems = textSiapSaji; // Simpan untuk disalin
+                  } 
+                  else if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+                      // METODE LAMA: Fallback jika admin mengirim format Array lama
+                      window.currentActiveOrderItems = data.items;
+                      let htmlTemp = '';
+                      data.items.forEach(item => {
+                          const cleanName = String(typeof item === 'object' ? (item.name || '') : item).replace(/^[\-\•\·\s]+/, '').trim();
+                          if (cleanName) {
+                              htmlTemp += `• ${cleanName}\n`;
                               copyText += `- ${cleanName}\n`;
                               detailPesananWA += `- ${cleanName}\n`;
-                              return `<li class="pb-0.5"><div class="text-white font-normal text-[16px] leading-tight flex items-start gap-2.5"><span class="text-white text-lg leading-none mt-[-2px]">&bull;</span> <span class="pt-0.5">${cleanName}</span></div></li>`;
-                          } else {
-                              // Render tanpa bullet, di-indentasi ke dalam dan miring (italic) sebagai catatan tambahan
-                              copyText += `  ${cleanName}\n`;
-                              detailPesananWA += `  ${cleanName}\n`;
-                              return `<li class="pb-0.5"><div class="text-[#cbd5e1] font-normal text-[15px] leading-tight pl-[22px] italic"><span class="pt-0.5">${cleanName}</span></div></li>`;
                           }
-                      }).join('');
-                  } else {
-                      listEl.innerHTML = `<li class="text-gray-500 italic text-base">- Pesanan dari admin</li>`;
+                      });
+                      listEl.innerText = htmlTemp; // Gunakan innerText agar cocok dengan whitespace-pre-wrap
+                  } 
+                  else {
+                      listEl.innerText = "- Pesanan dari admin";
                       copyText += `- Pesanan dari admin\n`;
                       detailPesananWA += `- Pesanan dari admin\n`;
+                      window.currentActiveOrderItems = "- Pesanan dari admin";
                   }
               }
 
