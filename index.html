@@ -3268,8 +3268,26 @@
             const nominalContainer = document.getElementById('transfer-nominal-container');
             if (value === 'Transfer') {
                 nominalContainer.classList.remove('hidden');
-                const baseFee = (window.currentActiveOrderBaseFee || 0) * 1000;
-                document.getElementById('payment-nominal-input').value = baseFee.toLocaleString('id-ID');
+                
+                // Ambil total item dari nota aktif jika ada
+                let totalItemPrice = 0;
+                if (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) {
+                    activeNotaItems.forEach(item => { totalItemPrice += item.price; });
+                }
+                
+                // Ambil ongkir & extra (dari input nota jika diisi, atau fallback ke default order)
+                const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
+                const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
+                const notaOngkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
+                const notaExtra = parseInt(extraInput.replace(/\./g, '')) || 0;
+                
+                const baseFee = notaOngkir > 0 ? notaOngkir : (window.currentActiveOrderBaseFee || 0) * 1000;
+                const extraFee = notaExtra > 0 ? notaExtra : (window.currentActiveOrderExtraFee || 0) * 1000;
+                
+                // Total keseluruhan (Barang + Ongkir + Tambahan)
+                const totalBayar = totalItemPrice + baseFee + extraFee;
+                
+                document.getElementById('payment-nominal-input').value = totalBayar.toLocaleString('id-ID');
             } else {
                 nominalContainer.classList.add('hidden');
             }
@@ -6352,7 +6370,7 @@
                     const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
                     let savedPaymentStr = localStorage.getItem(orderKey);
                     
-                    // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH)
+                    // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH YANG DIPERBAIKI)
                     if (!savedPaymentStr) {
                         let closestKey = null;
                         let minDiff = 15; // Maksimal selisih 15 menit
@@ -6362,25 +6380,47 @@
                         if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
                         
                         const prefix = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_`;
-                        const suffix = `_${kotor}`;
+                        const currentCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '').toLowerCase();
                         
-                        // Iterasi mencari catatan transfer terdekat
+                        // Iterasi mencari catatan transfer terdekat (Abaikan Nominal Kotor yang mungkin berubah dari sisi Admin)
                         for (let i = localStorage.length - 1; i >= 0; i--) {
                             const key = localStorage.key(i);
-                            if (key && key.startsWith(prefix) && key.endsWith(suffix)) {
-                                const keyTimeStr = key.split('_')[3]; 
-                                if (keyTimeStr && keyTimeStr.length === 4) {
-                                    const keyTimeMin = parseInt(keyTimeStr.substring(0,2), 10) * 60 + parseInt(keyTimeStr.substring(2,4), 10);
-                                    const diff = Math.abs(targetTimeMin - keyTimeMin);
-                                    if (diff < minDiff) {
-                                        minDiff = diff;
-                                        closestKey = key;
+                            if (key && key.startsWith(prefix)) {
+                                const parts = key.split('_');
+                                if (parts.length >= 5) {
+                                    const keyTimeStr = parts[3]; 
+                                    if (keyTimeStr && keyTimeStr.length === 4) {
+                                        const keyTimeMin = parseInt(keyTimeStr.substring(0,2), 10) * 60 + parseInt(keyTimeStr.substring(2,4), 10);
+                                        const diff = Math.abs(targetTimeMin - keyTimeMin);
+                                        
+                                        // Pengecekan ekstra: Cek kecocokan Nama Pelanggan
+                                        let isNameMatch = false;
+                                        try {
+                                            const storedDataStr = localStorage.getItem(key);
+                                            if (storedDataStr) {
+                                                const parsed = JSON.parse(storedDataStr);
+                                                if (parsed.orderName && parsed.orderName.toLowerCase() === currentCustomerName) {
+                                                    isNameMatch = true;
+                                                }
+                                            }
+                                        } catch(e){}
+
+                                        // Prioritaskan NAMA SAMA. Jika nama sama, pasti ini orderan yang dimaksud
+                                        if (isNameMatch) {
+                                            closestKey = key;
+                                            break; // Stop pencarian karena sudah pasti cocok
+                                        } 
+                                        // Jika nama tidak ada, gunakan kecocokan waktu yang paling dekat (< 15 menit)
+                                        else if (diff < minDiff) {
+                                            minDiff = diff;
+                                            closestKey = key;
+                                        }
                                     }
                                 }
                             }
                         }
                         
-                        // Jika ketemu catatan yang cocok (selisih < 15 menit), sinkronkan jamnya
+                        // Jika ketemu catatan yang cocok, sinkronkan ID-nya dengan data terbaru dari Admin
                         if (closestKey) {
                             savedPaymentStr = localStorage.getItem(closestKey);
                             try {
@@ -6392,7 +6432,7 @@
                                 savedData.orderName = safeName;
                                 
                                 localStorage.setItem(orderKey, JSON.stringify(savedData));
-                                localStorage.removeItem(closestKey);
+                                localStorage.removeItem(closestKey); // Hapus catatan lama agar rapi
                             } catch(e){}
                         }
                     }
