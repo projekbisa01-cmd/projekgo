@@ -9029,60 +9029,80 @@
               if (listEl) {
                   if (typeof textSiapSaji === 'string' && textSiapSaji.trim() !== '') {
                       // METODE BARU: Langsung injeksi string. UI akan mengikuti enter (\n) dari admin
-                      let formattedText = textSiapSaji.split('\n').map(line => {
+                      let htmlContent = '';
+                      let plainTextContent = '';
+
+                      textSiapSaji.split('\n').forEach(line => {
                           let t = line.trim();
-                          if (t === '') return t;
+                          if (t === '') return;
 
-                          // Cek kriteria untuk menambahkan bullet sebelum teks dimanipulasi
-                          const startsWithTarget = /^[\d\-]/.test(t);
-                          const endsWithTarget = /(\d|porsi|pcs|biji|buah)$/i.test(t);
-                          const shouldAddBullet = startsWithTarget || endsWithTarget;
+                          // 1. Bersihkan prefix strip/bullet bawaan admin di awal teks
+                          let cleanT = t.replace(/^[\-\•\·\s]+/, '');
 
-                          // Hilangkan "1x" di awal teks (case insensitive)
-                          t = t.replace(/^1x\s*/i, '');
-                          
-                          if (shouldAddBullet) {
-                              // Bersihkan tanda strip/bullet lama agar tidak dobel dan beri spasi agar menjorok ke kanan
-                              t = '   • ' + t.replace(/^[\-\•\·\s]+/, '');
+                          // 2. Deteksi apakah ini Item (Awalan angka ATAU akhiran angka/porsi/pcs/biji/buah)
+                          const startsWithDigit = /^[\d]/.test(cleanT);
+                          const endsWithUnit = /(\d|porsi|pcs|biji|buah)$/i.test(cleanT);
+                          const isItem = startsWithDigit || endsWithUnit;
+
+                          // 3. Hilangkan "1x" di awal teks (jika ada)
+                          cleanT = cleanT.replace(/^1x\s*/i, '');
+
+                          if (isItem) {
+                              // Item pesanan: beri bullet dan menjorok ke kanan
+                              htmlContent += `<div class="pl-4 relative"><span class="absolute left-0 top-0 text-white">•</span>${cleanT}</div>`;
+                              plainTextContent += `  - ${cleanT}\n`;
+                          } else {
+                              // Catatan biasa: rata kiri tanpa bullet
+                              htmlContent += `<div>${cleanT}</div>`;
+                              plainTextContent += `${cleanT}\n`;
                           }
-                          return t;
-                      }).filter(line => line !== '').join('\n');
+                      });
 
-                      listEl.innerText = formattedText;
-                      copyText += formattedText + '\n';
-                      detailPesananWA += formattedText + '\n';
-                      window.currentActiveOrderItems = formattedText; // Simpan untuk disalin
+                      listEl.innerHTML = htmlContent;
+                      
+                      copyText += plainTextContent;
+                      detailPesananWA += plainTextContent;
+                      window.currentActiveOrderItems = plainTextContent.trim();
                   } 
                   else if (data.items && Array.isArray(data.items) && data.items.length > 0) {
                       // METODE LAMA: Fallback jika admin mengirim format Array lama
-                      window.currentActiveOrderItems = data.items;
-                      let htmlTemp = '';
+                      let htmlContent = '';
+                      let plainTextContent = '';
+                      
                       data.items.forEach(item => {
-                          let cleanName = String(typeof item === 'object' ? (item.name || '') : item).trim();
-                          
-                          // Cek kriteria untuk menambahkan bullet sebelum teks dimanipulasi
-                          const startsWithTarget = /^[\d\-]/.test(cleanName);
-                          const endsWithTarget = /(\d|porsi|pcs|biji|buah)$/i.test(cleanName);
-                          const shouldAddBullet = startsWithTarget || endsWithTarget;
+                          let t = String(typeof item === 'object' ? (item.name || '') : item).trim();
+                          if (t === '') return;
 
-                          // Hilangkan "1x"
-                          cleanName = cleanName.replace(/^1x\s*/i, '');
+                          // 1. Bersihkan prefix strip/bullet bawaan admin di awal teks
+                          let cleanT = t.replace(/^[\-\•\·\s]+/, '');
                           
-                          if (shouldAddBullet) {
-                              // Bersihkan tanda strip/bullet lama agar tidak dobel dan beri spasi agar menjorok ke kanan
-                              cleanName = '   • ' + cleanName.replace(/^[\-\•\·\s]+/, '');
-                          }
+                          // 2. Deteksi apakah ini Item (Awalan angka ATAU akhiran angka/porsi/pcs/biji/buah)
+                          const startsWithDigit = /^[\d]/.test(cleanT);
+                          const endsWithUnit = /(\d|porsi|pcs|biji|buah)$/i.test(cleanT);
+                          const isItem = startsWithDigit || endsWithUnit;
+
+                          // 3. Hilangkan "1x" di awal teks (jika ada)
+                          cleanT = cleanT.replace(/^1x\s*/i, '');
                           
-                          if (cleanName) {
-                              htmlTemp += `${cleanName}\n`;
-                              copyText += `${cleanName.replace('•', '-')}\n`;
-                              detailPesananWA += `${cleanName.replace('•', '-')}\n`;
+                          if (isItem) {
+                              // Item pesanan: beri bullet dan menjorok ke kanan
+                              htmlContent += `<div class="pl-4 relative"><span class="absolute left-0 top-0 text-white">•</span>${cleanT}</div>`;
+                              plainTextContent += `  - ${cleanT}\n`;
+                          } else {
+                              // Catatan biasa: rata kiri tanpa bullet
+                              htmlContent += `<div>${cleanT}</div>`;
+                              plainTextContent += `${cleanT}\n`;
                           }
                       });
-                      listEl.innerText = htmlTemp; // Gunakan innerText agar cocok dengan whitespace-pre-wrap
+
+                      listEl.innerHTML = htmlContent;
+                      
+                      copyText += plainTextContent;
+                      detailPesananWA += plainTextContent;
+                      window.currentActiveOrderItems = plainTextContent.trim();
                   } 
                   else {
-                      listEl.innerText = "- Pesanan dari admin";
+                      listEl.innerHTML = "<div>- Pesanan dari admin</div>";
                       copyText += `- Pesanan dari admin\n`;
                       detailPesananWA += `- Pesanan dari admin\n`;
                       window.currentActiveOrderItems = "- Pesanan dari admin";
