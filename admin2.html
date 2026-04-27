@@ -1877,13 +1877,13 @@
             const saldoSaatIni = parseInt(window._currentTotalSaldo || 0);
 
             // RUMUS BARU SESUAI PERMINTAAN: 
-            // (Saldo Awal Jam 6 + Penambahan Manual / Top Up) - (Saldo Akhir Saat Ini + Penambahan Manual / Top Up)
+            // (Saldo Awal Jam 6 + Penambahan Manual / Top Up) - Saldo Akhir Saat Ini
             let bagianKiri = saldoJam6 + topUp;
-            let bagianKanan = saldoSaatIni + topUp;
+            let bagianKanan = saldoSaatIni;
             let pembandingValue = bagianKiri - bagianKanan;
             
             // Format rincian rumus untuk ditampilkan di UI
-            const rincianTeks = `((S.Awal: ${Math.round(saldoJam6).toLocaleString('id-ID')} + Manual: ${Math.round(topUp).toLocaleString('id-ID')}) - (S.Akhir: ${Math.round(saldoSaatIni).toLocaleString('id-ID')} + Manual: ${Math.round(topUp).toLocaleString('id-ID')}))`;
+            const rincianTeks = `((S.Awal: ${Math.round(saldoJam6).toLocaleString('id-ID')} + Manual: ${Math.round(topUp).toLocaleString('id-ID')}) - (S.Akhir: ${Math.round(saldoSaatIni).toLocaleString('id-ID')}))`;
 
             valText.innerText = `Rp ${Math.round(pembandingValue).toLocaleString('id-ID')}`;
 
@@ -2273,6 +2273,7 @@
             try {
                 const batch = writeBatch(db);
                 const items = details.split('\n').map(l => ({ name: l, qty: 1 }));
+                const pesanan_text = items.map(i => `${i.qty}x ${i.name}`).join('\n');
                 const orderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
 
                 if (riderUid) {
@@ -2285,12 +2286,14 @@
                     batch.set(orderRef, {
                         rider_uid: riderUid, rider_name: riderName, customer_phone: phone, customer_name: custName,
                         fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'assigned', is_nyambi: false,
-                        created_at: serverTimestamp(), daily_order_id: dailyOrdersRef.id, missed_by: null, last_ping: serverTimestamp() 
+                        created_at: serverTimestamp(), daily_order_id: dailyOrdersRef.id, missed_by: null, last_ping: serverTimestamp(),
+                        pesanan_text: pesanan_text
                     });
 
                     batch.set(dailyOrdersRef, {
                         UID: riderUid, Nama_Rider: riderName, Tanggal: Tanggal, Jam: Jam, Nama_Pelanggan: custName,
-                        Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp()
+                        Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp(),
+                        pesanan_text: pesanan_text
                     });
 
                     const adminCut = Math.round(feeParsed.real * 0.16);
@@ -2312,7 +2315,8 @@
                     batch.set(orderRef, {
                         rider_uid: null, rider_name: null, customer_phone: phone, customer_name: custName,
                         fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false,
-                        created_at: serverTimestamp(), missed_by: null 
+                        created_at: serverTimestamp(), missed_by: null,
+                        pesanan_text: pesanan_text
                     });
                     
                     window.showAlert('Disimpan ke Pending', 'Rider tidak ada/kosong. Orderan masuk ke tab Pending (Belum di Share). Akan otomatis di-share jika ada rider on-bid.', 'info');
