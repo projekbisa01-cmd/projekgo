@@ -6481,87 +6481,42 @@
                 if (isDone) {
                     const dateStr = parseSheetDate(item.Tanggal);
                     const timeStr = parseSheetTime(item.Jam);
+                    const safeCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '');
+                    const currentCustomerNameLower = safeCustomerName.toLowerCase();
                     
-                    // KUNCI BARU: Prioritaskan pencarian menggunakan ID Document Firebase yang 100% akurat
-                    let orderKey = item.id ? `pay_${currentUserUID}_${item.id}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                    let savedPaymentStr = localStorage.getItem(orderKey);
-                    
-                    // Jika kunci akurat tidak ketemu (mungkin orderan format lama), coba cari pakai fallback kunci lama
-                    if (!savedPaymentStr && item.id) {
-                        const fallbackKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                        savedPaymentStr = localStorage.getItem(fallbackKey);
-                        if (savedPaymentStr) {
-                            // Upgrade/Perbarui ke kunci yang lebih akurat
-                            localStorage.setItem(orderKey, savedPaymentStr);
-                            localStorage.removeItem(fallbackKey);
+                    let savedPaymentStr = null;
+                    let matchedKey = null;
+
+                    // PENCARIAN SIMPEL: Patokan murni pada Nama Pelanggan dan Tanggal Hari Ini
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith(`pay_${currentUserUID}_`)) {
+                            try {
+                                const storedDataStr = localStorage.getItem(key);
+                                if (storedDataStr) {
+                                    const parsed = JSON.parse(storedDataStr);
+                                    const storedName = (parsed.orderName || "").toLowerCase();
+                                    
+                                    // Cek jika Nama Pelanggan dan Tanggal cocok
+                                    if (storedName === currentCustomerNameLower && parsed.dateStr === dateStr) {
+                                        savedPaymentStr = storedDataStr;
+                                        matchedKey = key;
+                                        break; // Langsung berhenti mencari jika sudah ketemu
+                                    }
+                                }
+                            } catch(e){}
                         }
                     }
                     
-                    // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH YANG DIPERBAIKI)
-                    if (!savedPaymentStr) {
-                        let closestKey = null;
-                        let minDiff = 15; // Maksimal selisih 15 menit
-                        
-                        const tParts = timeStr.split(':');
-                        let targetTimeMin = 0;
-                        if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
-                        
-                        const prefix = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_`;
-                        const currentCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '').toLowerCase();
-                        
-                        // Iterasi mencari catatan transfer terdekat (Abaikan Nominal Kotor yang mungkin berubah dari sisi Admin)
-                        for (let i = localStorage.length - 1; i >= 0; i--) {
-                            const key = localStorage.key(i);
-                            if (key && key.startsWith(prefix)) {
-                                const parts = key.split('_');
-                                if (parts.length >= 5) {
-                                    const keyTimeStr = parts[3]; 
-                                    if (keyTimeStr && keyTimeStr.length === 4) {
-                                        const keyTimeMin = parseInt(keyTimeStr.substring(0,2), 10) * 60 + parseInt(keyTimeStr.substring(2,4), 10);
-                                        const diff = Math.abs(targetTimeMin - keyTimeMin);
-                                        
-                                        // Pengecekan ekstra: Cek kecocokan Nama Pelanggan
-                                        let isNameMatch = false;
-                                        try {
-                                            const storedDataStr = localStorage.getItem(key);
-                                            if (storedDataStr) {
-                                                const parsed = JSON.parse(storedDataStr);
-                                                if (parsed.orderName && parsed.orderName.toLowerCase() === currentCustomerName) {
-                                                    isNameMatch = true;
-                                                }
-                                            }
-                                        } catch(e){}
-
-                                        // Prioritaskan NAMA SAMA. Jika nama sama, pasti ini orderan yang dimaksud
-                                        if (isNameMatch) {
-                                            closestKey = key;
-                                            break; // Stop pencarian karena sudah pasti cocok
-                                        } 
-                                        // Jika nama tidak ada, gunakan kecocokan waktu yang paling dekat (< 15 menit)
-                                        else if (diff < minDiff) {
-                                            minDiff = diff;
-                                            closestKey = key;
-                                        }
-                                    }
-                                }
+                    // Sinkronkan jam transfer dengan jam history (Waktu Admin)
+                    if (savedPaymentStr && matchedKey) {
+                        try {
+                            const savedData = JSON.parse(savedPaymentStr);
+                            if (savedData.timeStr !== timeStr) {
+                                savedData.timeStr = timeStr; // Memakai Waktu Admin
+                                localStorage.setItem(matchedKey, JSON.stringify(savedData));
                             }
-                        }
-                        
-                        // Jika ketemu catatan yang cocok, sinkronkan ID-nya dengan data terbaru dari Admin
-                        if (closestKey) {
-                            savedPaymentStr = localStorage.getItem(closestKey);
-                            try {
-                                const savedData = JSON.parse(savedPaymentStr);
-                                // Sinkronkan jam dengan history admin/server
-                                savedData.timeStr = timeStr; 
-                                // Update nama pelanggan agar lebih akurat
-                                const safeName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '');
-                                savedData.orderName = safeName;
-                                
-                                localStorage.setItem(orderKey, JSON.stringify(savedData));
-                                localStorage.removeItem(closestKey); // Hapus catatan lama agar rapi
-                            } catch(e){}
-                        }
+                        } catch(e){}
                     }
 
                     // Default dianggap Tunai jika tidak ada catatan transfer
@@ -8325,13 +8280,13 @@
                   const statusRef = doc(db, '/status_rider_aktif', String(uid).trim());
                   
                   if (isOnline) {
-                      // Masuk ke antrean Radar
+                      // Masuk ke antrean Radar (Melapor Online)
                       await setDoc(statusRef, {
                           uid: String(uid).trim(),
                           name: riderName !== 'Memuat...' ? riderName : 'Rider',
                           is_online: true,
                           is_available: true,
-                          in_main_queue: true,
+                          // in_main_queue: true, -> DIHAPUS: Hak in_main_queue murni dipegang Admin/Server
                           // Update waktu agar rider masuk di urutan paling bawah saat baru On-Bid
                           last_drop_time: serverTimestamp(),
                           last_drop_desc: "Mulai On-Bid (Menunggu Order)"
@@ -8763,8 +8718,8 @@
                           if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
                           
                           const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                          // is_available: true agar siap terima order, in_main_queue: true agar masuk radar lagi
-                          updateDoc(statusRef, { is_available: true, in_main_queue: true }).catch(e=>{});
+                          // is_available: true agar siap terima order (Sistem Server yang akan set in_main_queue: true)
+                          updateDoc(statusRef, { is_available: true }).catch(e=>{});
                       }
 
                       // Refresh data agar antarmuka kembali bersih dan sinkron
@@ -9491,7 +9446,7 @@
                       await setDoc(statusRef, { 
                           is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
                           is_online: newOnbidStatus,
-                          in_main_queue: newOnbidStatus,
+                          // in_main_queue: newOnbidStatus, -> DIHAPUS: Hak in_main_queue murni dipegang Admin/Server
                           last_drop_time: serverTimestamp(),
                           last_drop_desc: desc,
                           proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
@@ -10059,13 +10014,13 @@
 
                       // Mengubah warna kartu berdasarkan jumlah saldo
                       if (badgeEl && cardEl) {
-                          if (saldo >= 50000) {
-                              badgeEl.innerText = "AMAN";
+                          if (saldo >= 10000) {
+                              badgeEl.innerText = "AMAN lik";
                               badgeEl.className = "absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-emerald-200 text-emerald-700";
                               cardEl.className = "bg-emerald-50 rounded-2xl p-5 border border-emerald-200 shadow-sm relative overflow-hidden transition-all duration-300";
                               saldoEl.className = "text-3xl font-black text-emerald-600";
-                          } else if (saldo >= 0 && saldo < 50000) {
-                              badgeEl.innerText = "LIMIT";
+                          } else if (saldo >= 0 && saldo < 10000) {
+                              badgeEl.innerText = "Top Up Lik";
                               badgeEl.className = "absolute top-4 right-4 text-[9px] font-black px-2 py-1 rounded bg-yellow-200 text-yellow-700";
                               cardEl.className = "bg-yellow-50 rounded-2xl p-5 border border-yellow-200 shadow-sm relative overflow-hidden transition-all duration-300";
                               saldoEl.className = "text-3xl font-black text-yellow-600";
@@ -10284,4 +10239,4 @@
       } catch (e) { console.error("Firebase Init Error:", e); }
     </script>
 </body>
-</html> 
+</html>
