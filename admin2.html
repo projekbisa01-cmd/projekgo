@@ -1268,54 +1268,26 @@
                                 }
                             }
 
-                            // LOGIKA BARU: ESTAFET (SERVER-AUTHORITATIVE)
+                            // LOGIKA BARU: RIDER OFF ISTIRAHAT KEMUDIAN ONBID LAGI (MASUK ANTREAN)
                             const descLower = (data.last_drop_desc || "").toLowerCase();
                             const isAdminOverride = descLower.includes("standby di basecamp") || descLower.includes("kompensasi") || descLower.includes("prioritas") || descLower.includes("batal");
                             
-                            // Trigger mendeteksi perubahan dari TIDAK AVAILABLE menjadi AVAILABLE
-                            if (!wasAvailable && isNowActive && !isAdminOverride) {
-                                const oldLastDropMs = getTimestampMs(prevRider.last_drop_time);
-                                const newLastDropMs = getTimestampMs(data.last_drop_time);
+                            // 1. Trigger mendeteksi perubahan in_main_queue dari False ke True
+                            if (!wasInMainQueue && inMainQueue && isNowActive && !isAdminOverride) {
+                                const lastDropMs = getTimestampMs(prevRider.last_drop_time);
                                 const retainedLocation = window.getKetLokasi(prevRider);
-                                const ref = doc(db, 'status_rider_aktif', uid);
-
-                                // Cek apakah Rider baru saja "Drop-Off" (DO)
-                                // Saat DO, aplikasi rider akan mengupdate last_drop_time. Kita cek apakah waktunya berubah.
-                                const isJustDropOff = newLastDropMs > (oldLastDropMs + 5000); 
-
-                                if (isJustDropOff) {
-                                    // Skenario 1: Selesai Order (DO). Langsung setujui masuk antrean.
-                                    // Posisi antrean ditentukan oleh newLastDropMs yang dikirim aplikasi rider.
-                                    updateDoc(ref, { 
-                                        in_main_queue: true, 
-                                        last_drop_desc: "Baru Selesai Order", 
-                                        proof_desc: retainedLocation, 
-                                        last_updated: serverTimestamp() 
-                                    });
-                                } else {
-                                    // Skenario 2: Selesai Istirahat (Hanya geser toggle On/Off tanpa ubah last_drop_time)
-                                    if (oldLastDropMs > 0) {
-                                        const diffMins = (Date.now() - oldLastDropMs) / (1000 * 60);
-
-                                        if (diffMins > 30) {
-                                            // Eksekusi > 30 Menit: Tolak dan lemparkan kembali ke Shift Baru
-                                            updateDoc(ref, { 
-                                                in_main_queue: false, 
-                                                last_drop_desc: "Off > 30 Menit (Verifikasi Ulang)", 
-                                                proof_desc: retainedLocation, 
-                                                last_updated: serverTimestamp() 
-                                            });
-                                        } else {
-                                            // Eksekusi < 30 Menit: Aman, setujui masuk antrean
-                                            // WAJIB RESET WAKTU jadi sekarang, agar dia turun ke posisi terbawah antrean
-                                            updateDoc(ref, { 
-                                                in_main_queue: true, 
-                                                last_drop_time: serverTimestamp(), 
-                                                last_drop_desc: "Selesai Istirahat (< 30 Menit)", 
-                                                proof_desc: retainedLocation, 
-                                                last_updated: serverTimestamp() 
-                                            });
-                                        }
+                                
+                                if (lastDropMs > 0) {
+                                    // 2. Pengecekan selisih waktu sekarang vs foto terakhir
+                                    const diffMins = (Date.now() - lastDropMs) / (1000 * 60);
+                                    const ref = doc(db, 'status_rider_aktif', uid);
+                                    
+                                    if (diffMins > 30) {
+                                        // 4. Eksekusi > 30 Menit: Tolak dan lemparkan kembali ke Shift Baru / Verifikasi
+                                        updateDoc(ref, { in_main_queue: false, last_drop_desc: "Off > 30 Menit (Verifikasi Ulang)", proof_desc: retainedLocation, last_updated: serverTimestamp() });
+                                    } else {
+                                        // 3. Eksekusi < 30 Menit: Masuk Antrean, TAPI posisinya dilempar ke paling bawah
+                                        updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), last_drop_desc: "Selesai Istirahat (< 30 Menit)", proof_desc: retainedLocation, last_updated: serverTimestamp() });
                                     }
                                 }
                             }
