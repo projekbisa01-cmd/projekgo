@@ -6481,8 +6481,21 @@
                 if (isDone) {
                     const dateStr = parseSheetDate(item.Tanggal);
                     const timeStr = parseSheetTime(item.Jam);
-                    const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
+                    
+                    // KUNCI BARU: Prioritaskan pencarian menggunakan ID Document Firebase yang 100% akurat
+                    let orderKey = item.id ? `pay_${currentUserUID}_${item.id}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
                     let savedPaymentStr = localStorage.getItem(orderKey);
+                    
+                    // Jika kunci akurat tidak ketemu (mungkin orderan format lama), coba cari pakai fallback kunci lama
+                    if (!savedPaymentStr && item.id) {
+                        const fallbackKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
+                        savedPaymentStr = localStorage.getItem(fallbackKey);
+                        if (savedPaymentStr) {
+                            // Upgrade/Perbarui ke kunci yang lebih akurat
+                            localStorage.setItem(orderKey, savedPaymentStr);
+                            localStorage.removeItem(fallbackKey);
+                        }
+                    }
                     
                     // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH YANG DIPERBAIKI)
                     if (!savedPaymentStr) {
@@ -8961,12 +8974,13 @@
                               window.vibrateInterval = null;
                           }
 
-                          window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
-                          window.incomingOrderAudio.loop = true;
-                          const playPromise = window.incomingOrderAudio.play();
-                          if (playPromise !== undefined) {
-                              playPromise.catch(error => { console.warn("Audio play prevented"); });
-                          }
+                          // Suara dinonaktifkan karena sudah dihandle oleh Android Studio untuk meringankan beban aplikasi
+                          // window.incomingOrderAudio = new Audio('https://www.myinstants.com/media/sounds/apple-sms.mp3'); 
+                          // window.incomingOrderAudio.loop = true;
+                          // const playPromise = window.incomingOrderAudio.play();
+                          // if (playPromise !== undefined) {
+                          //     playPromise.catch(error => { console.warn("Audio play prevented"); });
+                          // }
 
                           // Mulai Getar Berulang
                           if ("vibrate" in navigator) {
@@ -9493,7 +9507,9 @@
                       const totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
                       
                       const safeName = (window.currentActiveCustomerName || "Orderan").replace(/['"\\]/g, '');
-                      const orderKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
+                      
+                      // KUNCI BARU: Gunakan ID Order Firebase yang 100% akurat agar sinkron
+                      const orderKey = window.currentActiveOrderId ? `pay_${currentUserUID}_${window.currentActiveOrderId}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
                       
                       let saved = {
                           type: window.tempPaymentData.type,
