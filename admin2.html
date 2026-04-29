@@ -3344,6 +3344,20 @@
                 const cardClass = isLow ? 'bg-rose-50 border-rose-200 shadow-md ring-1 ring-rose-300' : 'bg-white border-gray-100 shadow-sm';
                 const safeEncodedUid = encodeURIComponent(String(b.id || ''));
 
+                // --- DETEKSI DOUBLE TOP UP UNTUK BADGE ---
+                let doubleTopUpWarning = '';
+                if (b.edit_logs && b.edit_logs.length >= 2) {
+                    const log1 = b.edit_logs[0];
+                    const log2 = b.edit_logs[1];
+                    if (log1 && log2 && log1.action === 'Top Up' && log2.action === 'Top Up' && log1.amount === log2.amount) {
+                        const timeDiff = Math.abs(log1.time - log2.time);
+                        if (timeDiff < 300000) { // 5 menit (300.000 ms)
+                            doubleTopUpWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Top-Up</span></div>';
+                        }
+                    }
+                }
+                // --- END DETEKSI ---
+
                 html += `
                     <div class="rounded-xl p-3.5 border flex flex-col mt-2 transition-all ${cardClass}">
                         <div class="flex justify-between items-center w-full">
@@ -3353,6 +3367,7 @@
                                     ${isLow ? '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm shrink-0">SALDO MINIM</span>' : ''}
                                 </div>
                                 <span class="text-[9px] text-slate-500 font-bold truncate">${b.id}</span>
+                                ${doubleTopUpWarning}
                             </div>
                             <div class="flex flex-col items-end gap-2 shrink-0 z-10 relative ml-2">
                                 <div class="px-3 py-1.5 rounded-lg border font-black text-sm ${saldoClass} w-full text-center shadow-sm">Rp ${saldo.toLocaleString('id-ID')}</div>
@@ -3428,49 +3443,82 @@
 
             const currentData = allRiderBalances.find(r => r.id === uid) || {};
             const currentSaldo = parseInt(currentData.saldo || 0);
-            let newSaldo = currentSaldo;
-            let actionName = "";
+            
+            // Bungkus proses eksekusi dalam fungsi agar bisa dipanggil setelah konfirmasi
+            const executeUpdate = async () => {
+                let newSaldo = currentSaldo;
+                let actionName = "";
 
-            if (actionType === 'set') { newSaldo = amount; actionName = "Set Manual"; } 
-            else if (actionType === 'add') { newSaldo = currentSaldo + amount; actionName = "Top Up"; } 
-            else if (actionType === 'sub') { newSaldo = currentSaldo - amount; actionName = "Kurangi"; }
+                if (actionType === 'set') { newSaldo = amount; actionName = "Set Manual"; } 
+                else if (actionType === 'add') { newSaldo = currentSaldo + amount; actionName = "Top Up"; } 
+                else if (actionType === 'sub') { newSaldo = currentSaldo - amount; actionName = "Kurangi"; }
 
-            let logs = currentData.edit_logs || [];
-            logs.unshift({ action: actionName, amount: amount, prev: currentSaldo, now: newSaldo, time: Date.now() });
-            logs = logs.slice(0, 10);
+                let logs = currentData.edit_logs || [];
+                logs.unshift({ action: actionName, amount: amount, prev: currentSaldo, now: newSaldo, time: Date.now() });
+                logs = logs.slice(0, 10);
 
-            const loader = document.getElementById('loading-overlay');
-            if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
+                const loader = document.getElementById('loading-overlay');
+                if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
-            try {
-                const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', uid);
-                
-                if (actionType === 'set') await setDoc(balanceRef, { uid: uid, name: rName, saldo: amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                else if (actionType === 'add') await setDoc(balanceRef, { uid: uid, name: rName, saldo: increment(amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                else if (actionType === 'sub') await setDoc(balanceRef, { uid: uid, name: rName, saldo: increment(-amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                
-                // JIKA MENGURANGI SALDO, MASUKKAN JUGA KE LEDGER BUKU KAS
-                if (actionType === 'sub') {
-                    await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
-                        rider_uid: uid, rider_name: rName, amount: amount, omset_order: 0, 
-                        type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
-                    });
+                try {
+                    const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', uid);
+                    
+                    if (actionType === 'set') await setDoc(balanceRef, { uid: uid, name: rName, saldo: amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    else if (actionType === 'add') await setDoc(balanceRef, { uid: uid, name: rName, saldo: increment(amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    else if (actionType === 'sub') await setDoc(balanceRef, { uid: uid, name: rName, saldo: increment(-amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    
+                    // JIKA MENGURANGI SALDO, MASUKKAN JUGA KE LEDGER BUKU KAS
+                    if (actionType === 'sub') {
+                        await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
+                            rider_uid: uid, rider_name: rName, amount: amount, omset_order: 0, 
+                            type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
+                        });
+                    }
+                    
+                    let topUpDiff = 0;
+                    if (actionType === 'add') topUpDiff = amount;
+                    else if (actionType === 'sub') topUpDiff = -amount;
+                    else if (actionType === 'set') topUpDiff = amount - currentSaldo;
+
+                    if (topUpDiff !== 0) {
+                        const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+                        await setDoc(trackerRef, { top_up: increment(topUpDiff) }, { merge: true }).catch(e=>{});
+                    }
+                    
+                    let successMsg = 'Saldo berhasil diupdate.';
+                    if (actionType === 'add') successMsg = `Berhasil Top Up <span class="text-xs font-black text-sky-600 uppercase tracking-wider bg-sky-50 px-1 rounded">${rName}</span> sebesar <span class="text-base font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-emerald-100">Rp ${amount.toLocaleString('id-ID')}</span>`;
+                    else if (actionType === 'sub') successMsg = `Berhasil mengurangi saldo <span class="text-xs font-black text-sky-600 uppercase tracking-wider bg-sky-50 px-1 rounded">${rName}</span> sebesar <span class="text-base font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-rose-100">Rp ${amount.toLocaleString('id-ID')}</span>`;
+                    else if (actionType === 'set') successMsg = `Berhasil mengubah saldo <span class="text-xs font-black text-sky-600 uppercase tracking-wider bg-sky-50 px-1 rounded">${rName}</span> menjadi <span class="text-base font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-sky-100">Rp ${amount.toLocaleString('id-ID')}</span>`;
+
+                    if (typeof window.showAlert === 'function') window.showAlert('Berhasil', successMsg, 'success');
+                    document.getElementById('saldo-modal').classList.add('hidden'); document.getElementById('saldo-modal').classList.remove('flex');
+                } catch(e) { if (typeof window.showAlert === 'function') window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error'); } 
+                finally { if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); } }
+            };
+
+            // --- PENCEGAHAN DOUBLE TOP UP ---
+            if (actionType === 'add') {
+                const logs = currentData.edit_logs || [];
+                if (logs.length > 0) {
+                    const lastLog = logs[0];
+                    if (lastLog.action === 'Top Up' && lastLog.amount === amount) {
+                        const timeDiffMs = Date.now() - lastLog.time;
+                        if (timeDiffMs < 300000) { // Jika kurang dari 5 menit (300.000 ms)
+                            const mins = Math.floor(timeDiffMs / 60000);
+                            const secs = Math.floor((timeDiffMs % 60000) / 1000);
+                            const timeText = mins > 0 ? `${mins} menit ${secs} detik` : `${secs} detik`;
+                            
+                            window.showConfirm('Indikasi Double Top-Up', `Anda baru saja Top Up nominal Rp ${amount.toLocaleString('id-ID')} pada ${timeText} yang lalu.\n\nYakin ingin menginputnya lagi?`, async () => {
+                                await executeUpdate();
+                            });
+                            return; // Hentikan eksekusi, tunggu konfirmasi
+                        }
+                    }
                 }
-                
-                let topUpDiff = 0;
-                if (actionType === 'add') topUpDiff = amount;
-                else if (actionType === 'sub') topUpDiff = -amount;
-                else if (actionType === 'set') topUpDiff = amount - currentSaldo;
-
-                if (topUpDiff !== 0) {
-                    const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
-                    await setDoc(trackerRef, { top_up: increment(topUpDiff) }, { merge: true }).catch(e=>{});
-                }
-                
-                if (typeof window.showAlert === 'function') window.showAlert('Berhasil', 'Saldo berhasil diupdate.', 'success');
-                document.getElementById('saldo-modal').classList.add('hidden'); document.getElementById('saldo-modal').classList.remove('flex');
-            } catch(e) { if (typeof window.showAlert === 'function') window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error'); } 
-            finally { if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); } }
+            }
+            
+            // Jika tidak ada indikasi double top up, langsung eksekusi
+            await executeUpdate();
         };
 
         window.openEditOrder = (id, isDaily = false) => {
@@ -3667,7 +3715,7 @@
                 const icon = document.getElementById('custom-modal-icon');
                 
                 document.getElementById('custom-modal-title').innerText = title;
-                document.getElementById('custom-modal-text').innerText = text;
+                document.getElementById('custom-modal-text').innerHTML = text;
                 
                 const inputEl = document.getElementById('custom-modal-input');
                 const selectEl = document.getElementById('custom-modal-select-wrapper');
