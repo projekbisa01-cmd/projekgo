@@ -14,6 +14,8 @@
     <title>PROJEKGO - Admin Dispatch</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Script SheetJS untuk ekspor format asli .xlsx -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
         
@@ -542,6 +544,9 @@
         <section>
             <div class="flex justify-between items-center mb-3 px-1 border-b border-gray-200 pb-2 mt-2">
                 <h2 class="font-black text-black text-[11px] uppercase tracking-tight">Daftar Saldo Rider <span id="stat-saldo-count" class="text-[9px] font-bold text-sky-600 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-100 ml-1">0 Data</span></h2>
+                <button onclick="window.exportRiwayatSaldoToExcel()" class="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg text-[9px] font-black shadow-sm hover:bg-emerald-500 hover:text-white transition-colors flex items-center gap-1.5 uppercase tracking-wider shrink-0">
+                    <i class="fa-solid fa-file-excel"></i> Ekspor
+                </button>
             </div>
             
             <div class="relative mb-4">
@@ -2439,6 +2444,85 @@
         };
         
         window.scrollToBookmark = () => { window.showAlert('Info', 'Fungsi ini dapat Anda kembangkan lebih lanjut.', 'info'); };
+
+        window.exportRiwayatSaldoToExcel = () => {
+            if (!allRiderBalances || allRiderBalances.length === 0) {
+                window.showAlert('Kosong', 'Tidak ada data saldo rider.', 'warning');
+                return;
+            }
+
+            // Ambil tanggal target dari input history-date, jika kosong gunakan hari ini
+            let targetDateVal = document.getElementById('history-date').value;
+            if (!targetDateVal) {
+                const now = new Date();
+                const dd = String(now.getDate()).padStart(2, '0');
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                const yyyy = now.getFullYear();
+                targetDateVal = `${yyyy}-${mm}-${dd}`;
+            }
+
+            let allLogs = [];
+
+            // Kumpulkan log riwayat dari semua rider yang SESUAI dengan tanggal target
+            allRiderBalances.forEach(rider => {
+                const logs = rider.edit_logs || [];
+                logs.forEach(log => {
+                    const logDateObj = new Date(log.time);
+                    const logDd = String(logDateObj.getDate()).padStart(2, '0');
+                    const logMm = String(logDateObj.getMonth() + 1).padStart(2, '0');
+                    const logYyyy = logDateObj.getFullYear();
+                    const logDateStr = `${logYyyy}-${logMm}-${logDd}`;
+
+                    if (logDateStr === targetDateVal) {
+                        allLogs.push({
+                            name: rider.name || rider.id,
+                            amount: log.amount,
+                            action: log.action,
+                            time: log.time
+                        });
+                    }
+                });
+            });
+
+            // Urutkan berdasarkan waktu pengeditan terbaru
+            allLogs.sort((a, b) => b.time - a.time);
+
+            if (allLogs.length === 0) {
+                const [y, m, d] = targetDateVal.split('-');
+                window.showAlert('Kosong', `Tidak ada riwayat perubahan saldo untuk tanggal ${d}-${m}-${y}.`, 'warning');
+                return;
+            }
+
+            // Format data untuk SheetJS (Excel Asli)
+            const excelData = allLogs.map(log => {
+                const dateObj = new Date(log.time);
+                const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+                const formatWaktu = dateObj.toLocaleDateString('id-ID', optionsDate);
+                const formatJam = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':');
+                
+                return {
+                    "Nama Rider": log.name,
+                    "Nominal": Number(log.amount) || 0, // Dibiarkan sebagai Number agar bisa di-SUM di Excel
+                    "Tindakan": log.action,
+                    "Waktu": formatWaktu,
+                    "Jam": formatJam
+                };
+            });
+
+            // Pastikan library XLSX sudah termuat dari CDN
+            if (typeof XLSX === 'undefined') {
+                window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
+                return;
+            }
+
+            // Generate worksheet dan workbook
+            const worksheet = XLSX.utils.json_to_sheet(excelData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Riwayat Saldo");
+            
+            // Trigger download dengan ekstensi .xlsx
+            XLSX.writeFile(workbook, `Riwayat_Saldo_Rider_${targetDateVal.replace(/-/g, '')}.xlsx`);
+        };
 
         window.submitOrder = async () => {
             const riderUid = document.getElementById('selected-rider-uid').value;
