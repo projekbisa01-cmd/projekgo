@@ -2005,14 +2005,20 @@
 
         <!-- HALAMAN TOP RIDERS / LEADERBOARD -->
         <div id="page-top-riders" class="hidden-page page-container min-h-screen bg-gray-50">
-            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 flex items-center gap-4 shadow-sm">
-                <button onclick="switchPage('fitur')" class="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full text-gray-600 hover:bg-gray-200 transition-colors">
-                    <i class="fa-solid fa-arrow-left"></i>
-                </button>
-                <div>
-                    <h1 class="font-bold text-xl text-gray-800">Top Riders</h1>
-                    <p id="top-riders-period" class="text-xs text-gray-500">Peringkat penyelesaian order</p>
+            <header class="p-6 bg-white border-b border-gray-100 sticky top-0 z-40 flex items-center justify-between shadow-sm">
+                <div class="flex items-center gap-4">
+                    <button onclick="switchPage('fitur')" class="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full text-gray-600 hover:bg-gray-200 transition-colors">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <div>
+                        <h1 class="font-bold text-xl text-gray-800">Top Riders</h1>
+                        <p id="top-riders-period" class="text-xs text-gray-500">Peringkat penyelesaian order</p>
+                    </div>
                 </div>
+                <!-- TOMBOL REFRESH MANUAL UNTUK SINKRONISASI GAS -->
+                <button onclick="manualRefresh().then(() => switchPage('top-riders'))" class="w-8 h-8 flex items-center justify-center bg-orange-50 text-orange-600 rounded-full shadow-sm hover:bg-orange-100 active:scale-90 transition-all">
+                    <i class="fa-solid fa-rotate"></i>
+                </button>
             </header>
             <main class="p-5 max-w-md mx-auto min-h-screen pb-24" id="leaderboard-container">
                 <!-- Dirender via JS -->
@@ -7202,9 +7208,9 @@
             const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
             const now = new Date();
 
-            // --- LOGIKA SMART: Cek Bulan Lalu, jika kosong -> Cek Bulan Ini ---
+            // --- LOGIKA BARU: FIX HANYA BULAN LALU DAN PENGELOMPOKAN BERDASARKAN UID ---
             
-            // 1. Setup Target Awal (Bulan Lalu)
+            // 1. Setup Target (Hanya Bulan Lalu)
             let targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
             let targetMonth = targetDate.getMonth() + 1; 
             let targetYear = targetDate.getFullYear();
@@ -7228,28 +7234,26 @@
                         const rawName = item.Nama_Rider || "Tanpa Nama";
                         const cleanName = rawName.trim(); 
                         
-                        if (!stats[cleanName]) {
-                            stats[cleanName] = { name: cleanName, trips: 0 };
+                        // Gunakan UID sebagai pengelompokan agar rider dengan beda penulisan nama tetap tergabung
+                        const rawUid = item.UID || item.uid || "Tanpa UID";
+                        const cleanUid = String(rawUid).trim().toUpperCase();
+                        
+                        if (!stats[cleanUid]) {
+                            stats[cleanUid] = { name: cleanName, uid: cleanUid, trips: 0 };
                         }
-                        stats[cleanName].trips += 1;
+                        // Update nama jika sebelumnya tersimpan "Tanpa Nama"
+                        if (stats[cleanUid].name === "Tanpa Nama" && cleanName !== "Tanpa Nama") {
+                            stats[cleanUid].name = cleanName;
+                        }
+
+                        stats[cleanUid].trips += 1;
                     }
                 });
                 return Object.values(stats).sort((a, b) => b.trips - a.trips);
             };
 
-            // Coba ambil data Bulan Lalu
+            // Ambil data (Hanya Bulan Lalu secara fix)
             let sortedRiders = getRankings(targetMonth, targetYear);
-
-            // 2. Jika Data Bulan Lalu Kosong, Switch ke Bulan Ini
-            if (sortedRiders.length === 0) {
-                targetDate = new Date(); // Reset ke Now (Bulan Ini)
-                targetMonth = targetDate.getMonth() + 1;
-                targetYear = targetDate.getFullYear();
-                displayPeriod = `Periode Berjalan ${monthNames[targetDate.getMonth()]} ${targetYear}`;
-                
-                // Ambil data Bulan Ini
-                sortedRiders = getRankings(targetMonth, targetYear);
-            }
 
             // Update Label di Header
             if (periodLabel) {
