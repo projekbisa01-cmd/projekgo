@@ -1499,7 +1499,64 @@
             if(btn) btn.disabled = true; if(icon) icon.classList.add('refresh-spin');
 
             try {
-                const response = await fetch(SCRIPT_URL); window.allData = await response.json();
+                // 1. CEK CACHE LOKAL
+                let cachedData = [];
+                try {
+                    const cacheStr = localStorage.getItem('admin_app_data');
+                    if (cacheStr) {
+                        cachedData = JSON.parse(cacheStr);
+                        // Jika aplikasi baru dibuka (bukan tombol refresh ditekan manual)
+                        if (cachedData.length > 0 && !isManualUpdate && window.allData.length === 0) {
+                            window.allData = cachedData;
+                            processAnalytics(); populateSuspendRiderSelect(); window.populateProfileSelect();
+                            if (window.renderProfileStatusList) window.renderProfileStatusList();
+                            switchTab(currentActiveTab);
+                        }
+                    }
+                } catch(e) { console.log("Cache read error", e); }
+
+                // 2. TENTUKAN PARAMETER DELTA ('since')
+                let fetchUrl = SCRIPT_URL;
+                let sinceDateStr = "";
+                let sinceDateObj = null;
+
+                if (cachedData.length > 0) {
+                    // Mundur 5 hari ke belakang untuk meng-cover data yang mungkin telat diinput
+                    const d = new Date(); d.setDate(d.getDate() - 5);
+                    const mm = String(d.getMonth() + 1).padStart(2, '0');
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    const yyyy = d.getFullYear();
+                    sinceDateStr = `${yyyy}-${mm}-${dd}`;
+                    fetchUrl = `${SCRIPT_URL}?since=${sinceDateStr}`;
+                    sinceDateObj = new Date(yyyy, d.getMonth(), d.getDate());
+                }
+
+                // 3. AMBIL DATA DARI SERVER (Super Cepat karena hanya mengunduh sebagian data)
+                const response = await fetch(fetchUrl); 
+                const newData = await response.json();
+                
+                // 4. GABUNGKAN (MERGE) DATA BARU & DATA LAMA
+                if (cachedData.length > 0 && sinceDateStr && sinceDateObj) {
+                    // Buang data lama di cache yang overlap (tanggalnya >= sinceDateObj) agar ditimpa newData terbaru
+                    const filteredCache = cachedData.filter(row => {
+                        const dateKey = parseToJKTKey(row.Tanggal); // Format: MM-DD-YYYY
+                        if (!dateKey) return true;
+                        const parts = dateKey.split('-');
+                        if (parts.length === 3) {
+                            const rowDate = new Date(parts[2], parseInt(parts[0])-1, parts[1]);
+                            return rowDate < sinceDateObj; 
+                        }
+                        return true;
+                    });
+                    window.allData = filteredCache.concat(newData);
+                } else {
+                    window.allData = newData; // Gunakan semua data jika tidak ada cache
+                }
+
+                // 5. SIMPAN KE CACHE LOKAL UNTUK SESI BERIKUTNYA
+                try {
+                    localStorage.setItem('admin_app_data', JSON.stringify(window.allData));
+                } catch(e) { console.warn("Penyimpanan lokal penuh", e); }
                 
                 // RESET FLAG RENDER SEHINGGA AKAN DIPROSES ULANG SAAT DIBUKA
                 isMonthlyRendered = false; isAnalysisRendered = false; isOnbidRendered = false;
@@ -1511,7 +1568,7 @@
                 
                 if(isManualUpdate) {
                     loadExpiredDocs(); 
-                    window.customAlert("Data seluruhnya berhasil disinkronisasi!", "Update Selesai", "success");
+                    window.customAlert("Data berhasil disinkronisasi!", "Update Selesai", "success");
                 }
                 
                 // Panggil render ulang hanya untuk tab yang sedang aktif
