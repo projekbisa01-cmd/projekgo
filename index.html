@@ -5561,7 +5561,8 @@
                     newData = window.prefetchedRiderData;
                     window.prefetchedAllData = null;
                     window.prefetchedRiderData = null;
-                } else {
+                } else if (!hasLoadedFromCache || forceRefresh) {
+                    // OPTIMASI: HANYA narik data GAS jika forceRefresh (Manual Refresh) ATAU memori HP kosong
                     const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
                     if (!response.ok) throw new Error("Koneksi gagal.");
                     const data = await response.json();
@@ -5569,6 +5570,10 @@
                     
                     const uidLower = String(currentUserUID).trim().toLowerCase();
                     newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
+                } else {
+                    // MODE SANGAT CEPAT: Gunakan cache lokal, lewati proses fetch GAS
+                    items = []; 
+                    newData = rawData; 
                 }
                 
                 // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
@@ -7216,51 +7221,91 @@
             let targetYear = targetDate.getFullYear();
             let displayPeriod = `Periode ${monthNames[targetDate.getMonth()]} ${targetYear}`;
 
-            // Helper function untuk memfilter dan menghitung ranking
-            const getRankings = (tMonth, tYear) => {
-                const stats = {};
-                sourceData.forEach(item => {
-                    const dateStr = parseSheetDate(item.Tanggal); // Format internal: MM-DD-YYYY
-                    if (!dateStr) return;
-
-                    const parts = dateStr.split('-'); 
-                    if (parts.length !== 3) return;
-
-                    const m = parseInt(parts[0]);
-                    const y = parseInt(parts[2]);
-
-                    // Filter: Bulan Sesuai & Status Selesai
-                    if (m === tMonth && y === tYear && String(item.Status || '').trim().toLowerCase() === 'selesai') {
-                        const rawName = item.Nama_Rider || "Tanpa Nama";
-                        const cleanName = rawName.trim(); 
-                        
-                        // Gunakan UID sebagai pengelompokan agar rider dengan beda penulisan nama tetap tergabung
-                        const rawUid = item.UID || item.uid || "Tanpa UID";
-                        const cleanUid = String(rawUid).trim().toUpperCase();
-                        
-                        if (!stats[cleanUid]) {
-                            stats[cleanUid] = { name: cleanName, uid: cleanUid, trips: 0 };
-                        }
-                        // Update nama jika sebelumnya tersimpan "Tanpa Nama"
-                        if (stats[cleanUid].name === "Tanpa Nama" && cleanName !== "Tanpa Nama") {
-                            stats[cleanUid].name = cleanName;
-                        }
-
-                        stats[cleanUid].trips += 1;
-                    }
-                });
-                return Object.values(stats).sort((a, b) => b.trips - a.trips);
-            };
-
-            // Ambil data (Hanya Bulan Lalu secara fix)
-            let sortedRiders = getRankings(targetMonth, targetYear);
-
             // Update Label di Header
             if (periodLabel) {
                 periodLabel.innerText = displayPeriod;
             }
 
-            // 3. Jika Masih Kosong Juga
+            // --- SISTEM CACHE BULANAN ---
+            const cacheKey = `leaderboard_cache_${targetYear}_${targetMonth}`;
+            const isNewDataAvailable = (allRiderData && allRiderData.length > 0);
+            const cachedData = localStorage.getItem(cacheKey);
+            let sortedRiders = [];
+
+            if (cachedData && !isNewDataAvailable) {
+                // 1. GUNAKAN CACHE MEMORI HP (Super Cepat, Tidak perlu hitung / unduh GAS)
+                try {
+                    sortedRiders = JSON.parse(cachedData);
+                } catch(e) { console.error("Cache leaderboard rusak"); }
+            } else {
+                // 2. HITUNG ULANG & SIMPAN KE CACHE
+                const sourceData = isNewDataAvailable ? allRiderData : rawData;
+
+                // Jika data kosong dan belum ada cache (Misal: Awal bulan baru atau HP direstart bersih)
+                if (sourceData.length === 0 && !cachedData) {
+                    container.innerHTML = `
+                        <div class="text-center py-10">
+                            <i class="fa-solid fa-cloud-arrow-down text-4xl text-blue-200 mb-4 animate-bounce"></i>
+                            <p class="text-xs font-bold text-gray-500 italic">tunggu yah..data sedang diunduh dari admin PROVELO TM</p>
+                        </div>`;
+                    
+                    // Otomatis tarik data GAS khusus untuk update bulan baru
+                    if (!window.isFetchingLeaderboard) {
+                        window.isFetchingLeaderboard = true;
+                        manualRefresh().then(() => {
+                            window.isFetchingLeaderboard = false;
+                            switchPage('top-riders');
+                        });
+                    }
+                    return;
+                }
+
+                // Helper function untuk memfilter dan menghitung ranking
+                const getRankings = (tMonth, tYear) => {
+                    const stats = {};
+                    sourceData.forEach(item => {
+                        const dateStr = parseSheetDate(item.Tanggal); // Format internal: MM-DD-YYYY
+                        if (!dateStr) return;
+
+                        const parts = dateStr.split('-'); 
+                        if (parts.length !== 3) return;
+
+                        const m = parseInt(parts[0]);
+                        const y = parseInt(parts[2]);
+
+                        // Filter: Bulan Sesuai & Status Selesai
+                        if (m === tMonth && y === tYear && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                            const rawName = item.Nama_Rider || "Tanpa Nama";
+                            const cleanName = rawName.trim(); 
+                            
+                            // Gunakan UID sebagai pengelompokan agar rider dengan beda penulisan nama tetap tergabung
+                            const rawUid = item.UID || item.uid || "Tanpa UID";
+                            const cleanUid = String(rawUid).trim().toUpperCase();
+                            
+                            if (!stats[cleanUid]) {
+                                stats[cleanUid] = { name: cleanName, uid: cleanUid, trips: 0 };
+                            }
+                            // Update nama jika sebelumnya tersimpan "Tanpa Nama"
+                            if (stats[cleanUid].name === "Tanpa Nama" && cleanName !== "Tanpa Nama") {
+                                stats[cleanUid].name = cleanName;
+                            }
+
+                            stats[cleanUid].trips += 1;
+                        }
+                    });
+                    return Object.values(stats).sort((a, b) => b.trips - a.trips);
+                };
+
+                // Ambil data dari kalkulasi ulang
+                sortedRiders = getRankings(targetMonth, targetYear);
+
+                // SIMPAN KE CACHE (Hanya jika kita menggunakan allRiderData lengkap dari GAS)
+                if (isNewDataAvailable) {
+                    localStorage.setItem(cacheKey, JSON.stringify(sortedRiders));
+                }
+            }
+
+            // 3. Jika Masih Kosong Juga (Misal: Memang tidak ada order selesai bulan lalu)
             if (sortedRiders.length === 0) {
                 container.innerHTML = `
                     <div class="text-center py-20">
