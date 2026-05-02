@@ -2549,10 +2549,6 @@
 
             const dateVal = document.getElementById('history-date').value || 'Rekap';
             let totalOngkir = 0, totalTambahan = 0;
-            let csvRows = [];
-            csvRows.push("sep=;");
-            // Kolom Keterangan dihilangkan
-            csvRows.push(["UID", "Nama_Rider", "tanggal", "Jam", "Nominal_Kotor", "Tambahan", "Status"].join(";"));
 
             // Salin data dan urutkan dari pagi ke malam (ascending)
             let exportData = [...window.currentHistoryData];
@@ -2569,53 +2565,94 @@
                 return (a.Jam || "00:00").localeCompare((b.Jam || "00:00"));
             });
 
-            exportData.forEach(o => {
+            // Siapkan data JSON untuk diubah menjadi file Excel (XLSX)
+            const excelData = exportData.map((o, index) => {
                 const ongkir = parseFloat(((o.fee || 0) / 1000).toFixed(2));
                 const tambahan = parseFloat(((o.tambahan || 0) / 1000).toFixed(2));
                 totalOngkir += ongkir; totalTambahan += tambahan;
                 
-                const safeString = (str) => `"${String(str || '').replace(/"/g, '""')}"`;
-                
-                // Pastikan format pemisah tanggal dan jam sesuai permintaan
+                // Pastikan format pemisah tanggal dan jam sesuai permintaan (YYYY-MM-DD dan HH:MM)
                 let formatTanggal = String(o.Tanggal || dateVal).replace(/\//g, '-');
+                let formatJam = '--:--';
+                let dayStr = '00';
                 
-                // Gunakan jam saat admin submit orderan (bukan DO)
-                let adminJam = o.Jam || '--:--';
-                if (o.admin_created_at && o.admin_created_at.seconds) {
-                    adminJam = new Date(o.admin_created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-                } else if (o.created_at && o.created_at.seconds && adminJam === '--:--') {
-                    adminJam = new Date(o.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                // Ekstrak jam dan tanggal dengan akurat dari timestamp admin (jika ada)
+                let timeSource = o.admin_created_at || o.created_at;
+                if (timeSource && timeSource.seconds) {
+                    const d = new Date(timeSource.seconds * 1000);
+                    const yyyy = d.getFullYear();
+                    const mm = String(d.getMonth() + 1).padStart(2, '0');
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    const hh = String(d.getHours()).padStart(2, '0');
+                    const mnt = String(d.getMinutes()).padStart(2, '0');
+                    
+                    formatTanggal = `${yyyy}-${mm}-${dd}`;
+                    formatJam = `${hh}:${mnt}`;
+                    dayStr = dd; // Ambil 2 digit tanggal
+                } else {
+                    // Fallback ke data string jika timestamp tidak ditemukan
+                    formatJam = String(o.Jam || '--:--').replace(/\./g, ':');
+                    const parts = formatTanggal.split('-'); // YYYY-MM-DD
+                    if (parts.length === 3) dayStr = parts[2];
                 }
-                let formatJam = String(adminJam).replace(/\./g, ':');
                 
-                // Mengubah titik menjadi koma untuk nilai nominal
-                let ongkirStr = String(ongkir).replace('.', ',');
-                let tambahanStr = String(tambahan).replace('.', ',');
+                // Membuat nomor order otomatis dengan format order#(tanggal)(urutan)
+                // Urutan dipastikan menjadi 3 digit (001, 002, dst) berdasarkan baris ekspor.
+                const urutan = String(index + 1).padStart(3, '0');
+                const keteranganOrder = `order#${dayStr}${urutan}`;
                 
-                csvRows.push([
-                    safeString(o.rider_uid || ''), 
-                    safeString(o.rider_name || ''), 
-                    safeString(formatTanggal), 
-                    safeString(formatJam), 
-                    ongkirStr, 
-                    tambahanStr,
-                    safeString(o.Status || 'Selesai')
-                ].join(";"));
+                return {
+                    "UID": String(o.rider_uid || ''), 
+                    "Nama_Rider": String(o.rider_name || ''), 
+                    "Tanggal": formatTanggal, 
+                    "Jam": formatJam, 
+                    "Keterangan": keteranganOrder,
+                    "Nominal_Kotor": ongkir, 
+                    "Tambahan": tambahan,
+                    "Status": String(o.Status || 'Selesai')
+                };
             });
 
-            csvRows.push("");
-            // Kolom total disesuaikan dan diubah titik menjadi koma
-            let totalOngkirStr = String(parseFloat(totalOngkir.toFixed(2))).replace('.', ',');
-            let totalTambahanStr = String(parseFloat(totalTambahan.toFixed(2))).replace('.', ',');
-            csvRows.push(["\"TOTAL\"", "\"\"", "\"\"", "\"\"", totalOngkirStr, totalTambahanStr, "\"\""].join(";"));
+            // Tambahkan baris TOTAL di bawah (dengan angka mentah untuk format Excel)
+            excelData.push({
+                "UID": "TOTAL",
+                "Nama_Rider": "",
+                "Tanggal": "",
+                "Jam": "",
+                "Keterangan": "",
+                "Nominal_Kotor": parseFloat(totalOngkir.toFixed(2)),
+                "Tambahan": parseFloat(totalTambahan.toFixed(2)),
+                "Status": ""
+            });
 
-            const csvContent = csvRows.join("\r\n");
-            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
+            // Pastikan library XLSX sudah termuat
+            if (typeof XLSX === 'undefined') {
+                window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
+                return;
+            }
+
+            const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+            // Menerapkan Format Accounting Rupiah untuk kolom Nominal_Kotor dan Tambahan
+            const range = XLSX.utils.decode_range(worksheet['!ref']);
+            // Format standar Accounting Excel untuk Rupiah dengan dukungan Desimal
+            const formatAccounting = '_("Rp"* #,##0.##_);_("Rp"* \\(#,##0.##\\);_("Rp"* "-"_);_(@_)';
+
+            for(let R = range.s.r + 1; R <= range.e.r; ++R) {
+                // Karena ada tambahan kolom "Keterangan" sebelumnya, 
+                // index kolom bergeser menjadi c:5 (Kolom F) dan c:6 (Kolom G)
+                const cellF = worksheet[XLSX.utils.encode_cell({c:5, r:R})]; // Nominal_Kotor
+                const cellG = worksheet[XLSX.utils.encode_cell({c:6, r:R})]; // Tambahan
+                
+                if(cellF && cellF.t === 'n') cellF.z = formatAccounting;
+                if(cellG && cellG.t === 'n') cellG.z = formatAccounting;
+            }
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Rekap Selesai");
             
-            link.setAttribute("href", url); link.setAttribute("download", `Rekap_PROJEKGO_${dateVal}.csv`); link.style.visibility = 'hidden';
-            document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); 
+            // Trigger download langsung dengan format asli .xlsx (Excel)
+            XLSX.writeFile(workbook, `Rekap_PROJEKGO_${dateVal}.xlsx`);
         };
         
         window.scrollToBookmark = () => { window.showAlert('Info', 'Fungsi ini dapat Anda kembangkan lebih lanjut.', 'info'); };
