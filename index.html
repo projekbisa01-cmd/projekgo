@@ -4927,26 +4927,16 @@
             const historyList = document.getElementById('rider-history-list');
             if (!historyList) return;
 
+            let combinedHistory = [];
+
+            // 1. Proses Data Riwayat Order (Potongan ADM)
             const userHistory = window.currentWalletHistoryData || [];
-
-            if (userHistory.length === 0) {
-                historyList.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold">Belum ada riwayat order.</p>';
-                return;
-            }
-
-            let html = '';
-            const limit = window.walletHistoryLimit || 3;
-            const itemsToShow = userHistory.slice(0, limit);
-
-            itemsToShow.forEach(data => {
+            userHistory.forEach(data => {
                 const dateStr = data.Tanggal || data.tanggal || '-';
                 const timeStr = data.Jam || data.jam || '-';
                 
                 let kotor = Number(data.Nominal_Kotor || data.fee || data.Fee || 0);
-                let extra = Number(data.Tambahan || data.extra || data.Extra || 0);
-                
                 if (kotor > 0 && kotor <= 500) kotor = kotor * 1000;
-                if (extra > 0 && extra <= 500) extra = extra * 1000;
 
                 const desc = data.List_Pesanan || data.Keterangan || 'Orderan';
                 const status = data.Status || data.status || 'Selesai';
@@ -4955,30 +4945,97 @@
                 const admRate = typeof window.getAdmRate === 'function' && dateStr !== '-' ? window.getAdmRate(dateStr) : 0.16;
                 const potongan = isDone ? Math.round(kotor * admRate) : 0;
 
-                const netClass = isDone ? 'text-red-600' : 'text-gray-400 line-through';
-                const iconClass = isDone ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200';
-                const icon = isDone ? 'fa-minus' : 'fa-xmark';
+                // Hitung Timestamp untuk Pengurutan Akurat
+                let timestamp = 0;
+                if (data.created_at && data.created_at.seconds) {
+                    timestamp = data.created_at.seconds * 1000;
+                } else if (data.timestamp && data.timestamp.seconds) {
+                    timestamp = data.timestamp.seconds * 1000;
+                } else {
+                    timestamp = new Date(`${dateStr.replace(/-/g, '/')} ${timeStr}`).getTime() || 0;
+                }
+
+                if (potongan > 0) {
+                    combinedHistory.push({
+                        type: 'order',
+                        timestamp: timestamp,
+                        dateStr: dateStr,
+                        timeStr: timeStr,
+                        desc: desc,
+                        potongan: potongan,
+                        isDone: isDone
+                    });
+                }
+            });
+
+            // 2. Proses Data Riwayat Cicilan (Potongan Jaket/Atribut)
+            const installmentHistory = window.firebaseInstallmentHistoryData || [];
+            installmentHistory.forEach(item => {
+                let dateStr = '-';
+                let timeStr = '-';
+                let timestamp = 0;
+
+                if (item.created_at && item.created_at.seconds) {
+                    timestamp = item.created_at.seconds * 1000;
+                    const d = new Date(timestamp);
+                    // Format menyesuaikan (DD-MM-YYYY)
+                    dateStr = d.toLocaleDateString('id-ID', {day: '2-digit', month: '2-digit', year: 'numeric'}).replace(/\//g, '-');
+                    timeStr = d.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'}).replace('.', ':');
+                }
+
+                combinedHistory.push({
+                    type: 'cicilan',
+                    timestamp: timestamp,
+                    dateStr: dateStr,
+                    timeStr: timeStr,
+                    desc: item.desc || 'Potongan Otomatis Cicilan Mingguan',
+                    potongan: Number(item.amount) || 0,
+                    isDone: true
+                });
+            });
+
+            // Urutkan gabungan data dari yang terbaru (Descending)
+            combinedHistory.sort((a, b) => b.timestamp - a.timestamp);
+
+            if (combinedHistory.length === 0) {
+                historyList.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold">Belum ada riwayat potongan.</p>';
+                return;
+            }
+
+            let html = '';
+            const limit = window.walletHistoryLimit || 3;
+            const itemsToShow = combinedHistory.slice(0, limit);
+
+            itemsToShow.forEach(item => {
+                const netClass = item.isDone ? 'text-red-600' : 'text-gray-400 line-through';
+                let iconClass = item.isDone ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200';
+                let icon = item.isDone ? 'fa-minus' : 'fa-xmark';
+
+                // Bedakan ikon jika itu adalah potongan cicilan (Baju/Jaket)
+                if (item.type === 'cicilan') {
+                    icon = 'fa-shirt';
+                }
 
                 html += `
-                    <div class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <div class="w-8 h-8 rounded-full ${iconClass} border flex items-center justify-center shrink-0">
+                    <div class="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between gap-2">
+                        <div class="flex items-start gap-3 flex-1 min-w-0">
+                            <div class="w-8 h-8 rounded-full ${iconClass} border flex items-center justify-center shrink-0 mt-0.5">
                                 <i class="fa-solid ${icon} text-xs"></i>
                             </div>
-                            <div>
-                                <h4 class="text-[11px] font-bold text-gray-800 line-clamp-1 w-32 truncate" title="${desc}">${desc}</h4>
-                                <p class="text-[9px] text-gray-400 font-medium mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${dateStr} • ${timeStr}</p>
+                            <div class="flex-1 min-w-0">
+                                <h4 class="text-[11px] font-bold text-gray-800 leading-tight line-clamp-2" title="${item.desc}">${item.desc}</h4>
+                                <p class="text-[9px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${item.dateStr} • ${item.timeStr}</p>
                             </div>
                         </div>
                         <div class="text-right shrink-0">
-                            <p class="text-xs font-black ${netClass}">- Rp ${potongan.toLocaleString('id-ID')}</p>
+                            <p class="text-xs font-black ${netClass}">- Rp ${item.potongan.toLocaleString('id-ID')}</p>
                             <p class="text-[8px] font-bold text-gray-400 uppercase mt-0.5">Potongan</p>
                         </div>
                     </div>
                 `;
             });
 
-            if (userHistory.length > limit) {
+            if (combinedHistory.length > limit) {
                 html += `
                     <button onclick="window.loadMoreWalletHistory()" class="w-full py-3.5 mt-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl active:scale-95 transition-all text-xs border border-emerald-200 shadow-sm flex items-center justify-center gap-2">
                         Lihat Semuanya <i class="fa-solid fa-chevron-down"></i>
@@ -10478,6 +10535,11 @@
                       if (typeof window.renderInstallmentsHistory === 'function') {
                           window.renderInstallmentsHistory();
                       }
+                  }
+                  
+                  // REFRESH LIST DOMPET JIKA ADA PERUBAHAN DATA CICILAN
+                  if (typeof window.renderWalletHistoryUI === 'function') {
+                      window.renderWalletHistoryUI();
                   }
               }, (error) => {
                   console.error("Error fetching installments history:", error);
