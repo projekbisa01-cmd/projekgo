@@ -3431,25 +3431,35 @@
             if (value === 'Transfer') {
                 nominalContainer.classList.remove('hidden');
                 
-                // Ambil total item dari nota aktif jika ada
-                let totalItemPrice = 0;
-                if (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) {
-                    activeNotaItems.forEach(item => { totalItemPrice += item.price; });
+                let totalBayar = 0;
+                
+                // Ambil input ongkir & extra dari nota
+                const ongkirInputEl = document.getElementById('active-nota-input-ongkir');
+                const extraInputEl = document.getElementById('active-nota-input-extra');
+                
+                // Deteksi apakah nota sudah diisi atau diakses (ada item atau input ongkir tidak kosong)
+                const hasNotaInteraction = (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) || 
+                                           (ongkirInputEl && ongkirInputEl.value !== "") || 
+                                           (extraInputEl && extraInputEl.value !== "");
+                
+                if (hasNotaInteraction) {
+                    // Ambil persis sesuai totalan di nota
+                    let totalItemPrice = 0;
+                    if (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) {
+                        activeNotaItems.forEach(item => { totalItemPrice += item.price; });
+                    }
+                    const notaOngkir = ongkirInputEl ? (parseInt(ongkirInputEl.value.replace(/\./g, '')) || 0) : 0;
+                    const notaExtra = extraInputEl ? (parseInt(extraInputEl.value.replace(/\./g, '')) || 0) : 0;
+                    
+                    totalBayar = totalItemPrice + notaOngkir + notaExtra;
+                } else {
+                    // Jika rider tidak pernah buka nota, gunakan ongkir default dari sistem
+                    const defaultOngkir = (window.currentActiveOrderBaseFee || 0) * 1000;
+                    const defaultExtra = (window.currentActiveOrderExtraFee || 0) * 1000;
+                    totalBayar = defaultOngkir + defaultExtra;
                 }
                 
-                // Ambil ongkir & extra (dari input nota jika diisi, atau fallback ke default order)
-                const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
-                const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
-                const notaOngkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
-                const notaExtra = parseInt(extraInput.replace(/\./g, '')) || 0;
-                
-                const baseFee = notaOngkir > 0 ? notaOngkir : (window.currentActiveOrderBaseFee || 0) * 1000;
-                const extraFee = notaExtra > 0 ? notaExtra : (window.currentActiveOrderExtraFee || 0) * 1000;
-                
-                // Total keseluruhan (Barang + Ongkir + Tambahan)
-                const totalBayar = totalItemPrice + baseFee + extraFee;
-                
-                document.getElementById('payment-nominal-input').value = totalBayar.toLocaleString('id-ID');
+                document.getElementById('payment-nominal-input').value = totalBayar > 0 ? totalBayar.toLocaleString('id-ID') : '';
             } else {
                 nominalContainer.classList.add('hidden');
             }
@@ -6701,58 +6711,62 @@
                     }
                     
                     // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH YANG DIPERBAIKI)
-                    if (!savedPaymentStr) {
-                        let closestKey = null;
-                        let minDiff = 15; // Maksimal selisih 15 menit
-                        
-                        const tParts = timeStr.split(':');
-                        let targetTimeMin = 0;
-                        if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
-                        
-                        const prefix = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_`;
-                        const currentCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '').toLowerCase();
-                        
-                        // Iterasi mencari catatan transfer terdekat (Abaikan Nominal Kotor yang mungkin berubah dari sisi Admin)
-                        for (let i = localStorage.length - 1; i >= 0; i--) {
-                            const key = localStorage.key(i);
-                            if (key && key.startsWith(prefix)) {
-                                const parts = key.split('_');
-                                if (parts.length >= 5) {
-                                    const keyTimeStr = parts[3]; 
-                                    if (keyTimeStr && keyTimeStr.length === 4) {
-                                        const keyTimeMin = parseInt(keyTimeStr.substring(0,2), 10) * 60 + parseInt(keyTimeStr.substring(2,4), 10);
-                                        const diff = Math.abs(targetTimeMin - keyTimeMin);
-                                        
-                                        // Pengecekan ekstra: Cek kecocokan Nama Pelanggan
-                                        let isNameMatch = false;
-                                        try {
-                                            const storedDataStr = localStorage.getItem(key);
-                                            if (storedDataStr) {
-                                                const parsed = JSON.parse(storedDataStr);
-                                                if (parsed.orderName && parsed.orderName.toLowerCase() === currentCustomerName) {
-                                                    isNameMatch = true;
-                                                }
-                                            }
-                                        } catch(e){}
-
-                                        // Prioritaskan NAMA SAMA. Jika nama sama, pasti ini orderan yang dimaksud
-                                        if (isNameMatch) {
-                                            closestKey = key;
-                                            break; // Stop pencarian karena sudah pasti cocok
-                                        } 
-                                        // Jika nama tidak ada, gunakan kecocokan waktu yang paling dekat (< 15 menit)
-                                        else if (diff < minDiff) {
-                                            minDiff = diff;
-                                            closestKey = key;
-                                        }
-                                    }
+                if (!savedPaymentStr) {
+                    let closestKey = null;
+                    let bestScore = -1; // Skor kecocokan (Semakin tinggi semakin cocok)
+                    
+                    const tParts = timeStr.split(':');
+                    let targetTimeMin = 0;
+                    if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
+                    
+                    const prefix = `pay_${currentUserUID}_`;
+                    const currentCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '').toLowerCase().trim();
+                    
+                    // Iterasi mencari catatan transfer milik rider ini
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith(prefix)) {
+                            try {
+                                const storedDataStr = localStorage.getItem(key);
+                                if (!storedDataStr) continue;
+                                const parsed = JSON.parse(storedDataStr);
+                                
+                                // Wajib di tanggal yang sama
+                                if (parsed.dateStr !== dateStr) continue;
+                                
+                                let score = 0;
+                                
+                                // Kriteria 1: Nama Pelanggan Sama (Skor Tinggi: 100)
+                                const savedName = (parsed.orderName || '').toLowerCase().trim();
+                                const isNameMatch = (savedName !== '' && savedName !== 'pelanggan' && savedName === currentCustomerName);
+                                if (isNameMatch) score += 100;
+                                
+                                // Kriteria 2: Jam Admin vs Jam Selesai Rider (Selisih <= 15 menit)
+                                const savedTimeStr = parsed.timeStr || '';
+                                const sParts = savedTimeStr.split(':');
+                                let savedTimeMin = 0;
+                                if (sParts.length >= 2) savedTimeMin = parseInt(sParts[0], 10) * 60 + parseInt(sParts[1], 10);
+                                
+                                const diff = Math.abs(targetTimeMin - savedTimeMin);
+                                if (diff <= 15) {
+                                    score += (20 - diff); // Skor 5 - 20 (Semakin dekat, semakin tinggi)
+                                } else if (!isNameMatch) {
+                                    // Jika nama tidak sama dan selisih jam lebih dari 15 menit, lewati
+                                    continue;
                                 }
-                            }
+                                
+                                // Set sebagai kandidat terbaik jika skornya mengalahkan yang sebelumnya
+                                if (score > bestScore && score > 0) {
+                                    bestScore = score;
+                                    closestKey = key;
+                                }
+                            } catch(e){}
                         }
-                        
-                        // Jika ketemu catatan yang cocok, sinkronkan ID-nya dengan data terbaru dari Admin
-                        if (closestKey) {
-                            savedPaymentStr = localStorage.getItem(closestKey);
+                    }
+                    
+                    // Jika ketemu catatan yang cocok, sinkronkan ID-nya dengan data terbaru dari Admin
+                    if (closestKey) {
+                        savedPaymentStr = localStorage.getItem(closestKey);
                             try {
                                 const savedData = JSON.parse(savedPaymentStr);
                                 // Sinkronkan jam dengan history admin/server
