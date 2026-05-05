@@ -1940,7 +1940,7 @@
             <main class="p-5 max-w-md mx-auto space-y-6">
                 <!-- Summary Card -->
                 <div class="space-y-3">
-                    <h2 class="text-[17px] font-bold text-gray-900 px-1">Pinjaman Anda</h2>
+                    <h2 class="text-[17px] font-bold text-gray-900 px-1">Cicilan Atribute </h2>
                     <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm relative overflow-hidden">
                         <div class="flex items-center gap-2 mb-3">
                             <span id="installments-status-badge" class="text-[10px] font-bold bg-green-100 text-green-700 px-2.5 py-1 rounded-md">Aktif</span>
@@ -3569,30 +3569,31 @@
                 
                 let totalBayar = 0;
                 
-                // Ambil input ongkir & extra dari nota
-                const ongkirInputEl = document.getElementById('active-nota-input-ongkir');
-                const extraInputEl = document.getElementById('active-nota-input-extra');
+                // Ambil total langsung dari text preview Nota (Paling Akurat karena persis seperti yang tertulis di layar)
+                const activeTotalEl = document.getElementById('active-nota-preview-total');
+                const activeTotal = parseInt((activeTotalEl ? activeTotalEl.innerText : "0").replace(/[^0-9]/g, '')) || 0;
                 
-                // Deteksi apakah nota sudah diisi atau diakses (ada item atau input ongkir tidak kosong)
-                const hasNotaInteraction = (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) || 
-                                           (ongkirInputEl && ongkirInputEl.value !== "") || 
-                                           (extraInputEl && extraInputEl.value !== "");
+                const regTotalEl = document.getElementById('nota-preview-total');
+                const regTotal = parseInt((regTotalEl ? regTotalEl.innerText : "0").replace(/[^0-9]/g, '')) || 0;
                 
-                if (hasNotaInteraction) {
-                    // Ambil persis sesuai totalan di nota
-                    let totalItemPrice = 0;
-                    if (typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0) {
-                        activeNotaItems.forEach(item => { totalItemPrice += item.price; });
-                    }
-                    const notaOngkir = ongkirInputEl ? (parseInt(ongkirInputEl.value.replace(/\./g, '')) || 0) : 0;
-                    const notaExtra = extraInputEl ? (parseInt(extraInputEl.value.replace(/\./g, '')) || 0) : 0;
-                    
-                    totalBayar = totalItemPrice + notaOngkir + notaExtra;
+                const hasActiveItems = typeof activeNotaItems !== 'undefined' && activeNotaItems.length > 0;
+                const hasRegItems = typeof notaItems !== 'undefined' && notaItems.length > 0;
+
+                // Logika Prioritas Pengambilan Nominal:
+                // 1. Jika ada item di Nota Aktif (dari Tugas Berjalan) -> Gunakan total Nota Aktif
+                // 2. Jika ada item di Nota Regular (Fitur Lainnya) -> Gunakan total Nota Regular
+                // 3. Jika tidak ada item tapi total Nota Aktif > 0 (karena auto-fill ongkir) -> Gunakan total Nota Aktif
+                // 4. Default sistem -> Hitung ongkir dasar + extra
+                if (hasActiveItems) {
+                    totalBayar = activeTotal;
+                } else if (hasRegItems) {
+                    totalBayar = regTotal;
+                } else if (activeTotal > 0) {
+                    totalBayar = activeTotal; 
                 } else {
-                    // Jika rider tidak pernah buka nota, gunakan ongkir default dari sistem
-                    const defaultOngkir = (window.currentActiveOrderBaseFee || 0) * 1000;
-                    const defaultExtra = (window.currentActiveOrderExtraFee || 0) * 1000;
-                    totalBayar = defaultOngkir + defaultExtra;
+                    const finalOngkir = (window.currentActiveOrderBaseFee || 0) * 1000;
+                    const finalExtra = (window.currentActiveOrderExtraFee || 0) * 1000;
+                    totalBayar = finalOngkir + finalExtra;
                 }
                 
                 document.getElementById('payment-nominal-input').value = totalBayar > 0 ? totalBayar.toLocaleString('id-ID') : '';
@@ -9926,6 +9927,16 @@
               }
               
               if(typeof window.validateFinishOrder === 'function') window.validateFinishOrder();
+              
+              // Bersihkan memori Nota Aktif agar tidak bocor ke orderan berikutnya
+              if (typeof activeNotaItems !== 'undefined') {
+                  activeNotaItems = [];
+              }
+              const activeOngkirEl = document.getElementById('active-nota-input-ongkir');
+              const activeExtraEl = document.getElementById('active-nota-input-extra');
+              if (activeOngkirEl) activeOngkirEl.value = "";
+              if (activeExtraEl) activeExtraEl.value = "";
+              if (typeof updateActiveNotaPreview === 'function') updateActiveNotaPreview();
               
               // Bersihkan ID Aktif
               window.currentActiveOrderId = null;
