@@ -481,6 +481,11 @@
                 <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-500 group-hover:bg-slate-500 group-hover:text-white transition-colors flex items-center justify-center text-xl"><i class="fa-solid fa-users-gear"></i></div>
                 <span class="text-[10px] font-black uppercase tracking-wider text-slate-700">Kelola Data Rider (Tambah/Hapus)</span>
             </button>
+            
+            <button onclick="window.handleLogout()" class="col-span-2 bg-rose-600 p-5 rounded-2xl border border-rose-500 shadow-md flex flex-col items-center justify-center gap-3 hover:bg-rose-700 active:scale-95 transition-all group mt-2">
+                <div class="w-12 h-12 rounded-full bg-white/20 text-white flex items-center justify-center text-xl"><i class="fa-solid fa-right-from-bracket"></i></div>
+                <span class="text-[10px] font-black uppercase tracking-wider text-white">Logout / Keluar Admin</span>
+            </button>
         </div>
     </main>
 
@@ -1250,7 +1255,7 @@
         window.userRole = null; // 'admin' atau 'owner'
         window.analyticsTargets = { omset: 5000000, order: 1000 };
 
-        window.handleLogin = () => {
+        window.handleLogin = async () => {
             const pass = document.getElementById('login-password').value;
             const err = document.getElementById('login-error');
             const overlay = document.getElementById('login-overlay');
@@ -1258,25 +1263,53 @@
             const btnOmset = document.getElementById('btn-menu-omset');
             const btnAnalisis = document.getElementById('btn-menu-analisis');
 
-            if (pass === 'Admin_projekgo') {
-                window.userRole = 'admin';
+            let role = null;
+            if (pass === 'Admin_projekgo') role = 'admin';
+            else if (pass === 'Admin_projekgo123') role = 'owner';
+
+            if (role) {
+                window.userRole = role;
                 err.classList.add('hidden');
+                
+                // Simpan sesi login ke Firestore agar tidak perlu login terus
+                const user = auth.currentUser;
+                if (user) {
+                    try {
+                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
+                        await setDoc(sessionRef, { role: role, timestamp: serverTimestamp() });
+                    } catch (e) { console.warn("Gagal menyimpan sesi login", e); }
+                }
+
                 overlay.classList.add('hidden');
-                if (btnCustomers) btnCustomers.classList.add('hidden');
-                if (btnOmset) btnOmset.classList.add('hidden');
-                if (btnAnalisis) btnAnalisis.classList.add('hidden');
-                if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders(); 
-            } else if (pass === 'Admin_projekgo123') {
-                window.userRole = 'owner';
-                err.classList.add('hidden');
-                overlay.classList.add('hidden');
-                if (btnCustomers) btnCustomers.classList.remove('hidden');
-                if (btnOmset) btnOmset.classList.remove('hidden');
-                if (btnAnalisis) btnAnalisis.classList.remove('hidden');
+                if (role === 'admin') {
+                    if (btnCustomers) btnCustomers.classList.add('hidden');
+                    if (btnOmset) btnOmset.classList.add('hidden');
+                    if (btnAnalisis) btnAnalisis.classList.add('hidden');
+                } else {
+                    if (btnCustomers) btnCustomers.classList.remove('hidden');
+                    if (btnOmset) btnOmset.classList.remove('hidden');
+                    if (btnAnalisis) btnAnalisis.classList.remove('hidden');
+                }
                 if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders(); 
             } else {
                 err.classList.remove('hidden');
             }
+        };
+
+        window.handleLogout = async () => {
+            window.showConfirm('Logout', 'Yakin ingin keluar? Anda harus memasukkan sandi lagi nanti.', async () => {
+                const user = auth.currentUser;
+                if (user) {
+                    try {
+                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
+                        await deleteDoc(sessionRef);
+                    } catch(e) {}
+                }
+                window.userRole = null;
+                document.getElementById('login-password').value = '';
+                document.getElementById('login-overlay').classList.remove('hidden');
+                window.switchPage('dispatch');
+            });
         };
 
         window.togglePassword = () => {
@@ -1306,6 +1339,34 @@
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
+                // Cek sesi login yang tersimpan
+                const checkSession = async () => {
+                    try {
+                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
+                        const snap = await getDoc(sessionRef);
+                        if (snap.exists() && snap.data().role) {
+                            window.userRole = snap.data().role;
+                            document.getElementById('login-overlay').classList.add('hidden');
+                            
+                            const btnCustomers = document.getElementById('btn-menu-customers');
+                            const btnOmset = document.getElementById('btn-menu-omset');
+                            const btnAnalisis = document.getElementById('btn-menu-analisis');
+                            
+                            if (window.userRole === 'admin') {
+                                if (btnCustomers) btnCustomers.classList.add('hidden');
+                                if (btnOmset) btnOmset.classList.add('hidden');
+                                if (btnAnalisis) btnAnalisis.classList.add('hidden');
+                            } else {
+                                if (btnCustomers) btnCustomers.classList.remove('hidden');
+                                if (btnOmset) btnOmset.classList.remove('hidden');
+                                if (btnAnalisis) btnAnalisis.classList.remove('hidden');
+                            }
+                            if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders();
+                        }
+                    } catch (e) { console.warn("Error load session", e); }
+                };
+                checkSession();
+
                 startRiderListener();
                 startGlobalOrdersListener();
                 startRiderBalancesListener(); 
