@@ -1779,17 +1779,23 @@
                     </div>
                 </div>
 
-                <!-- FLOATING ON-BID TOGGLE (DI ATAS NAVBAR) -->
-                <div class="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur-md px-6 py-2.5 rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] border border-gray-200 flex items-center gap-4 z-50">
-                    <span id="onbid-text" class="text-xs font-black text-gray-500 uppercase tracking-widest transition-colors">OFF-BID</span>
-                    <label class="switch transform scale-110 shadow-sm rounded-full cursor-pointer m-0">
-                        <input type="checkbox" id="onbid-toggle" onchange="toggleOnbid()">
-                        <span class="slider"></span>
-                    </label>
+                <!-- FLOATING ON-BID TOGGLE (DI ATAS NAVBAR) DIGANTI 3 TOMBOL -->
+                <input type="checkbox" id="onbid-toggle" class="hidden" onchange="toggleOnbid()">
+                <div id="rider-control-panel" class="absolute -top-[4.5rem] left-1/2 transform -translate-x-1/2 w-[calc(100%-2.5rem)] max-w-md bg-white/95 backdrop-blur-md p-2.5 rounded-[1.25rem] shadow-[0_-8px_25px_rgba(0,0,0,0.08)] border border-gray-100 grid grid-cols-3 gap-2.5 z-50 transition-all duration-300">
+                    <button id="btn-action-onbid" onclick="window.actionOnbid()" class="py-3 bg-gray-50 text-gray-500 hover:bg-gray-100 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-gray-200 shadow-sm">
+                        <i class="fa-solid fa-power-off text-base mb-0.5"></i> <span>ON-BID</span>
+                    </button>
+                    <button id="btn-action-foto" onclick="window.actionKirimFoto()" disabled class="py-3 bg-gray-100 text-gray-400 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1.5 cursor-not-allowed opacity-50 border border-gray-200 relative overflow-hidden shadow-sm">
+                        <i class="fa-solid fa-camera text-base mb-0.5"></i> <span>FOTO DO</span>
+                        <div id="badge-foto-lock" class="absolute top-1.5 right-1.5 w-5 h-5 bg-gray-200 rounded-full flex items-center justify-center shadow-inner"><i class="fa-solid fa-lock text-[8px] text-gray-500"></i></div>
+                    </button>
+                    <button id="btn-action-offbid" onclick="window.actionOffbid()" class="py-3 bg-red-50 text-red-500 hover:bg-red-100 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-red-200 shadow-sm">
+                        <i class="fa-solid fa-stop text-base mb-0.5"></i> <span>OFF-BID</span>
+                    </button>
                 </div>
 
                 <!-- RADAR CONTAINER COMPACT -->
-                <div id="order-radar-container" class="p-6 pt-10 relative overflow-hidden transition-all duration-500 min-h-[160px] flex items-center justify-center max-w-md mx-auto">
+                <div id="order-radar-container" class="p-6 pt-14 relative overflow-hidden transition-all duration-500 min-h-[160px] flex items-center justify-center max-w-md mx-auto">
                     
                     <!-- State Offline -->
                     <div id="radar-offline" class="flex flex-col items-center justify-center text-center transition-all duration-500 absolute inset-0 z-10 bg-white/95 backdrop-blur-sm pt-6">
@@ -3353,6 +3359,21 @@
                 // Simpan ke variabel global (sama seperti alur sebelumnya)
                 window.finishPhotoBase64 = fullBase64;
                 
+                // MASUKKAN KE ANTREAN UTAMA (RADAR)
+                const currentUserUID = localStorage.getItem('rider_uid');
+                if (currentUserUID && window.isFirebaseReady) {
+                    const statusRef = window.FirebaseFirestoreDoc(window.FirebaseDB, '/status_rider_aktif', String(currentUserUID).trim());
+                    window.FirebaseFirestoreUpdateDoc(statusRef, {
+                        in_main_queue: true,
+                        last_drop_time: window.FirebaseServerTimestamp(),
+                        last_drop_desc: "Telah mengirim Foto DO/Standby"
+                    }).then(() => {
+                        if (typeof window.showCustomToast === 'function') {
+                            window.showCustomToast("Foto diterima! Anda telah masuk ke Antrean Radar.");
+                        }
+                    }).catch(e => console.error("Gagal masuk antrean", e));
+                }
+                
                 // Update UI untuk menampilkan preview
                 document.getElementById('finish-photo-placeholder').classList.add('hidden');
                 
@@ -3383,6 +3404,21 @@
                     
                     // Simpan base64 hasil kompresi ke variabel global agar bisa di-upload ke Firebase nanti
                     window.finishPhotoBase64 = compressedBase64;
+                    
+                    // MASUKKAN KE ANTREAN UTAMA (RADAR)
+                    const currentUserUID = localStorage.getItem('rider_uid');
+                    if (currentUserUID && window.isFirebaseReady) {
+                        const statusRef = window.FirebaseFirestoreDoc(window.FirebaseDB, '/status_rider_aktif', String(currentUserUID).trim());
+                        window.FirebaseFirestoreUpdateDoc(statusRef, {
+                            in_main_queue: true,
+                            last_drop_time: window.FirebaseServerTimestamp(),
+                            last_drop_desc: "Telah mengirim Foto DO/Standby"
+                        }).then(() => {
+                            if (typeof window.showCustomToast === 'function') {
+                                window.showCustomToast("Foto diterima! Anda telah masuk ke Antrean Radar.");
+                            }
+                        }).catch(e => console.error("Gagal masuk antrean", e));
+                    }
                     
                     // Sembunyikan placeholder, tampilkan gambar & tombol hapus
                     document.getElementById('finish-photo-placeholder').classList.add('hidden');
@@ -6340,6 +6376,23 @@
                 }
             });
 
+            // MEMBUKA KUNCI TOMBOL FOTO DO JIKA SUDAH ADA ORDERAN HARI INI
+            const btnFoto = document.getElementById('btn-action-foto');
+            const lockBadge = document.getElementById('badge-foto-lock');
+            if (btnFoto && lockBadge) {
+                if (tTrips > 0) {
+                    // Buka kunci
+                    btnFoto.disabled = false;
+                    btnFoto.className = "py-3 bg-blue-50 text-blue-500 hover:bg-blue-100 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-blue-200 relative overflow-hidden shadow-sm cursor-pointer opacity-100";
+                    lockBadge.classList.add('hidden');
+                } else {
+                    // Kunci
+                    btnFoto.disabled = true;
+                    btnFoto.className = "py-3 bg-gray-100 text-gray-400 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1.5 cursor-not-allowed opacity-50 border border-gray-200 relative overflow-hidden shadow-sm";
+                    lockBadge.classList.remove('hidden');
+                }
+            }
+
             const todayNetEl = document.getElementById('today-net-earnings');
             if (todayNetEl) todayNetEl.innerText = `Rp ${Math.round(tNet).toLocaleString('id-ID')}`;
             
@@ -7250,7 +7303,10 @@
                 step1SwipeBtn.classList.add('bg-green-500', 'swipe-success');
                 
                 setTimeout(() => {
-                    window.goToPage(2);
+                    // Skip halaman 2, langsung arahkan ke popup pembayaran (cash/transfer)
+                    window.isRestingAfterFinish = false;
+                    window.showPaymentPopupInternal();
+                    
                     // Reset slider
                     setTimeout(() => {
                         step1SwipeBtn.style.left = '4px';
@@ -8230,6 +8286,7 @@
             });
         }
 
+        // --- FUNGSI AKSI 3 TOMBOL BARU ---
         async function toggleOnbid(isForced) {
             const forceExit = (isForced === true);
             // Validasi lapis kedua jika rider memaksa klik saat tidak ada sinyal
@@ -8293,11 +8350,42 @@
         // Ekspor fungsi agar dapat diakses dari modul firebase saat suspend
         window.toggleOnbid = toggleOnbid;
 
+        window.actionOnbid = function() {
+            const toggle = document.getElementById('onbid-toggle');
+            if (toggle && !toggle.checked) { toggle.checked = true; window.toggleOnbid(); }
+            window.update3ButtonsUI('onbid');
+        };
+        window.actionKirimFoto = function() {
+            if (typeof window.showCustomToast === 'function') window.showCustomToast("Silakan Kirim Foto DO untuk masuk antrean.");
+            // Memanggil kamera (Akan disetting di step berikutnya)
+            window.triggerNativeCamera(); 
+        };
+        window.actionOffbid = function() {
+            const toggle = document.getElementById('onbid-toggle');
+            if (toggle && toggle.checked) { toggle.checked = false; window.toggleOnbid(); }
+            window.update3ButtonsUI('offbid');
+        };
+        window.update3ButtonsUI = function(activeState) {
+            const btnOn = document.getElementById('btn-action-onbid');
+            const btnOff = document.getElementById('btn-action-offbid');
+            if (activeState === 'onbid') {
+                if(btnOn) { btnOn.className = "py-3 bg-green-100 text-green-600 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-green-300 shadow-sm"; }
+                if(btnOff) { btnOff.className = "py-3 bg-gray-50 text-gray-400 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-gray-200 shadow-sm hover:bg-red-50 hover:text-red-400"; }
+            } else {
+                if(btnOn) { btnOn.className = "py-3 bg-gray-50 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-gray-200 shadow-sm hover:bg-green-50 hover:text-green-500"; }
+                if(btnOff) { btnOff.className = "py-3 bg-red-100 text-red-600 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all flex flex-col items-center justify-center gap-1.5 border border-red-300 shadow-sm"; }
+            }
+        };
+
         function updateOnbidUI(isActive) {
             const text = document.getElementById('onbid-text'); 
-            text.innerText = isActive ? "ON-BID AKTIF" : "OFF-BID"; 
-            // PERBARUI KELAS CSS SESUAI TAMPILAN FLOATING BARU
-            text.className = `text-xs font-black uppercase tracking-widest transition-colors ${isActive ? 'text-green-600' : 'text-gray-500'}`;
+            if (text) {
+                text.innerText = isActive ? "ON-BID AKTIF" : "OFF-BID"; 
+                text.className = `text-xs font-black uppercase tracking-widest transition-colors ${isActive ? 'text-green-600' : 'text-gray-500'}`;
+            }
+
+            // Memanggil fungsi sinkronisasi warna 3 tombol baru
+            window.update3ButtonsUI(isActive ? 'onbid' : 'offbid');
             
             const indicator = document.getElementById('status-indicator'); if(indicator) indicator.className = `absolute bottom-0 right-0 w-3 h-3 ${isActive ? 'bg-green-500' : 'bg-gray-400'} border-2 border-white rounded-full`;
 
@@ -8562,6 +8650,12 @@
           });
           
           const storage = getStorage(app); // INISIALISASI STORAGE
+
+          // EXPOSE FIREBASE KE WINDOW AGAR BISA DIAKSES OLEH SCRIPT GLOBAL
+          window.FirebaseDB = db;
+          window.FirebaseFirestoreDoc = doc;
+          window.FirebaseFirestoreUpdateDoc = updateDoc;
+          window.FirebaseServerTimestamp = serverTimestamp;
 
           // --- FUNGSI TABUNGAN KU (BARU) ---
           let tabunganUnsubscribe = null;
@@ -10055,7 +10149,7 @@
                       await setDoc(statusRef, { 
                           is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
                           is_online: newOnbidStatus,
-                          in_main_queue: newOnbidStatus,
+                          in_main_queue: false, // UBAH JADI FALSE AGAR KELUAR ANTREAN
                           last_drop_time: serverTimestamp(),
                           last_drop_desc: desc,
                           proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
