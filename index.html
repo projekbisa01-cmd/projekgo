@@ -1848,10 +1848,25 @@
                 </button>
             </header>
             <main class="max-w-md mx-auto flex flex-col pb-32 pt-4 px-4 w-full">
-                <!-- Kontainer langsung dilepas agar wide dan bebas scroll -->
-                <div id="radar-queue-list" class="flex flex-col gap-4 w-full">
-                    <!-- Item List Akan Di-Inject Firebase JS -->
-                    <div class="text-[11px] font-bold text-white bg-black/40 backdrop-blur-sm rounded-full w-max mx-auto px-4 py-2 mt-4 text-center shadow-sm">Memuat antrean...</div>
+                <!-- Toggle Tabs Capsule -->
+                <div class="flex bg-gray-100 p-1 rounded-xl border border-gray-200/60 mb-4 shrink-0">
+                    <button id="tab-queue-btn-waiting" onclick="window.switchQueueTab('waiting')" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-orange-600 shadow-sm border border-gray-200/50">Daftar Antrean</button>
+                    <button id="tab-queue-btn-running" onclick="window.switchQueueTab('running')" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700">Sedang Jalan</button>
+                </div>
+
+                <!-- Kontainer Menunggu (Antrean) -->
+                <div id="tab-queue-waiting" class="flex flex-col gap-4 w-full">
+                    <div id="radar-queue-list" class="flex flex-col gap-4 w-full">
+                        <!-- Item List Akan Di-Inject Firebase JS -->
+                        <div class="text-[11px] font-bold text-white bg-black/40 backdrop-blur-sm rounded-full w-max mx-auto px-4 py-2 mt-4 text-center shadow-sm">Memuat antrean...</div>
+                    </div>
+                </div>
+
+                <!-- Kontainer Sedang Jalan (Order Aktif) -->
+                <div id="tab-queue-running" class="hidden flex flex-col gap-4 w-full">
+                    <div id="radar-running-list" class="flex flex-col gap-4 w-full">
+                        <div class="text-[11px] font-bold text-white bg-black/40 backdrop-blur-sm rounded-full w-max mx-auto px-4 py-2 mt-4 text-center shadow-sm">Memuat rider aktif...</div>
+                    </div>
                 </div>
             </main>
         </div>
@@ -2966,6 +2981,28 @@
                     modal.classList.remove('flex');
                     if(imgEl) imgEl.src = ""; // Bersihkan memori RAM dari tag img
                 }, 300);
+            }
+        };
+
+        // --- FUNGSI TAB ANTREAN (BARU) ---
+        window.switchQueueTab = function(tab) {
+            const btnWaiting = document.getElementById('tab-queue-btn-waiting');
+            const btnRunning = document.getElementById('tab-queue-btn-running');
+            const tabWaiting = document.getElementById('tab-queue-waiting');
+            const tabRunning = document.getElementById('tab-queue-running');
+
+            if (!btnWaiting || !btnRunning || !tabWaiting || !tabRunning) return;
+
+            if (tab === 'waiting') {
+                btnWaiting.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-orange-600 shadow-sm border border-gray-200/50";
+                btnRunning.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700";
+                tabWaiting.classList.remove('hidden');
+                tabRunning.classList.add('hidden');
+            } else {
+                btnRunning.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-blue-600 shadow-sm border border-gray-200/50";
+                btnWaiting.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700";
+                tabRunning.classList.remove('hidden');
+                tabWaiting.classList.add('hidden');
             }
         };
 
@@ -8575,7 +8612,7 @@
           };
 
           window.startTabunganListener = (uid) => {
-              if (!uid || !isAuthReady) return;
+              if (!uid) return; // Menghapus pengecekan !isAuthReady agar tidak gagal diam-diam saat diklik cepat
               const cleanUid = String(uid).trim().toUpperCase();
 
               if (tabunganUnsubscribe) {
@@ -8591,10 +8628,10 @@
 
                   if (docSnap.exists()) {
                       const data = docSnap.data();
-                      const saldo = data.saldo || 0;
+                      const saldo = data.saldo || data.balance || 0; // Tambahan opsi fallback 'balance'
                       if(saldoEl) saldoEl.innerText = `Rp ${saldo.toLocaleString('id-ID')}`;
 
-                      let logs = data.edit_logs || [];
+                      let logs = data.edit_logs || data.riwayat || []; // Tambahan opsi fallback 'riwayat'
                       // Sort descending by time
                       logs.sort((a, b) => {
                           const timeA = a.timestamp?.seconds || a.timestamp || 0;
@@ -8656,6 +8693,11 @@
                   }
               }, (error) => {
                   console.error("Error fetching tabungan:", error);
+                  // TAMBAHAN: Ubah UI jika terjadi error database/akses ditolak agar tidak stuck di Memuat
+                  const saldoEl = document.getElementById('tabungan-saldo');
+                  const historyContainer = document.getElementById('tabungan-history-list');
+                  if(saldoEl) saldoEl.innerText = "Gagal Memuat";
+                  if(historyContainer) historyContainer.innerHTML = '<div class="text-center py-10"><i class="fa-solid fa-triangle-exclamation text-3xl text-red-400 mb-3"></i><p class="text-sm font-bold text-red-500">Akses ditolak atau koneksi gagal</p></div>';
               });
           };
           // -----------------------------------
@@ -10169,11 +10211,19 @@
                       return getTs(a.last_drop_time) - getTs(b.last_drop_time);
                   });
 
-                  // 2. FILTER: HANYA TAMPILKAN RIDER YANG PUNYA NOMOR ANTREAN (> 0)
-                  // (Sembunyikan semua rider abu-abu / menunggu verifikasi)
+                  // 2. FILTER RIDER: Pisahkan Antrean vs Berjalan
                   let visibleRiders = allRiders.filter(r => {
                       const qNum = Number(r.queue_number) || 0;
-                      return qNum > 0; 
+                      // Tampilkan di antrean jika punya nomor dan statusnya available
+                      const isAvailable = r.is_available === true || r.is_available === 'true';
+                      return qNum > 0 && isAvailable; 
+                  });
+
+                  let runningRiders = allRiders.filter(r => {
+                      // Rider sedang jalan jika online, tapi TIDAK available
+                      const isOnline = r.is_online === true || r.is_online === 'true';
+                      const isAvailable = r.is_available === true || r.is_available === 'true';
+                      return isOnline && !isAvailable && r.force_kill !== true;
                   });
 
                   // 3. UPDATE POSISI SAYA (DI NAVBAR BAWAH)
@@ -10365,6 +10415,108 @@
                       // Menyusun ulang posisi kartu di layar secara otomatis tanpa re-render keseluruhan
                       container.appendChild(card);
                   });
+
+                  // 6. BANGUN/UPDATE UI KARTU RIDER SEDANG BERJALAN
+                  const runningContainer = document.getElementById('radar-running-list');
+                  if (runningContainer) {
+                      if (runningRiders.length === 0) {
+                          runningContainer.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-motorcycle text-4xl text-gray-200 mb-3 block"></i>Belum ada rider yang berjalan.</div>';
+                      } else {
+                          const emptyState = runningContainer.querySelector('.fa-motorcycle');
+                          if (emptyState) runningContainer.innerHTML = '';
+
+                          const validRunningUids = new Set(runningRiders.map(r => String(r.uid).trim().toUpperCase()));
+                          Array.from(runningContainer.children).forEach(child => {
+                              if (child.id && child.id.startsWith('running-card-')) {
+                                  const childUid = child.id.replace('running-card-', '');
+                                  if (!validRunningUids.has(childUid)) {
+                                      runningContainer.removeChild(child);
+                                  }
+                              }
+                          });
+
+                          runningRiders.forEach((rider) => {
+                              const uidClean = String(rider.uid || '').trim().toUpperCase();
+                              const myUidClean = String(currentUserUID || '').trim().toUpperCase();
+                              const isMe = uidClean === myUidClean;
+
+                              const name = rider.name || 'Rider';
+                              const locationDesc = rider.last_drop_desc || 'Sedang memproses orderan';
+                              
+                              let ongkirBadge = `<span id="badge-ongkir-${uidClean}" class="text-[10px] font-bold text-blue-500 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 whitespace-nowrap shadow-sm"><i class="fa-solid fa-motorcycle"></i> Berjalan</span>`;
+                              // Fitur tarik data fee dihapus untuk hemat kuota read Firebase
+
+                              let imageSrc = rider.last_drop_image || null;
+                              if (imageSrc && typeof imageSrc === 'string') {
+                                  imageSrc = imageSrc.trim();
+                                  if (imageSrc.includes('ibb.co')) {
+                                      if (!imageSrc.startsWith('http')) imageSrc = 'https://' + imageSrc;
+                                      imageSrc = imageSrc.replace('ibb.co/', 'ibb.co.com/');
+                                  } else if (!imageSrc.startsWith('http://') && !imageSrc.startsWith('https://') && imageSrc.length > 100) {
+                                      let pureBase64 = imageSrc;
+                                      if (imageSrc.includes('base64,')) pureBase64 = imageSrc.split('base64,')[1];
+                                      pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
+                                      if (pureBase64.length > 0) imageSrc = `data:image/jpeg;base64,${pureBase64}`;
+                                      else imageSrc = null;
+                                  }
+                              }
+                              const hasPhoto = imageSrc ? true : false;
+                              
+                              window.riderImagesMap = window.riderImagesMap || {};
+                              if (hasPhoto) window.riderImagesMap[uidClean] = imageSrc;
+
+                              const photoIcon = hasPhoto 
+                                  ? `<div class="icon-wrap w-12 flex flex-col items-center justify-center shrink-0 cursor-pointer active:scale-90 transition-transform" onclick="window.showRiderImagePreview('${uidClean}')">
+                                      <div class="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center border border-blue-100 shadow-inner mb-1">
+                                          <i class="fa-solid fa-image text-sm"></i>
+                                      </div>
+                                      <span class="text-[8px] font-bold text-blue-600 tracking-tight leading-none text-center">Lihat Foto</span>
+                                     </div>`
+                                  : `<div class="icon-wrap w-12 flex flex-col items-center justify-center shrink-0">
+                                      <div class="w-9 h-9 rounded-full bg-gray-50 text-gray-300 flex items-center justify-center border border-gray-100 shadow-inner mb-1">
+                                          <i class="fa-solid fa-camera text-sm"></i>
+                                      </div>
+                                      <span class="text-[8px] font-bold text-gray-400 tracking-tight leading-none text-center">No Foto</span>
+                                     </div>`;
+
+                              let card = document.getElementById('running-card-' + uidClean);
+                              const cardClasses = isMe ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100';
+
+                              if (!card) {
+                                  card = document.createElement('div');
+                                  card.id = 'running-card-' + uidClean;
+                                  card.className = `flex items-center gap-2 p-3 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  card.innerHTML = `
+                                      ${isMe ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>' : ''}
+                                      ${photoIcon}
+                                      <div class="flex-1 min-w-0 flex flex-col justify-center ml-1">
+                                          <div class="flex items-center gap-1.5 mb-1">
+                                              <span class="text-xs font-bold ${isMe ? 'text-blue-800' : 'text-gray-800'} truncate leading-none">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
+                                              <i class="fa-solid fa-spinner animate-spin text-[9px] text-blue-500"></i>
+                                          </div>
+                                          <div class="flex items-start gap-1">
+                                              <i class="fa-solid fa-motorcycle text-blue-500 text-[9px] mt-0.5 shrink-0"></i>
+                                              <p class="l-desc text-[10px] font-medium text-gray-500 line-clamp-1 leading-tight break-words">"${locationDesc}"</p>
+                                          </div>
+                                      </div>
+                                      <div class="shrink-0 flex items-center justify-end">
+                                          ${ongkirBadge}
+                                      </div>
+                                  `;
+                                  runningContainer.appendChild(card);
+                              } else {
+                                  card.className = `flex items-center gap-2 p-3 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  const descEl = card.querySelector('.l-desc');
+                                  if (descEl && descEl.innerText !== `"${locationDesc}"`) {
+                                      descEl.innerText = `"${locationDesc}"`;
+                                  }
+
+                                  runningContainer.appendChild(card);
+                              }
+                          });
+                      }
+                  }
+
               } catch (err) {
                   console.error("Critical Error saat merender antrean:", err);
                   const container = document.getElementById('radar-queue-list');
