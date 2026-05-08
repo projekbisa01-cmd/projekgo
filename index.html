@@ -974,6 +974,29 @@
         </div>
     </div>
 
+    <!-- POPUP KETERANGAN FOTO ONBID (BARU) -->
+    <div id="foto-standby-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div id="foto-standby-content" class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-blue-500"></div>
+            
+            <h3 class="text-xl font-black text-gray-800 mb-2 mt-2">Keterangan Lokasi</h3>
+            <p class="text-[11px] text-gray-600 mb-4 font-medium leading-relaxed italic">
+                Tuliskan patokan lokasi standby kamu agar mudah dipantau admin.
+            </p>
+
+            <img id="preview-foto-standby" class="w-full h-32 object-cover rounded-xl border border-gray-200 shadow-sm mb-4" src="" alt="Preview">
+
+            <textarea id="input-keterangan-standby" rows="2" placeholder="Contoh: Depan Indomaret Alun-alun" class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500 transition-colors mb-4 resize-none"></textarea>
+
+            <div class="flex w-full gap-3">
+                <button onclick="window.batalKirimFoto()" class="w-1/2 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl active:scale-95 transition-all text-sm">Batal</button>
+                <button id="btn-kirim-foto-final" onclick="window.kirimFotoStandby()" class="w-1/2 py-3 bg-blue-500 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-paper-plane"></i> Kirim
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- POPUP DEKLARASI KOMITMEN (READ ONLY - HALAMAN BULANAN) -->
     <div id="commitment-readonly-popup" class="fixed inset-0 z-[200] flex items-center justify-center px-4 opacity-0 pointer-events-none transition-opacity duration-500">
         <div class="absolute inset-0 bg-gray-900/90 backdrop-blur-sm transition-opacity" onclick="closeReadOnlyCommitment()"></div>
@@ -3350,12 +3373,122 @@
             }
         };
 
+        // Fungsi bantuan untuk men-convert DataURL Base64 ke Blob (untuk kompresi/manipulasi lanjutan jika butuh)
+        function dataURItoBlob(dataURI) {
+            var byteString = atob(dataURI.split(',')[1]);
+            var mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+            var ab = new ArrayBuffer(byteString.length);
+            var ia = new Uint8Array(ab);
+            for (var i = 0; i < byteString.length; i++) {
+                ia[i] = byteString.charCodeAt(i);
+            }
+            return new Blob([ab], {type: mimeString});
+        }
+
+        // --- ALUR BARU: POPUP KETERANGAN SETELAH FOTO ---
+        window.tempFotoStandbyBase64 = null;
+
+        window.tampilkanPopupKeteranganStandby = function(base64Data) {
+            window.tempFotoStandbyBase64 = base64Data;
+            
+            const popup = document.getElementById('foto-standby-popup');
+            const content = document.getElementById('foto-standby-content');
+            const previewImg = document.getElementById('preview-foto-standby');
+            const inputDesc = document.getElementById('input-keterangan-standby');
+            const btnFinal = document.getElementById('btn-kirim-foto-final');
+
+            if (popup && content && previewImg && inputDesc) {
+                previewImg.src = base64Data;
+                inputDesc.value = ""; // Reset form
+                if(btnFinal) {
+                    btnFinal.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Kirim';
+                    btnFinal.disabled = false;
+                }
+
+                popup.classList.remove('hidden');
+                popup.classList.add('flex');
+                setTimeout(() => {
+                    popup.classList.remove('opacity-0');
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                    inputDesc.focus();
+                }, 10);
+            }
+        };
+
+        window.batalKirimFoto = function() {
+            window.tempFotoStandbyBase64 = null;
+            const popup = document.getElementById('foto-standby-popup');
+            const content = document.getElementById('foto-standby-content');
+            
+            if (popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
+            }
+        };
+
+        window.kirimFotoStandby = function() {
+            if (!window.tempFotoStandbyBase64) return;
+
+            const inputDesc = document.getElementById('input-keterangan-standby');
+            const descValue = inputDesc.value.trim() || "Standby menunggu orderan";
+            const btnFinal = document.getElementById('btn-kirim-foto-final');
+            
+            if (btnFinal) {
+                btnFinal.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengirim...';
+                btnFinal.disabled = true;
+            }
+
+            const currentUserUID = localStorage.getItem('rider_uid');
+            if (currentUserUID && window.isFirebaseReady) {
+                const statusRef = window.FirebaseFirestoreDoc(window.FirebaseDB, '/status_rider_aktif', String(currentUserUID).trim());
+                
+                // MENGIRIM DATA KE FIREBASE
+                window.FirebaseFirestoreUpdateDoc(statusRef, {
+                    in_main_queue: true,
+                    last_drop_time: window.FirebaseServerTimestamp(),
+                    last_drop_desc: descValue,
+                    proof_desc: descValue,
+                    last_drop_image: window.tempFotoStandbyBase64
+                }).then(() => {
+                    if (typeof window.showCustomToast === 'function') {
+                        window.showCustomToast("Foto & Lokasi berhasil dikirim! Anda masuk antrean.");
+                    }
+                    window.batalKirimFoto(); // Tutup popup setelah sukses
+                }).catch(e => {
+                    console.error("Gagal mengirim foto standby:", e);
+                    alert("Gagal terhubung ke server. Silakan coba lagi.");
+                    if (btnFinal) {
+                        btnFinal.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Kirim';
+                        btnFinal.disabled = false;
+                    }
+                });
+            } else {
+                alert("Sistem belum siap. Coba beberapa saat lagi.");
+                if (btnFinal) {
+                    btnFinal.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Kirim';
+                    btnFinal.disabled = false;
+                }
+            }
+        };
+
+
         // Fungsi ini AKAN DIPANGGIL OLEH ANDROID NATIVE setelah gambar selesai dikompres
         window.receiveCompressedPhotoFromAndroid = function(base64Data) {
             try {
                 // Tambahkan prefix "data:image/jpeg;base64," jika Android hanya mengirimkan text mentahnya
                 const fullBase64 = base64Data.startsWith('data:image') ? base64Data : 'data:image/jpeg;base64,' + base64Data;
                 
+                // Alihkan ke popup keterangan
+                window.tampilkanPopupKeteranganStandby(fullBase64);
+                
+                // --- KODE LAMA DI-DISABLE, DIGANTIKAN ALUR POPUP DI ATAS ---
+                /*
                 // Simpan ke variabel global (sama seperti alur sebelumnya)
                 window.finishPhotoBase64 = fullBase64;
                 
@@ -3387,7 +3520,7 @@
                 
                 // Validasi agar tombol "Selesaikan Orderan" aktif
                 window.validateFinishOrder();
-                
+                */
             } catch (error) {
                 console.error("Gagal menerima gambar dari Android:", error);
                 alert("Gagal memproses gambar dari Android. Silakan coba lagi.");
@@ -3402,6 +3535,14 @@
                     // Panggil fungsi kompresi (maksimal lebar 800px, kualitas 70%) agar file ringan (< 500kb)
                     const compressedBase64 = await compressImage(file, 800, 0.7);
                     
+                    // Alihkan ke popup keterangan
+                    window.tampilkanPopupKeteranganStandby(compressedBase64);
+
+                    // Bersihkan input file agar bisa memilih gambar yang sama lagi jika batal
+                    input.value = "";
+                    
+                    // --- KODE LAMA DI-DISABLE, DIGANTIKAN ALUR POPUP DI ATAS ---
+                    /*
                     // Simpan base64 hasil kompresi ke variabel global agar bisa di-upload ke Firebase nanti
                     window.finishPhotoBase64 = compressedBase64;
                     
@@ -3432,6 +3573,7 @@
                     removeBtn.classList.add('flex');
                     
                     window.validateFinishOrder();
+                    */
                 } catch (error) {
                     console.error("Gagal mengkompresi gambar:", error);
                     alert("Gagal memproses gambar. Silakan coba lagi.");
