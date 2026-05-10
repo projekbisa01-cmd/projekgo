@@ -1391,6 +1391,12 @@
                 <div class="relative flex justify-center">
                     <input type="password" id="pin-input" inputmode="numeric" maxlength="6" class="w-full text-center tracking-[1em] text-3xl py-4 bg-white border border-gray-200 rounded-2xl shadow-inner focus:outline-none focus:ring-2 focus:ring-orange-500 font-black text-gray-800" placeholder="••••••">
                 </div>
+                <!-- TAMBAHAN: Container Konfirmasi PIN Baru (Tersembunyi by default) -->
+                <div id="pin-confirm-container" class="hidden w-full mt-4 animate-fadeIn">
+                    <p class="text-xs text-gray-500 mb-2 font-bold text-left px-2">Konfirmasi PIN Baru</p>
+                    <input type="password" id="pin-confirm-input" inputmode="numeric" maxlength="6" class="w-full text-center tracking-[1em] text-3xl py-4 bg-white border border-gray-200 rounded-2xl shadow-inner focus:outline-none focus:ring-2 focus:ring-orange-500 font-black text-gray-800" placeholder="••••••">
+                </div>
+                
                 <div id="pin-error-msg" class="hidden text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl border border-red-100 mt-2">PIN Salah!</div>
                 <div class="flex space-x-3 mt-6">
                     <button onclick="window.cancelPin()" class="w-1/3 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 transition-all text-sm border border-gray-200">Batal</button>
@@ -5766,9 +5772,32 @@
                     } catch(e) {}
                 }
 
-                // 2. VERIFIKASI UID SEPENUHNYA VIA FIRESTORE (Sangat Cepat - Menggantikan Fetch Google Sheets)
-                if (!hasCache && typeof window.verifyRiderUidFirestore === 'function') {
-                    const isUidValid = await window.verifyRiderUidFirestore(uid);
+                // 2. VERIFIKASI UID SEPENUHNYA VIA FIRESTORE (Menggantikan fungsi eksternal yang hilang)
+                if (!hasCache) {
+                    let isUidValid = false;
+                    try {
+                        // Gunakan dynamic import syntax karena kita ada di scope regular script
+                        const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                        const db = getFirestore();
+                        const targetProjectId = "onbid-2f87a"; // Hardcode sesuai config di bawah
+                        
+                        // Cek eksistensi UID di koleksi rider_profiles
+                        const profileRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', uid);
+                        const profileSnap = await getDoc(profileRef);
+                        
+                        if (profileSnap.exists()) {
+                            isUidValid = true;
+                            // Simpan nama rider jika ada
+                            if (profileSnap.data().name || profileSnap.data().nama_lengkap) {
+                                window.permanentRiderName = profileSnap.data().name || profileSnap.data().nama_lengkap;
+                            }
+                        }
+                    } catch (fbError) {
+                        console.error("Gagal cek Firestore untuk UID:", fbError);
+                        // Fallback darurat: Jika Firebase error (bukan karena uid tidak ada, tapi misal koneksi putus)
+                        // Kita biarkan lolos dulu ke cek PIN
+                        isUidValid = true; 
+                    }
                     
                     if (!isUidValid) {
                         errorMsg.innerText = `UID "${uid}" tidak terdaftar di sistem. Akses ditolak.`; 
@@ -5918,11 +5947,20 @@
                     window.prefetchedAllData = null;
                     window.prefetchedRiderData = null;
                 } else if (!hasLoadedFromCache || forceRefresh) {
-                    // OPTIMASI: HANYA narik data GAS jika forceRefresh (Manual Refresh) ATAU memori HP kosong
-                    const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
-                    if (!response.ok) throw new Error("Koneksi gagal.");
-                    const data = await response.json();
-                    items = Array.isArray(data) ? data : [];
+                    // MENGAMBIL DATA DARI GAS UNTUK RIWAYAT
+                    try {
+                        const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
+                        if (response.ok) {
+                            const data = await response.json();
+                            items = Array.isArray(data) ? data : [];
+                        } else {
+                            console.warn("GAS Fetch tidak OK, mengabaikan data GAS.");
+                            items = []; // Jika GAS gagal, biarkan kosong agar tidak force logout
+                        }
+                    } catch (fetchErr) {
+                        console.warn("Gagal terhubung ke GAS:", fetchErr);
+                        items = []; // Mencegah crash jika timeout
+                    }
                     
                     const uidLower = String(currentUserUID).trim().toLowerCase();
                     newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
@@ -5935,28 +5973,20 @@
                 // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
                 allRiderData = items;
                 
-                if (newData.length === 0) {
-                    // JIKA SETELAH FETCH UID BENAR-BENAR TIDAK ADA (DIHAPUS ADMIN)
-                    if (typeof window.handleLogout === 'function') {
-                        window.handleLogout("Sesi berakhir: UID Anda tidak lagi terdaftar di sistem.");
-                    } else {
-                        localStorage.removeItem('rider_uid');
-                        location.reload();
-                    }
-                    if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
-                    return;
+                // --- PERBAIKAN FATAL: JANGAN LOGOUT JIKA newData KOSONG ---
+                // Karena kita sudah pakai Firebase untuk verifikasi, jika newData (dari GAS) kosong, 
+                // itu berarti Rider belum punya orderan, BUKAN berarti UID-nya dihapus.
+                if (newData.length === 0 && !hasLoadedFromCache) {
+                    console.log("Rider belum memiliki riwayat pesanan di Spreadsheet.");
+                    // Jangan panggil handleLogout! Biarkan lanjut dengan array kosong.
                 }
                 
                 // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
-                currentUserUID = String(newData[0].UID).trim();
+                // Jika newData kosong, gunakan currentUserUID yang sedang aktif
+                currentUserUID = newData.length > 0 ? String(newData[0].UID).trim() : currentUserUID;
                 
                 if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
                 lastDataCount = newData.length; 
-                
-                // --- HYBRID DATA LOGIC: PISAHKAN DATA SHEET ---
-                // 1. Masukkan ke appsScriptData (Sesuai request: data hari ini dari Sheet TIDAK DIBUANG)
-                // KINI DIABAIKAN SESUAI REQUEST (100% Firebase untuk riwayat)
-                // appsScriptData = newData; 
                 
                 // 2. Jika module Firebase sudah siap, panggil listener khusus order hari ini
                 if (typeof window.startDailyOrdersListener === 'function') {
@@ -5969,12 +5999,16 @@
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
                 
             } catch (error) {
+                console.error("Error pada fetchData Utama:", error);
                 const refreshIcon = document.getElementById('refresh-icon');
                 if (refreshIcon) refreshIcon.classList.remove('refreshing');
 
+                // Jika gagal fetch dan cache kosong sama sekali, pastikan loading hilang
                 if (rawData.length === 0) {
-                    document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('login-page').style.display = 'flex';
-                    errorMsg.innerText = "Gagal memuat data. Periksa koneksi Anda."; errorMsg.classList.remove('hidden');
+                    document.getElementById('loading-overlay').style.display = 'none'; 
+                    document.getElementById('main-app').classList.remove('hidden');
+                    // Tampilkan UI meski kosong
+                    updateUI();
                 }
             }
         }
@@ -8810,38 +8844,73 @@
           // -------------------------------------------------------------
           // NEW: FUNGSI SISTEM PIN RIDER
           // -------------------------------------------------------------
-          window.checkRiderPin = function(uid) {
+          window.isSettingNewPin = false; // Flag untuk mode Buat PIN Baru
+
+          window.checkRiderPin = async function(uid) {
               window.tempLoginUid = uid; 
               
               // Ubah tampilan dari input UID ke input PIN
               document.getElementById('login-input-section').classList.add('hidden');
               document.getElementById('pin-section').classList.remove('hidden');
               document.getElementById('pin-input').value = '';
+              document.getElementById('pin-confirm-input').value = ''; // Reset input konfirmasi
               document.getElementById('pin-error-msg').classList.add('hidden');
               
-              // Sembunyikan error message utama jika ada
               const mainErrorMsg = document.getElementById('login-error-msg');
               if(mainErrorMsg) mainErrorMsg.classList.add('hidden');
+
+              const title = document.getElementById('pin-title');
+              const desc = document.getElementById('pin-desc');
+              const btn = document.getElementById('submit-pin-btn');
+              const confirmContainer = document.getElementById('pin-confirm-container');
+
+              try {
+                  const targetProjectId = firebaseConfig.projectId;
+                  const pinRef = doc(db, 'artifacts', targetProjectId, 'users', String(uid).trim().toUpperCase(), 'security', 'pin_data');
+                  const pinSnap = await getDoc(pinRef);
+
+                  if (pinSnap.exists() && pinSnap.data().pin) {
+                      // JIKA PIN SUDAH ADA -> Mode Login Normal
+                      window.isSettingNewPin = false;
+                      title.innerText = "Masukkan PIN";
+                      desc.innerText = "Masukkan 6 digit PIN keamanan Anda.";
+                      btn.innerHTML = '<i class="fa-solid fa-unlock-keyhole"></i> Lanjut';
+                      confirmContainer.classList.add('hidden');
+                  } else {
+                      // JIKA PIN BELUM ADA -> Mode Registrasi PIN Baru
+                      window.isSettingNewPin = true;
+                      title.innerText = "Buat PIN Baru";
+                      desc.innerText = "Akun baru terdeteksi. Silakan buat 6 digit PIN keamanan Anda.";
+                      btn.innerHTML = '<i class="fa-solid fa-save"></i> Simpan & Masuk';
+                      confirmContainer.classList.remove('hidden');
+                  }
+              } catch (error) {
+                  console.error("Gagal mengecek status PIN:", error);
+                  // Fallback jika offline/gagal fetch, anggap login normal
+                  window.isSettingNewPin = false;
+              }
           };
 
           window.cancelPin = function() {
               window.tempLoginUid = null;
+              window.isSettingNewPin = false;
               
               // Kembalikan ke tampilan input UID
               document.getElementById('pin-section').classList.add('hidden');
               document.getElementById('login-input-section').classList.remove('hidden');
               
-              // Reset tombol login
               const btn = document.getElementById('login-btn');
               if(btn) {
                   btn.innerHTML = 'Buka Dashboard';
                   btn.disabled = false;
               }
               document.getElementById('pin-error-msg').classList.add('hidden');
+              document.getElementById('pin-confirm-container').classList.add('hidden');
           };
 
           window.submitPin = async function() {
               const pinInput = document.getElementById('pin-input').value;
+              const confirmInput = document.getElementById('pin-confirm-input').value;
               const errorMsg = document.getElementById('pin-error-msg');
               const btn = document.getElementById('submit-pin-btn');
               const uid = window.tempLoginUid;
@@ -8854,55 +8923,71 @@
                   return;
               }
 
+              // Validasi tambahan jika sedang mode Buat PIN Baru
+              if (window.isSettingNewPin) {
+                  if (pinInput !== confirmInput) {
+                      errorMsg.innerText = "Konfirmasi PIN tidak sama!";
+                      errorMsg.classList.remove('hidden');
+                      return;
+                  }
+              }
+
               const originalBtnHtml = btn.innerHTML;
-              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memeriksa...';
+              btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses...';
               btn.disabled = true;
               errorMsg.classList.add('hidden');
 
               try {
                   const targetProjectId = firebaseConfig.projectId;
-                  
-                  // PERBAIKAN: Mengarahkan path PIN ke /users/{uid}/security/pin_data
                   const pinRef = doc(db, 'artifacts', targetProjectId, 'users', String(uid).trim().toUpperCase(), 'security', 'pin_data');
-                  const pinSnap = await getDoc(pinRef);
 
-                  let isValid = false;
+                  if (window.isSettingNewPin) {
+                      // --- PROSES MENYIMPAN PIN BARU ---
+                      await setDoc(pinRef, {
+                          pin: pinInput,
+                          created_at: serverTimestamp(),
+                          updated_at: serverTimestamp()
+                      }, { merge: true });
 
-                  if (pinSnap.exists()) {
-                      const data = pinSnap.data();
-                      // Cek PIN di database, jika belum diset oleh Admin maka pakai default '123456'
-                      const savedPin = data.pin || data.PIN || "123456"; 
-                      
-                      if (pinInput === String(savedPin)) {
-                          isValid = true;
-                      }
-                  } else {
-                      // Jika dokumen security/pin_data belum ada, beri akses dengan PIN default '123456'
-                      if (pinInput === "123456") {
-                          isValid = true;
-                      }
-                  }
-
-                  if (isValid) {
-                      // Lolos keamanan
+                      // Berhasil simpan, langsung alihkan ke Dashboard
                       document.getElementById('pin-section').classList.add('hidden');
                       btn.innerHTML = originalBtnHtml;
                       btn.disabled = false;
-                      
-                      // Teruskan ke fungsi bypass login utama
                       window.proceedWithLogin(uid);
+
                   } else {
-                      // PIN salah
-                      errorMsg.innerText = "PIN Salah! Silakan coba lagi.";
-                      errorMsg.classList.remove('hidden');
-                      btn.innerHTML = originalBtnHtml;
-                      btn.disabled = false;
-                      document.getElementById('pin-input').value = '';
+                      // --- PROSES LOGIN NORMAL (PENCOCOKAN PIN) ---
+                      const pinSnap = await getDoc(pinRef);
+                      let isValid = false;
+
+                      if (pinSnap.exists()) {
+                          const data = pinSnap.data();
+                          const savedPin = data.pin || data.PIN || "123456"; 
+                          if (pinInput === String(savedPin)) {
+                              isValid = true;
+                          }
+                      } else {
+                          // Fallback darurat
+                          if (pinInput === "123456") isValid = true;
+                      }
+
+                      if (isValid) {
+                          document.getElementById('pin-section').classList.add('hidden');
+                          btn.innerHTML = originalBtnHtml;
+                          btn.disabled = false;
+                          window.proceedWithLogin(uid);
+                      } else {
+                          errorMsg.innerText = "PIN Salah! Silakan coba lagi.";
+                          errorMsg.classList.remove('hidden');
+                          btn.innerHTML = originalBtnHtml;
+                          btn.disabled = false;
+                          document.getElementById('pin-input').value = '';
+                      }
                   }
 
               } catch (error) {
-                  console.error("Error checking PIN:", error);
-                  errorMsg.innerText = "Gagal memverifikasi keamanan. Pastikan koneksi internet stabil.";
+                  console.error("Error submit PIN:", error);
+                  errorMsg.innerText = "Gagal menghubungi server. Pastikan koneksi internet stabil.";
                   errorMsg.classList.remove('hidden');
                   btn.innerHTML = originalBtnHtml;
                   btn.disabled = false;
