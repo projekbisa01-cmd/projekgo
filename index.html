@@ -10261,7 +10261,9 @@
           // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
           // -------------------------------------------------------------
           let queueUnsubscribe = null;
+          let globalActiveOrdersUnsubscribe = null;
           let latestStatusSnapshot = null;
+          window.globalActiveOrdersMap = {};
 
           window.processAndRenderQueue = () => {
               if (!latestStatusSnapshot) return;
@@ -10504,13 +10506,22 @@
                   // 6. BANGUN/UPDATE UI KARTU RIDER SEDANG BERJALAN
                   const runningContainer = document.getElementById('radar-running-list');
                   if (runningContainer) {
-                      if (runningRiders.length === 0) {
+                      const processingOrders = window.globalActiveOrdersList || [];
+                      
+                      // Urutkan dari terbaru ke terlama berdasarkan accepted_at
+                      processingOrders.sort((a, b) => {
+                          const timeA = a.accepted_at?.seconds || 0;
+                          const timeB = b.accepted_at?.seconds || 0;
+                          return timeB - timeA;
+                      });
+
+                      if (processingOrders.length === 0) {
                           runningContainer.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-motorcycle text-4xl text-gray-200 mb-3 block"></i>Belum ada rider yang berjalan.</div>';
                       } else {
                           const emptyState = runningContainer.querySelector('.fa-motorcycle');
-                          if (emptyState) runningContainer.innerHTML = '';
+                          if (emptyState && !emptyState.closest('.rounded-xl')) runningContainer.innerHTML = '';
 
-                          const validRunningUids = new Set(runningRiders.map(r => String(r.uid).trim().toUpperCase()));
+                          const validRunningUids = new Set(processingOrders.map(r => String(r.rider_uid).trim().toUpperCase()));
                           Array.from(runningContainer.children).forEach(child => {
                               if (child.id && child.id.startsWith('running-card-')) {
                                   const childUid = child.id.replace('running-card-', '');
@@ -10520,49 +10531,25 @@
                               }
                           });
 
-                          runningRiders.forEach((rider) => {
-                              const uidClean = String(rider.uid || '').trim().toUpperCase();
+                          processingOrders.forEach((orderData, index) => {
+                              const uidClean = String(orderData.rider_uid || '').trim().toUpperCase();
                               const myUidClean = String(currentUserUID || '').trim().toUpperCase();
                               const isMe = uidClean === myUidClean;
 
-                              const name = rider.name || 'Rider';
-                              const locationDesc = rider.last_drop_desc || 'Sedang memproses orderan';
+                              const name = orderData.rider_name || 'Rider';
                               
-                              let ongkirBadge = `<span id="badge-ongkir-${uidClean}" class="text-[10px] font-bold text-blue-500 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 whitespace-nowrap shadow-sm"><i class="fa-solid fa-motorcycle"></i> Berjalan</span>`;
-                              // Fitur tarik data fee dihapus untuk hemat kuota read Firebase
-
-                              let imageSrc = rider.last_drop_image || null;
-                              if (imageSrc && typeof imageSrc === 'string') {
-                                  imageSrc = imageSrc.trim();
-                                  if (imageSrc.includes('ibb.co')) {
-                                      if (!imageSrc.startsWith('http')) imageSrc = 'https://' + imageSrc;
-                                      imageSrc = imageSrc.replace('ibb.co/', 'ibb.co.com/');
-                                  } else if (!imageSrc.startsWith('http://') && !imageSrc.startsWith('https://') && imageSrc.length > 100) {
-                                      let pureBase64 = imageSrc;
-                                      if (imageSrc.includes('base64,')) pureBase64 = imageSrc.split('base64,')[1];
-                                      pureBase64 = pureBase64.replace(/[^A-Za-z0-9+/=]/g, '');
-                                      if (pureBase64.length > 0) imageSrc = `data:image/jpeg;base64,${pureBase64}`;
-                                      else imageSrc = null;
+                              const fee = Number(orderData.fee || orderData.Fee || orderData.nominal_kotor || orderData.Nominal_Kotor || 0);
+                              const extra = Number(orderData.extra || orderData.Extra || orderData.tambahan || orderData.Tambahan || 0);
+                              
+                              let ongkirText = "";
+                              if (fee > 0 || extra > 0) {
+                                  ongkirText = `Rp ${fee.toLocaleString('id-ID')}`;
+                                  if (extra > 0) {
+                                      ongkirText += ` + ${extra.toLocaleString('id-ID')}`;
                                   }
                               }
-                              const hasPhoto = imageSrc ? true : false;
-                              
-                              window.riderImagesMap = window.riderImagesMap || {};
-                              if (hasPhoto) window.riderImagesMap[uidClean] = imageSrc;
 
-                              const photoIcon = hasPhoto 
-                                  ? `<div class="icon-wrap w-12 flex flex-col items-center justify-center shrink-0 cursor-pointer active:scale-90 transition-transform" onclick="window.showRiderImagePreview('${uidClean}')">
-                                      <div class="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center border border-blue-100 shadow-inner mb-1">
-                                          <i class="fa-solid fa-image text-sm"></i>
-                                      </div>
-                                      <span class="text-[8px] font-bold text-blue-600 tracking-tight leading-none text-center">Lihat Foto</span>
-                                     </div>`
-                                  : `<div class="icon-wrap w-12 flex flex-col items-center justify-center shrink-0">
-                                      <div class="w-9 h-9 rounded-full bg-gray-50 text-gray-300 flex items-center justify-center border border-gray-100 shadow-inner mb-1">
-                                          <i class="fa-solid fa-camera text-sm"></i>
-                                      </div>
-                                      <span class="text-[8px] font-bold text-gray-400 tracking-tight leading-none text-center">No Foto</span>
-                                     </div>`;
+                              let ongkirBadge = `<div class="flex flex-col items-end"><span id="badge-ongkir-${uidClean}" class="text-[10px] font-bold text-blue-500 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 whitespace-nowrap shadow-sm"><i class="fa-solid fa-motorcycle"></i> Berjalan</span>${ongkirText ? `<span class="text-[10px] font-black text-gray-700 mt-1">${ongkirText}</span>` : ''}</div>`;
 
                               let card = document.getElementById('running-card-' + uidClean);
                               const cardClasses = isMe ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100';
@@ -10570,32 +10557,38 @@
                               if (!card) {
                                   card = document.createElement('div');
                                   card.id = 'running-card-' + uidClean;
-                                  card.className = `flex items-center gap-2 p-3 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  card.className = `flex items-center gap-3 p-4 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
                                   card.innerHTML = `
                                       ${isMe ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>' : ''}
-                                      ${photoIcon}
-                                      <div class="flex-1 min-w-0 flex flex-col justify-center ml-1">
+                                      <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center border border-blue-200 shadow-inner shrink-0">
+                                          <i class="fa-solid fa-motorcycle"></i>
+                                      </div>
+                                      <div class="flex-1 min-w-0 flex flex-col justify-center">
                                           <div class="flex items-center gap-1.5 mb-1">
-                                              <span class="text-xs font-bold ${isMe ? 'text-blue-800' : 'text-gray-800'} truncate leading-none">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
-                                              <i class="fa-solid fa-spinner animate-spin text-[9px] text-blue-500"></i>
+                                              <span class="text-sm font-bold ${isMe ? 'text-blue-800' : 'text-gray-800'} truncate leading-none">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
                                           </div>
-                                          <div class="flex items-start gap-1">
-                                              <i class="fa-solid fa-motorcycle text-blue-500 text-[9px] mt-0.5 shrink-0"></i>
-                                              <p class="l-desc text-[10px] font-medium text-gray-500 line-clamp-1 leading-tight break-words">"${locationDesc}"</p>
+                                          <div class="flex items-center gap-1.5">
+                                              <i class="fa-solid fa-spinner animate-spin text-[10px] text-blue-500"></i>
+                                              <p class="text-[10px] font-medium text-blue-600 leading-tight">Sedang memproses orderan</p>
                                           </div>
                                       </div>
                                       <div class="shrink-0 flex items-center justify-end">
                                           ${ongkirBadge}
                                       </div>
                                   `;
-                                  runningContainer.appendChild(card);
                               } else {
-                                  card.className = `flex items-center gap-2 p-3 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
-                                  const descEl = card.querySelector('.l-desc');
-                                  if (descEl && descEl.innerText !== `"${locationDesc}"`) {
-                                      descEl.innerText = `"${locationDesc}"`;
+                                  card.className = `flex items-center gap-3 p-4 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  
+                                  const existingBadgeContainer = card.querySelector('.shrink-0.flex.items-center.justify-end');
+                                  if (existingBadgeContainer && existingBadgeContainer.innerHTML !== ongkirBadge) {
+                                      existingBadgeContainer.innerHTML = ongkirBadge;
                                   }
+                              }
 
+                              // Pastikan urutan DOM sesuai dengan urutan array yang sudah disortir
+                              if (runningContainer.children[index] !== card) {
+                                  runningContainer.insertBefore(card, runningContainer.children[index]);
+                              } else if (!card.parentNode) {
                                   runningContainer.appendChild(card);
                               }
                           });
@@ -10626,7 +10619,30 @@
 
               // PENGHEMATAN KUOTA: Listener 'busy_riders' dari active_orders telah DIBUANG sepenuhnya!
               // Radar sekarang murni hanya 1 tarikan data dari status_rider_aktif
+              // TAMBAHAN: Untuk menampilkan ongkir, kita tambahkan listener ke active_orders (sangat efisien karena isinya hanya order yang sedang aktif)
               
+              const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+              const activeOrdersRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'active_orders');
+              const activeOrdersProcessingQuery = query(activeOrdersRef, where('status', '==', 'processing'));
+              
+              globalActiveOrdersUnsubscribe = onSnapshot(activeOrdersProcessingQuery, (snapshot) => {
+                  window.globalActiveOrdersMap = {};
+                  window.globalActiveOrdersList = [];
+                  snapshot.forEach(docSnap => {
+                      const data = docSnap.data();
+                      if (data.rider_uid) {
+                          window.globalActiveOrdersMap[String(data.rider_uid).trim().toUpperCase()] = {
+                              fee: data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor || 0,
+                              extra: data.extra || data.Extra || data.tambahan || data.Tambahan || 0
+                          };
+                          window.globalActiveOrdersList.push(data);
+                      }
+                  });
+                  if (typeof window.processAndRenderQueue === 'function') window.processAndRenderQueue();
+              }, (error) => {
+                  console.error("Error fetching active orders globally:", error);
+              });
+
               const statusRef = collection(db, '/status_rider_aktif');
               queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
                   latestStatusSnapshot = snapshot;
@@ -10646,6 +10662,11 @@
                   queueUnsubscribe();
                   queueUnsubscribe = null;
               }
+              if (globalActiveOrdersUnsubscribe) {
+                  globalActiveOrdersUnsubscribe();
+                  globalActiveOrdersUnsubscribe = null;
+              }
+              window.globalActiveOrdersMap = {};
               latestStatusSnapshot = null;
               
               const container = document.getElementById('radar-queue-list');
