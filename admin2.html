@@ -5550,9 +5550,13 @@
         };
 
         window.addRider = async () => {
-            const uid = document.getElementById('new-rider-uid').value.trim();
+            let uid = document.getElementById('new-rider-uid').value.trim();
             const name = document.getElementById('new-rider-name').value.trim();
-            if(!uid || !name) { window.showAlert('Gagal', 'ID/No.HP dan Nama wajib diisi.', 'warning'); return; }
+            
+            // Bersihkan UID dari spasi dan karakter aneh yang bisa membuat Firebase Error
+            uid = uid.replace(/[^a-zA-Z0-9_-]/g, '');
+
+            if(!uid || !name) { window.showAlert('Gagal', 'ID/No.HP dan Nama wajib diisi dengan benar.', 'warning'); return; }
 
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden'); loader.classList.add('flex');
@@ -5581,22 +5585,96 @@
                     updated_at: serverTimestamp()
                 }, { merge: true });
 
+                // 1. Buat Profil Dasar di /users/{uid}
+                const refProfile = doc(db, 'artifacts', firebaseConfig.projectId, 'users', uid);
+                batch.set(refProfile, {
+                    uid: uid,
+                    name: name,
+                    phone: uid, 
+                    role: 'rider',
+                    is_active: true,
+                    created_at: serverTimestamp()
+                }, { merge: true });
+
+                // 2. Buat Pancingan Folder Security (PIN) agar APK mendeteksinya dan memunculkan menu setup PIN
+                const refPin = doc(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'security', 'pin_data');
+                batch.set(refPin, {
+                    is_setup: false, // Flag ini yang memicu APK memunculkan "Buat PIN Baru"
+                    pin_hash: "",
+                    updated_at: serverTimestamp()
+                }, { merge: true });
+
+                // 3. Buat Pancingan Device Binding
+                const refDevice = doc(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'device_binding', 'info');
+                batch.set(refDevice, {
+                    is_bound: false, // Flag ini menandakan rider belum login di device manapun
+                    device_id: "",
+                    device_model: "",
+                    updated_at: serverTimestamp()
+                }, { merge: true });
+
+                // 4. Tambahkan juga ke koleksi 'rider_profiles' di dalam path artifacts
+                const refRiderProfile = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', uid);
+                batch.set(refRiderProfile, {
+                    uid: uid,
+                    name: name,
+                    phone: uid,
+                    role: 'rider',
+                    is_active: true,
+                    created_at: serverTimestamp()
+                }, { merge: true });
+
                 await batch.commit();
-                window.showAlert('Berhasil', 'Rider baru berhasil ditambahkan.', 'success');
+                window.showAlert('Berhasil', 'Rider baru berhasil ditambahkan dan siap login.', 'success');
                 document.getElementById('new-rider-uid').value = '';
                 document.getElementById('new-rider-name').value = '';
                 window.renderManageRiders();
             } catch(e) {
-                window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
+                console.error("Error saat Simpan Rider:", e);
+                // Menampilkan pesan error asli dari Firebase agar ketahuan masalahnya
+                window.showAlert('Gagal Menyimpan', `Error: ${e.message}`, 'error');
             } finally {
                 loader.classList.add('hidden'); loader.classList.remove('flex');
             }
         };
 
         window.deleteRider = (uid, name) => {
-            window.showConfirm('Hapus Rider?', `Yakin ingin menghapus permanen rider ${name} (ID: ${uid})? Semua status dan saldo akan terhapus.`, async () => {
+            const modal = document.getElementById('custom-modal');
+            const icon = document.getElementById('custom-modal-icon');
+            const inputEl = document.getElementById('custom-modal-input');
+            const selectEl = document.getElementById('custom-modal-select-wrapper');
+            
+            icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-rose-50 text-rose-500 border-rose-100';
+            icon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
+            
+            document.getElementById('custom-modal-title').innerText = 'Hapus Rider Permanen?';
+            document.getElementById('custom-modal-text').innerHTML = `Tindakan ini tidak dapat dibatalkan. Untuk melanjutkan penghapusan <b>${name}</b> (ID: ${uid}), ketik ulang nama rider di bawah ini:`;
+            
+            selectEl.classList.add('hidden');
+            inputEl.classList.remove('hidden');
+            inputEl.type = 'text';
+            inputEl.value = '';
+            inputEl.placeholder = `Ketik: ${name}`;
+            inputEl.oninput = null; // Reset event listener jika ada
+            
+            document.getElementById('custom-modal-actions').innerHTML = `
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button id="btn-confirm-delete-rider" class="flex-1 py-3 bg-rose-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-trash"></i> Hapus</button>
+            `;
+            
+            document.getElementById('btn-confirm-delete-rider').onclick = async () => {
+                const typedName = inputEl.value.trim();
+                
+                // Validasi pencocokan nama (Mengabaikan huruf besar/kecil)
+                if (typedName.toLowerCase() !== name.toLowerCase()) {
+                    window.showAlert('Gagal Hapus', 'Nama yang diketik tidak cocok dengan nama rider. Penghapusan dibatalkan demi keamanan.', 'error');
+                    return;
+                }
+                
+                modal.classList.add('hidden'); modal.classList.remove('flex');
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
+                
                 try {
                     const batch = writeBatch(db);
                     batch.delete(doc(db, 'status_rider_aktif', uid));
@@ -5604,15 +5682,21 @@
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_tabungan', uid));
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan', uid));
                     
+                    // Tambahan: Hapus juga data dari profil
+                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', uid));
+                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', uid));
+                    
                     await batch.commit();
-                    window.showAlert('Berhasil', 'Data Rider berhasil dihapus.', 'success');
+                    window.showAlert('Berhasil', 'Data Rider berhasil dihapus secara permanen dari seluruh sistem.', 'success');
                     window.renderManageRiders();
                 } catch(e) {
                     window.showAlert('Gagal', 'Terjadi kesalahan saat menghapus data.', 'error');
                 } finally {
                     loader.classList.add('hidden'); loader.classList.remove('flex');
                 }
-            });
+            };
+            
+            modal.classList.remove('hidden'); modal.classList.add('flex');
         };
 
         window.processLanjutInput = () => {
