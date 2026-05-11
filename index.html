@@ -10065,14 +10065,32 @@
                               const custName = window.currentActiveCustomerName || 'Pelanggan';
                               const jamSekarang = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                               
-                              await setDoc(dailyOrderRef, {
+                              // Kumpulkan data dalam satu objek
+                              const transferData = {
                                   payment_type: 'Transfer',
                                   payment_nominal: payNominal,
                                   Nama_Pelanggan: custName, // Menjaga agar nama tidak hilang di rekap transfer
                                   Jam: jamSekarang, // Fallback waktu
                                   updated_at: serverTimestamp(),
                                   created_at: serverTimestamp() // Fallback urutan waktu
-                              }, { merge: true });
+                              };
+
+                              // 1. Tulis langsung saat ini juga
+                              await setDoc(dailyOrderRef, transferData, { merge: true });
+                              
+                              // 2. ASURANSI RACE CONDITION: Tulis ulang setelah 4 detik
+                              // (Sistem Admin kemungkinan menimpa/overwrite dokumen ini saat memindahkan data. 
+                              // Delay ini memastikan data 'Transfer' kita masuk paling akhir).
+                              setTimeout(async () => {
+                                  try {
+                                      await setDoc(dailyOrderRef, {
+                                          payment_type: 'Transfer',
+                                          payment_nominal: payNominal,
+                                          updated_at: serverTimestamp()
+                                      }, { merge: true });
+                                      console.log("Data Transfer diverifikasi ulang ke daily_orders.");
+                                  } catch(e) {}
+                              }, 4000);
                               
                               console.log("Data Transfer berhasil disimpan untuk rekap Rider.");
                           }
