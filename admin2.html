@@ -2154,22 +2154,40 @@
                 const isActiveNow = isOnline && isAvailable;
                 const inMainQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
 
-                // Jika terdeteksi offline lebih dari 30 menit, reset tiketnya secara mandiri
-                if (!isActiveNow && inMainQueue) {
+                // Jika terdeteksi tidak aktif, pastikan dibuang dari antrean visual dan cek durasi untuk reset tiket
+                if (!isActiveNow) {
                     const lastUpdatedMs = getTimestampMs(rider.last_updated);
-                    if (lastUpdatedMs > 0) {
+                    const dropTimeCheck = getTimestampMs(rider.last_drop_time);
+                    const dropDateCheck = new Date(dropTimeCheck);
+                    
+                    let updates = {};
+                    let needUpdate = false;
+
+                    // 1. Langsung dibuang dari antrean utama secara sistem (untuk visual UI)
+                    if (inMainQueue) {
+                        updates.in_main_queue = false;
+                        needUpdate = true;
+                    }
+
+                    // 2. Cek apakah sudah offline > 30 menit untuk mereset tiket DO
+                    if (lastUpdatedMs > 0 && dropDateCheck.getFullYear() > 2000) {
                         const lamaOffMins = (now - lastUpdatedMs) / (1000 * 60);
                         if (lamaOffMins > 30) {
-                            const ref = doc(db, 'status_rider_aktif', rider.uid);
-                            updateDoc(ref, { 
-                                in_main_queue: false, 
-                                last_drop_time: new Date("2000-01-01T00:00:00Z"),
-                                last_drop_desc: "Baru Masuk Shift", 
-                                proof_desc: "Rider masuk shift",
-                                proof_url: "", photo_url: "", image_url: "", location: "",
-                                last_updated: serverTimestamp()
-                            }).catch(e => {});
+                            updates.last_drop_time = new Date("2000-01-01T00:00:00Z");
+                            updates.last_drop_desc = "on lagi";
+                            updates.proof_desc = "Rider masuk shift";
+                            updates.proof_url = ""; 
+                            updates.photo_url = ""; 
+                            updates.image_url = ""; 
+                            updates.location = "";
+                            updates.last_updated = serverTimestamp();
+                            needUpdate = true;
                         }
+                    }
+
+                    if (needUpdate) {
+                        const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        updateDoc(ref, updates).catch(e => {});
                     }
                 }
             });
@@ -2622,6 +2640,15 @@
                         if (prevRider) {
                             const wasActive = (prevRider.is_online === true || prevRider.is_online === 'true') && (prevRider.is_available === true || prevRider.is_available === 'true');
                             
+                            // LANGSUNG BUANG DARI ANTREAN JIKA OFFLINE/TIDAK TERSEDIA
+                            if (wasActive && !isNowActive && (prevRider.in_main_queue === true || prevRider.in_main_queue === 'true')) {
+                                const ref = doc(db, 'status_rider_aktif', uid);
+                                updateDoc(ref, {
+                                    in_main_queue: false,
+                                    last_updated: serverTimestamp()
+                                }).catch(e => {});
+                            }
+
                             // LOGIKA TIKET DO (ARGOMETER OFFLINE MAKS 30 MENIT)
                             // 1. Trigger mendeteksi rider yang kembali On-Bid setelah sebelumnya Off-Bid
                             if (!wasActive && isNowActive) {
@@ -2642,14 +2669,14 @@
                                             // MENGUBAH DATA LOKAL SECARA INSTAN AGAR UI TIDAK BERKEDIP MENAMPILKAN DATA LAMA
                                             data.in_main_queue = false;
                                             data.last_drop_time = new Date("2000-01-01T00:00:00Z");
-                                            data.last_drop_desc = "Baru Masuk Shift";
+                                            data.last_drop_desc = "on lagi";
                                             data.proof_desc = "Rider masuk shift";
                                             data.proof_url = ""; data.photo_url = ""; data.image_url = ""; data.location = "";
 
                                             updateDoc(ref, { 
                                                 in_main_queue: false, 
                                                 last_drop_time: new Date("2000-01-01T00:00:00Z"), // Tiket DO direset (Nol)
-                                                last_drop_desc: "Baru Masuk Shift", 
+                                                last_drop_desc: "on lagi", 
                                                 proof_desc: "Rider masuk shift", 
                                                 proof_url: "",
                                                 photo_url: "",
@@ -2657,12 +2684,14 @@
                                                 location: "",
                                                 last_updated: serverTimestamp() 
                                             });
-                                        } else if (lamaOffMins >= 1) {
-                                            // 4. Tiket Masih Berlaku: OFF masih di bawah 30 menit. Izinkan masuk dan gunakan tiket DO aslinya
+                                        } else {
+                                            // 4. Tiket Masih Berlaku: OFF masih di bawah 30 menit. Kembalikan ke antrean utama
+                                            let ketDesc = `Aktif Kembali`;
+                                            if (lamaOffMins >= 1) ketDesc = `Aktif Kembali (${Math.round(lamaOffMins)} mnt)`;
+                                            
                                             updateDoc(ref, { 
                                                 in_main_queue: true, 
-                                                // Tidak merubah last_drop_time agar tiket DO tetap valid dan aman
-                                                last_drop_desc: `Aktif Kembali (${Math.round(lamaOffMins)} mnt)`, 
+                                                last_drop_desc: ketDesc, 
                                                 last_updated: serverTimestamp() 
                                             });
                                         }
@@ -2671,6 +2700,7 @@
                             }
                         }
                     }
+
                 });
 
                 newShiftRiders = [];
@@ -3089,7 +3119,9 @@
                             UID: selectedUid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                             Nama_Pelanggan: orderDoc.data().customer_name || '-', Nominal_Kotor: (orderDoc.data().fee || 0) / 1000,
                             Tambahan: (orderDoc.data().tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
-                            created_at: serverTimestamp()
+                            created_at: serverTimestamp(),
+                            payment_type: orderDoc.data().payment_type || null,
+                            payment_nominal: orderDoc.data().payment_nominal || null
                         });
 
                         transaction.update(orderRef, {
@@ -3165,7 +3197,9 @@
                         UID: nextRider.uid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                         Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
                         Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
-                        created_at: serverTimestamp()
+                        created_at: serverTimestamp(),
+                        payment_type: currentData.payment_type || null,
+                        payment_nominal: currentData.payment_nominal || null
                     });
 
                     transaction.update(orderRef, {
@@ -3315,7 +3349,9 @@
                             UID: nextRider.uid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                             Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
                             Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
-                            created_at: serverTimestamp()
+                            created_at: serverTimestamp(),
+                            payment_type: currentData.payment_type || null,
+                            payment_nominal: currentData.payment_nominal || null
                         });
 
                         transaction.update(orderRef, {
@@ -4410,6 +4446,20 @@
                 const saldo = parseInt(b.saldo || 0);
                 const safeEncodedUid = encodeURIComponent(String(b.id || ''));
 
+                // --- DETEKSI DOUBLE TABUNGAN UNTUK BADGE ---
+                let doubleTabunganWarning = '';
+                if (b.edit_logs && b.edit_logs.length >= 2) {
+                    const log1 = b.edit_logs[0];
+                    const log2 = b.edit_logs[1];
+                    if (log1 && log2 && log1.action.includes('Setor') && log2.action.includes('Setor') && log1.amount === log2.amount) {
+                        const timeDiff = Math.abs(log1.time - log2.time);
+                        if (timeDiff < 300000) { // 5 menit (300.000 ms)
+                            doubleTabunganWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Setoran</span></div>';
+                        }
+                    }
+                }
+                // --- END DETEKSI ---
+
                 html += `
                     <div class="rounded-xl p-3.5 border bg-white border-gray-100 shadow-sm flex flex-col mt-2 transition-all hover:border-teal-300">
                         <div class="flex justify-between items-center w-full">
@@ -4420,6 +4470,7 @@
                                 </div>
                                 <span class="text-[9px] text-slate-500 font-bold truncate">Tabungan Saat Ini</span>
                                 <div class="font-black text-lg text-teal-600 mt-0.5">Rp ${saldo.toLocaleString('id-ID')}</div>
+                                ${doubleTabunganWarning}
                             </div>
                             <div class="flex flex-col items-end gap-1.5 shrink-0 relative ml-2">
                                 <button type="button" onclick="window.openRiwayatTabungan('${safeEncodedUid}')" class="w-full bg-slate-50 text-slate-600 px-3 py-2 rounded-lg text-[9px] font-black uppercase hover:bg-slate-200 transition-colors border border-slate-200 flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer" title="Riwayat Tabungan"><i class="fa-solid fa-clock-rotate-left"></i> Riwayat</button>
@@ -5175,7 +5226,7 @@
                 if (b.edit_logs && b.edit_logs.length >= 2) {
                     const log1 = b.edit_logs[0];
                     const log2 = b.edit_logs[1];
-                    if (log1 && log2 && log1.action === 'Top Up' && log2.action === 'Top Up' && log1.amount === log2.amount) {
+                    if (log1 && log2 && log1.action.includes('Top Up') && log2.action.includes('Top Up') && log1.amount === log2.amount) {
                         const timeDiff = Math.abs(log1.time - log2.time);
                         if (timeDiff < 300000) { // 5 menit (300.000 ms)
                             doubleTopUpWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Top-Up</span></div>';
@@ -5747,17 +5798,25 @@
 
             const warningBox = document.getElementById('confirm-double-warning');
             warningBox.classList.add('hidden');
-            if (window.tempTx.module === 'saldo' && actionType === 'add') {
+            
+            const isTopUp = window.tempTx.module === 'saldo' && actionType === 'add';
+            const isSetorTabungan = window.tempTx.module === 'tabungan' && actionType === 'add';
+
+            if (isTopUp || isSetorTabungan) {
                 const logs = window.tempTx.editLogs || [];
                 if (logs.length > 0) {
                     const lastLog = logs[0];
-                    if (lastLog.action === 'Top Up' && lastLog.amount === amount) {
+                    // Toleransi kecocokan nama action agar kompatibel dengan data riwayat yang sudah ada
+                    const isActionMatch = (isTopUp && lastLog.action.includes('Top Up')) || (isSetorTabungan && lastLog.action.includes('Setor'));
+                    
+                    if (isActionMatch && lastLog.amount === amount) {
                         const timeDiffMs = Date.now() - lastLog.time;
-                        if (timeDiffMs < 300000) { 
+                        if (timeDiffMs < 300000) { // 5 menit (300.000 ms)
                             const mins = Math.floor(timeDiffMs / 60000);
                             const secs = Math.floor((timeDiffMs % 60000) / 1000);
                             const timeText = mins > 0 ? `${mins} menit ${secs} detik` : `${secs} detik`;
-                            document.getElementById('confirm-double-text').innerText = `Anda baru saja Top Up nominal Rp ${amount.toLocaleString('id-ID')} pada ${timeText} yang lalu. Yakin ingin menginputnya lagi?`;
+                            const actionName = isTopUp ? 'Top Up Saldo' : 'Setor Tabungan';
+                            document.getElementById('confirm-double-text').innerText = `Anda baru saja ${actionName} nominal Rp ${amount.toLocaleString('id-ID')} pada ${timeText} yang lalu. Yakin ingin menginputnya lagi?`;
                             warningBox.classList.remove('hidden');
                         }
                     }
