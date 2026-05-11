@@ -10013,7 +10013,8 @@
                   if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
                   
                   const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
-                  await updateDoc(orderRef, {
+                  // UBAH JADI TASK PROMISE (TIDAK LANGSUNG AWAIT) AGAR BISA JALAN BERSAMAAN
+                  const updateOrderTask = updateDoc(orderRef, {
                       status: 'completed',
                       finished_at: serverTimestamp(),
                       proof_desc: desc,
@@ -10036,9 +10037,10 @@
                       window.isRestingAfterFinish = false; // Reset flag
                   }
                   
+                  let updateStatusTask = Promise.resolve();
                   if (currentUserUID) {
                       const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                      await setDoc(statusRef, { 
+                      updateStatusTask = setDoc(statusRef, { 
                           is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
                           is_online: newOnbidStatus,
                           in_main_queue: newOnbidStatus,
@@ -10050,58 +10052,52 @@
                       }, { merge: true });
                   }
                   
-                  // --- SIMPAN PENCATATAN KHUSUS TRANSFER (UNTUK REKAP RIDER) ---
+                  // --- SIMPAN PENCATATAN KHUSUS TRANSFER (UNTUK REKAP RIDER) BERSAMAAN ---
+                  let updateTransferTask = Promise.resolve();
                   if (window.tempPaymentData && currentUserUID) {
-                      try {
-                          const orderId = window.currentActiveOrderId;
-                          const payType = window.tempPaymentData.type;
-                          const payNominal = window.tempPaymentData.nominal || 0;
+                      const orderId = window.currentActiveOrderId;
+                      const payType = window.tempPaymentData.type;
+                      const payNominal = window.tempPaymentData.nominal || 0;
 
-                          // HANYA simpan ke Firebase jika metode pembayarannya Transfer
-                          // Tunai diabaikan sesuai permintaan agar tidak membebani database
-                          if (payType === 'Transfer') {
-                              const dailyOrderRef = doc(db, 'artifacts', appId, 'users', currentUserUID, 'daily_orders', orderId);
-                              
-                              const custName = window.currentActiveCustomerName || 'Pelanggan';
-                              const jamSekarang = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
-                              
-                              // Kumpulkan data dalam satu objek
-                              const transferData = {
-                                  payment_type: 'Transfer',
-                                  payment_nominal: payNominal,
-                                  Nama_Pelanggan: custName, // Menjaga agar nama tidak hilang di rekap transfer
-                                  Jam: jamSekarang, // Fallback waktu
-                                  updated_at: serverTimestamp(),
-                                  created_at: serverTimestamp() // Fallback urutan waktu
-                              };
-
-                              // 1. Tulis langsung saat ini juga
-                              await setDoc(dailyOrderRef, transferData, { merge: true });
-                              
-                              // 2. ASURANSI RACE CONDITION: Tulis ulang setelah 4 detik
-                              // (Sistem Admin kemungkinan menimpa/overwrite dokumen ini saat memindahkan data. 
-                              // Delay ini memastikan data 'Transfer' kita masuk paling akhir).
-                              setTimeout(async () => {
-                                  try {
-                                      await setDoc(dailyOrderRef, {
-                                          payment_type: 'Transfer',
-                                          payment_nominal: payNominal,
-                                          updated_at: serverTimestamp()
-                                      }, { merge: true });
-                                      console.log("Data Transfer diverifikasi ulang ke daily_orders.");
-                                  } catch(e) {}
-                              }, 4000);
-                              
-                              console.log("Data Transfer berhasil disimpan untuk rekap Rider.");
-                          }
+                      // HANYA simpan ke Firebase jika metode pembayarannya Transfer
+                      if (payType === 'Transfer') {
+                          const dailyOrderRef = doc(db, 'artifacts', appId, 'users', currentUserUID, 'daily_orders', orderId);
                           
-                          // Bersihkan cache / sisa lokal
-                          const orderKey = `pay_${currentUserUID}_${window.currentActiveOrderId}`;
-                          localStorage.removeItem(orderKey);
-                      } catch (err) {
-                          console.error("Gagal update payment ke Firebase:", err);
+                          const custName = window.currentActiveCustomerName || 'Pelanggan';
+                          const jamSekarang = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                          
+                          const transferData = {
+                              payment_type: 'Transfer',
+                              payment_nominal: payNominal,
+                              Nama_Pelanggan: custName, 
+                              Jam: jamSekarang, 
+                              updated_at: serverTimestamp(),
+                              created_at: serverTimestamp() 
+                          };
+
+                          updateTransferTask = setDoc(dailyOrderRef, transferData, { merge: true });
+                          
+                          // 2. ASURANSI RACE CONDITION: Tetap ada, tulis ulang setelah 3.5 detik
+                          setTimeout(async () => {
+                              try {
+                                  await setDoc(dailyOrderRef, {
+                                      payment_type: 'Transfer',
+                                      payment_nominal: payNominal,
+                                      updated_at: serverTimestamp()
+                                  }, { merge: true });
+                                  console.log("Data Transfer diverifikasi ulang ke daily_orders.");
+                              } catch(e) {}
+                          }, 3500);
                       }
+                      
+                      // Bersihkan cache / sisa lokal
+                      const orderKey = `pay_${currentUserUID}_${window.currentActiveOrderId}`;
+                      localStorage.removeItem(orderKey);
                   }
+
+                  // EKSEKUSI SEMUA PROSES KE FIREBASE SECARA BERSAMAAN (PARALEL)
+                  await Promise.all([updateOrderTask, updateStatusTask, updateTransferTask]);
+                  console.log("Semua data pesanan & pembayaran berhasil disimpan berbarengan.");
 
                   if(typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
                   
