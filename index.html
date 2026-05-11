@@ -10050,21 +10050,38 @@
                       }, { merge: true });
                   }
                   
-                  // --- SIMPAN RIWAYAT PEMBAYARAN TRANSFER (FIREBASE) ---
+                  // --- SIMPAN PENCATATAN KHUSUS TRANSFER (UNTUK REKAP RIDER) ---
                   if (window.tempPaymentData && currentUserUID) {
                       try {
-                          const dailyOrderRef = doc(db, 'artifacts', appId, 'users', currentUserUID, 'daily_orders', window.currentActiveOrderId);
-                          await setDoc(dailyOrderRef, {
-                              payment_type: window.tempPaymentData.type,
-                              payment_nominal: window.tempPaymentData.nominal || 0,
-                              updated_at: serverTimestamp()
-                          }, { merge: true });
+                          const orderId = window.currentActiveOrderId;
+                          const payType = window.tempPaymentData.type;
+                          const payNominal = window.tempPaymentData.nominal || 0;
+
+                          // HANYA simpan ke Firebase jika metode pembayarannya Transfer
+                          // Tunai diabaikan sesuai permintaan agar tidak membebani database
+                          if (payType === 'Transfer') {
+                              const dailyOrderRef = doc(db, 'artifacts', appId, 'users', currentUserUID, 'daily_orders', orderId);
+                              
+                              const custName = window.currentActiveCustomerName || 'Pelanggan';
+                              const jamSekarang = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                              
+                              await setDoc(dailyOrderRef, {
+                                  payment_type: 'Transfer',
+                                  payment_nominal: payNominal,
+                                  Nama_Pelanggan: custName, // Menjaga agar nama tidak hilang di rekap transfer
+                                  Jam: jamSekarang, // Fallback waktu
+                                  updated_at: serverTimestamp(),
+                                  created_at: serverTimestamp() // Fallback urutan waktu
+                              }, { merge: true });
+                              
+                              console.log("Data Transfer berhasil disimpan untuk rekap Rider.");
+                          }
                           
-                          // Hapus sisa-sisa lokal lama jika masih ada agar bersih
+                          // Bersihkan cache / sisa lokal
                           const orderKey = `pay_${currentUserUID}_${window.currentActiveOrderId}`;
                           localStorage.removeItem(orderKey);
                       } catch (err) {
-                          console.error("Gagal update payment di daily_orders:", err);
+                          console.error("Gagal update payment ke Firebase:", err);
                       }
                   }
 
