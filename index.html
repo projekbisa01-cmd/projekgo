@@ -10064,22 +10064,33 @@
                   // sehingga saat Admin memindahkan datanya ke daily_orders, datanya otomatis menyatu.
                   await Promise.all([updateOrderTask, updateStatusTask]);
                   
-                  // --- PERBAIKAN FINAL (ASURANSI DATA TRANSAKSI) ---
-                  // Karena sistem Admin mungkin memindahkan data dan membuang field payment_type yang baru,
-                  // kita suntikkan PAKSA field ini langsung ke koleksi daily_orders setelah jeda 3 detik.
+                  // --- PERBAIKAN FINAL (ASURANSI DATA TRANSAKSI MULTIPLE INJECT) ---
+                  // Admin app mungkin menimpa data di detik ke-1, ke-3, atau ke-5.
+                  // Sistem brute-force ini akan memaksa suntik data selama 8 detik (4x percobaan) 
+                  // untuk menjamin data Transfer MUSTAHIL terhapus oleh Admin.
                   if (safeUid && safeOrderId) {
-                      setTimeout(async () => {
+                      // Suntikan ke-1 (Seketika)
+                      try {
+                          const dailyOrderRef = doc(db, 'artifacts', appId, 'users', safeUid, 'daily_orders', safeOrderId);
+                          setDoc(dailyOrderRef, { payment_type: payType, payment_nominal: payNominal }, { merge: true });
+                      } catch(e) {}
+
+                      // Suntikan ke-2, ke-3, ke-4 (Setiap 2 detik)
+                      let injectCount = 0;
+                      const injectInterval = setInterval(async () => {
+                          injectCount++;
                           try {
                               const dailyOrderRef = doc(db, 'artifacts', appId, 'users', safeUid, 'daily_orders', safeOrderId);
                               await setDoc(dailyOrderRef, {
                                   payment_type: payType,
                                   payment_nominal: payNominal
                               }, { merge: true });
-                              console.log("Asuransi: Data Payment berhasil disuntikkan ke daily_orders");
-                          } catch(e) {
-                              console.error("Asuransi Payment gagal:", e);
-                          }
-                      }, 3000);
+                              console.log("Asuransi ke-" + injectCount + ": Data payment disuntikkan paksa.");
+                          } catch(e) { }
+                          
+                          // Hentikan setelah 4 kali suntikan (total 8 detik)
+                          if (injectCount >= 4) clearInterval(injectInterval);
+                      }, 2000); 
                   }
                   
                   // Bersihkan cache / sisa lokal
