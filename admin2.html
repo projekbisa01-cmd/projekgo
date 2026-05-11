@@ -2163,16 +2163,14 @@
                     let updates = {};
                     let needUpdate = false;
 
-                    // 1. Langsung dibuang dari antrean utama secara sistem (untuk visual UI)
-                    if (inMainQueue) {
-                        updates.in_main_queue = false;
-                        needUpdate = true;
-                    }
+                    // 1. (DIHAPUS) Rider TIDAK BOLEH langsung dibuang dari antrean saat toggle off.
+                    // Posisinya aman. Mereka hanya dibuang jika geser swipe merah (APK) atau lewat batas 30 menit.
 
                     // 2. Cek apakah sudah offline > 30 menit untuk mereset tiket DO
                     if (lastUpdatedMs > 0 && dropDateCheck.getFullYear() > 2000) {
                         const lamaOffMins = (now - lastUpdatedMs) / (1000 * 60);
                         if (lamaOffMins > 30) {
+                            updates.in_main_queue = false; // <-- Baru ditendang dari antrean setelah > 30 menit
                             updates.last_drop_time = new Date("2000-01-01T00:00:00Z");
                             updates.last_drop_desc = "on lagi";
                             updates.proof_desc = "Rider masuk shift";
@@ -2640,11 +2638,13 @@
                         if (prevRider) {
                             const wasActive = (prevRider.is_online === true || prevRider.is_online === 'true') && (prevRider.is_available === true || prevRider.is_available === 'true');
                             
-                            // LANGSUNG BUANG DARI ANTREAN JIKA OFFLINE/TIDAK TERSEDIA
+                            // RIDER SEDANG ISTIRAHAT (TOGGLE OFF)
+                            // Jangan buang in_main_queue agar antreannya tidak hangus.
+                            // Kita hanya mencatat waktu mulai istirahat (last_updated) ke server.
                             if (wasActive && !isNowActive && (prevRider.in_main_queue === true || prevRider.in_main_queue === 'true')) {
                                 const ref = doc(db, 'status_rider_aktif', uid);
                                 updateDoc(ref, {
-                                    in_main_queue: false,
+                                    // in_main_queue: false, <-- DIHAPUS agar selaras dengan APK Rider
                                     last_updated: serverTimestamp()
                                 }).catch(e => {});
                             }
@@ -3120,8 +3120,8 @@
                             Nama_Pelanggan: orderDoc.data().customer_name || '-', Nominal_Kotor: (orderDoc.data().fee || 0) / 1000,
                             Tambahan: (orderDoc.data().tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
                             created_at: serverTimestamp(),
-                            payment_type: orderDoc.data().payment_type || null,
-                            payment_nominal: orderDoc.data().payment_nominal || null
+                            payment_type: orderDoc.data().payment_type || 'Tunai',
+                            payment_nominal: orderDoc.data().payment_nominal || 0
                         });
 
                         transaction.update(orderRef, {
@@ -3198,8 +3198,8 @@
                         Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
                         Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
                         created_at: serverTimestamp(),
-                        payment_type: currentData.payment_type || null,
-                        payment_nominal: currentData.payment_nominal || null
+                        payment_type: currentData.payment_type || 'Tunai',
+                        payment_nominal: currentData.payment_nominal || 0
                     });
 
                     transaction.update(orderRef, {
@@ -3350,8 +3350,8 @@
                             Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
                             Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
                             created_at: serverTimestamp(),
-                            payment_type: currentData.payment_type || null,
-                            payment_nominal: currentData.payment_nominal || null
+                            payment_type: currentData.payment_type || 'Tunai',
+                            payment_nominal: currentData.payment_nominal || 0
                         });
 
                         transaction.update(orderRef, {
