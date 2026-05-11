@@ -10013,14 +10013,21 @@
                   if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
                   
                   const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
+                  
+                  // Simpan data ke variabel lokal agar tidak hilang saat ID di-reset
+                  const safeOrderId = window.currentActiveOrderId;
+                  const safeUid = currentUserUID;
+                  const payType = window.tempPaymentData ? window.tempPaymentData.type : 'Tunai';
+                  const payNominal = window.tempPaymentData ? (window.tempPaymentData.nominal || 0) : 0;
+
                   // UBAH JADI TASK PROMISE (TIDAK LANGSUNG AWAIT) AGAR BISA JALAN BERSAMAAN
                   const updateOrderTask = updateDoc(orderRef, {
                       status: 'completed',
                       finished_at: serverTimestamp(),
                       proof_desc: desc,
                       proof_image: proofImageUrl, // SEKARANG MENYIMPAN URL YANG RINGAN
-                      payment_type: window.tempPaymentData ? window.tempPaymentData.type : 'Tunai',
-                      payment_nominal: window.tempPaymentData ? (window.tempPaymentData.nominal || 0) : 0
+                      payment_type: payType,
+                      payment_nominal: payNominal
                   });
                   
                   const toggleEl = document.getElementById('onbid-toggle');
@@ -10048,7 +10055,7 @@
                           last_drop_desc: desc,
                           proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
                           last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
-                          last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
+                          last_order_id: safeOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
                       }, { merge: true });
                   }
                   
@@ -10057,9 +10064,27 @@
                   // sehingga saat Admin memindahkan datanya ke daily_orders, datanya otomatis menyatu.
                   await Promise.all([updateOrderTask, updateStatusTask]);
                   
+                  // --- PERBAIKAN FINAL (ASURANSI DATA TRANSAKSI) ---
+                  // Karena sistem Admin mungkin memindahkan data dan membuang field payment_type yang baru,
+                  // kita suntikkan PAKSA field ini langsung ke koleksi daily_orders setelah jeda 3 detik.
+                  if (safeUid && safeOrderId) {
+                      setTimeout(async () => {
+                          try {
+                              const dailyOrderRef = doc(db, 'artifacts', appId, 'users', safeUid, 'daily_orders', safeOrderId);
+                              await setDoc(dailyOrderRef, {
+                                  payment_type: payType,
+                                  payment_nominal: payNominal
+                              }, { merge: true });
+                              console.log("Asuransi: Data Payment berhasil disuntikkan ke daily_orders");
+                          } catch(e) {
+                              console.error("Asuransi Payment gagal:", e);
+                          }
+                      }, 3000);
+                  }
+                  
                   // Bersihkan cache / sisa lokal
                   if (window.tempPaymentData && currentUserUID) {
-                      const orderKey = `pay_${currentUserUID}_${window.currentActiveOrderId}`;
+                      const orderKey = `pay_${currentUserUID}_${safeOrderId}`;
                       localStorage.removeItem(orderKey);
                   }
 
