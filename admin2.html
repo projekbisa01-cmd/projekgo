@@ -2913,25 +2913,32 @@
                 const isActuallyOnline = rider.is_online === true || rider.is_online === 'true';
                 const isAvailable = rider.is_available === true || rider.is_available === 'true';
                 
+                // Cek apakah rider bisa diklik (harus online, available, dan saldo > 0)
+                const isSelectable = isActuallyOnline && isAvailable && !isKosong;
+
                 let statusBadge = '';
                 if (isKosong) statusBadge = `<span class="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-red-200 ml-1.5 align-middle animate-pulse"><i class="fa-solid fa-ban"></i> SALDO 0</span>`;
                 else if (isMinim) statusBadge = `<span class="bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-rose-200 ml-1.5 align-middle animate-pulse" title="Saldo kritis di bawah 10rb"><i class="fa-solid fa-wallet"></i> < 10k</span>`;
                 else if (!isActuallyOnline) statusBadge = `<span class="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-200 ml-1.5 align-middle" title="Sinyal Rider Hilang / Aplikasi Tertutup / Off-Bid"><i class="fa-solid fa-triangle-exclamation"></i> Sinyal Jelek</span>`;
-                else if (!isAvailable) statusBadge = `<span class="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[8px] font-bold border border-slate-200 ml-1.5 align-middle" title="Rider mematikan status tersedia"><i class="fa-solid fa-pause"></i> Tidak Tersedia</span>`;
+                else if (!isAvailable) statusBadge = `<span class="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[8px] font-bold border border-slate-200 ml-1.5 align-middle" title="Rider mematikan status tersedia"><i class="fa-solid fa-pause"></i> Istirahat</span>`;
 
                 let timeOnbidStr = '--:--';
                 const timeRawMs = getTimestampMs(rider.last_drop_time);
                 if (timeRawMs > 0) timeOnbidStr = new Date(timeRawMs).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                 
-                const cardOpacity = (!isActuallyOnline || !isAvailable) ? 'opacity-75 bg-slate-50' : 'bg-white';
-                let rankBadgeClass = 'bg-slate-100 text-slate-500', rankContent = index + 1;
+                // Ubah styling jika tidak bisa diklik
+                const cardOpacity = (!isActuallyOnline || !isAvailable) ? 'opacity-75 bg-slate-100 grayscale-[30%]' : 'bg-white hover:border-sky-300 cursor-pointer active:scale-[0.98]';
+                const onClickAction = isSelectable ? `onclick="window.selectRider('${rider.uid}', '${displayName}')"` : '';
+                
+                let rankBadgeClass = 'bg-slate-200 text-slate-400', rankContent = index + 1;
                 
                 if (isKosong) { rankBadgeClass = 'bg-red-100 text-red-500'; rankContent = '<i class="fa-solid fa-ban text-[10px]"></i>'; } 
-                else if (isMinim) { rankBadgeClass = 'bg-rose-100 text-rose-500'; rankContent = '<i class="fa-solid fa-triangle-exclamation text-[10px]"></i>'; } 
-                else if (isFirst && isActuallyOnline && isAvailable) { rankBadgeClass = 'btn-primary text-white'; }
+                else if (isMinim && isSelectable) { rankBadgeClass = 'bg-rose-100 text-rose-500'; rankContent = '<i class="fa-solid fa-triangle-exclamation text-[10px]"></i>'; } 
+                else if (isFirst && isSelectable) { rankBadgeClass = 'btn-primary text-white'; }
+                else if (isSelectable) { rankBadgeClass = 'bg-slate-100 text-slate-500'; } // Normal rank
 
                 html += `
-                    <div onclick="window.selectRider('${rider.uid}', '${displayName}')" class="rider-card cursor-pointer p-3 rounded-2xl border border-gray-100 ${cardOpacity} hover:border-sky-300 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm relative group" id="rider-card-${rider.uid}">
+                    <div ${onClickAction} class="rider-card p-3 rounded-2xl border border-gray-100 ${cardOpacity} transition-all flex justify-between items-center shadow-sm relative group" id="rider-card-${rider.uid}">
                         <div class="flex items-center gap-3 overflow-hidden pr-8 w-full">
                             <div class="w-8 h-8 rounded-full ${rankBadgeClass} flex items-center justify-center font-black text-xs shrink-0">${rankContent}</div>
                             <div class="overflow-hidden w-full">
@@ -2949,14 +2956,36 @@
             const currentId = document.getElementById('selected-rider-uid').value;
             const isCurrentSelectedStillInMainQueue = availableMainQueue.find(r => r.uid === currentId);
             
+            // Perbarui pemilihan otomatis. Jangan otomatis pilih rider yang tidak 'selectable'
             if (isCurrentSelectedStillInMainQueue) {
-                const rName = isCurrentSelectedStillInMainQueue.nama || isCurrentSelectedStillInMainQueue.name || isCurrentSelectedStillInMainQueue.displayName;
-                const selName = rName && String(rName).trim() !== '' ? rName : currentId;
-                window.selectRider(currentId, selName, false);
+                // Cek apakah rider yang terpilih sekarang masih selectable. Jika tidak, batalkan pilihan.
+                const isActuallyOnline = isCurrentSelectedStillInMainQueue.is_online === true || isCurrentSelectedStillInMainQueue.is_online === 'true';
+                const isAvailable = isCurrentSelectedStillInMainQueue.is_available === true || isCurrentSelectedStillInMainQueue.is_available === 'true';
+                const balanceData = allRiderBalances.find(b => String(b.id).trim() === String(isCurrentSelectedStillInMainQueue.uid).trim());
+                const isKosong = balanceData ? parseInt(balanceData.saldo || 0) <= 0 : true;
+
+                if (!isActuallyOnline || !isAvailable || isKosong) {
+                    window.clearSelection();
+                } else {
+                    const rName = isCurrentSelectedStillInMainQueue.nama || isCurrentSelectedStillInMainQueue.name || isCurrentSelectedStillInMainQueue.displayName;
+                    const selName = rName && String(rName).trim() !== '' ? rName : currentId;
+                    window.selectRider(currentId, selName, false);
+                }
             } else if (availableMainQueue.length > 0) {
-                const rName = availableMainQueue[0].nama || availableMainQueue[0].name || availableMainQueue[0].displayName;
-                const firstRiderName = rName && String(rName).trim() !== '' ? rName : availableMainQueue[0].uid;
-                window.selectRider(availableMainQueue[0].uid, firstRiderName, false);
+                 // Otomatis pilih rider PERTAMA yang Selectable
+                 const firstSelectableRider = availableMainQueue.find(r => {
+                    const isActuallyOnline = r.is_online === true || r.is_online === 'true';
+                    const isAvailable = r.is_available === true || r.is_available === 'true';
+                    const balanceData = allRiderBalances.find(b => String(b.id).trim() === String(r.uid).trim());
+                    const isKosong = balanceData ? parseInt(balanceData.saldo || 0) <= 0 : true;
+                    return isActuallyOnline && isAvailable && !isKosong;
+                 });
+
+                 if (firstSelectableRider) {
+                     const rName = firstSelectableRider.nama || firstSelectableRider.name || firstSelectableRider.displayName;
+                     const firstRiderName = rName && String(rName).trim() !== '' ? rName : firstSelectableRider.uid;
+                     window.selectRider(firstSelectableRider.uid, firstRiderName, false);
+                 }
             }
         }
 
