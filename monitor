@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROJEKGO - TV Dashboard Monitor</title>
+    
+    <!-- Script Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Script FontAwesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Script Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc;
+            overflow: hidden; /* Mencegah scroll di TV */
+            margin: 0;
+            padding: 0;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7); /* Slate 800 dengan transparansi */
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(14, 165, 233, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0); }
+        }
+
+        .live-indicator {
+            animation: pulse-ring 2s infinite;
+        }
+
+        /* Auto-scroll animation for long lists on TV */
+        @keyframes autoScroll {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(calc(-100% + 200px)); }
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col p-4 gap-4">
+
+    <header class="glass-card rounded-2xl p-4 flex justify-between items-center shrink-0">
+        <div class="flex items-center gap-4">
+            <div class="w-12 h-12 bg-gradient-to-br from-sky-400 to-sky-600 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30 text-white text-2xl">
+                <i class="fa-solid fa-satellite-dish live-indicator rounded-full"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-black tracking-tight text-white">PROJEKGO <span class="text-sky-400">DISPATCH TV</span></h1>
+                <p class="text-sm font-bold text-slate-400 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Sistem Real-Time Aktif
+                </p>
+            </div>
+        </div>
+        <div class="text-right">
+            <h2 id="clock-time" class="text-4xl font-black text-white tracking-tighter">00:00:00</h2>
+            <p id="clock-date" class="text-sm font-bold text-slate-400 uppercase tracking-widest">Memuat Tanggal...</p>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-12 gap-4 min-h-0">
+        
+        <!-- KOLOM KIRI: Antrean (Shift & Radar) -->
+        <div class="col-span-3 flex flex-col gap-4 min-h-0">
+            <!-- Antrean Shift (Menunggu Verifikasi) -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col h-1/3">
+                <div class="flex justify-between items-center mb-3 shrink-0 border-b border-slate-700/50 pb-2">
+                    <h3 class="font-black text-indigo-400 uppercase tracking-wider text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-user-clock"></i> Rider Baru / Shift
+                    </h3>
+                    <span id="count-shift" class="bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-xs font-black border border-indigo-500/30">0</span>
+                </div>
+                <div id="list-shift" class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                    <p class="text-slate-500 text-xs italic text-center mt-4">Memuat data...</p>
+                </div>
+            </div>
+
+            <!-- Antrean Radar Aktif -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col h-2/3">
+                <div class="flex justify-between items-center mb-3 shrink-0 border-b border-slate-700/50 pb-2">
+                    <h3 class="font-black text-sky-400 uppercase tracking-wider text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-satellite-dish"></i> Antrean Radar Standby
+                    </h3>
+                    <span id="count-radar" class="bg-sky-500/20 text-sky-400 px-2 py-0.5 rounded text-xs font-black border border-sky-500/30">0</span>
+                </div>
+                <div id="list-radar" class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                    <p class="text-slate-500 text-xs italic text-center mt-4">Memuat data...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- KOLOM TENGAH: Sedang Order & Offline -->
+        <div class="col-span-5 flex flex-col gap-4 min-h-0">
+            <!-- Sedang Bawa Orderan -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col h-2/3 ring-1 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)] relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-2xl"></div>
+                <div class="flex justify-between items-center mb-3 shrink-0 border-b border-slate-700/50 pb-2 relative z-10">
+                    <h3 class="font-black text-emerald-400 uppercase tracking-wider text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-motorcycle"></i> Sedang Proses Orderan
+                    </h3>
+                    <span id="count-active" class="bg-emerald-500 text-white px-2.5 py-1 rounded text-xs font-black shadow-lg shadow-emerald-500/40 animate-pulse">0</span>
+                </div>
+                <div id="list-active" class="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2 relative z-10">
+                    <p class="text-slate-500 text-xs italic text-center mt-4">Tidak ada rider yang sedang membawa orderan.</p>
+                </div>
+            </div>
+
+            <!-- Rider Offline -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col h-1/3">
+                <div class="flex justify-between items-center mb-3 shrink-0 border-b border-slate-700/50 pb-2">
+                    <h3 class="font-black text-rose-400 uppercase tracking-wider text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-power-off"></i> Rider Tidak Aktif / OFF
+                    </h3>
+                    <span id="count-off" class="bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded text-xs font-black border border-rose-500/30">0</span>
+                </div>
+                <!-- Grid layout untuk daftar off agar muat banyak -->
+                <div id="list-off" class="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-2 gap-2 content-start pr-2">
+                    <p class="text-slate-500 text-xs italic text-center col-span-2 mt-4">Memuat data...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- KOLOM KANAN: Statistik & Performa -->
+        <div class="col-span-4 flex flex-col gap-4 min-h-0">
+            
+            <!-- Summary Header -->
+            <div class="grid grid-cols-2 gap-3 shrink-0">
+                <div class="glass-card rounded-2xl p-4 flex flex-col justify-center relative overflow-hidden group">
+                    <div class="absolute -right-4 -top-4 w-16 h-16 bg-blue-500/20 rounded-full blur-xl group-hover:bg-blue-500/40 transition-colors"></div>
+                    <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Order Hari Ini</p>
+                    <p id="stat-total-order" class="text-4xl font-black text-blue-400">0</p>
+                </div>
+                <div class="glass-card rounded-2xl p-4 flex flex-col justify-center relative overflow-hidden group">
+                    <div class="absolute -right-4 -top-4 w-16 h-16 bg-amber-500/20 rounded-full blur-xl group-hover:bg-amber-500/40 transition-colors"></div>
+                    <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Menunggu/Pending</p>
+                    <p id="stat-pending-order" class="text-3xl font-black text-amber-400">0</p>
+                </div>
+            </div>
+
+            <!-- Grafik Tren -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col shrink-0 h-48">
+                <h3 class="font-black text-slate-300 uppercase tracking-wider text-[11px] mb-2 border-b border-slate-700/50 pb-2">
+                    <i class="fa-solid fa-chart-area text-slate-400 mr-1"></i> Tren Order Masuk (Hari Ini)
+                </h3>
+                <div class="flex-1 w-full relative">
+                    <canvas id="chart-hourly"></canvas>
+                </div>
+            </div>
+
+            <!-- Leaderboard Performa Rider -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col flex-1 min-h-0">
+                <div class="flex justify-between items-center mb-3 shrink-0 border-b border-slate-700/50 pb-2">
+                    <h3 class="font-black text-amber-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                        <i class="fa-solid fa-trophy"></i> Top Performa Rider
+                    </h3>
+                    <span class="text-[9px] font-bold text-slate-500 uppercase">Order Selesai Hari Ini</span>
+                </div>
+                <div id="list-leaderboard" class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                    <p class="text-slate-500 text-xs italic text-center mt-4">Belum ada order selesai.</p>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, query, where, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // Konfigurasi Firebase (Sama persis dengan Admin Dispatch)
+        const firebaseConfig = {
+            apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
+            authDomain: "onbid-2f87a.firebaseapp.com",
+            projectId: "onbid-2f87a",
+            storageBucket: "onbid-2f87a.firebasestorage.app",
+            messagingSenderId: "223888282484",
+            appId: "1:223888282484:web:2fc05ed67ca1fab39e1221"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // State Global
+        let allRiders = [];
+        let allActiveOrders = [];
+        let todayCompletedOrders = [];
+        
+        // Chart Instance
+        let hourlyChart = null;
+
+        function startClock() {
+            const timeEl = document.getElementById('clock-time');
+            const dateEl = document.getElementById('clock-date');
+            const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+            setInterval(() => {
+                const now = new Date();
+                timeEl.innerText = String(now.getHours()).padStart(2, '0') + ':' + 
+                                   String(now.getMinutes()).padStart(2, '0') + ':' + 
+                                   String(now.getSeconds()).padStart(2, '0');
+                dateEl.innerText = `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+            }, 1000);
+        }
+
+        // Login Anonim untuk Read Data
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                startRiderListener();
+                startOrdersListener();
+            }
+        });
+        signInAnonymously(auth).catch(e => console.error("Auth failed:", e));
+        startClock();
+
+        // Helpers
+        function getTimestampMs(field) {
+            if (!field) return 0;
+            if (typeof field.toMillis === 'function') return field.toMillis();
+            if (field.seconds) return field.seconds * 1000;
+            return 0;
+        }
+
+        function formatTime(ms) {
+            if (!ms) return '--:--';
+            const d = new Date(ms);
+            return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        }
+
+        // Helper baru untuk mendeteksi nama secara akurat
+        function getRiderName(obj) {
+            const name = obj.nama || obj.name || obj.displayName || obj.rider_name;
+            if (name && String(name).trim() !== '') return name;
+            return obj.id || obj.uid || obj.rider_uid || 'Tanpa Nama';
+        }
+
+        function startRiderListener() {
+            const statusCol = collection(db, 'status_rider_aktif');
+            onSnapshot(statusCol, (snapshot) => {
+                allRiders = [];
+                snapshot.forEach(docSnap => {
+                    allRiders.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                updateRiderUI();
+            }, (error) => console.error("Rider listener error:", error));
+        }
+
+        function startOrdersListener() {
+            const today = new Date();
+            today.setHours(0,0,0,0); // Mulai jam 00:00 hari ini
+
+            const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+            
+            // Dengarkan SEMUA orderan aktif & selesai (hari ini)
+            const q = query(ordersCol, where("created_at", ">=", today));
+            
+            onSnapshot(q, (snapshot) => {
+                allActiveOrders = [];
+                todayCompletedOrders = [];
+
+                snapshot.forEach(docSnap => {
+                    const data = { id: docSnap.id, ...docSnap.data() };
+                    allActiveOrders.push(data);
+                    
+                    if (data.status === 'completed') {
+                        todayCompletedOrders.push(data);
+                    }
+                });
+
+                updateOrdersUI();
+                updateRiderUI(); // Update UI rider karena status "Sedang Bawa Orderan" bergantung pada orders
+            }, (error) => console.error("Orders listener error:", error));
+        }
+
+        function updateRiderUI() {
+            // Pemisahan Kategori
+            const busyUids = new Set(allActiveOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
+            
+            const shiftQueue = [];
+            const radarQueue = [];
+            const offlineRiders = [];
+            
+            allRiders.forEach(r => {
+                const isOnline = r.is_online === true || r.is_online === 'true';
+                const isAvailable = r.is_available === true || r.is_available === 'true';
+                const inMainQueue = r.in_main_queue === true || r.in_main_queue === 'true';
+
+                // Jika sedang bawa orderan, jangan masuk ke antrean manapun di layar TV
+                if (busyUids.has(r.id)) return; 
+
+                if (!isOnline || !isAvailable) {
+                    offlineRiders.push(r);
+                } else if (inMainQueue) {
+                    radarQueue.push(r);
+                } else {
+                    shiftQueue.push(r);
+                }
+            });
+
+            // Urutkan Radar berdasarkan last_drop_time (Siapa cepat dia atas)
+            radarQueue.sort((a, b) => (getTimestampMs(a.last_drop_time) || 0) - (getTimestampMs(b.last_drop_time) || 0));
+            // Urutkan Shift berdasarkan last_updated
+            shiftQueue.sort((a, b) => (getTimestampMs(a.last_updated) || 0) - (getTimestampMs(b.last_updated) || 0));
+            // Urutkan Offline berdasarkan nama (menggunakan fungsi helper baru)
+            offlineRiders.sort((a, b) => getRiderName(a).localeCompare(getRiderName(b)));
+
+            // --- RENDER ANTREAN SHIFT ---
+            document.getElementById('count-shift').innerText = shiftQueue.length;
+            const shiftContainer = document.getElementById('list-shift');
+            if (shiftQueue.length === 0) {
+                shiftContainer.innerHTML = '<p class="text-slate-500 text-[10px] text-center mt-2 border border-dashed border-slate-700 rounded-lg py-2">Kosong</p>';
+            } else {
+                shiftContainer.innerHTML = shiftQueue.map(r => `
+                    <div class="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-2.5 flex justify-between items-center">
+                        <div class="flex items-center gap-2.5 overflow-hidden">
+                            <div class="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[10px] shrink-0"><i class="fa-solid fa-user-clock"></i></div>
+                            <div class="truncate">
+                                <p class="text-xs font-bold text-slate-200 truncate uppercase">${getRiderName(r)}</p>
+                                <p class="text-[9px] text-indigo-400 truncate">${r.proof_desc || r.last_drop_desc || 'Standby'}</p>
+                            </div>
+                        </div>
+                        <span class="text-[9px] font-black text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">${formatTime(getTimestampMs(r.last_updated))}</span>
+                    </div>
+                `).join('');
+            }
+
+            // --- RENDER ANTREAN RADAR ---
+            document.getElementById('count-radar').innerText = radarQueue.length;
+            const radarContainer = document.getElementById('list-radar');
+            if (radarQueue.length === 0) {
+                radarContainer.innerHTML = '<div class="h-full flex items-center justify-center"><p class="text-slate-500 text-xs font-bold uppercase tracking-widest border border-dashed border-slate-700 rounded-xl px-4 py-3">Antrean Radar Kosong</p></div>';
+            } else {
+                radarContainer.innerHTML = radarQueue.map((r, i) => {
+                    const isFirst = i === 0;
+                    const borderClass = isFirst ? 'border-sky-500/50 bg-sky-500/10' : 'border-slate-700/50 bg-slate-800/50';
+                    const numberClass = isFirst ? 'bg-sky-500 text-white' : 'bg-slate-700 text-slate-300';
+                    return `
+                    <div class="rounded-xl p-2.5 flex justify-between items-center border ${borderClass} shadow-sm">
+                        <div class="flex items-center gap-3 overflow-hidden">
+                            <div class="w-7 h-7 rounded-full ${numberClass} flex items-center justify-center text-[11px] font-black shrink-0">${i+1}</div>
+                            <div class="truncate">
+                                <p class="text-sm font-black text-white truncate uppercase tracking-tight">${getRiderName(r)}</p>
+                                <p class="text-[10px] font-bold text-slate-400 truncate flex items-center gap-1"><i class="fa-solid fa-location-dot text-rose-500"></i> ${r.proof_desc || r.location || 'Standby'}</p>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <span class="text-[10px] font-bold text-slate-300 flex items-center gap-1 bg-slate-800 px-2 py-1 rounded-md border border-slate-600"><i class="fa-regular fa-clock text-sky-400"></i> ${formatTime(getTimestampMs(r.last_drop_time))}</span>
+                        </div>
+                    </div>
+                `}).join('');
+            }
+
+            // --- RENDER RIDER OFF ---
+            document.getElementById('count-off').innerText = offlineRiders.length;
+            const offContainer = document.getElementById('list-off');
+            if (offlineRiders.length === 0) {
+                offContainer.innerHTML = '<p class="text-emerald-500/70 text-[10px] font-bold text-center col-span-2 mt-2">Semua Rider Sedang Aktif.</p>';
+            } else {
+                offContainer.innerHTML = offlineRiders.map(r => `
+                    <div class="bg-rose-500/5 border border-rose-500/10 rounded-lg p-2 flex items-center gap-2 overflow-hidden opacity-70">
+                        <div class="w-2 h-2 rounded-full bg-rose-500 shrink-0"></div>
+                        <p class="text-[10px] font-bold text-slate-300 uppercase truncate">${getRiderName(r)}</p>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function updateOrdersUI() {
+            // --- UPDATE STATS ---
+            const activeOrders = allActiveOrders.filter(o => o.status === 'assigned' || o.status === 'processing');
+            const pendingOrders = allActiveOrders.filter(o => o.status === 'unassigned' || o.status === 'missed');
+            
+            document.getElementById('stat-total-order').innerText = todayCompletedOrders.length + activeOrders.length;
+            document.getElementById('stat-pending-order').innerText = pendingOrders.length;
+
+            // Jika ada order pending, kasih efek peringatan di angka
+            const pendingEl = document.getElementById('stat-pending-order');
+            if (pendingOrders.length > 0) {
+                pendingEl.classList.remove('text-amber-400');
+                pendingEl.classList.add('text-rose-500', 'animate-pulse');
+            } else {
+                pendingEl.classList.add('text-amber-400');
+                pendingEl.classList.remove('text-rose-500', 'animate-pulse');
+            }
+
+            // --- RENDER SEDANG BAWA ORDERAN ---
+            document.getElementById('count-active').innerText = activeOrders.length;
+            const activeContainer = document.getElementById('list-active');
+            
+            // Urutkan yang terbaru di atas
+            activeOrders.sort((a,b) => (getTimestampMs(b.created_at) || 0) - (getTimestampMs(a.created_at) || 0));
+
+            if (activeOrders.length === 0) {
+                activeContainer.innerHTML = '<div class="h-full flex items-center justify-center"><p class="text-slate-500 text-[11px] font-bold">Tidak ada order yang sedang jalan.</p></div>';
+            } else {
+                activeContainer.innerHTML = activeOrders.map(o => {
+                    const isProcessing = o.status === 'processing';
+                    const badgeColor = isProcessing ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+                    const iconBadge = isProcessing ? '<i class="fa-solid fa-person-biking mr-1"></i>OTW' : '<i class="fa-solid fa-bell animate-pulse mr-1"></i>Wait';
+                    const itemName = o.items && o.items.length > 0 ? o.items[0].name.split('\n')[0] : 'Order Biasa';
+
+                    return `
+                    <div class="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3 shadow-lg flex flex-col gap-2 relative overflow-hidden">
+                        <div class="absolute left-0 top-0 bottom-0 w-1 ${isProcessing ? 'bg-emerald-500' : 'bg-amber-500'}"></div>
+                        <div class="flex justify-between items-start pl-1">
+                            <div class="overflow-hidden">
+                                <p class="text-xs font-black text-white uppercase truncate">${getRiderName(o)}</p>
+                                <p class="text-[10px] text-slate-400 truncate mt-0.5"><span class="font-bold text-slate-300">${o.customer_name || 'Pelanggan'}</span> - ${itemName}</p>
+                            </div>
+                            <span class="text-[9px] font-black ${badgeColor} px-2 py-1 rounded border shrink-0 uppercase tracking-widest">${iconBadge}</span>
+                        </div>
+                    </div>
+                `}).join('');
+            }
+
+            // --- RENDER LEADERBOARD ---
+            updateLeaderboard();
+            
+            // --- UPDATE GRAFIK TREN ---
+            updateChart();
+        }
+
+        function updateLeaderboard() {
+            const boardContainer = document.getElementById('list-leaderboard');
+            if (todayCompletedOrders.length === 0) {
+                boardContainer.innerHTML = '<p class="text-slate-500 text-xs text-center mt-6">Belum ada data diselesaikan hari ini.</p>';
+                return;
+            }
+
+            // Hitung order per rider
+            const riderScores = {};
+            todayCompletedOrders.forEach(o => {
+                const uid = o.rider_uid;
+                if (!uid) return;
+                if (!riderScores[uid]) riderScores[uid] = { name: getRiderName(o), count: 0 };
+                riderScores[uid].count++;
+            });
+
+            const sorted = Object.values(riderScores).sort((a, b) => b.count - a.count).slice(0, 5); // Ambil Top 5
+
+            boardContainer.innerHTML = sorted.map((r, i) => {
+                let rankIcon = `<span class="text-slate-500 font-black text-xs mr-2 w-4 text-center">${i+1}</span>`;
+                if (i === 0) rankIcon = '<i class="fa-solid fa-medal text-amber-400 text-lg mr-2 drop-shadow-md w-4 text-center"></i>';
+                else if (i === 1) rankIcon = '<i class="fa-solid fa-medal text-slate-300 text-base mr-2 drop-shadow-md w-4 text-center"></i>';
+                else if (i === 2) rankIcon = '<i class="fa-solid fa-medal text-orange-400 text-sm mr-2 drop-shadow-md w-4 text-center"></i>';
+
+                // Hitung lebar bar (relatif ke top #1)
+                const maxCount = sorted[0].count;
+                const widthPercent = (r.count / maxCount) * 100;
+
+                return `
+                <div class="flex items-center p-2 rounded-lg hover:bg-slate-800/50 transition-colors group">
+                    ${rankIcon}
+                    <div class="flex-1 overflow-hidden">
+                        <div class="flex justify-between items-end mb-1">
+                            <p class="text-[11px] font-black text-slate-200 uppercase truncate pr-2">${r.name}</p>
+                            <p class="text-[10px] font-black text-amber-400 shrink-0">${r.count} <span class="text-[8px] text-slate-500 font-bold uppercase">Order</span></p>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                            <div class="bg-gradient-to-r from-amber-600 to-amber-400 h-1.5 rounded-full" style="width: ${widthPercent}%"></div>
+                        </div>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function updateChart() {
+            const ctx = document.getElementById('chart-hourly');
+            if (!ctx) return;
+
+            // Inisialisasi array jam (06:00 sampai 23:00)
+            const hourCounts = new Array(18).fill(0); // Index 0 = Jam 6, Index 17 = Jam 23
+            const labels = [];
+            for(let i=6; i<=23; i++) labels.push(String(i).padStart(2,'0')+':00');
+
+            const allToday = [...allActiveOrders, ...todayCompletedOrders];
+            const countedIds = new Set(); // Mencegah duplikasi id order
+
+            allToday.forEach(o => {
+                if (countedIds.has(o.id)) return;
+                countedIds.add(o.id);
+
+                const ms = getTimestampMs(o.created_at);
+                if (ms > 0) {
+                    const d = new Date(ms);
+                    const h = d.getHours();
+                    if (h >= 6 && h <= 23) {
+                        hourCounts[h - 6]++;
+                    } else if (h < 6) {
+                        hourCounts[0]++; // Digabung ke jam 6 pagi
+                    }
+                }
+            });
+
+            if (hourlyChart) {
+                hourlyChart.data.datasets[0].data = hourCounts;
+                hourlyChart.update();
+            } else {
+                Chart.defaults.color = '#94a3b8';
+                Chart.defaults.font.family = "'Plus Jakarta Sans', sans-serif";
+
+                hourlyChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Jumlah Order',
+                            data: hourCounts,
+                            borderColor: '#38bdf8', // sky-400
+                            backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                            borderWidth: 3,
+                            pointBackgroundColor: '#0f172a',
+                            pointBorderColor: '#38bdf8',
+                            pointBorderWidth: 2,
+                            pointRadius: 3,
+                            pointHoverRadius: 6,
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                titleFont: { size: 11, weight: 'bold' },
+                                bodyFont: { size: 12, weight: 'bold' },
+                                padding: 10,
+                                displayColors: false
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: 'rgba(255,255,255,0.05)' },
+                                ticks: { font: { size: 9, weight: 'bold' }, maxRotation: 45, minRotation: 45 }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                border: { display: false },
+                                grid: { color: 'rgba(255,255,255,0.05)', borderDash: [5, 5] },
+                                ticks: { font: { size: 10, weight: 'bold' }, stepSize: 1 }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>
