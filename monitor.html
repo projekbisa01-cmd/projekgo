@@ -150,7 +150,7 @@
             </div>
 
             <!-- Grafik Tren -->
-            <div class="glass-card rounded-2xl p-4 flex flex-col shrink-0 h-48 border border-slate-700/50">
+            <div class="glass-card rounded-2xl p-4 flex flex-col shrink-0 h-40 border border-slate-700/50">
                 <h3 class="font-black text-slate-300 uppercase tracking-wider text-[11px] mb-2 border-b border-slate-700/50 pb-2">
                     <i class="fa-solid fa-chart-area text-slate-400 mr-1"></i> Tren Order Masuk (Hari Ini)
                 </h3>
@@ -169,6 +169,16 @@
                 </div>
                 <div id="list-leaderboard" class="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
                     <p class="text-slate-500 text-sm italic text-center mt-4">Belum ada order selesai.</p>
+                </div>
+            </div>
+
+            <!-- Distribusi Jam Sibuk -->
+            <div class="glass-card rounded-2xl p-4 flex flex-col shrink-0 border border-slate-700/50">
+                <h3 class="font-black text-rose-400 uppercase tracking-widest text-xs flex items-center gap-2 mb-3 border-b-2 border-slate-700/50 pb-2">
+                    <i class="fa-solid fa-fire-flame-curved text-lg animate-pulse"></i> Jam Sibuk (Peak Hours)
+                </h3>
+                <div id="list-peak-hours" class="space-y-2">
+                    <p class="text-slate-500 text-sm italic text-center">Belum ada data order.</p>
                 </div>
             </div>
 
@@ -466,6 +476,73 @@
             
             // --- UPDATE GRAFIK TREN ---
             updateChart();
+
+            // --- UPDATE JAM SIBUK ---
+            updatePeakHours();
+        }
+
+        function updatePeakHours() {
+            const container = document.getElementById('list-peak-hours');
+            const hourCounts = {};
+
+            const allToday = [...allActiveOrders, ...todayCompletedOrders];
+            const countedIds = new Set();
+
+            // Hitung total order per jam (0-23)
+            allToday.forEach(o => {
+                if (countedIds.has(o.id)) return;
+                countedIds.add(o.id);
+
+                const ms = getTimestampMs(o.created_at);
+                if (ms > 0) {
+                    const d = new Date(ms);
+                    const h = d.getHours();
+                    if (!hourCounts[h]) hourCounts[h] = 0;
+                    hourCounts[h]++;
+                }
+            });
+
+            // Ubah ke array, saring yang ada ordernya, dan urutkan terbanyak
+            const sortedHours = Object.keys(hourCounts)
+                .map(h => ({ hour: parseInt(h), count: hourCounts[h] }))
+                .filter(item => item.count > 0)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 3); // Ambil 3 Jam paling sibuk
+
+            if (sortedHours.length === 0) {
+                container.innerHTML = '<p class="text-slate-500 text-sm italic text-center mt-2">Belum ada data distribusi jam sibuk.</p>';
+                return;
+            }
+
+            container.innerHTML = sortedHours.map((item, index) => {
+                const startHour = String(item.hour).padStart(2, '0') + ':00';
+                const endHour = String(item.hour).padStart(2, '0') + ':59';
+                
+                // Styling warna juara 1, 2, dan 3
+                let colorClass = 'text-rose-400';
+                let bgClass = 'bg-rose-500/10 border-rose-500/20';
+                
+                if (index === 1) {
+                    colorClass = 'text-orange-400';
+                    bgClass = 'bg-orange-500/10 border-orange-500/20';
+                } else if (index === 2) {
+                    colorClass = 'text-amber-400';
+                    bgClass = 'bg-amber-500/10 border-amber-500/20';
+                }
+
+                return `
+                <div class="flex justify-between items-center p-2.5 rounded-xl border ${bgClass}">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-regular fa-clock ${colorClass} opacity-80 text-lg"></i>
+                        <span class="text-sm font-bold text-slate-200 tracking-wider">${startHour} - ${endHour}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xl font-black ${colorClass} drop-shadow-sm">${item.count}</span>
+                        <span class="text-[10px] text-slate-400 font-bold uppercase mt-1">Order</span>
+                    </div>
+                </div>
+                `;
+            }).join('');
         }
 
         function updateLeaderboard() {
