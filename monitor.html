@@ -27,8 +27,18 @@
             font-family: 'Inter', sans-serif;
             background-color: #05080c; 
             color: #f8fafc;
-            overflow: hidden; 
+            overflow: hidden; /* Mencegah scrollbar utama muncul */
             -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale; /* Menambah kehalusan teks */
+        }
+
+        /* Container utama diatur agar selalu 100vh dan 100vw, tanpa scroll */
+        #app-container {
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
         }
 
         .panel {
@@ -36,21 +46,40 @@
             border: 1px solid #1e293b;
             border-radius: 6px;
             position: relative;
+            display: flex;
+            flex-direction: column; /* Pastikan isi panel tersusun vertikal */
+            overflow: hidden; /* Mencegah isi meluber */
         }
 
         .panel-header {
             border-bottom: 1px solid #1e293b;
-            padding: 8px 12px;
-            font-size: 0.75rem;
+            padding: 0.5rem 0.75rem; /* Menggunakan rem untuk skalabilitas */
+            font-size: clamp(0.6rem, 1vw, 0.75rem); /* Ukuran teks responsif */
             font-weight: 800;
             letter-spacing: 0.05em;
             text-transform: uppercase;
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-shrink: 0; /* Header tidak menyusut */
         }
 
-        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        /* Mengatur agar container canvas benar-benar fleksibel */
+        .chart-container {
+            flex-grow: 1; /* Mengisi sisa ruang panel */
+            min-height: 0; /* Penting untuk flexbox agar bisa mengecil */
+            position: relative;
+            width: 100%;
+            height: 100%;
+            padding: 0.5rem;
+        }
+
+        /* Memastikan elemen canvas mengisi parent-nya */
+        canvas {
+            display: block; /* Mencegah spasi ekstra di bawah canvas */
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
 
@@ -59,6 +88,10 @@
             border: 1px solid #1e293b;
             border-top: 2px solid;
             border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: clamp(0.5rem, 1.5vh, 1rem); /* Padding responsif */
         }
         
         .border-t-cyan { border-top-color: #06b6d4; }
@@ -95,7 +128,7 @@
         /* 2. Efek Melayang/Bergelombang untuk Kotak KPI Atas */
         @keyframes kpi-float {
             0%, 100% { transform: translateY(0); box-shadow: 0 0 0 rgba(0,0,0,0); }
-            50% { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.4); }
+            50% { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
         }
         .kpi-card {
             animation: kpi-float 4s infinite alternate ease-in-out;
@@ -108,7 +141,7 @@
 
         /* 3. Efek Angka Melompat saat Data Berubah */
         @keyframes data-flash {
-            0% { color: #fff; text-shadow: 0 0 20px #34d399; transform: scale(1.4); }
+            0% { color: #fff; text-shadow: 0 0 20px #34d399; transform: scale(1.2); }
             100% { transform: scale(1); }
         }
         .update-flash {
@@ -126,187 +159,202 @@
             background-size: 1rem 1rem;
             animation: progress-stripes 1s linear infinite;
         }
+        
+        /* Utilitas untuk teks yang responsif terhadap viewport */
+        .text-responsive-kpi-val { font-size: clamp(1.25rem, 2.5vw, 1.875rem); } /* ~text-2xl to text-3xl */
+        .text-responsive-kpi-lbl { font-size: clamp(0.5rem, 0.8vw, 0.65rem); }   /* ~text-[9px] to text-xs */
+
     </style>
 </head>
 
-<body class="h-screen w-screen flex flex-col p-1.5 lg:p-2 gap-2 box-border">
+<body class="bg-[#05080c] text-slate-50 m-0 overflow-hidden">
+    <!-- Wrapper Utama agar perhitungan tinggi layar absolut 100vh -->
+    <div id="app-container" class="p-2 gap-2">
 
-    <header class="flex justify-between items-center px-2 py-1 shrink-0">
-        <div class="flex items-center gap-3">
-            <i class="fa-solid fa-staff-snake text-emerald-500 text-3xl"></i>
-            <div>
-                <h1 class="text-xl lg:text-2xl font-black tracking-wider text-white uppercase leading-none">PROJEKGO <span class="text-emerald-500">ANALYTICS</span></h1>
-                <p class="text-[10px] text-slate-400 font-semibold tracking-widest uppercase mt-1">Comprehensive Overview of Rider & Order Performance</p>
+        <!-- HEADER -->
+        <header class="flex justify-between items-center px-2 py-1 shrink-0" style="height: 6vh; min-height: 40px;">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-staff-snake text-emerald-500 text-2xl lg:text-3xl"></i>
+                <div>
+                    <h1 class="text-lg lg:text-2xl font-black tracking-wider text-white uppercase leading-none">PROJEKGO <span class="text-emerald-500">ANALYTICS</span></h1>
+                    <p class="text-[9px] lg:text-[10px] text-slate-400 font-semibold tracking-widest uppercase mt-1 hidden sm:block">Comprehensive Overview of Rider & Order Performance</p>
+                </div>
             </div>
-        </div>
-        <div class="flex items-center gap-4">
-            <button id="btn-audio" class="flex items-center gap-2 px-3 py-1.5 rounded bg-slate-800 border border-slate-600 text-slate-300 font-bold text-xs hover:bg-slate-700 transition-all">
-                <i class="fa-solid fa-volume-xmark" id="audio-icon"></i>
-                <span id="audio-text">Audio Off</span>
-            </button>
-            <div class="flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-900/50">
-                <span class="relative flex h-2 w-2">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-full w-full bg-emerald-500"></span>
-                </span>
-                <span id="sync-status" class="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Live</span>
+            <div class="flex items-center gap-2 lg:gap-4">
+                <button id="btn-audio" class="flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded bg-slate-800 border border-slate-600 text-slate-300 font-bold text-[10px] lg:text-xs hover:bg-slate-700 transition-all">
+                    <i class="fa-solid fa-volume-xmark" id="audio-icon"></i>
+                    <span id="audio-text" class="hidden sm:inline">Audio Off</span>
+                </button>
+                <div class="flex items-center gap-1.5 px-2 py-1 lg:px-3 lg:py-1.5 rounded border border-slate-700 bg-slate-900/50">
+                    <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-full w-full bg-emerald-500"></span>
+                    </span>
+                    <span id="sync-status" class="text-[9px] lg:text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Live</span>
+                </div>
+                <div class="text-right">
+                    <div id="clock" class="text-lg lg:text-xl font-bold text-white font-mono leading-none">00:00</div>
+                    <div id="date" class="text-[8px] lg:text-[9px] text-slate-400 font-semibold uppercase tracking-widest mt-0.5">Senin, 1 Jan</div>
+                </div>
             </div>
-            <div class="text-right">
-                <div id="clock" class="text-xl font-bold text-white font-mono leading-none">00:00</div>
-                <div id="date" class="text-[9px] text-slate-400 font-semibold uppercase tracking-widest mt-0.5">Senin, 1 Jan</div>
-            </div>
-        </div>
-    </header>
+        </header>
 
-    <main class="flex-1 flex gap-2 overflow-hidden min-h-0">
-        
-        <!-- SIDEBAR (Diubah menjadi Panel Segmentasi Pelanggan) -->
-        <aside class="w-[20%] panel flex flex-col min-h-0 shrink-0 border-l-4 border-l-slate-700">
-            <div class="panel-header text-white justify-center py-3 bg-slate-800/50 uppercase tracking-widest">
-                <i class="fa-solid fa-users-viewfinder text-blue-400"></i> SEGMENTASI PELANGGAN
-            </div>
-            <div id="customer-segments" class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
-                <div class="h-full flex flex-col justify-center items-center text-slate-600 p-4 text-center">
-                    <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
-                    <span class="text-[9px] font-bold uppercase tracking-widest mt-2">Menghitung Data...</span>
+        <!-- MAIN CONTENT (Sisa Tinggi Layar) -->
+        <main class="flex-1 flex gap-2 overflow-hidden min-h-0" style="height: calc(100vh - 6vh - 1rem);">
+            
+            <!-- SIDEBAR: SEGMENTASI PELANGGAN -->
+            <aside class="w-1/4 max-w-[280px] panel shrink-0 border-l-4 border-l-slate-700">
+                <div class="panel-header text-white justify-center py-2 bg-slate-800/50 uppercase tracking-widest">
+                    <i class="fa-solid fa-users-viewfinder text-blue-400"></i> SEGMENTASI PELANGGAN
                 </div>
-            </div>
-        </aside>
+                <div id="customer-segments" class="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col justify-start gap-2">
+                    <div class="h-full flex flex-col justify-center items-center text-slate-600 p-4 text-center">
+                        <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
+                        <span class="text-[9px] font-bold uppercase tracking-widest mt-2">Menghitung Data...</span>
+                    </div>
+                </div>
+            </aside>
 
-        <div class="flex-1 flex flex-col gap-2 min-h-0">
-            <div class="grid grid-cols-5 gap-2 shrink-0">
-                <div class="kpi-card border-t-cyan p-3 flex items-center justify-between">
-                    <div class="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shrink-0">
-                        <i class="fa-solid fa-motorcycle text-cyan-400 text-lg"></i>
+            <!-- AREA KANAN (KPI & CHARTS) -->
+            <div class="flex-1 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+                
+                <!-- ROW 1: KPI CARDS (Tinggi Tetap Relatif) -->
+                <div class="grid grid-cols-5 gap-2 shrink-0" style="height: 12%;">
+                    <div class="kpi-card border-t-cyan">
+                        <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shrink-0">
+                            <i class="fa-solid fa-motorcycle text-cyan-400 text-sm lg:text-lg"></i>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-responsive-kpi-lbl text-slate-400 font-bold uppercase tracking-wider">Rider Shift</div>
+                            <div id="count-shift" class="text-responsive-kpi-val font-black text-white text-cyan-neon leading-none mt-1">0</div>
+                        </div>
                     </div>
-                    <div class="text-right">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Rider Shift</div>
-                        <div id="count-shift" class="text-2xl font-black text-white text-cyan-neon leading-none mt-1">0</div>
+                    <div class="kpi-card border-t-amber">
+                        <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-amber-500/20 flex items-center justify-center border border-amber-500/30 shrink-0">
+                            <i class="fa-solid fa-satellite-dish text-amber-400 text-sm lg:text-lg"></i>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-responsive-kpi-lbl text-slate-400 font-bold uppercase tracking-wider">Antrean Radar</div>
+                            <div id="count-radar" class="text-responsive-kpi-val font-black text-white leading-none mt-1">0</div>
+                        </div>
                     </div>
-                </div>
-                <div class="kpi-card border-t-amber p-3 flex items-center justify-between">
-                    <div class="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center border border-amber-500/30 shrink-0">
-                        <i class="fa-solid fa-satellite-dish text-amber-400 text-lg"></i>
+                    <div class="kpi-card border-t-emerald">
+                        <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30 shrink-0">
+                            <i class="fa-solid fa-box-open text-emerald-400 text-sm lg:text-lg"></i>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-responsive-kpi-lbl text-slate-400 font-bold uppercase tracking-wider">Sedang Diproses</div>
+                            <div id="count-active" class="text-responsive-kpi-val font-black text-white text-emerald-neon leading-none mt-1">0</div>
+                        </div>
                     </div>
-                    <div class="text-right">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Antrean Radar</div>
-                        <div id="count-radar" class="text-2xl font-black text-white leading-none mt-1">0</div>
+                    <div class="kpi-card border-t-rose">
+                        <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/30 shrink-0">
+                            <i class="fa-solid fa-bed text-rose-400 text-sm lg:text-lg"></i>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-responsive-kpi-lbl text-slate-400 font-bold uppercase tracking-wider">Rider OFF</div>
+                            <div id="count-off" class="text-responsive-kpi-val font-black text-white leading-none mt-1">0</div>
+                        </div>
                     </div>
-                </div>
-                <div class="kpi-card border-t-emerald p-3 flex items-center justify-between">
-                    <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30 shrink-0">
-                        <i class="fa-solid fa-box-open text-emerald-400 text-lg"></i>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Sedang Diproses</div>
-                        <div id="count-active" class="text-2xl font-black text-white text-emerald-neon leading-none mt-1">0</div>
-                    </div>
-                </div>
-                <div class="kpi-card border-t-rose p-3 flex items-center justify-between">
-                    <div class="w-10 h-10 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/30 shrink-0">
-                        <i class="fa-solid fa-bed text-rose-400 text-lg"></i>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Rider OFF</div>
-                        <div id="count-off" class="text-2xl font-black text-white leading-none mt-1">0</div>
-                    </div>
-                </div>
-                <div class="kpi-card border-t-blue p-3 flex items-center justify-between">
-                    <div class="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center border border-blue-500/30 shrink-0">
-                        <i class="fa-solid fa-clipboard-check text-blue-400 text-lg"></i>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Total Hari Ini</div>
-                        <div id="total-order-today" class="text-2xl font-black text-white leading-none mt-1">0</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex-1 grid grid-cols-3 grid-rows-2 gap-2 min-h-0">
-                <div class="panel flex flex-col min-h-0">
-                    <div class="panel-header text-cyan-400"><i class="fa-solid fa-chart-bar"></i> TOP PERFORMA RIDER</div>
-                    <div class="flex-1 p-2 relative w-full h-full"><canvas id="chart-leaderboard"></canvas></div>
-                </div>
-                <div class="panel flex flex-col min-h-0">
-                    <div class="panel-header text-emerald-400"><i class="fa-solid fa-chart-column"></i> JUMLAH ORDER PER JAM</div>
-                    <div class="flex-1 p-2 relative w-full h-full"><canvas id="chart-trend"></canvas></div>
-                </div>
-                <div class="panel flex flex-col min-h-0">
-                    <div class="panel-header text-fuchsia-400"><i class="fa-solid fa-chart-pie"></i> DISTRIBUSI STATUS RIDER</div>
-                    <div class="flex-1 p-2 relative w-full h-full flex justify-center items-center">
-                        <canvas id="chart-rider-status"></canvas>
-                        <div class="absolute inset-0 flex flex-col justify-center items-center pointer-events-none mt-2">
-                            <span id="donut-total-rider" class="text-xl font-black text-white">0</span>
-                            <span class="text-[8px] text-slate-400 uppercase">Total</span>
+                    <div class="kpi-card border-t-blue">
+                        <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-blue-500/20 flex items-center justify-center border border-blue-500/30 shrink-0">
+                            <i class="fa-solid fa-clipboard-check text-blue-400 text-sm lg:text-lg"></i>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-responsive-kpi-lbl text-slate-400 font-bold uppercase tracking-wider">Total Hari Ini</div>
+                            <div id="total-order-today" class="text-responsive-kpi-val font-black text-white leading-none mt-1">0</div>
                         </div>
                     </div>
                 </div>
-                <div class="panel flex flex-col min-h-0">
-                    <div class="panel-header text-blue-400"><i class="fa-solid fa-crown"></i> TOP PELANGGAN LOYAL</div>
-                    <div class="flex-1 p-2 relative w-full h-full"><canvas id="chart-customers"></canvas></div>
-                </div>
 
-                <!-- STATUS ORDER LIVE (Ditambahkan Notifikasi Berkedip) -->
-                <div class="panel flex flex-col min-h-0" id="panel-live-status">
-                    <div class="panel-header text-amber-400">
-                        <i class="fa-solid fa-star"></i> STATUS ORDER LIVE
+                <!-- ROW 2: CHARTS GRID (Tinggi Fleksibel) -->
+                <div class="flex-1 grid grid-cols-3 grid-rows-2 gap-2 min-h-0 pb-1">
+                    
+                    <div class="panel">
+                        <div class="panel-header text-cyan-400"><i class="fa-solid fa-chart-bar"></i> TOP PERFORMA RIDER</div>
+                        <div class="chart-container"><canvas id="chart-leaderboard"></canvas></div>
                     </div>
-                    <div class="flex-1 p-2 relative w-full h-full">
-                        <!-- Notifikasi Emergency -->
-                        <div id="delay-notification" class="hidden absolute top-2 left-2 right-2 z-10 alert-pulse border rounded p-2 flex items-center justify-between shadow-lg">
-                            <div class="flex items-center gap-2">
-                                <i class="fa-solid fa-triangle-exclamation text-white"></i>
-                                <span class="text-[10px] font-black text-white uppercase tracking-tighter">Delay detected (>2m)</span>
+                    
+                    <div class="panel">
+                        <div class="panel-header text-emerald-400"><i class="fa-solid fa-chart-column"></i> JUMLAH ORDER PER JAM</div>
+                        <div class="chart-container"><canvas id="chart-trend"></canvas></div>
+                    </div>
+                    
+                    <div class="panel">
+                        <div class="panel-header text-fuchsia-400"><i class="fa-solid fa-chart-pie"></i> DISTRIBUSI STATUS RIDER</div>
+                        <div class="chart-container flex justify-center items-center">
+                            <canvas id="chart-rider-status"></canvas>
+                            <div class="absolute inset-0 flex flex-col justify-center items-center pointer-events-none mt-3">
+                                <span id="donut-total-rider" class="text-xl lg:text-2xl font-black text-white">0</span>
+                                <span class="text-[8px] lg:text-[10px] text-slate-400 uppercase">Total</span>
                             </div>
-                            <span class="text-[10px] font-bold text-white bg-black/40 px-2 py-0.5 rounded">Action Required</span>
                         </div>
-                        <canvas id="chart-order-status"></canvas>
+                    </div>
+                    
+                    <div class="panel">
+                        <div class="panel-header text-blue-400"><i class="fa-solid fa-crown"></i> TOP PELANGGAN LOYAL</div>
+                        <div class="chart-container"><canvas id="chart-customers"></canvas></div>
+                    </div>
+
+                    <div class="panel" id="panel-live-status">
+                        <div class="panel-header text-amber-400 relative">
+                            <i class="fa-solid fa-star"></i> STATUS ORDER LIVE
+                            <!-- Notifikasi Emergency di Header -->
+                            <div id="delay-notification" class="hidden absolute right-2 top-1/2 -translate-y-1/2 alert-pulse border border-rose-500/50 rounded px-2 py-0.5 flex items-center gap-1 shadow-lg">
+                                <i class="fa-solid fa-triangle-exclamation text-white text-[8px]"></i>
+                                <span class="text-[8px] font-black text-white uppercase tracking-tighter">Delay >2m</span>
+                            </div>
+                        </div>
+                        <div class="chart-container"><canvas id="chart-order-status"></canvas></div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header text-emerald-400"><i class="fa-solid fa-users"></i> RASIO PENYELESAIAN HARI INI</div>
+                        <div class="chart-container flex justify-center items-center">
+                            <canvas id="chart-completion"></canvas>
+                             <div class="absolute inset-0 flex flex-col justify-center items-center pointer-events-none mt-3">
+                                <span id="donut-completion-rate" class="text-xl lg:text-2xl font-black text-white">0%</span>
+                                <span class="text-[8px] lg:text-[10px] text-slate-400 uppercase">Sukses</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <div class="panel flex flex-col min-h-0">
-                    <div class="panel-header text-emerald-400"><i class="fa-solid fa-users"></i> RASIO PENYELESAIAN HARI INI</div>
-                    <div class="flex-1 p-2 relative w-full h-full flex justify-center items-center">
-                        <canvas id="chart-completion"></canvas>
-                         <div class="absolute inset-0 flex flex-col justify-center items-center pointer-events-none mt-2">
-                            <span id="donut-completion-rate" class="text-xl font-black text-white">0%</span>
-                            <span class="text-[8px] text-slate-400 uppercase">Sukses</span>
+                <!-- ROW 3: TARGET & STATUS (Tinggi Tetap Relatif) -->
+                <div class="grid grid-cols-3 gap-2 shrink-0" style="height: 10%; min-height: 50px;">
+                    <div class="panel col-span-2 flex justify-center px-4 border-l-4 border-l-blue-500 h-full">
+                        <div class="w-full">
+                            <div class="flex justify-between items-end mb-1">
+                                <div class="text-[9px] lg:text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                                    <i class="fa-solid fa-bullseye text-blue-400 mr-1"></i> TARGET ORDER HARI INI
+                                </div>
+                                <div class="text-[10px] lg:text-xs font-bold text-slate-300">
+                                    <span id="target-actual" class="text-blue-400 text-sm lg:text-base font-black transition-colors">0</span> / <span id="target-goal">100</span>
+                                </div>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2 lg:h-3 mb-1 border border-slate-700 overflow-hidden">
+                                <div id="target-progress-bar" class="bg-blue-500 h-full rounded-full transition-all duration-1000 progress-striped" style="width: 0%"></div>
+                            </div>
+                            <div class="flex justify-between text-[8px] lg:text-[9px] text-slate-500 font-bold uppercase">
+                                <span>0%</span>
+                                <span id="target-percentage">0% Tercapai</span>
+                                <span>100%</span>
+                            </div>
                         </div>
                     </div>
+                    
+                    <div class="panel col-span-1 flex items-center justify-between px-4 bg-emerald-900/10 border-l-4 border-l-emerald-500 h-full">
+                        <div>
+                            <div class="text-[8px] lg:text-[9px] text-slate-400 font-bold uppercase mb-0.5">OVERALL STATUS</div>
+                            <div class="text-[10px] lg:text-xs font-bold text-emerald-400">SISTEM OPTIMAL</div>
+                        </div>
+                        <i class="fa-solid fa-shield-halved text-2xl lg:text-3xl text-emerald-500/50"></i>
+                    </div>
                 </div>
-            </div>
 
-            <div class="grid grid-cols-3 gap-2 shrink-0 h-[8vh]">
-                <!-- Panel Target Order Hari Ini (Menggantikan Key Insights) -->
-                <div class="panel col-span-2 flex flex-col justify-center px-4 border-l-4 border-l-blue-500">
-                    <div class="flex justify-between items-end mb-1.5">
-                        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-widest">
-                            <i class="fa-solid fa-bullseye text-blue-400 mr-1"></i> TARGET ORDER HARI INI
-                        </div>
-                        <div class="text-[10px] font-bold text-slate-300">
-                            <span id="target-actual" class="text-blue-400 text-sm font-black transition-colors">0</span> / <span id="target-goal">100</span>
-                        </div>
-                    </div>
-                    <div class="w-full bg-slate-800 rounded-full h-2 mb-1 border border-slate-700 overflow-hidden">
-                        <div id="target-progress-bar" class="bg-blue-500 h-full rounded-full transition-all duration-1000 progress-striped" style="width: 0%"></div>
-                    </div>
-                    <div class="flex justify-between text-[8px] text-slate-500 font-bold uppercase">
-                        <span>0%</span>
-                        <span id="target-percentage">0% Tercapai</span>
-                        <span>100%</span>
-                    </div>
-                </div>
-                <!-- ... sisa panel Overall Status ... -->
-                <div class="panel col-span-1 flex items-center justify-between px-4 bg-emerald-900/10 border-l-4 border-l-emerald-500">
-                    <div>
-                        <div class="text-[9px] text-slate-400 font-bold uppercase mb-0.5">OVERALL STATUS</div>
-                        <div class="text-xs font-bold text-emerald-400">SISTEM BERJALAN OPTIMAL</div>
-                    </div>
-                    <i class="fa-solid fa-shield-halved text-2xl text-emerald-500/50"></i>
-                </div>
             </div>
-        </div>
-    </main>
+        </main>
+    </div>
 
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
@@ -340,23 +388,27 @@
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let lastWarningBeepTime = 0;
 
-        // --- FUNGSI HELPER: Memicu Efek Melompat Jika Data Berubah ---
         function updateNumberWithFlash(elementId, newValue) {
             const el = document.getElementById(elementId);
             if (el && el.innerText !== String(newValue)) {
                 el.innerText = newValue;
                 el.classList.remove('update-flash');
-                void el.offsetWidth; // Trigger reflow browser untuk reset animasi CSS
+                void el.offsetWidth;
                 el.classList.add('update-flash');
             }
         }
 
         const charts = { leaderboard: null, trend: null, riderStatus: null, customers: null, orderStatus: null, completion: null };
-        // Mengubah default font chart menjadi lebih besar, tebal, dan warna lebih terang
+        
+        // --- PENGATURAN HD UNTUK CHART.JS ---
+        // Memaksa resolusi tinggi untuk layar besar
+        Chart.defaults.devicePixelRatio = window.devicePixelRatio > 1 ? window.devicePixelRatio : 2; 
         Chart.defaults.color = '#e2e8f0'; 
-        Chart.defaults.font.size = 11; 
+        // Menggunakan ukuran font yang responsif terhadap tinggi layar, tapi ada batas minimal
+        Chart.defaults.font.size = Math.max(10, Math.floor(window.innerHeight * 0.012)); 
         Chart.defaults.font.weight = 'bold';
-        const gridConfig = { color: '#334155', drawBorder: false };
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        const gridConfig = { color: '#1e293b', drawBorder: false };
 
         const initAuth = async () => {
             try {
@@ -368,7 +420,6 @@
         };
         initAuth();
 
-        // 5 Kali Beep (tit tit tit tit tit)
         function playWarningBeep() { 
             if(audioEnabled) { 
                 for(let i=0; i<5; i++) {
@@ -463,7 +514,6 @@
                 else { if (r.in_main_queue === true || r.in_main_queue === 'true') rCount++; else sCount++; }
             });
             
-            // Mengganti .innerText dengan fungsi helper animasi kita
             updateNumberWithFlash('count-shift', sCount);
             updateNumberWithFlash('count-radar', rCount);
             updateNumberWithFlash('count-active', aCount);
@@ -473,13 +523,10 @@
             
             updateCustomerSegments(); 
             updateChartsData(sCount, rCount, aCount, oCount);
-            
-            // Panggil fungsi target harian menggantikan generateInsights()
             updateDailyTarget(todayAllOrders.length);
         }
 
         function updateDailyTarget(currentTotal) {
-            // ANDA BISA MENGUBAH ANGKA TARGET DI BAWAH INI (misal: 100, 200, 50)
             const TARGET_ORDER = 100; 
             
             document.getElementById('target-goal').innerText = TARGET_ORDER;
@@ -487,7 +534,7 @@
 
             let rawPercentage = (currentTotal / TARGET_ORDER) * 100;
             let displayPercentage = Math.round(rawPercentage);
-            let barPercentage = rawPercentage > 100 ? 100 : rawPercentage; // Maksimal bar 100%
+            let barPercentage = rawPercentage > 100 ? 100 : rawPercentage;
 
             const bar = document.getElementById('target-progress-bar');
             const actualText = document.getElementById('target-actual');
@@ -496,13 +543,11 @@
             bar.style.width = barPercentage + '%';
 
             if (rawPercentage >= 100) {
-                // Jika target tercapai (Warna Hijau)
                 bar.classList.replace('bg-blue-500', 'bg-emerald-500');
                 actualText.classList.replace('text-blue-400', 'text-emerald-400');
                 percentText.innerText = 'TARGET TERCAPAI!';
                 percentText.classList.add('text-emerald-400');
             } else {
-                // Jika belum tercapai (Warna Biru)
                 bar.classList.replace('bg-emerald-500', 'bg-blue-500');
                 actualText.classList.replace('text-emerald-400', 'text-blue-400');
                 percentText.innerText = displayPercentage + '% Tercapai';
@@ -511,19 +556,12 @@
         }
 
         function updateCustomerSegments() {
-            let loyalCount = 0;
-            let activeCount = 0;
-            let churnCount = 0;
-            
+            let loyalCount = 0, activeCount = 0, churnCount = 0;
             const now = Date.now();
-            const ONE_DAY = 24 * 60 * 60 * 1000; // 1 Hari dalam milidetik
+            const ONE_DAY = 24 * 60 * 60 * 1000; 
 
-            // Menghitung data berdasarkan Logika Segmentasi Anda
             allCustomers.forEach(c => {
-                // Syarat Loyal: Order >= 5 kali
                 if ((c.order_count || 0) >= 5) loyalCount++;
-                
-                // Syarat Aktif (<= 7 hari) dan Pasif/Churn (>= 30 hari)
                 if (c.last_order && c.last_order.seconds) {
                     const diffDays = (now - (c.last_order.seconds * 1000)) / ONE_DAY;
                     if (diffDays <= 7) activeCount++;
@@ -533,37 +571,35 @@
 
             const container = document.getElementById('customer-segments');
             if (allCustomers.length === 0) {
-                container.innerHTML = `<div class="h-full flex flex-col justify-center items-center text-slate-600 p-4 text-center"><span class="text-[9px] font-bold uppercase tracking-widest">Belum ada data pelanggan di database</span></div>`;
+                container.innerHTML = `<div class="h-full flex flex-col justify-center items-center text-slate-600 p-4 text-center"><span class="text-[9px] font-bold uppercase tracking-widest">Belum ada data</span></div>`;
                 return;
             }
 
-            // Mencegah re-render seluruh kotak agar animasi angka bisa berjalan
             if (document.getElementById('seg-active')) {
                 updateNumberWithFlash('seg-active', activeCount);
                 updateNumberWithFlash('seg-loyal', loyalCount);
                 updateNumberWithFlash('seg-churn', churnCount);
                 updateNumberWithFlash('seg-total', allCustomers.length);
             } else {
-                // Render elemen untuk pertama kalinya (memberi ID pada angkanya)
                 container.innerHTML = `
-                    <div class="bg-[#121926] border border-emerald-500/50 rounded p-3 flex flex-col gap-1 relative overflow-hidden">
-                        <div class="absolute -right-2 -bottom-2 opacity-10 text-emerald-500"><i class="fa-solid fa-fire text-5xl"></i></div>
-                        <div class="text-[9px] text-emerald-400 font-bold uppercase tracking-wider">Aktif (≤ 7 Hari)</div>
-                        <div class="text-2xl font-black text-white"><span id="seg-active">${activeCount}</span> <span class="text-[10px] text-slate-500 font-normal">orang</span></div>
+                    <div class="bg-[#121926] border border-emerald-500/50 rounded p-2 lg:p-3 flex flex-col gap-0.5 lg:gap-1 relative overflow-hidden flex-1 justify-center">
+                        <div class="absolute -right-2 -bottom-2 opacity-10 text-emerald-500"><i class="fa-solid fa-fire text-4xl lg:text-5xl"></i></div>
+                        <div class="text-[8px] lg:text-[9px] text-emerald-400 font-bold uppercase tracking-wider">Aktif (≤ 7 Hari)</div>
+                        <div class="text-xl lg:text-2xl font-black text-white"><span id="seg-active">${activeCount}</span> <span class="text-[8px] lg:text-[10px] text-slate-500 font-normal">orang</span></div>
                     </div>
-                    <div class="bg-[#121926] border border-amber-500/50 rounded p-3 flex flex-col gap-1 relative overflow-hidden">
-                        <div class="absolute -right-2 -bottom-2 opacity-10 text-amber-500"><i class="fa-solid fa-star text-5xl"></i></div>
-                        <div class="text-[9px] text-amber-400 font-bold uppercase tracking-wider">Loyal (≥ 5 Order)</div>
-                        <div class="text-2xl font-black text-white"><span id="seg-loyal">${loyalCount}</span> <span class="text-[10px] text-slate-500 font-normal">orang</span></div>
+                    <div class="bg-[#121926] border border-amber-500/50 rounded p-2 lg:p-3 flex flex-col gap-0.5 lg:gap-1 relative overflow-hidden flex-1 justify-center">
+                        <div class="absolute -right-2 -bottom-2 opacity-10 text-amber-500"><i class="fa-solid fa-star text-4xl lg:text-5xl"></i></div>
+                        <div class="text-[8px] lg:text-[9px] text-amber-400 font-bold uppercase tracking-wider">Loyal (≥ 5 Order)</div>
+                        <div class="text-xl lg:text-2xl font-black text-white"><span id="seg-loyal">${loyalCount}</span> <span class="text-[8px] lg:text-[10px] text-slate-500 font-normal">orang</span></div>
                     </div>
-                    <div class="bg-[#121926] border border-rose-500/50 rounded p-3 flex flex-col gap-1 relative overflow-hidden">
-                        <div class="absolute -right-2 -bottom-2 opacity-10 text-rose-500"><i class="fa-solid fa-ghost text-5xl"></i></div>
-                        <div class="text-[9px] text-rose-400 font-bold uppercase tracking-wider">Pasif (≥ 30 Hari)</div>
-                        <div class="text-2xl font-black text-white"><span id="seg-churn">${churnCount}</span> <span class="text-[10px] text-slate-500 font-normal">orang</span></div>
+                    <div class="bg-[#121926] border border-rose-500/50 rounded p-2 lg:p-3 flex flex-col gap-0.5 lg:gap-1 relative overflow-hidden flex-1 justify-center">
+                        <div class="absolute -right-2 -bottom-2 opacity-10 text-rose-500"><i class="fa-solid fa-ghost text-4xl lg:text-5xl"></i></div>
+                        <div class="text-[8px] lg:text-[9px] text-rose-400 font-bold uppercase tracking-wider">Pasif (≥ 30 Hari)</div>
+                        <div class="text-xl lg:text-2xl font-black text-white"><span id="seg-churn">${churnCount}</span> <span class="text-[8px] lg:text-[10px] text-slate-500 font-normal">orang</span></div>
                     </div>
-                    <div class="mt-4 border-t border-slate-700 pt-2 text-center">
-                        <div class="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Total Database</div>
-                        <div class="text-lg font-black text-slate-200"><span id="seg-total">${allCustomers.length}</span> <span class="text-[8px] text-slate-500 font-normal">pelanggan</span></div>
+                    <div class="mt-1 lg:mt-2 border-t border-slate-700 pt-1 lg:pt-2 text-center shrink-0">
+                        <div class="text-[9px] lg:text-[10px] text-slate-400 uppercase tracking-widest font-bold">Total Database</div>
+                        <div class="text-base lg:text-lg font-black text-slate-200"><span id="seg-total">${allCustomers.length}</span> <span class="text-[8px] text-slate-500 font-normal">pelanggan</span></div>
                     </div>
                 `;
             }
@@ -584,10 +620,8 @@
 
             let topCustomers = [];
             if (allCustomers.length > 0) {
-                // Sesuai logika #4: Sering Order (Frequent) - order_count dari terbesar ke terkecil
                 topCustomers = [...allCustomers].sort((a,b) => (b.order_count || 0) - (a.order_count || 0)).slice(0, 5);
             } else {
-                // Fallback jika belum ada data di koleksi 'customers'
                 const custCounts = {};
                 todayAllOrders.forEach(o => { if (o.status === 'completed' && o.customer_name) custCounts[o.customer_name] = (custCounts[o.customer_name] || 0) + 1; });
                 topCustomers = Object.keys(custCounts).map(n => ({ nama: n, order_count: custCounts[n] })).sort((a,b) => b.order_count - a.order_count).slice(0, 5);
@@ -607,16 +641,62 @@
         function drawBarChart(id, inst, axis, labels, data, color, cb) {
             const ctx = document.getElementById(id); if(!ctx) return;
             if(inst) { inst.data.labels = labels; inst.data.datasets[0].data = data; inst.update(); return; }
-            cb(new Chart(ctx, { type: 'bar', data: { labels: labels, datasets: [{ data: data, backgroundColor: color, borderRadius: 2 }] }, options: { indexAxis: axis, responsive: true, maintainAspectRatio: false, scales: { x: { grid: axis==='y' ? gridConfig : {display: false}, ticks:{color: '#e2e8f0', font:{size:11, weight:'bold'}} }, y: { grid: axis==='x' ? gridConfig : {display: false}, ticks:{color: '#e2e8f0', font:{size:11, weight:'bold'}} } }, plugins: { legend: { display: false } } } }));
+            
+            const fontSize = Chart.defaults.font.size;
+            
+            cb(new Chart(ctx, { 
+                type: 'bar', 
+                data: { labels: labels, datasets: [{ data: data, backgroundColor: color, borderRadius: 2 }] }, 
+                options: { 
+                    indexAxis: axis, 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    layout: { padding: 4 },
+                    scales: { 
+                        x: { grid: axis==='y' ? gridConfig : {display: false}, ticks:{color: '#e2e8f0', font:{size: fontSize, weight:'bold'}, autoSkip: false} }, 
+                        y: { grid: axis==='x' ? gridConfig : {display: false}, ticks:{color: '#e2e8f0', font:{size: fontSize, weight:'bold'}, autoSkip: false} } 
+                    }, 
+                    plugins: { legend: { display: false } } 
+                } 
+            }));
         }
 
         function drawDonutChart(id, inst, labels, data, colors, cb) {
             const ctx = document.getElementById(id); if(!ctx) return;
             if(inst) { inst.data.datasets[0].data = data; inst.update(); return; }
-            cb(new Chart(ctx, { type: 'doughnut', data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { display: true, position: 'right', labels: { boxWidth: 10, font: {size: 11, weight: 'bold'}, color: '#e2e8f0' } } } } }));
+            
+            const fontSize = Chart.defaults.font.size;
+            
+            cb(new Chart(ctx, { 
+                type: 'doughnut', 
+                data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderWidth: 0 }] }, 
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    cutout: '70%', 
+                    layout: { padding: 4 },
+                    plugins: { 
+                        legend: { 
+                            display: true, 
+                            position: 'right', 
+                            labels: { boxWidth: 12, font: {size: fontSize, weight: 'bold'}, color: '#e2e8f0', padding: 10 } 
+                        } 
+                    } 
+                } 
+            }));
         }
-
-        // Fungsi generateInsights() telah dihapus dan digantikan updateDailyTarget()
+        
+        // Memaksa grafik untuk dirender ulang jika ukuran jendela berubah (opsional, tapi berguna untuk TV)
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                const newFontSize = Math.max(10, Math.floor(window.innerHeight * 0.012));
+                Chart.defaults.font.size = newFontSize;
+                // Grafiknya akan merespons otomatis saat update data berikutnya, 
+                // atau Anda bisa memanggil updateChartsData secara paksa jika diperlukan.
+            }, 250);
+        });
 
     </script>
 </body>
