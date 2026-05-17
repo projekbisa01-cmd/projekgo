@@ -304,12 +304,8 @@
                 <div class="flex-1 grid grid-cols-3 grid-rows-2 gap-3 min-h-0 pb-1">
                     
                     <div class="panel">
-                        <div class="panel-header text-cyan-400"><i class="fa-solid fa-chart-bar mr-1"></i> TOP PERFORMA RIDER</div>
-                        <div class="chart-container"><canvas id="chart-leaderboard"></canvas></div>
-                    </div>
-                    
-                    <div class="panel">
-                        <div class="panel-header text-emerald-400"><i class="fa-solid fa-chart-column mr-1"></i> JUMLAH ORDER PER JAM</div>
+                        <!-- Judul Panel Diubah -->
+                        <div class="panel-header text-emerald-400"><i class="fa-solid fa-chart-column mr-1"></i> ANALISIS JAM SIBUK</div>
                         <div class="chart-container"><canvas id="chart-trend"></canvas></div>
                     </div>
                     
@@ -820,9 +816,45 @@
             // Memperpanjang batas huruf menjadi 14 agar nama tampil lebih utuh
             drawBarChart('chart-leaderboard', charts.leaderboard, 'y', topRiders.map(r => r.name.length > 14 ? r.name.substring(0,14) + '..' : r.name), topRiders.map(r => r.count), '#06b6d4', (c) => charts.leaderboard = c);
 
-            const hourCounts = {}; for(let i=6; i<=23; i++) hourCounts[i] = 0;
-            todayAllOrders.forEach(o => { if (o.created_at?.seconds) { const h = new Date(o.created_at.seconds * 1000).getHours(); if (h >= 6 && h <= 23) hourCounts[h]++; } });
-            drawBarChart('chart-trend', charts.trend, 'x', Object.keys(hourCounts).map(h => `${h}:00`), Object.values(hourCounts), '#10b981', (c) => charts.trend = c);
+            // ==========================================
+            // LOGIKA KERANJANG JAM SIBUK (Langkah 2 & 3)
+            // ==========================================
+            // Menyiapkan 6 variabel keranjang (hanya menghitung order)
+            const jamSibuk = {
+                'Pagi (06-10)': 0,
+                'Jeda (10-11)': 0,
+                'Siang (11-14)': 0,
+                'Sore (14-16)': 0,
+                'Malam (16-20)': 0,
+                'Tutup (>20)': 0
+            };
+
+            // Looping data order hari ini dan distribusikan
+            todayAllOrders.forEach(o => { 
+                if (o.created_at?.seconds) { 
+                    const date = new Date(o.created_at.seconds * 1000);
+                    // Ambil jam dan menit dalam format numerik HHMM untuk perbandingan mudah (Contoh 09:30 jadi 930)
+                    const jamText = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
+                    
+                    // Implementasi logika If-Else persis seperti instruksi Anda
+                    if (jamText >= '00:00' && jamText < '10:00') { 
+                        jamSibuk['Pagi (06-10)']++; 
+                    } else if (jamText >= '10:00' && jamText < '11:00') { 
+                        jamSibuk['Jeda (10-11)']++; 
+                    } else if (jamText >= '11:00' && jamText < '14:00') { 
+                        jamSibuk['Siang (11-14)']++; 
+                    } else if (jamText >= '14:00' && jamText < '16:00') { 
+                        jamSibuk['Sore (14-16)']++; 
+                    } else if (jamText >= '16:00' && jamText < '20:00') { 
+                        jamSibuk['Malam (16-20)']++; 
+                    } else if (jamText >= '20:00') { 
+                        jamSibuk['Tutup (>20)']++; 
+                    }
+                } 
+            });
+
+            // Kirim data keranjang yang sudah terisi ke Chart.js (Sumbu X Vertikal)
+            drawBarChart('chart-trend', charts.trend, 'x', Object.keys(jamSibuk), Object.values(jamSibuk), '#10b981', (c) => charts.trend = c);
 
             drawDonutChart('chart-rider-status', charts.riderStatus, ['Shift', 'Radar', 'Diproses', 'Off'], [shiftCount, radarCount, activeCount, offCount], ['#06b6d4', '#f59e0b', '#10b981', '#f43f5e'], String(allRiders.length), 'Total', (c) => charts.riderStatus = c);
 
