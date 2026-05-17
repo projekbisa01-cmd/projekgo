@@ -409,6 +409,8 @@
         let todayAllOrders = [];
         let allCustomers = [];
         
+        const GAS_CUSTOMER_URL = "https://script.google.com/macros/s/AKfycbxeZvbZb8had2uY-P_Nr44AwWcwxfGuwyn1QHHW5eFJz1IKsN-WGvhrbp16tNg5IzKw/exec";
+        
         let audioEnabled = false;
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let lastWarningBeepTime = 0;
@@ -566,6 +568,32 @@
 
         onAuthStateChanged(auth, (user) => { if (user) startDataListeners(); });
 
+        async function fetchCustomersFromGAS() {
+            try {
+                // Tampilkan indikator loading ringan jika diperlukan (bisa via console)
+                console.log("Menarik data dari GAS...");
+                
+                const response = await fetch(GAS_CUSTOMER_URL);
+                const data = await response.json();
+                
+                // Mendukung 2 format GAS umum: Mengembalikan array langsung, atau JSON { data: [...] }
+                let customersArray = [];
+                if (Array.isArray(data)) {
+                    customersArray = data;
+                } else if (data && Array.isArray(data.data)) {
+                    customersArray = data.data;
+                }
+                
+                if (customersArray.length > 0) {
+                    allCustomers = customersArray;
+                    processDataAndUpdate(); // Trigger update UI (Badge & Chart Loyal)
+                    console.log("Data pelanggan GAS berhasil diperbarui!");
+                }
+            } catch (error) {
+                console.error("Gagal menarik data dari GAS:", error);
+            }
+        }
+
         function startDataListeners() {
             onSnapshot(collection(db, 'status_rider_aktif'), (snapshot) => {
                 allRiders = []; snapshot.forEach(docSnap => { allRiders.push({...docSnap.data(), uid: docSnap.id}); });
@@ -582,11 +610,11 @@
                 todayAllOrders = []; snapshot.forEach(docSnap => todayAllOrders.push({ id: docSnap.id, ...docSnap.data() }));
                 processDataAndUpdate();
             });
-            const qCustomers = query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'customers'));
-            onSnapshot(qCustomers, (snapshot) => {
-                allCustomers = []; snapshot.forEach(docSnap => allCustomers.push({ id: docSnap.id, ...docSnap.data() }));
-                processDataAndUpdate();
-            });
+            
+            // Mengganti Listener Firebase dengan Fetching GAS
+            fetchCustomersFromGAS(); 
+            // Atur agar Dasbor mengecek ke GAS otomatis setiap 60 detik (60000 ms)
+            setInterval(fetchCustomersFromGAS, 60000);
         }
 
         function processDataAndUpdate() {
@@ -646,17 +674,77 @@
 
         function updateCustomerSegments() {
             let loyalCount = 0, activeCount = 0, churnCount = 0;
-            const now = Date.now();
-            const ONE_DAY = 24 * 60 * 60 * 1000; 
+            
+            // Langkah 1: Persiapan Waktu Saat Ini
+            const now = new Date(); 
+            
+            // ==========================================
+            // PENAMBAHAN MOCK DATA (DATA SIMULASI)
+            // Jika database asli masih kosong, gunakan data ini agar UI terlihat.
+            // ==========================================
+            let dataToProcess = allCustomers;
+            if (allCustomers.length === 0) {
+                // Menambahkan lebih banyak data agar daftar penuh dan efek scroll film aktif
+                dataToProcess = [
+                    { name: "Budi (Simulasi)", order_count: 8, last_order: new Date(now.getTime() - (2 * 24 * 60 * 60 * 1000)) },
+                    { name: "Siti (Simulasi)", order_count: 2, last_order: new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000)) },
+                    { name: "Agus (Simulasi)", order_count: 1, last_order: new Date(now.getTime() - (35 * 24 * 60 * 60 * 1000)) },
+                    { name: "Rina (Simulasi)", order_count: 15, last_order: new Date(now.getTime() - (1 * 24 * 60 * 60 * 1000)) },
+                    { name: "Joko (Simulasi)", order_count: 4, last_order: new Date(now.getTime() - (6 * 24 * 60 * 60 * 1000)) },
+                    { name: "Ayu (Simulasi)", order_count: 6, last_order: new Date(now.getTime() - (15 * 24 * 60 * 60 * 1000)) },
+                    { name: "Deni (Simulasi)", order_count: 1, last_order: new Date(now.getTime() - (45 * 24 * 60 * 60 * 1000)) },
+                    { name: "Tono (Simulasi)", order_count: 5, last_order: new Date(now.getTime() - (3 * 24 * 60 * 60 * 1000)) }
+                ];
+            }
 
-            allCustomers.forEach(c => {
-                if ((c.order_count || 0) >= 5) loyalCount++;
+            // Siapkan array untuk menampung pelanggan yang sudah diproses agar bisa dirender
+            const processedCustomers = [];
+
+            // Gunakan dataToProcess alih-alih allCustomers
+            dataToProcess.forEach(c => {
+                // Menyiapkan variabel lastDate
+                let lastDate;
+                
+                // Cek apakah data dari Firestore atau dari GAS (String)
                 if (c.last_order && c.last_order.seconds) {
-                    const diffDays = (now - (c.last_order.seconds * 1000)) / ONE_DAY;
-                    if (diffDays <= 7) activeCount++;
-                    if (diffDays >= 30) churnCount++;
+                    lastDate = new Date(c.last_order.seconds * 1000);
+                } else if (c.last_order) {
+                    lastDate = new Date(c.last_order);
+                } else {
+                    lastDate = new Date();
                 }
+
+                // Pengaman jika format tanggal invalid/kosong
+                if (isNaN(lastDate.getTime())) lastDate = new Date();
+
+                // Menghitung selisih waktu dari hari ini ke order terakhir (Logika Langkah 1)
+                const diffTime = Math.abs(now - lastDate);
+                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)); // Konversi ke Hari
+                
+                // Simpan _days_ago ke objek untuk dirender nanti
+                c._days_ago = diffDays;
+
+                // Logika Langkah 2: Kategorisasi berdasarkan Syarat/Kriteria
+                // Pelanggan Loyal (Sering Order: >= 5)
+                if ((c.order_count || 0) >= 5) {
+                    loyalCount++;
+                }
+                
+                // Pelanggan Aktif (Order dalam 7 hari terakhir: <= 7)
+                if (diffDays <= 7) {
+                    activeCount++;
+                }
+                
+                // Pelanggan Pasif / Churn (Mulai Hilang: >= 30 hari)
+                if (diffDays >= 30) {
+                    churnCount++;
+                }
+                
+                processedCustomers.push(c);
             });
+            
+            // Urutkan pelanggan, misalnya yang order terakhir berada di atas
+            processedCustomers.sort((a,b) => (a._days_ago - b._days_ago));
 
             const container = document.getElementById('customer-segments');
             if (allCustomers.length === 0) {
@@ -664,42 +752,73 @@
                 return;
             }
 
-            if (document.getElementById('seg-active')) {
-                updateNumberWithFlash('seg-active', activeCount);
-                updateNumberWithFlash('seg-loyal', loyalCount);
-                updateNumberWithFlash('seg-churn', churnCount);
-                updateNumberWithFlash('seg-total', allCustomers.length);
-            } else {
-                container.innerHTML = `
-                    <div class="bg-gradient-to-br from-emerald-950/40 to-slate-900 border border-emerald-500/30 rounded-lg p-3 lg:p-4 flex flex-col gap-1 relative overflow-hidden flex-1 justify-center shadow-md">
-                        <div class="absolute -right-3 -bottom-3 opacity-[0.08] text-emerald-400"><i class="fa-solid fa-fire text-6xl lg:text-7xl"></i></div>
-                        <div class="text-[9px] lg:text-[11px] text-emerald-400 font-black uppercase tracking-widest z-10">Aktif (≤ 7 Hari)</div>
-                        <div class="text-2xl lg:text-4xl font-black text-white z-10 drop-shadow-md"><span id="seg-active">${activeCount}</span> <span class="text-[10px] lg:text-[12px] text-slate-400 font-bold uppercase tracking-wider">orang</span></div>
+            // Membangun ulang struktur HTML di dalam panel
+            let htmlContent = `
+                <!-- BAGIAN ATAS: RINGKASAN TOTAL -->
+                <div class="grid grid-cols-3 gap-2 shrink-0 mb-2">
+                    <div class="bg-emerald-950/40 border border-emerald-500/30 rounded px-2 py-1.5 flex flex-col items-center justify-center text-center">
+                        <div class="text-[8px] lg:text-[9px] text-emerald-400 font-black uppercase tracking-wider">Aktif</div>
+                        <div class="text-sm lg:text-base font-black text-white" id="seg-active">${activeCount}</div>
                     </div>
-                    <div class="bg-gradient-to-br from-amber-950/40 to-slate-900 border border-amber-500/30 rounded-lg p-3 lg:p-4 flex flex-col gap-1 relative overflow-hidden flex-1 justify-center shadow-md">
-                        <div class="absolute -right-3 -bottom-3 opacity-[0.08] text-amber-400"><i class="fa-solid fa-star text-6xl lg:text-7xl"></i></div>
-                        <div class="text-[9px] lg:text-[11px] text-amber-400 font-black uppercase tracking-widest z-10">Loyal (≥ 5 Order)</div>
-                        <div class="text-2xl lg:text-4xl font-black text-white z-10 drop-shadow-md"><span id="seg-loyal">${loyalCount}</span> <span class="text-[10px] lg:text-[12px] text-slate-400 font-bold uppercase tracking-wider">orang</span></div>
+                    <div class="bg-amber-950/40 border border-amber-500/30 rounded px-2 py-1.5 flex flex-col items-center justify-center text-center">
+                        <div class="text-[8px] lg:text-[9px] text-amber-400 font-black uppercase tracking-wider">Loyal</div>
+                        <div class="text-sm lg:text-base font-black text-white" id="seg-loyal">${loyalCount}</div>
                     </div>
-                    <div class="bg-gradient-to-br from-rose-950/40 to-slate-900 border border-rose-500/30 rounded-lg p-3 lg:p-4 flex flex-col gap-1 relative overflow-hidden flex-1 justify-center shadow-md">
-                        <div class="absolute -right-3 -bottom-3 opacity-[0.08] text-rose-400"><i class="fa-solid fa-ghost text-6xl lg:text-7xl"></i></div>
-                        <div class="text-[9px] lg:text-[11px] text-rose-400 font-black uppercase tracking-widest z-10">Pasif (≥ 30 Hari)</div>
-                        <div class="text-2xl lg:text-4xl font-black text-white z-10 drop-shadow-md"><span id="seg-churn">${churnCount}</span> <span class="text-[10px] lg:text-[12px] text-slate-400 font-bold uppercase tracking-wider">orang</span></div>
+                    <div class="bg-rose-950/40 border border-rose-500/30 rounded px-2 py-1.5 flex flex-col items-center justify-center text-center">
+                        <div class="text-[8px] lg:text-[9px] text-rose-400 font-black uppercase tracking-wider">Pasif</div>
+                        <div class="text-sm lg:text-base font-black text-white" id="seg-churn">${churnCount}</div>
                     </div>
-                    <div class="mt-2 lg:mt-3 border-t border-slate-700/50 pt-2 lg:pt-3 text-center shrink-0">
-                        <div class="text-[10px] lg:text-xs text-slate-400 uppercase tracking-widest font-black mb-1">Total Database</div>
-                        <div class="text-lg lg:text-xl font-black text-slate-200"><span id="seg-total">${allCustomers.length}</span> <span class="text-[9px] text-slate-500 font-bold uppercase tracking-wider">pelanggan</span></div>
+                </div>
+                
+                <!-- BAGIAN BAWAH: LIST PELANGGAN & BADGE -->
+                <div id="customer-list-container" class="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-2 pr-1 pb-4">
+            `;
+            
+            // Rendering / Pembuatan Tampilan Badge
+            processedCustomers.forEach(c => {
+                // Badge Default: Jumlah Order
+                let badgesHTML = `<span class="px-1.5 py-0.5 rounded-sm bg-slate-800 text-slate-300 border border-slate-600 text-[8px] lg:text-[9px] font-bold shadow-sm">${c.order_count || 1}x Order</span>`;
+                
+                // Badge Loyal
+                if ((c.order_count || 0) >= 5) {
+                    badgesHTML += `<span class="px-1.5 py-0.5 rounded-sm bg-amber-900/60 text-amber-300 border border-amber-600/50 text-[8px] lg:text-[9px] font-bold shadow-sm shadow-amber-500/10"><i class="fa-solid fa-crown mr-1"></i>Loyal</span>`;
+                }
+                
+                // Badge Aktif atau Pasif
+                if (c._days_ago <= 7) {
+                    badgesHTML += `<span class="px-1.5 py-0.5 rounded-sm bg-emerald-900/60 text-emerald-300 border border-emerald-600/50 text-[8px] lg:text-[9px] font-bold shadow-sm shadow-emerald-500/10"><i class="fa-solid fa-fire mr-1"></i>Aktif</span>`;
+                } else if (c._days_ago >= 30) {
+                    badgesHTML += `<span class="px-1.5 py-0.5 rounded-sm bg-rose-900/60 text-rose-300 border border-rose-600/50 text-[8px] lg:text-[9px] font-bold shadow-sm shadow-rose-500/10"><i class="fa-solid fa-ghost mr-1"></i>Pasif</span>`;
+                }
+
+                // Baris Pelanggan
+                htmlContent += `
+                    <div class="bg-slate-900/50 border-l-2 border-l-slate-500 p-2 lg:p-3 rounded flex flex-col gap-1.5 hover:bg-slate-800/80 transition-colors">
+                        <div class="flex justify-between items-start">
+                            <div class="text-xs lg:text-sm font-bold text-white uppercase truncate pr-2 w-[70%]">${c.nama || c.name || c.id || 'Anonim'}</div>
+                            <div class="text-[9px] lg:text-[10px] text-slate-400 font-mono whitespace-nowrap">${c._days_ago === 0 ? 'Hari ini' : c._days_ago + 'hr lalu'}</div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5 items-center">
+                            ${badgesHTML}
+                        </div>
                     </div>
                 `;
-            }
+            });
+
+            htmlContent += `</div>`; // Tutup area list
+            
+            // Render ke container
+            container.innerHTML = htmlContent;
         }
 
         function updateChartsData(shiftCount, radarCount, activeCount, offCount) {
             const completed = todayAllOrders.filter(o => o.status === 'completed');
             const riderCounts = {};
             completed.forEach(o => { const name = o.rider_name || 'Unknown'; riderCounts[name] = (riderCounts[name] || 0) + 1; });
-            const topRiders = Object.keys(riderCounts).map(n => ({name: n, count: riderCounts[n]})).sort((a,b) => b.count - a.count).slice(0, 6);
-            drawBarChart('chart-leaderboard', charts.leaderboard, 'y', topRiders.map(r => r.name.substring(0,10)), topRiders.map(r => r.count), '#06b6d4', (c) => charts.leaderboard = c);
+            // Mengambil 5 Top Rider agar batang grafik lebih tebal dan jelas di TV
+            const topRiders = Object.keys(riderCounts).map(n => ({name: n, count: riderCounts[n]})).sort((a,b) => b.count - a.count).slice(0, 5);
+            // Memperpanjang batas huruf menjadi 14 agar nama tampil lebih utuh
+            drawBarChart('chart-leaderboard', charts.leaderboard, 'y', topRiders.map(r => r.name.length > 14 ? r.name.substring(0,14) + '..' : r.name), topRiders.map(r => r.count), '#06b6d4', (c) => charts.leaderboard = c);
 
             const hourCounts = {}; for(let i=6; i<=23; i++) hourCounts[i] = 0;
             todayAllOrders.forEach(o => { if (o.created_at?.seconds) { const h = new Date(o.created_at.seconds * 1000).getHours(); if (h >= 6 && h <= 23) hourCounts[h]++; } });
@@ -715,7 +834,8 @@
                 todayAllOrders.forEach(o => { if (o.status === 'completed' && o.customer_name) custCounts[o.customer_name] = (custCounts[o.customer_name] || 0) + 1; });
                 topCustomers = Object.keys(custCounts).map(n => ({ nama: n, order_count: custCounts[n] })).sort((a,b) => b.order_count - a.order_count).slice(0, 5);
             }
-            drawBarChart('chart-customers', charts.customers, 'y', topCustomers.map(c => (c.nama || c.name || c.id || 'Anonim').substring(0,12)), topCustomers.map(c => c.order_count || 0), '#3b82f6', (c) => charts.customers = c);
+            // Memperpanjang batas huruf untuk nama pelanggan juga
+            drawBarChart('chart-customers', charts.customers, 'y', topCustomers.map(c => { const n = c.nama || c.name || c.id || 'Anonim'; return n.length > 14 ? n.substring(0,14) + '..' : n; }), topCustomers.map(c => c.order_count || 0), '#3b82f6', (c) => charts.customers = c);
 
             const activeStatusObj = { assigned: 0, processing: 0, unassigned: 0, missed: 0 };
             allGlobalOrders.forEach(o => { if(activeStatusObj[o.status] !== undefined) activeStatusObj[o.status]++; });
@@ -738,7 +858,6 @@
                         data: data, 
                         backgroundColor: color, 
                         borderRadius: 4,
-                        // MENGGUNAKAN PERSENTASE: Bukan Piksel. Akan membesar/mengecil proporsional!
                         barPercentage: 0.75, 
                         categoryPercentage: 0.8 
                     }] 
@@ -755,9 +874,10 @@
                                 color: Chart.defaults.color, 
                                 font: getDynamicFont(), 
                                 padding: 4, 
-                                autoSkip: true,
-                                maxTicksLimit: 6, // Mencegah teks terlalu penuh di layar kecil
-                                maxRotation: 0,   // MENCEGAH TEKS MIRING yang menghancurkan layout panel
+                                // Jika ini sumbu X (angka jumlah), boleh skip agar tidak tumpang tindih. Jika ini nama kategori, jangan skip!
+                                autoSkip: axis === 'x',
+                                maxTicksLimit: axis === 'x' ? 6 : undefined, 
+                                maxRotation: 0, 
                                 minRotation: 0
                             }
                         }, 
@@ -767,8 +887,9 @@
                                 color: Chart.defaults.color, 
                                 font: getDynamicFont(), 
                                 padding: 4, 
-                                autoSkip: true,
-                                maxTicksLimit: 5 
+                                // Jika ini sumbu Y (nama rider/pelanggan), paksa Chart.js tampilkan semua nama (autoSkip: false)
+                                autoSkip: axis === 'y' ? false : true,
+                                maxTicksLimit: axis === 'y' ? undefined : 6 
                             } 
                         } 
                     }, 
@@ -841,6 +962,52 @@
                 });
             }, 150);
         });
+
+        // --- FITUR AUTO-SCROLL MULUS UNTUK DAFTAR PELANGGAN ---
+        let exactScrollY = 0; // Menggunakan memori eksternal agar hitungan desimal tidak dibulatkan TV
+        let scrollSpeed = 0.5; // Kecepatan scroll (0.5 pixel per frame, cukup mulus untuk teks film)
+        let isScrollWaiting = false;
+        
+        function autoScrollCustomers() {
+            const el = document.getElementById('customer-list-container');
+            
+            // Hanya jalan jika elemennya ada, tidak sedang jeda, dan isinya melebihi tinggi kotak
+            if (el && !isScrollWaiting && el.scrollHeight > el.clientHeight) {
+                
+                // Menambah koordinat secara presisi
+                exactScrollY += scrollSpeed;
+                el.scrollTop = exactScrollY;
+                
+                // Deteksi jika scroll sudah mentok di paling bawah (dikurangi 2px untuk toleransi layar)
+                if (Math.ceil(el.scrollTop) >= (el.scrollHeight - el.clientHeight - 2)) {
+                    isScrollWaiting = true; // Hentikan pergerakan sementara
+                    
+                    // Jeda 3 detik di paling bawah agar nama terakhir terbaca
+                    setTimeout(() => {
+                        const currentEl = document.getElementById('customer-list-container');
+                        if (currentEl) {
+                            exactScrollY = 0; // Reset koordinat memori
+                            currentEl.scrollTop = 0; // Kembalikan pandangan ke paling atas secara instan
+                            
+                            // Jeda 1.5 detik di paling atas sebelum mulai jalan lagi
+                            setTimeout(() => { isScrollWaiting = false; }, 1500); 
+                        } else {
+                            isScrollWaiting = false;
+                            exactScrollY = 0;
+                        }
+                    }, 3000); 
+                }
+            } else if (el && el.scrollHeight <= el.clientHeight) {
+                // Jika data sedikit dan tidak perlu di-scroll, pastikan variabel kembali nol
+                exactScrollY = 0; 
+            }
+            
+            // Terus panggil fungsi ini di setiap frame (60fps) untuk pergerakan super mulus
+            requestAnimationFrame(autoScrollCustomers);
+        }
+        
+        // Memulai engine scroll
+        requestAnimationFrame(autoScrollCustomers);
 
         // --- EFEK SIMULASI LIVE DATA ---
         // Memaksa grafik untuk melakukan animasi "bouncing" halus setiap 12 detik 
