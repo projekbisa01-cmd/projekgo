@@ -431,8 +431,10 @@
         
         Chart.defaults.color = '#cbd5e1'; 
         
-        // Menurunkan ukuran minimum font agar tidak berdesakan di resolusi 720p (TV 32")
-        const getOptimalFontSize = () => Math.max(9, Math.floor(window.innerHeight * 0.012));
+        // FUNGSI BARU: Ukuran font dihitung dari sisi layar terkecil, menjamin proporsi yang identik
+        // Jika layar mengecil 2x, font juga mengecil tepat 2x. Batas terkecil dipasang di 8px.
+        const getOptimalFontSize = () => Math.max(8, Math.min(window.innerWidth, window.innerHeight) * 0.011);
+        const getDynamicFont = () => ({ size: getOptimalFontSize(), weight: 'bold', family: "'Inter', sans-serif" });
         
         Chart.defaults.font.size = getOptimalFontSize(); 
         Chart.defaults.font.weight = 'bold';
@@ -458,17 +460,14 @@
                 const x = meta.data[0].x || chart.chartArea.left + (chart.chartArea.right - chart.chartArea.left) / 2;
                 const y = meta.data[0].y || chart.chartArea.top + (chart.chartArea.bottom - chart.chartArea.top) / 2;
 
-                // MENGAMBIL RADIUS LUBANG ASLI: 
-                // Teks akan dinamis mengikuti ukuran lubang diagram, bukan tinggi layar TV.
                 const innerRadius = chart.getDatasetMeta(0).controller.innerRadius || 30;
-
                 const text = centerConfig.value || '';
                 const label = centerConfig.label || '';
 
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
 
-                // Ukuran teks berpatokan pada ukuran radius (jari-jari) lubang
+                // Ukuran teks berpatokan mutlak pada radius lubang (proporsional murni)
                 const mainFontSize = innerRadius * 0.65;
                 const labelFontSize = innerRadius * 0.22;
                 
@@ -731,9 +730,6 @@
             const ctx = document.getElementById(id); if(!ctx) return;
             if(inst) { inst.data.labels = labels; inst.data.datasets[0].data = data; inst.update(); return; }
             
-            const chartColor = Chart.defaults.color;
-            const fontSize = Chart.defaults.font.size;
-            
             cb(new Chart(ctx, { 
                 type: 'bar', 
                 data: { 
@@ -742,23 +738,38 @@
                         data: data, 
                         backgroundColor: color, 
                         borderRadius: 4,
-                        barThickness: 'flex',
-                        maxBarThickness: 20 // Diperkecil batas maksimum ketebalan batang
+                        // MENGGUNAKAN PERSENTASE: Bukan Piksel. Akan membesar/mengecil proporsional!
+                        barPercentage: 0.75, 
+                        categoryPercentage: 0.8 
                     }] 
                 }, 
                 options: { 
                     indexAxis: axis, 
                     responsive: true, 
                     maintainAspectRatio: false, 
-                    layout: { padding: { top: 5, right: 10, bottom: 0, left: 0 } }, // Padding dipersempit
+                    layout: { padding: { top: 5, right: 10, bottom: 0, left: 0 } }, 
                     scales: { 
                         x: { 
                             grid: axis==='y' ? gridConfig : {display: false}, 
-                            ticks: { color: chartColor, font: {size: fontSize, weight:'bold'}, padding: 4, autoSkip: true } // Auto-skip agar teks tak menumpuk
+                            ticks: { 
+                                color: Chart.defaults.color, 
+                                font: getDynamicFont(), 
+                                padding: 4, 
+                                autoSkip: true,
+                                maxTicksLimit: 6, // Mencegah teks terlalu penuh di layar kecil
+                                maxRotation: 0,   // MENCEGAH TEKS MIRING yang menghancurkan layout panel
+                                minRotation: 0
+                            }
                         }, 
                         y: { 
                             grid: axis==='x' ? gridConfig : {display: false}, 
-                            ticks: { color: chartColor, font: {size: fontSize, weight:'bold'}, padding: 4, autoSkip: true } 
+                            ticks: { 
+                                color: Chart.defaults.color, 
+                                font: getDynamicFont(), 
+                                padding: 4, 
+                                autoSkip: true,
+                                maxTicksLimit: 5 
+                            } 
                         } 
                     }, 
                     plugins: { 
@@ -774,16 +785,10 @@
             const ctx = document.getElementById(id); if(!ctx) return;
             if(inst) { 
                 inst.data.datasets[0].data = data; 
-                // Perbarui juga data angka di tengah secara realtime
-                if(inst.options.plugins.centerText) {
-                    inst.options.plugins.centerText.value = centerVal;
-                }
+                if(inst.options.plugins.centerText) inst.options.plugins.centerText.value = centerVal;
                 inst.update(); 
                 return; 
             }
-            
-            const fontSize = Chart.defaults.font.size;
-            const chartColor = Chart.defaults.color;
             
             cb(new Chart(ctx, { 
                 type: 'doughnut', 
@@ -791,21 +796,20 @@
                 options: { 
                     responsive: true, 
                     maintainAspectRatio: false, 
-                    cutout: '75%', // Thinner ring looks more modern
-                    layout: { padding: 10 },
+                    cutout: '70%', // Lingkaran sedikit ditebalkan agar terlihat di TV
+                    layout: { padding: 4 },
                     plugins: { 
                         legend: { 
                             display: true, 
                             position: 'right', 
                             labels: { 
-                                boxWidth: Math.max(12, fontSize), // Scale box with font
-                                font: {size: fontSize, weight: 'bold'}, 
-                                color: chartColor, 
-                                padding: Math.max(10, fontSize) 
+                                boxWidth: getOptimalFontSize() * 1.2, // Box warna menyesuaikan ukuran font
+                                font: getDynamicFont(), 
+                                color: Chart.defaults.color, 
+                                padding: Math.max(8, getOptimalFontSize()) 
                             } 
                         },
                         tooltip: { enabled: false },
-                        // Panggil konfigurasi plugin custom kita di sini
                         centerText: { value: centerVal, label: centerLbl }
                     },
                     animation: { duration: 1000, easing: 'easeOutBounce' }
@@ -813,37 +817,29 @@
             }));
         }
         
-        // Redraw charts explicitly when window resizes to maintain crispness
+        // Redraw & REKALKULASI UKURAN FONT mutlak secara proporsional saat ukuran TV/Window berubah
         let resizeTimeout;
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
-                // Update default font size based on new window dimensions
-                Chart.defaults.font.size = getOptimalFontSize();
+                const newFont = getDynamicFont();
+                Chart.defaults.font.size = newFont.size;
                 
-                // Force update all charts to re-render with new pixel ratio / dimensions
                 Object.values(charts).forEach(chart => {
                     if (chart) {
-                        // Update specific options that might need resizing SAFELY
                         if (chart.options.scales) {
-                            if (chart.options.scales.x && chart.options.scales.x.ticks) {
-                                if (!chart.options.scales.x.ticks.font) chart.options.scales.x.ticks.font = {};
-                                chart.options.scales.x.ticks.font.size = Chart.defaults.font.size;
-                            }
-                            if (chart.options.scales.y && chart.options.scales.y.ticks) {
-                                if (!chart.options.scales.y.ticks.font) chart.options.scales.y.ticks.font = {};
-                                chart.options.scales.y.ticks.font.size = Chart.defaults.font.size;
-                            }
+                            if (chart.options.scales.x?.ticks) chart.options.scales.x.ticks.font = newFont;
+                            if (chart.options.scales.y?.ticks) chart.options.scales.y.ticks.font = newFont;
                         }
-                        if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                        if (chart.options.plugins?.legend?.labels) {
                             if (!chart.options.plugins.legend.labels.font) chart.options.plugins.legend.labels.font = {};
-                            chart.options.plugins.legend.labels.font.size = Chart.defaults.font.size;
-                            chart.options.plugins.legend.labels.boxWidth = Math.max(12, Chart.defaults.font.size);
+                            chart.options.plugins.legend.labels.font = newFont;
+                            chart.options.plugins.legend.labels.boxWidth = newFont.size * 1.2;
                         }
-                        chart.update('none'); // Update without animation for smoother resize
+                        chart.update('none'); 
                     }
                 });
-            }, 300);
+            }, 150);
         });
 
         // --- EFEK SIMULASI LIVE DATA ---
