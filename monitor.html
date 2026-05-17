@@ -359,7 +359,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, onSnapshot, query, where } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, onSnapshot, query, where } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -372,7 +372,11 @@
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getFirestore(app);
+        
+        // Mengganti getFirestore dengan initializeFirestore yang mengaktifkan cache offline/lokal
+        const db = initializeFirestore(app, {
+            localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        });
 
         let isCanvasConfig = false;
         if (typeof __firebase_config !== 'undefined') {
@@ -534,8 +538,25 @@
         onAuthStateChanged(auth, (user) => { if (user) startDataListeners(); });
 
         async function fetchCustomersFromGAS() {
+            const CACHE_KEY = 'projekgo_customers_cache';
+            const CACHE_TTL = 5 * 60 * 1000; // Cache bertahan 5 menit (300.000 ms)
+
             try {
-                console.log("Menarik data pelanggan dari GAS...");
+                // Cek cache lokal terlebih dahulu
+                const cachedData = localStorage.getItem(CACHE_KEY);
+                if (cachedData) {
+                    const parsedCache = JSON.parse(cachedData);
+                    const isCacheValid = (Date.now() - parsedCache.timestamp) < CACHE_TTL;
+                    
+                    if (isCacheValid) {
+                        allCustomers = parsedCache.data;
+                        processDataAndUpdate();
+                        console.log("Menggunakan data Pelanggan dari Cache Lokal (Hemat Kuota)");
+                        return; // Berhenti di sini, tidak perlu fetch ke GAS
+                    }
+                }
+
+                console.log("Menarik data pelanggan baru dari GAS...");
                 const response = await fetch(GAS_CUSTOMER_URL);
                 const data = await response.json();
                 
@@ -548,11 +569,25 @@
                 
                 if (customersArray.length > 0) {
                     allCustomers = customersArray;
+                    
+                    // Simpan data terbaru ke LocalStorage beserta waktu simpannya
+                    localStorage.setItem(CACHE_KEY, JSON.stringify({
+                        timestamp: Date.now(),
+                        data: allCustomers
+                    }));
+
                     processDataAndUpdate(); 
-                    console.log("Data pelanggan berhasil diperbarui!");
+                    console.log("Data pelanggan dari GAS berhasil diperbarui dan di-cache!");
                 }
             } catch (error) {
                 console.error("Gagal menarik data dari GAS:", error);
+                // Jika gagal fetch (misal offline), coba gunakan cache yang ada meskipun expired
+                const backupCache = localStorage.getItem(CACHE_KEY);
+                if (backupCache) {
+                    allCustomers = JSON.parse(backupCache).data;
+                    processDataAndUpdate();
+                    console.log("Menggunakan data cache darurat karena koneksi GAS gagal.");
+                }
             }
         }
 
