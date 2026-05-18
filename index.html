@@ -1858,6 +1858,7 @@
                 <div class="flex bg-gray-100 p-1 rounded-xl border border-gray-200/60 mb-4 shrink-0">
                     <button id="tab-queue-btn-waiting" onclick="window.switchQueueTab('waiting')" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-orange-600 shadow-sm border border-gray-200/50">Daftar Antrean</button>
                     <button id="tab-queue-btn-running" onclick="window.switchQueueTab('running')" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700">Sedang Jalan</button>
+                    <button id="tab-queue-btn-inactive" onclick="window.switchQueueTab('inactive')" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700">Belum Aktif</button>
                 </div>
 
                 <!-- Kontainer Menunggu (Antrean) -->
@@ -1872,6 +1873,13 @@
                 <div id="tab-queue-running" class="hidden flex flex-col gap-4 w-full">
                     <div id="radar-running-list" class="flex flex-col gap-4 w-full">
                         <div class="text-[11px] font-bold text-white bg-black/40 backdrop-blur-sm rounded-full w-max mx-auto px-4 py-2 mt-4 text-center shadow-sm">Memuat rider aktif...</div>
+                    </div>
+                </div>
+
+                <!-- Kontainer Belum Aktif (Order Kosong Sementara) -->
+                <div id="tab-queue-inactive" class="hidden flex flex-col gap-4 w-full">
+                    <div id="radar-inactive-list" class="flex flex-col gap-4 w-full">
+                        <div class="text-[11px] font-bold text-white bg-black/40 backdrop-blur-sm rounded-full w-max mx-auto px-4 py-2 mt-4 text-center shadow-sm">Data segera hadir...</div>
                     </div>
                 </div>
             </main>
@@ -2994,21 +3002,35 @@
         window.switchQueueTab = function(tab) {
             const btnWaiting = document.getElementById('tab-queue-btn-waiting');
             const btnRunning = document.getElementById('tab-queue-btn-running');
+            const btnInactive = document.getElementById('tab-queue-btn-inactive');
+            
             const tabWaiting = document.getElementById('tab-queue-waiting');
             const tabRunning = document.getElementById('tab-queue-running');
+            const tabInactive = document.getElementById('tab-queue-inactive');
 
-            if (!btnWaiting || !btnRunning || !tabWaiting || !tabRunning) return;
+            if (!btnWaiting || !btnRunning || !btnInactive || !tabWaiting || !tabRunning || !tabInactive) return;
 
+            // Reset class untuk semua tombol ke tampilan tidak aktif
+            const inactiveBtnClass = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700";
+            btnWaiting.className = inactiveBtnClass;
+            btnRunning.className = inactiveBtnClass;
+            btnInactive.className = inactiveBtnClass;
+
+            // Sembunyikan semua tab
+            tabWaiting.classList.add('hidden');
+            tabRunning.classList.add('hidden');
+            tabInactive.classList.add('hidden');
+
+            // Tampilkan tab yang dipilih dengan warnanya masing-masing
             if (tab === 'waiting') {
                 btnWaiting.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-orange-600 shadow-sm border border-gray-200/50";
-                btnRunning.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700";
                 tabWaiting.classList.remove('hidden');
-                tabRunning.classList.add('hidden');
-            } else {
+            } else if (tab === 'running') {
                 btnRunning.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-blue-600 shadow-sm border border-gray-200/50";
-                btnWaiting.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500 hover:text-gray-700";
                 tabRunning.classList.remove('hidden');
-                tabWaiting.classList.add('hidden');
+            } else if (tab === 'inactive') {
+                btnInactive.className = "flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-gray-800 shadow-sm border border-gray-200/50";
+                tabInactive.classList.remove('hidden');
             }
         };
 
@@ -10340,6 +10362,45 @@
                       return isOnline && !isAvailable && r.force_kill !== true;
                   });
 
+                  // --- LOGIKA BARU: FILTER RIDER BELUM AKTIF (OFFLINE) ---
+                  let offlineRiders = allRiders.filter(r => {
+                      const isOnline = r.is_online === true || r.is_online === 'true';
+                      const isAvailable = r.is_available === true || r.is_available === 'true';
+                      const inMainQueue = r.in_main_queue === true || r.in_main_queue === 'true';
+                      
+                      const cleanUid = String(r.uid).trim().toUpperCase();
+                      
+                      // LOGIKA AKURAT: Cek apakah UID rider ini terdaftar di active_orders (assigned / processing)
+                      const isBusy = window.globalActiveOrdersMap && window.globalActiveOrdersMap[cleanUid] !== undefined;
+
+                      // Jika dia sedang bawa orderan/dibunyikan, BUKAN OFF
+                      if (isBusy) {
+                          return false;
+                      }
+
+                      // Jika dia tidak di antrean dan (tidak online atau tidak available)
+                      return (!inMainQueue && (!isOnline || !isAvailable));
+                  });
+
+                  // Urutkan rider belum aktif berdasarkan nama
+                  offlineRiders.sort((a, b) => {
+                      const nameA = a.name || a.nama || a.uid || '';
+                      const nameB = b.name || b.nama || b.uid || '';
+                      return nameA.localeCompare(nameB);
+                  });
+                  // -------------------------------------------------------
+
+                  // --- UPDATE TEKS JUMLAH PADA TAB CAPSULE ---
+                  const processingOrdersCount = (window.globalActiveOrdersList || []).length;
+                  const btnWaiting = document.getElementById('tab-queue-btn-waiting');
+                  const btnRunning = document.getElementById('tab-queue-btn-running');
+                  const btnInactive = document.getElementById('tab-queue-btn-inactive');
+                  
+                  if(btnWaiting) btnWaiting.innerText = `Antrean (${visibleRiders.length})`;
+                  if(btnRunning) btnRunning.innerText = `Jalan (${processingOrdersCount})`;
+                  if(btnInactive) btnInactive.innerText = `Off (${offlineRiders.length})`;
+                  // -------------------------------------------
+
                   // 3. UPDATE POSISI SAYA (DI NAVBAR BAWAH)
                   const myPosEl = document.getElementById('my-queue-position');
                   const myStatus = currentUserUID ? allRiders.find(r => String(r.uid).trim().toUpperCase() === String(currentUserUID).trim().toUpperCase()) : null;
@@ -10610,6 +10671,67 @@
                                   runningContainer.insertBefore(card, runningContainer.children[index]);
                               } else if (!card.parentNode) {
                                   runningContainer.appendChild(card);
+                              }
+                          });
+                      }
+                  }
+
+                  // 7. BANGUN/UPDATE UI KARTU RIDER BELUM AKTIF
+                  const inactiveContainer = document.getElementById('radar-inactive-list');
+                  if (inactiveContainer) {
+                      if (offlineRiders.length === 0) {
+                          inactiveContainer.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-moon text-4xl text-gray-200 mb-3 block"></i>Semua rider sedang aktif.</div>';
+                      } else {
+                          const emptyState = inactiveContainer.querySelector('.fa-moon');
+                          if (emptyState && !emptyState.closest('.rounded-xl')) inactiveContainer.innerHTML = '';
+
+                          const validInactiveUids = new Set(offlineRiders.map(r => String(r.uid).trim().toUpperCase()));
+                          
+                          Array.from(inactiveContainer.children).forEach(child => {
+                              if (child.id && child.id.startsWith('inactive-card-')) {
+                                  const childUid = child.id.replace('inactive-card-', '');
+                                  if (!validInactiveUids.has(childUid)) {
+                                      inactiveContainer.removeChild(child);
+                                  }
+                              }
+                          });
+
+                          offlineRiders.forEach((riderData, index) => {
+                              const uidClean = String(riderData.uid || '').trim().toUpperCase();
+                              const myUidClean = String(currentUserUID || '').trim().toUpperCase();
+                              const isMe = uidClean === myUidClean;
+
+                              const name = riderData.name || riderData.nama || 'Rider';
+
+                              let card = document.getElementById('inactive-card-' + uidClean);
+                              const cardClasses = isMe ? 'bg-gray-100 border-gray-300' : 'bg-gray-50 border-gray-200';
+
+                              if (!card) {
+                                  card = document.createElement('div');
+                                  card.id = 'inactive-card-' + uidClean;
+                                  card.className = `flex items-center gap-3 p-4 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  card.innerHTML = `
+                                      ${isMe ? '<div class="absolute left-0 top-0 bottom-0 w-1 bg-gray-400"></div>' : ''}
+                                      <div class="w-10 h-10 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center border border-gray-300 shadow-inner shrink-0">
+                                          <i class="fa-solid fa-bed"></i>
+                                      </div>
+                                      <div class="flex-1 min-w-0 flex flex-col justify-center">
+                                          <div class="flex items-center gap-1.5">
+                                              <span class="text-sm font-bold ${isMe ? 'text-gray-800' : 'text-gray-600'} truncate leading-none">${isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name}</span>
+                                          </div>
+                                      </div>
+                                      <div class="shrink-0 flex items-center justify-end">
+                                          <span class="text-[9px] font-bold text-gray-500 bg-gray-200 px-2 py-1 rounded-lg border border-gray-300 whitespace-nowrap shadow-sm">OFF</span>
+                                      </div>
+                                  `;
+                              } else {
+                                  card.className = `flex items-center gap-3 p-4 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                              }
+
+                              if (inactiveContainer.children[index] !== card) {
+                                  inactiveContainer.insertBefore(card, inactiveContainer.children[index]);
+                              } else if (!card.parentNode) {
+                                  inactiveContainer.appendChild(card);
                               }
                           });
                       }
