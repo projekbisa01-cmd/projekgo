@@ -5866,21 +5866,36 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 
                 try {
+                    /* LANGKAH 1: Kirim sinyal paksa offline/logout ke HP Rider */
+                    const refStatus = doc(db, 'status_rider_aktif', uid);
+                    await updateDoc(refStatus, {
+                        force_kill: true,
+                        is_online: false,
+                        is_available: false,
+                        in_main_queue: false,
+                        last_drop_desc: "Akun Dihapus Permanen"
+                    }).catch(e => console.warn("Rider sudah tidak aktif"));
+
+                    /* LANGKAH 2: Beri jeda 2.5 detik agar APK Rider sempat merespons dan log out otomatis */
+                    await new Promise(resolve => setTimeout(resolve, 2500));
+
+                    /* LANGKAH 3: Hapus seluruh data sampai ke akar-akarnya */
                     const batch = writeBatch(db);
                     batch.delete(doc(db, 'status_rider_aktif', uid));
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', uid));
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_tabungan', uid));
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan', uid));
+                    batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_shifts', uid)); // Menghapus jadwal shift
                     
-                    // Tambahan: Hapus juga data dari profil
+                    // Hapus juga data dari profil
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', uid));
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', uid));
                     
                     await batch.commit();
-                    window.showAlert('Berhasil', 'Data Rider berhasil dihapus secara permanen dari seluruh sistem.', 'success');
+                    window.showAlert('Berhasil', 'Data Rider berhasil dihapus secara permanen dari seluruh sistem dan aplikasi mereka berhasil di-logout paksa.', 'success');
                     window.renderManageRiders();
                 } catch(e) {
-                    window.showAlert('Gagal', 'Terjadi kesalahan saat menghapus data.', 'error');
+                    window.showAlert('Gagal', 'Terjadi kesalahan saat menghapus data: ' + e.message, 'error');
                 } finally {
                     loader.classList.add('hidden'); loader.classList.remove('flex');
                 }
