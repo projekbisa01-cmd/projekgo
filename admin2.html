@@ -3458,6 +3458,34 @@
             };
         };
 
+        window.autoCorrectRiderQueueAfterOrder = async (uid) => {
+            if (!uid) return;
+            try {
+                const riderRef = doc(db, 'status_rider_aktif', uid);
+                const riderSnap = await getDoc(riderRef);
+                if (riderSnap.exists()) {
+                    const data = riderSnap.data();
+                    const isOnline = data.is_online === true || data.is_online === 'true';
+                    const isAvailable = data.is_available === true || data.is_available === 'true';
+                    const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
+                    const desc = (data.last_drop_desc || "").toLowerCase();
+
+                    // Cek apakah rider online tapi terlempar dari antrean utama
+                    if (isOnline && isAvailable && !inMainQueue) {
+                        // Pastikan dia bukan benar-benar rider yang baru pencet "Online" awal shift
+                        if (!desc.includes("baru masuk shift") && !desc.includes("standby di basecamp")) {
+                            await updateDoc(riderRef, {
+                                in_main_queue: true,
+                                last_drop_time: serverTimestamp(),
+                                last_drop_desc: "Selesai Order",
+                                last_updated: serverTimestamp()
+                            });
+                        }
+                    }
+                }
+            } catch(e) { console.warn("Auto correct error:", e); }
+        };
+
         function startGlobalOrdersListener() {
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
             const q = query(ordersCol, where("status", "in", ["assigned", "processing", "missed", "unassigned"]));
@@ -3465,6 +3493,24 @@
             onSnapshot(q, (snapshot) => {
                 const newGlobalOrders = [];
                 let hasNewOrder = false;
+
+                // --- MEKANISME KOREKSI RIDER (Mendeteksi order selesai) ---
+                snapshot.docChanges().forEach(change => {
+                    if (change.type === 'removed') {
+                        const orderData = change.doc.data();
+                        // Jika orderan tadinya ditugaskan/diproses lalu hilang dari radar aktif
+                        // Kemungkinan besar orderan tersebut statusnya menjadi 'completed'
+                        if (orderData.status === 'processing' || orderData.status === 'assigned') {
+                            if (orderData.rider_uid) {
+                                // Tunggu 2.5 detik agar Aplikasi Rider selesai update datanya ke Firebase
+                                setTimeout(() => {
+                                    window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid);
+                                }, 2500); 
+                            }
+                        }
+                    }
+                });
+                // -----------------------------------------------------------
 
                 snapshot.forEach(docSnap => {
                     const data = { id: docSnap.id, ...docSnap.data() };
