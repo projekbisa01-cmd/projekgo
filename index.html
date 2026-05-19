@@ -4783,7 +4783,7 @@
 
         window.sendTemplateWALokasi = function() {
             const phoneStr = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
-            const waMessage = "Selamat siang Kak, pesanan sedang dalam proses yah kak.\nseperti nya admin sedang banyak pesanan,jadi lokasi dari admin belum sempat di kasih🙏.\n_Mohon bantuannya untuk share loc ya Kak, agar saya bisa langsung meluncur tanpa kendala dan pengiriman jadi lebih cepat dan tepat\nTerima kasih ya Kak!_";
+            const waMessage = "Selamat siang Kak, pesanan sedang dalam proses yah kak.\nseperti nya admin sedang banyak pesanan,jadi lokasi dari admin belum sempat di kasih🙏.\n_Mohon bantuannya untuk share loc ya Kak, agar saya bisa langsung meluncur tanpa kendala dan pengiriman jadi lebih cepat dan tepat_\nTerima kasih ya Kak!_";
             
             // Buka Selector WA dengan nomor pelanggan yang sedang aktif
             window.openWaSelector(phoneStr, waMessage);
@@ -6114,9 +6114,10 @@
 
             if (forceRefresh) { localStorage.removeItem(`rider_docs_${currentUserUID}`); localStorage.removeItem(`rider_rating_${currentUserUID}`); }
             
-            // Panggil fetch dokumen di awal (paralel) agar tidak menunggu data utama selesai, jadi 2x lipat lebih cepat
+            // Panggil fetch dokumen di awal (paralel)
             fetchVehicleAndDocsData(currentUserUID);
             
+            // 1. CEK CACHE LOKAL
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -6124,101 +6125,113 @@
                         const parsedCache = JSON.parse(cached);
                         if (parsedCache.length > 0) {
                             rawData = parsedCache; 
-                            appsScriptData = parsedCache; // FIX: Mencegah history cache terhapus/blank saat loading data realtime
+                            window.gasHistoryData = parsedCache; // Simpan ke penampung history
                             if (lastDataCount === -1) lastDataCount = rawData.length;
-                            document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('main-app').classList.remove('hidden');
-                            updateUI(); setTimeout(showWelcomePopup, 500);
+                            
+                            // Render UI seketika dari cache
+                            document.getElementById('loading-overlay').style.display = 'none'; 
+                            document.getElementById('main-app').classList.remove('hidden');
+                            updateUI(); 
+                            setTimeout(showWelcomePopup, 500);
+                            
                             const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
                             if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
                             const cachedDocs = localStorage.getItem(`rider_docs_${currentUserUID}`);
                             if (cachedDocs) updateDocsUI(JSON.parse(cachedDocs));
+                            
                             hasLoadedFromCache = true;
                         }
-                    } catch (e) { }
+                    } catch (e) { console.warn("Cache parsing error", e); }
                 }
             }
+
+            // 2. UNLOCK UI INSTAN (FIREBASE FIRST)
+            // Jika tidak ada cache (Login baru), kita tetap hilangkan loading screen 
+            // agar Firebase bisa langsung render pesanan hari ini.
+            if (!hasLoadedFromCache) {
+                document.getElementById('loading-overlay').style.display = 'none'; 
+                document.getElementById('main-app').classList.remove('hidden');
+                
+                // Tampilkan notifikasi kecil bahwa riwayat sedang diunduh
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Aplikasi siap. Menyinkronkan riwayat masa lalu...");
+                }
+            }
+            
+            // Jalankan listener Firebase khusus order hari ini (Sangat Cepat)
+            if (typeof window.startDailyOrdersListener === 'function') {
+                window.startDailyOrdersListener(currentUserUID);
+            }
+
+            // 3. BACKGROUND SYNC GAS (GAS LATER)
+            // Dijalankan tanpa "await" agar tidak memblokir aplikasi
+            fetchGASBackground(forceRefresh, hasLoadedFromCache);
+        }
+
+        // --- FUNGSI BARU: BACKGROUND SYNC GAS ---
+        async function fetchGASBackground(forceRefresh, hasLoadedFromCache) {
             try {
-                // Tampilkan indikator refresh memutar jika masuk via cache tanpa loading layar penuh
+                // Tampilkan indikator refresh memutar (di background)
                 const refreshIcon = document.getElementById('refresh-icon');
-                if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.add('refreshing');
+                const sidebarRefreshIcon = document.getElementById('sidebar-refresh-icon');
+                if (refreshIcon) refreshIcon.classList.add('refreshing');
+                if (sidebarRefreshIcon) sidebarRefreshIcon.classList.add('refreshing');
 
                 let items = [];
                 let newData = [];
 
-                // NEW: Gunakan data yang sudah di-fetch saat verifikasi login manual
+                // Gunakan data prefetch jika ada (dari proses verifikasi login)
                 if (window.prefetchedAllData && window.prefetchedRiderData && !forceRefresh) {
                     items = window.prefetchedAllData;
                     newData = window.prefetchedRiderData;
                     window.prefetchedAllData = null;
                     window.prefetchedRiderData = null;
-                } else if (!hasLoadedFromCache || forceRefresh) {
+                } else {
                     // MENGAMBIL DATA DARI GAS UNTUK RIWAYAT
-                    try {
-                        const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
-                        if (response.ok) {
-                            const data = await response.json();
-                            items = Array.isArray(data) ? data : [];
-                        } else {
-                            console.warn("GAS Fetch tidak OK, mengabaikan data GAS.");
-                            items = []; // Jika GAS gagal, biarkan kosong agar tidak force logout
-                        }
-                    } catch (fetchErr) {
-                        console.warn("Gagal terhubung ke GAS:", fetchErr);
-                        items = []; // Mencegah crash jika timeout
+                    const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
+                    if (response.ok) {
+                        const data = await response.json();
+                        items = Array.isArray(data) ? data : [];
+                    } else {
+                        console.warn("GAS Fetch tidak OK, mengabaikan data GAS.");
                     }
                     
                     const uidLower = String(currentUserUID).trim().toLowerCase();
                     newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
-                } else {
-                    // MODE SANGAT CEPAT: Gunakan cache lokal, lewati proses fetch GAS
-                    items = []; 
-                    newData = rawData; 
                 }
                 
-                // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
+                // SIMPAN DATA GLOBAL
                 allRiderData = items;
+                window.gasHistoryData = newData; 
                 
-                // --- PERBAIKAN FATAL: JANGAN LOGOUT JIKA newData KOSONG ---
-                // Karena kita sudah pakai Firebase untuk verifikasi, jika newData (dari GAS) kosong, 
-                // itu berarti Rider belum punya orderan, BUKAN berarti UID-nya dihapus.
-                if (newData.length === 0 && !hasLoadedFromCache) {
-                    console.log("Rider belum memiliki riwayat pesanan di Spreadsheet.");
-                    // Jangan panggil handleLogout! Biarkan lanjut dengan array kosong.
+                if (lastDataCount !== -1 && newData.length > lastDataCount) {
+                    if (typeof playNotificationVoice === 'function') playNotificationVoice();
                 }
-                
-                // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
-                // Jika newData kosong, gunakan currentUserUID yang sedang aktif
-                currentUserUID = newData.length > 0 ? String(newData[0].UID).trim() : currentUserUID;
-                
-                if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
                 lastDataCount = newData.length; 
                 
-                // 2. Jika module Firebase sudah siap, panggil listener khusus order hari ini
-                if (typeof window.startDailyOrdersListener === 'function') {
-                    window.startDailyOrdersListener(currentUserUID);
+                // 4. Gabungkan data Firebase (Hari Ini) dan GAS (Riwayat) lalu Render ulang secara senyap
+                if (typeof window.combineAndRenderData === 'function') {
+                    window.combineAndRenderData();
                 }
                 
-                // 3. Gabungkan dan Render
-                combineAndRenderData();
-                
-                if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
-                
             } catch (error) {
-                console.error("Error pada fetchData Utama:", error);
+                console.error("Error pada Background Sync GAS:", error);
+            } finally {
+                // Matikan animasi loading
                 const refreshIcon = document.getElementById('refresh-icon');
+                const sidebarRefreshIcon = document.getElementById('sidebar-refresh-icon');
                 if (refreshIcon) refreshIcon.classList.remove('refreshing');
+                if (sidebarRefreshIcon) sidebarRefreshIcon.classList.remove('refreshing');
 
-                // Jika gagal fetch dan cache kosong sama sekali, pastikan loading hilang
-                if (rawData.length === 0) {
-                    document.getElementById('loading-overlay').style.display = 'none'; 
-                    document.getElementById('main-app').classList.remove('hidden');
-                    // Tampilkan UI meski kosong
-                    updateUI();
+                // Jika sedang di halaman leaderboard, render ulang dengan data baru
+                const pageTopRiders = document.getElementById('page-top-riders');
+                if (pageTopRiders && !pageTopRiders.classList.contains('hidden-page')) {
+                    if (typeof renderTopRiders === 'function') renderTopRiders();
                 }
             }
         }
 
-        // --- FUNGSI BARU: PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
+        // --- FUNGSI PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
         function combineAndRenderData() {
             const todayStr = getJakartaDateString();
             const finalData = [];
@@ -6226,14 +6239,37 @@
             // FILTER TANGGAL: 21 April 2026
             const filterDate = new Date(2026, 3, 21); 
 
-            window.firebaseData.forEach(fbItem => {
+            // 1. MASUKKAN DATA GAS (Riwayat Masa Lalu)
+            const gasData = window.gasHistoryData || [];
+            gasData.forEach(item => {
+                const itemDateStr = parseSheetDate(item.Tanggal);
+                let itemDate = new Date();
+                if (itemDateStr) {
+                   const parts = itemDateStr.split('-');
+                   if (parts.length === 3) {
+                       itemDate = new Date(parts[2], parts[0]-1, parts[1]); 
+                   }
+                }
+
+                // Cegah duplikasi data hari ini (Biarkan Firebase yang menangani hari ini)
+                if (itemDateStr !== todayStr && itemDate >= filterDate) {
+                    finalData.push({ 
+                        ...item, 
+                        is_sheet: true, 
+                        is_realtime: false 
+                    });
+                }
+            });
+
+            // 2. MASUKKAN DATA FIREBASE (Realtime Hari Ini)
+            const fbData = window.firebaseData || [];
+            fbData.forEach(fbItem => {
                 const fbDateStr = parseSheetDate(fbItem.Tanggal);
-                
                 let itemDate = new Date();
                 if (fbDateStr) {
                    const parts = fbDateStr.split('-');
                    if (parts.length === 3) {
-                       itemDate = new Date(parts[2], parts[0]-1, parts[1]); // Format internal adalah MM-DD-YYYY
+                       itemDate = new Date(parts[2], parts[0]-1, parts[1]); 
                    }
                 }
 
@@ -6253,13 +6289,16 @@
             
             requestAnimationFrame(() => {
                 updateUI(); 
-                // Pastikan yang dipanggil untuk rating adalah data yang memiliki Nama Rider
                 const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
                 if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
                 
-                document.getElementById('loading-overlay').style.display = 'none'; 
-                document.getElementById('main-app').classList.remove('hidden');
-                setTimeout(showWelcomePopup, 500);
+                // Pastikan loading screen hilang (pengamanan ekstra)
+                const loadingOverlay = document.getElementById('loading-overlay');
+                if (loadingOverlay && loadingOverlay.style.display !== 'none') {
+                    loadingOverlay.style.display = 'none'; 
+                    document.getElementById('main-app').classList.remove('hidden');
+                    setTimeout(showWelcomePopup, 500);
+                }
             });
         }
         // Ekspos ke window agar bisa dipanggil dari dalam modul Firebase
