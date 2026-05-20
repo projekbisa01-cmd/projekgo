@@ -6125,7 +6125,7 @@
                         const parsedCache = JSON.parse(cached);
                         if (parsedCache.length > 0) {
                             rawData = parsedCache; 
-                            window.gasHistoryData = parsedCache; // Simpan ke penampung history
+                            window.firebaseData = parsedCache; // Sinkronkan ke Firebase data agar transisi mulus
                             if (lastDataCount === -1) lastDataCount = rawData.length;
                             
                             // Render UI seketika dari cache
@@ -6178,16 +6178,14 @@
                 if (sidebarRefreshIcon) sidebarRefreshIcon.classList.add('refreshing');
 
                 let items = [];
-                let newData = [];
 
                 // Gunakan data prefetch jika ada (dari proses verifikasi login)
-                if (window.prefetchedAllData && window.prefetchedRiderData && !forceRefresh) {
+                if (window.prefetchedAllData && !forceRefresh) {
                     items = window.prefetchedAllData;
-                    newData = window.prefetchedRiderData;
                     window.prefetchedAllData = null;
-                    window.prefetchedRiderData = null;
+                    if (window.prefetchedRiderData) window.prefetchedRiderData = null;
                 } else {
-                    // MENGAMBIL DATA DARI GAS UNTUK RIWAYAT
+                    // MENGAMBIL DATA DARI GAS HANYA UNTUK LEADERBOARD / ALL RIDER
                     const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
                     if (response.ok) {
                         const data = await response.json();
@@ -6195,24 +6193,11 @@
                     } else {
                         console.warn("GAS Fetch tidak OK, mengabaikan data GAS.");
                     }
-                    
-                    const uidLower = String(currentUserUID).trim().toLowerCase();
-                    newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
                 }
                 
-                // SIMPAN DATA GLOBAL
+                // SIMPAN DATA GLOBAL HANYA UNTUK LEADERBOARD
                 allRiderData = items;
-                window.gasHistoryData = newData; 
-                
-                if (lastDataCount !== -1 && newData.length > lastDataCount) {
-                    if (typeof playNotificationVoice === 'function') playNotificationVoice();
-                }
-                lastDataCount = newData.length; 
-                
-                // 4. Gabungkan data Firebase (Hari Ini) dan GAS (Riwayat) lalu Render ulang secara senyap
-                if (typeof window.combineAndRenderData === 'function') {
-                    window.combineAndRenderData();
-                }
+                window.gasHistoryData = []; // Dikosongkan karena riwayat sekarang full dari Firebase
                 
             } catch (error) {
                 console.error("Error pada Background Sync GAS:", error);
@@ -6231,7 +6216,7 @@
             }
         }
 
-        // --- FUNGSI PENGGABUNG DATA (HYBRID: APPS SCRIPT + FIREBASE) ---
+        // --- FUNGSI PENGGABUNG DATA (FULL FIREBASE SEKARANG) ---
         function combineAndRenderData() {
             const todayStr = getJakartaDateString();
             const finalData = [];
@@ -6239,29 +6224,7 @@
             // FILTER TANGGAL: 21 April 2026
             const filterDate = new Date(2026, 3, 21); 
 
-            // 1. MASUKKAN DATA GAS (Riwayat Masa Lalu)
-            const gasData = window.gasHistoryData || [];
-            gasData.forEach(item => {
-                const itemDateStr = parseSheetDate(item.Tanggal);
-                let itemDate = new Date();
-                if (itemDateStr) {
-                   const parts = itemDateStr.split('-');
-                   if (parts.length === 3) {
-                       itemDate = new Date(parts[2], parts[0]-1, parts[1]); 
-                   }
-                }
-
-                // Cegah duplikasi data hari ini (Biarkan Firebase yang menangani hari ini)
-                if (itemDateStr !== todayStr && itemDate >= filterDate) {
-                    finalData.push({ 
-                        ...item, 
-                        is_sheet: true, 
-                        is_realtime: false 
-                    });
-                }
-            });
-
-            // 2. MASUKKAN DATA FIREBASE (Realtime Hari Ini)
+            // HANYA MASUKKAN DATA FIREBASE (Riwayat Penuh & Realtime)
             const fbData = window.firebaseData || [];
             fbData.forEach(fbItem => {
                 const fbDateStr = parseSheetDate(fbItem.Tanggal);
@@ -6283,6 +6246,12 @@
             });
 
             rawData = finalData;
+
+            // Voice notification jika ada data baru masuk (dari listener Firebase)
+            if (lastDataCount !== -1 && rawData.length > lastDataCount) {
+                if (typeof playNotificationVoice === 'function') playNotificationVoice();
+            }
+            lastDataCount = rawData.length;
 
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
