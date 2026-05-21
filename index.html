@@ -11240,8 +11240,91 @@
               });
           };
 
+          let scheduleUnsubscribe = null;
+
           window.startScheduleListener = (uid) => {
-              // Dinonaktifkan sesuai perintah
+              if (!uid || !isAuthReady) return;
+              const cleanUid = String(uid).trim().toUpperCase();
+
+              if (scheduleUnsubscribe) {
+                  scheduleUnsubscribe();
+              }
+
+              // Arahkan ke koleksi jadwal shift milik rider ini
+              const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+              const shiftRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_shifts', cleanUid);
+
+              scheduleUnsubscribe = onSnapshot(shiftRef, (docSnap) => {
+                  let shiftType = 'bebas';
+                  let poin = 0;
+
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      shiftType = data.shift_type || 'bebas';
+                      // Mengambil poin_minggu_ini hasil kalkulasi server (Admin)
+                      poin = data.poin_minggu_ini || 0;
+                  }
+
+                  // Panggil fungsi untuk mengupdate UI (Membuat Badge Otomatis)
+                  window.updateShiftBadgeUI(shiftType, poin);
+                  
+              }, (error) => {
+                  console.error("Error fetching shift data:", error);
+              });
+          };
+
+          window.updateShiftBadgeUI = function(shiftType, poin) {
+              let badgeContainer = document.getElementById('rider-shift-badge-container');
+              
+              // 1. Jika elemen belum ada, kita buat dan tempel secara otomatis di bawah Avatar Header
+              // Cara ini sangat aman agar tidak perlu mengedit 12.000 baris kode HTML Anda
+              if (!badgeContainer) {
+                  const avatarContainer = document.querySelector('#page-home header .relative.flex.flex-col.items-center.group');
+                  if (avatarContainer) {
+                      badgeContainer = document.createElement('div');
+                      badgeContainer.id = 'rider-shift-badge-container';
+                      // Posisi mutlak di bawah avatar, sejajar dengan rating
+                      badgeContainer.className = 'absolute -bottom-7 whitespace-nowrap z-[15] transition-all duration-300';
+                      avatarContainer.appendChild(badgeContainer);
+                  }
+              }
+
+              if (!badgeContainer) return; // Fallback jika kontainer tidak ditemukan
+
+              // 2. Logika Warna Badge berdasarkan Poin (Sesuai hitungan Admin)
+              let badgeColor = 'bg-green-100 text-green-700 border-green-200';
+              let poinText = 'Aman';
+              let icon = 'fa-circle-check';
+
+              if (poin >= 3) {
+                  badgeColor = 'bg-red-100 text-red-700 border-red-200 animate-pulse';
+                  poinText = 'SUSPEND';
+                  icon = 'fa-ban';
+              } else if (poin === 2) {
+                  badgeColor = 'bg-yellow-100 text-yellow-700 border-yellow-200';
+                  poinText = '2x Poin';
+                  icon = 'fa-triangle-exclamation';
+              } else if (poin === 1) {
+                  badgeColor = 'bg-orange-100 text-orange-700 border-orange-200';
+                  poinText = '1x Poin';
+                  icon = 'fa-circle-exclamation';
+              }
+
+              // 3. Format Tipe Shift
+              let shiftName = '';
+              if (shiftType === 'pagi') shiftName = 'Pagi';
+              else if (shiftType === 'siang') shiftName = 'Siang';
+              else if (shiftType === 'parttime') shiftName = 'Part-Time';
+              else shiftName = 'Bebas';
+
+              // 4. Injeksi HTML Badge ke dalam kontainer
+              badgeContainer.innerHTML = `
+                  <div class="flex items-center gap-1 text-[8px] font-bold ${badgeColor} px-2 py-0.5 rounded-full border shadow-sm">
+                      <i class="fa-solid fa-calendar-day"></i> ${shiftName}
+                      <span class="mx-0.5 text-current opacity-30">|</span>
+                      <i class="fa-solid ${icon}"></i> ${poinText}
+                  </div>
+              `;
           };
 
           /* // LOGIKA INI DIMATIKAN AGAR BIAYA READ FIREBASE TIDAK MEMBENGKAK
@@ -11265,4 +11348,4 @@
       } catch (e) { console.error("Firebase Init Error:", e); }
     </script>
 </body>
-</html>
+</html> 
