@@ -609,24 +609,59 @@
         }
 
         function startDataListeners() {
+            // 1. Listen Rider Aktif (Memori CPU hanya mengupdate data yang berubah)
             onSnapshot(collection(db, 'status_rider_aktif'), (snapshot) => {
-                allRiders = []; snapshot.forEach(docSnap => { allRiders.push({...docSnap.data(), uid: docSnap.id}); });
+                snapshot.docChanges().forEach((change) => {
+                    const data = { ...change.doc.data(), uid: change.doc.id };
+                    if (change.type === "added") {
+                        allRiders.push(data);
+                    } else if (change.type === "modified") {
+                        const index = allRiders.findIndex(r => r.uid === change.doc.id);
+                        if (index !== -1) allRiders[index] = data;
+                    } else if (change.type === "removed") {
+                        allRiders = allRiders.filter(r => r.uid !== change.doc.id);
+                    }
+                });
                 processDataAndUpdate();
             });
+
+            // 2. Listen Order Aktif Global (Hanya update array spesifik yang berubah)
             const qActive = query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'), where("status", "in", ["assigned", "processing", "missed", "unassigned"]));
             onSnapshot(qActive, (snapshot) => {
-                allGlobalOrders = []; snapshot.forEach(docSnap => allGlobalOrders.push({ id: docSnap.id, ...docSnap.data() }));
+                snapshot.docChanges().forEach((change) => {
+                    const data = { id: change.doc.id, ...change.doc.data() };
+                    if (change.type === "added") {
+                        allGlobalOrders.push(data);
+                    } else if (change.type === "modified") {
+                        const idx = allGlobalOrders.findIndex(o => o.id === change.doc.id);
+                        if (idx !== -1) allGlobalOrders[idx] = data;
+                    } else if (change.type === "removed") {
+                        allGlobalOrders = allGlobalOrders.filter(o => o.id !== change.doc.id);
+                    }
+                });
                 processDataAndUpdate();
             });
+
+            // 3. Listen Total Order Hari Ini (Hanya update array spesifik yang berubah)
             const today = new Date(); today.setHours(0,0,0,0);
             const qToday = query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'), where("created_at", ">=", today));
             onSnapshot(qToday, (snapshot) => {
-                todayAllOrders = []; snapshot.forEach(docSnap => todayAllOrders.push({ id: docSnap.id, ...docSnap.data() }));
+                snapshot.docChanges().forEach((change) => {
+                    const data = { id: change.doc.id, ...change.doc.data() };
+                    if (change.type === "added") {
+                        todayAllOrders.push(data);
+                    } else if (change.type === "modified") {
+                        const idx = todayAllOrders.findIndex(o => o.id === change.doc.id);
+                        if (idx !== -1) todayAllOrders[idx] = data;
+                    } else if (change.type === "removed") {
+                        todayAllOrders = todayAllOrders.filter(o => o.id !== change.doc.id);
+                    }
+                });
                 processDataAndUpdate();
             });
             
             fetchCustomersFromGAS(); 
-            setInterval(fetchCustomersFromGAS, 60000); // Tarik data setiap 60 detik
+            setInterval(fetchCustomersFromGAS, 60000); // Tarik data pelanggan Google Sheet tiap 60 dtk (sudah pakai sistem cache lokal)
         }
 
         let previousShiftCount = null;
