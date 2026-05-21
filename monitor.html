@@ -329,7 +329,7 @@
                                     <i class="fa-solid fa-flag-checkered text-blue-400 mr-2"></i> TARGET ORDER HARI INI
                                 </div>
                                 <div class="text-xs lg:text-sm font-bold text-slate-400">
-                                    <span id="target-actual" class="text-blue-400 text-lg lg:text-2xl font-black transition-colors mr-1">0</span> / <span id="target-goal" class="ml-1">100</span>
+                                    <span id="target-actual" class="text-blue-400 text-lg lg:text-2xl font-black transition-colors mr-1">0</span> / <span id="target-goal" class="ml-1">600</span>
                                 </div>
                             </div>
                             <div class="w-full bg-slate-900 rounded-full h-3 lg:h-4 mb-2 border border-slate-700 shadow-inner overflow-hidden">
@@ -406,17 +406,19 @@
 
         const charts = { riderStatus: null, customers: null, orderStatus: null, completion: null };
         
+        // --- KONFIGURASI SUPER HD UNTUK LAYAR TV 32 INCH ---
         const dpr = window.devicePixelRatio || 1;
-        Chart.defaults.devicePixelRatio = Math.max(dpr, 2.5); 
-        Chart.defaults.color = '#cbd5e1'; 
+        Chart.defaults.devicePixelRatio = Math.max(dpr, 4.0); // Kepadatan pixel dinaikkan ke 4.0 agar Super HD (Setara 4K Rendering)
+        Chart.defaults.color = '#f8fafc'; // Warna text grafik dibuat lebih putih/solid
         
-        const getOptimalFontSize = () => Math.max(8, Math.min(window.innerWidth, window.innerHeight) * 0.011);
-        const getDynamicFont = () => ({ size: getOptimalFontSize(), weight: 'bold', family: "'Inter', sans-serif" });
+        const getOptimalFontSize = () => Math.max(12, Math.min(window.innerWidth, window.innerHeight) * 0.014); // Ukuran font dasar diperbesar agar terbaca di TV
+        const getDynamicFont = () => ({ size: getOptimalFontSize(), weight: '900', family: "'Inter', sans-serif" }); // Weight 900 (Black) agar warna text pekat
         
         Chart.defaults.font.size = getOptimalFontSize(); 
-        Chart.defaults.font.weight = 'bold';
+        Chart.defaults.font.weight = '900'; // Font grafik sangat tebal
         Chart.defaults.font.family = "'Inter', sans-serif";
-        const gridConfig = { color: '#334155', drawBorder: false, lineWidth: 1 }; 
+        const gridConfig = { color: 'rgba(51, 65, 85, 0.8)', drawBorder: false, lineWidth: 1.5 }; // Garis panduan (grid) lebih jelas
+        // ----------------------------------------------------
 
         const centerTextPlugin = {
             id: 'centerText',
@@ -472,11 +474,26 @@
         initAuth();
 
         function playWarningBeep() { 
-            if(audioEnabled) { 
-                for(let i=0; i<5; i++) {
-                    setTimeout(() => playTone(1000, 'square', 0.08), i * 180);
+            // Jika audio dimatikan oleh user, hentikan fungsi
+            if (!audioEnabled) return;
+            
+            // Direct link audio MP3 (diubah dari link web menjadi link langsung MP3 agar berbunyi)
+            const audioUrl = "https://www.myinstants.com/media/sounds/error.mp3";
+            const notifAudio = new Audio(audioUrl);
+            
+            let playCount = 0;
+            
+            // Logika agar berbunyi 3 kali
+            notifAudio.onended = function() {
+                playCount++;
+                if (playCount < 3) {
+                    notifAudio.currentTime = 0; // Reset ke awal
+                    notifAudio.play().catch(err => console.log(err));
                 }
-            } 
+            };
+            
+            // Mulai putar audio
+            notifAudio.play().catch(err => console.log("Gagal memutar audio:", err));
         }
 
         function playTone(frequency, type, duration) {
@@ -612,6 +629,29 @@
             setInterval(fetchCustomersFromGAS, 60000); // Tarik data setiap 60 detik
         }
 
+        let previousShiftCount = null;
+
+        function playShiftBeep() {
+            if (!audioEnabled) return;
+            
+            // Direct link ke file MP3 agar bisa otomatis diputar oleh sistem HTML
+            const audioUrl = "https://www.myinstants.com/media/sounds/notifikasi-iphone.mp3";
+            const notifAudio = new Audio(audioUrl);
+            
+            let playCount = 0;
+            
+            // Logika agar berbunyi 3 kali
+            notifAudio.onended = function() {
+                playCount++;
+                if (playCount < 3) {
+                    notifAudio.currentTime = 0; // Reset ke awal
+                    notifAudio.play().catch(err => console.log(err));
+                }
+            };
+            
+            notifAudio.play().catch(err => console.log("Gagal memutar audio antrean shift:", err));
+        }
+
         function processDataAndUpdate() {
             const busyUids = new Set(allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').map(o => o.rider_uid));
             let sCount = 0, rCount = 0, aCount = busyUids.size, oCount = 0;
@@ -622,6 +662,12 @@
                 if (!isOnline || !isAvailable) oCount++;
                 else { if (r.in_main_queue === true || r.in_main_queue === 'true') rCount++; else sCount++; }
             });
+            
+            // Cek jika jumlah rider shift saat ini lebih banyak dari sebelumnya
+            if (previousShiftCount !== null && sCount > previousShiftCount) {
+                playShiftBeep();
+            }
+            previousShiftCount = sCount; // Simpan jumlah terbaru untuk dicek selanjutnya
             
             updateNumberWithFlash('count-shift', sCount);
             updateNumberWithFlash('count-radar', rCount);
@@ -635,7 +681,7 @@
         }
 
         function updateDailyTarget(currentTotal) {
-            const TARGET_ORDER = 100; 
+            const TARGET_ORDER = 600; 
             document.getElementById('target-goal').innerText = TARGET_ORDER;
             updateNumberWithFlash('target-actual', currentTotal);
 
@@ -1006,4 +1052,4 @@
 
     </script>
 </body>
-</html> 
+</html>
