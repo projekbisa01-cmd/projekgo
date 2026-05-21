@@ -1573,7 +1573,7 @@
         // =========================================================================
         window.autoSyncShiftBackground = async () => {
             if (!allShiftSchedules || allShiftSchedules.length === 0) return;
-            if (!window.currentHistoryData || window.currentHistoryData.length === 0) return;
+            // Dihapus pengecekan currentHistoryData agar perhitungan poin tetap jalan meski order hari ini kosong
 
             const today = new Date();
             const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -1589,32 +1589,48 @@
                 if (shift.shift_type === 'parttime') continue;
 
                 const jamData = shift.jam_pertama || {};
+                let updatesForThisShift = {};
+                let needUpdate = false;
                 
-                // HEMAT KUOTA: Jika rider SUDAH punya record jam hari ini, lewati! (0 Read Firebase)
-                if (jamData[todayStr] && jamData[todayStr] !== '-') continue;
+                // 1. CEK DAN UPDATE JAM PERTAMA NARIK
+                if (!jamData[todayStr] || jamData[todayStr] === '-') {
+                    if (window.currentHistoryData && window.currentHistoryData.length > 0) {
+                        const riderOrdersToday = window.currentHistoryData.filter(o => o.rider_uid === shift.uid);
+                        if (riderOrdersToday.length > 0) {
+                            riderOrdersToday.sort((a, b) => (a.Jam || "23:59").localeCompare(b.Jam || "23:59"));
+                            const jamPertamaNarik = riderOrdersToday[0].Jam;
 
-                // CARI TANPA READ FIREBASE: Gunakan memori lokal dari history order hari ini
-                const riderOrdersToday = window.currentHistoryData.filter(o => o.rider_uid === shift.uid);
+                            jamData[todayStr] = jamPertamaNarik;
+                            updatesForThisShift.jam_pertama = jamData;
+                            needUpdate = true;
+                            shift.jam_pertama = jamData; // Update memori lokal
+                        }
+                    }
+                }
+
+                // 2. HITUNG DAN UPDATE TOTAL POIN (OTOMATISASI BARU)
+                // Memanfaatkan fungsi countRedMarks() yang sudah ada
+                const calculatedPoin = countRedMarks(shift.uid);
                 
-                if (riderOrdersToday.length > 0) {
-                    // Cari orderan dengan waktu paling awal/pagi
-                    riderOrdersToday.sort((a, b) => (a.Jam || "23:59").localeCompare(b.Jam || "23:59"));
-                    const jamPertamaNarik = riderOrdersToday[0].Jam;
+                // Cek apakah poin yang dihitung berbeda dengan yang ada di database
+                if (shift.poin_minggu_ini !== calculatedPoin) {
+                    updatesForThisShift.poin_minggu_ini = calculatedPoin;
+                    needUpdate = true;
+                    shift.poin_minggu_ini = calculatedPoin; // Update memori lokal agar tidak update terus-menerus
+                }
 
-                    jamData[todayStr] = jamPertamaNarik;
-                    
+                // 3. MASUKKAN KE BATCH JIKA ADA PERUBAHAN
+                if (needUpdate) {
+                    updatesForThisShift.updated_at = serverTimestamp();
                     const shiftRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_shifts', shift.id);
-                    batch.update(shiftRef, { jam_pertama: jamData, updated_at: serverTimestamp() });
+                    batch.update(shiftRef, updatesForThisShift);
                     hasUpdates = true;
-                    
-                    // Update cache memori lokal agar loop berikutnya tidak berulang
-                    shift.jam_pertama = jamData; 
                 }
             }
 
             // Jika ada perubahan, update ke database secara serentak
             if (hasUpdates) {
-                try { await batch.commit(); } catch(e) { console.warn("Auto sync jam pertama error:", e); }
+                try { await batch.commit(); } catch(e) { console.warn("Auto sync background error:", e); }
             }
         };
 
@@ -6690,4 +6706,4 @@
         };
     </script>
 </body>
-</html>
+</html> 
