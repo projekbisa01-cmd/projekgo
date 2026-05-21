@@ -1531,11 +1531,11 @@
             if (!shiftData || shiftData.shift_type === 'parttime') return 0;
             
             let redMarks = 0;
-            let countKosong = 0; // Tambahan: Hitung hari yang kosong
+            let countKosong = 0; 
             const jamData = shiftData.jam_pertama || {};
             
             const today = new Date();
-            today.setHours(0, 0, 0, 0); // Normalisasi ke awal hari
+            today.setHours(0, 0, 0, 0); 
             const dayOfWeek = today.getDay();
             const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
             const startOfWeek = new Date(today);
@@ -1547,13 +1547,15 @@
                 const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
                 
                 const time = jamData[dateStr];
-                const isPastOrToday = d.getTime() <= today.getTime();
+                
+                // PERBAIKAN LOGIKA: Hanya hitung hari yang SUDAH BERLALU. 
+                // Hari ini TIDAK dihitung kosong walau rider belum narik orderan.
+                const isPast = d.getTime() < today.getTime();
 
                 if (time && time !== '-') {
                     if (shiftData.shift_type === 'pagi' && time > '09:00') redMarks++;
                     else if (shiftData.shift_type === 'siang' && time > '12:00') redMarks++;
-                } else if (isPastOrToday) {
-                    // Jika jam kosong dan harinya sudah lewat atau hari ini
+                } else if (isPast) {
                     countKosong++;
                 }
             }
@@ -1565,6 +1567,59 @@
 
             return redMarks;
         }
+
+        // =========================================================================
+        // AUTOMATISASI LATAR BELAKANG PENCATATAN JAM PERTAMA (HEMAT READ FIREBASE)
+        // =========================================================================
+        window.autoSyncShiftBackground = async () => {
+            if (!allShiftSchedules || allShiftSchedules.length === 0) return;
+            if (!window.currentHistoryData || window.currentHistoryData.length === 0) return;
+
+            const today = new Date();
+            const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+            // Hanya eksekusi jika Admin sedang di set kalender hari ini
+            const historyDateVal = document.getElementById('history-date')?.value;
+            if (historyDateVal && historyDateVal !== todayStr) return; 
+
+            let hasUpdates = false;
+            const batch = writeBatch(db);
+
+            for (const shift of allShiftSchedules) {
+                if (shift.shift_type === 'parttime') continue;
+
+                const jamData = shift.jam_pertama || {};
+                
+                // HEMAT KUOTA: Jika rider SUDAH punya record jam hari ini, lewati! (0 Read Firebase)
+                if (jamData[todayStr] && jamData[todayStr] !== '-') continue;
+
+                // CARI TANPA READ FIREBASE: Gunakan memori lokal dari history order hari ini
+                const riderOrdersToday = window.currentHistoryData.filter(o => o.rider_uid === shift.uid);
+                
+                if (riderOrdersToday.length > 0) {
+                    // Cari orderan dengan waktu paling awal/pagi
+                    riderOrdersToday.sort((a, b) => (a.Jam || "23:59").localeCompare(b.Jam || "23:59"));
+                    const jamPertamaNarik = riderOrdersToday[0].Jam;
+
+                    jamData[todayStr] = jamPertamaNarik;
+                    
+                    const shiftRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_shifts', shift.id);
+                    batch.update(shiftRef, { jam_pertama: jamData, updated_at: serverTimestamp() });
+                    hasUpdates = true;
+                    
+                    // Update cache memori lokal agar loop berikutnya tidak berulang
+                    shift.jam_pertama = jamData; 
+                }
+            }
+
+            // Jika ada perubahan, update ke database secara serentak
+            if (hasUpdates) {
+                try { await batch.commit(); } catch(e) { console.warn("Auto sync jam pertama error:", e); }
+            }
+        };
+
+        // Jalankan background checker secara otomatis setiap 3 menit (180.000 milidetik)
+        setInterval(window.autoSyncShiftBackground, 180000);
 
         window.getCurrentMondayStr = () => {
             const today = new Date();
@@ -6137,17 +6192,34 @@
                     const isForgiven = s.forgiven_week === window.getCurrentMondayStr();
                     const isSuspended = redMarks > 2 && !isForgiven;
 
+                    // --- LOGIKA BADGE JUMLAH TELAT / KOSONG ---
+                    let markColorClass = '';
+                    if (redMarks > 2) {
+                        markColorClass = 'bg-rose-100 text-rose-700 border-rose-200'; // Merah (> 2)
+                    } else if (redMarks === 2) {
+                        markColorClass = 'bg-amber-100 text-amber-700 border-amber-200'; // Kuning (== 2)
+                    } else {
+                        markColorClass = 'bg-emerald-100 text-emerald-700 border-emerald-200'; // Hijau (< 2)
+                    }
+                    
                     let badgeHtml = '';
+                    
+                    // Menampilkan Badge Telat khusus untuk Shift Pagi/Siang (Bukan Part-time)
+                    if (s.shift_type !== 'parttime') {
+                        badgeHtml += `<span class="${markColorClass} text-[8px] px-1.5 py-0.5 rounded font-black shadow-sm shrink-0 ml-1 border">${redMarks}x Poin</span>`;
+                    }
+                    // ------------------------------------------
+
                     let actionBtn = '';
                     
                     if (isSuspended) {
-                        badgeHtml = '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm shrink-0 ml-1">SUSPEND</span>';
+                        badgeHtml += '<span class="bg-rose-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm shrink-0 ml-1">SUSPEND</span>';
                         actionBtn = `<button onclick="event.stopPropagation(); window.forgiveRiderShift('${s.id}', '${s.name}')" class="w-6 h-6 bg-emerald-50 text-emerald-500 rounded flex items-center justify-center hover:bg-emerald-500 hover:text-white transition-colors border border-emerald-100 mr-1" title="Buka Suspend"><i class="fa-solid fa-unlock text-[10px]"></i></button>`;
                     } else if (isForgiven && redMarks > 2) {
-                        badgeHtml = '<span class="bg-emerald-100 text-emerald-600 text-[8px] px-1.5 py-0.5 rounded font-black shadow-sm shrink-0 ml-1 border border-emerald-200" title="Suspend telah dibuka oleh admin">DIBUKA</span>';
+                        badgeHtml += '<span class="bg-emerald-100 text-emerald-600 text-[8px] px-1.5 py-0.5 rounded font-black shadow-sm shrink-0 ml-1 border border-emerald-200" title="Suspend telah dibuka oleh admin">DIBUKA</span>';
                     }
 
-                    // PERUBAHAN: Menghapus div dropdown stats di dalam card, dan mengubah fungsi onClick di card
+                    // Menghapus div dropdown stats di dalam card, dan mengubah fungsi onClick di card
                     html += `
                         <div class="bg-white border border-gray-100 rounded-lg shadow-sm mb-1.5 transition-all hover:border-indigo-300 overflow-hidden flex flex-col">
                             <div class="flex justify-between items-center p-2 cursor-pointer" onclick="window.openRiderWeeklyStatsModal('${s.uid}', '${s.name}', '${s.shift_type}')">
