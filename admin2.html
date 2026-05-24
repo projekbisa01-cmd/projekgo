@@ -1536,6 +1536,11 @@
             
             const today = new Date();
             today.setHours(0, 0, 0, 0); 
+            
+            // Ambil waktu saat ini untuk pengecekan "hari ini"
+            const now = new Date();
+            const currentTimeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
             const dayOfWeek = today.getDay();
             const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
             const startOfWeek = new Date(today);
@@ -1548,15 +1553,24 @@
                 
                 const time = jamData[dateStr];
                 
-                // PERBAIKAN LOGIKA: Hanya hitung hari yang SUDAH BERLALU. 
-                // Hari ini TIDAK dihitung kosong walau rider belum narik orderan.
-                const isPast = d.getTime() < today.getTime();
+                const isPastDay = d.getTime() < today.getTime();
+                const isToday = d.getTime() === today.getTime();
+                const shiftLimit = shiftData.shift_type === 'pagi' ? '09:00' : '12:00';
 
                 if (time && time !== '-') {
-                    if (shiftData.shift_type === 'pagi' && time > '09:00') redMarks++;
-                    else if (shiftData.shift_type === 'siang' && time > '12:00') redMarks++;
-                } else if (isPast) {
-                    countKosong++;
+                    // Kalau sudah absen, cek apakah lewat jam shift
+                    if (time > shiftLimit) redMarks++;
+                } else {
+                    // Kalau belum absen
+                    if (isPastDay) {
+                        countKosong++;
+                    } else if (isToday) {
+                        // Kalau hari ini, cek apakah jam saat ini sudah melewati batas shift
+                        // Jika belum jamnya, JANGAN dihitung dulu
+                        if (currentTimeStr > shiftLimit) {
+                            countKosong++; 
+                        }
+                    }
                 }
             }
             
@@ -6309,6 +6323,57 @@
             });
         };
 
+        window.forgiveRiderShift = (id, name) => {
+            window.showConfirm('Buka Gembok Suspend?', `Anda yakin ingin memberikan pengampunan (buka suspend) untuk rider ${name} pada minggu ini?`, async () => {
+                const loader = document.getElementById('loading-overlay');
+                if (loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
+
+                try {
+                    // 1. Dapatkan string hari Senin minggu ini (format YYYY-MM-DD) sebagai penanda pengampunan
+                    const currentMonday = window.getCurrentMondayStr();
+
+                    // 2. Update status pengampunan di koleksi rider_shifts
+                    const shiftRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_shifts', id);
+                    await updateDoc(shiftRef, {
+                        forgiven_week: currentMonday,
+                        updated_at: serverTimestamp()
+                    });
+
+                    // 3. Cari UID rider berdasarkan ID dokumen shift untuk membuka blokir aplikasinya
+                    const shiftData = allShiftSchedules.find(s => s.id === id);
+                    if (shiftData && shiftData.uid) {
+                        const riderStatusRef = doc(db, 'status_rider_aktif', shiftData.uid);
+                        const riderLive = allRiders.find(r => r.uid === shiftData.uid);
+                        const retainedLoc = riderLive ? window.getKetLokasi(riderLive) : "Posisi / Standby";
+
+                        // Hapus status paksa offline dan kembalikan keterangan aktif
+                        await updateDoc(riderStatusRef, {
+                            force_kill: false,
+                            last_drop_desc: "Aktif Kembali (Suspend Dibuka)",
+                            proof_desc: retainedLoc,
+                            last_updated: serverTimestamp()
+                        });
+
+                        // Kirim notifikasi ke HP Rider bahwa suspend sudah dibuka
+                        if (typeof sendPushNotification === 'function') {
+                            sendPushNotification(shiftData.uid, "✅ SUSPEND DIBUKA ✅", "Admin telah membuka gembok suspend kamu. Silakan masuk antrean kembali.");
+                        }
+                    }
+
+                    if (typeof window.showAlert === 'function') {
+                        window.showAlert('Berhasil', `Suspend untuk ${name} berhasil dibuka untuk minggu ini.`, 'success');
+                    }
+                } catch (error) {
+                    console.error("Error forgive rider:", error);
+                    if (typeof window.showAlert === 'function') {
+                        window.showAlert('Gagal', 'Terjadi kesalahan saat membuka suspend.', 'error');
+                    }
+                } finally {
+                    if (loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+                }
+            });
+        };
+
         // PERUBAHAN: Fungsi baru untuk membuka modal statistik
         window.openRiderWeeklyStatsModal = async (uid, name, shiftType) => {
             const modal = document.getElementById('stats-shift-modal');
@@ -6398,16 +6463,20 @@
                 let totalTelatMurni = 0;
                 let countKosong = 0;
 
+                const now = new Date();
+                const currentTimeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
                 weekDates.forEach(wd => {
                     let time = earliestTimes[wd.dateStr] || '-';
                     let timeClass = 'text-slate-400 bg-slate-100 border border-slate-100';
                     let isLate = false;
-                    const isPastOrToday = wd.dateObj.getTime() <= today.getTime();
+                    
+                    const isPastDay = wd.dateObj.getTime() < today.getTime();
+                    const isToday = wd.dateObj.getTime() === today.getTime();
+                    const shiftLimit = shiftType === 'pagi' ? '09:00' : '12:00';
                     
                     if (time !== '-') {
-                        if (shiftType === 'pagi' && time > '09:00') {
-                            isLate = true;
-                        } else if (shiftType === 'siang' && time > '12:00') {
+                        if (time > shiftLimit) {
                             isLate = true;
                         }
                         
@@ -6418,21 +6487,30 @@
                         } else {
                             timeClass = 'text-indigo-600 bg-indigo-50 border border-indigo-100';
                         }
-                    } else if (isPastOrToday) {
-                        // Jika hari sudah lewat/hari ini dan jam kosong
-                        timeClass = 'text-rose-600 bg-rose-50 border border-rose-200';
-                        time = 'KOSONG'; // Ubah tampilan '-' menjadi KOSONG
-                        countKosong++;
+                    } else {
+                        let isKosong = false;
+                        if (isPastDay) {
+                            isKosong = true;
+                        } else if (isToday && currentTimeStr > shiftLimit) {
+                            // Kalau hari ini dan sudah lewat jam shift tapi belum narik
+                            isKosong = true;
+                        }
+
+                        if (isKosong) {
+                            timeClass = 'text-rose-600 bg-rose-50 border border-rose-200';
+                            time = 'KOSONG'; // Ubah tampilan '-' menjadi KOSONG
+                            countKosong++;
+                        }
                     }
 
-                    const isToday = wd.dateStr === `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-                    const todayClass = isToday ? 'bg-sky-50 border-sky-200' : 'bg-slate-50 border-slate-100';
+                    const isHariIniBeneran = wd.dateStr === `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+                    const todayClass = isHariIniBeneran ? 'bg-sky-50 border-sky-200' : 'bg-slate-50 border-slate-100';
                     const iconLate = isLate || (time === 'KOSONG') ? '<i class="fa-solid fa-triangle-exclamation text-rose-500 mr-1.5"></i>' : '';
                     
                     html += `
                         <div class="flex justify-between items-center p-2 rounded-lg border ${todayClass} shadow-sm">
                             <span class="text-[10px] font-bold text-slate-700 flex items-center gap-1">
-                                ${isToday ? '<i class="fa-solid fa-circle text-[6px] text-sky-500 mr-1 animate-pulse"></i>' : ''}
+                                ${isHariIniBeneran ? '<i class="fa-solid fa-circle text-[6px] text-sky-500 mr-1 animate-pulse"></i>' : ''}
                                 ${wd.display}
                             </span>
                             <div class="flex items-center">
@@ -6485,10 +6563,6 @@
                 contentContainer.innerHTML = '<div class="text-center py-6 bg-rose-50 rounded-xl border border-rose-200"><p class="text-[10px] text-rose-500 font-bold">Gagal memuat data histori.</p></div>';
             }
         };
-
-        // Menghapus fungsi toggleRiderWeeklyStats yang lama (opsional, tapi baik untuk kebersihan kode)
-        // window.toggleRiderWeeklyStats = async (uid) => { ... } 
-        // --- AKHIR FUNGSI JADWAL SHIFT ---
 
         // =====================================================================
         // FUNGSI 5 PILAR ANALISIS BISNIS LANJUTAN
@@ -6706,4 +6780,4 @@
         };
     </script>
 </body>
-</html> 
+</html>
