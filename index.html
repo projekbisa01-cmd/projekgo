@@ -4606,6 +4606,109 @@
 
             // 2. Tutup popup Success
             window.closeOrderSuccessPopup();
+
+            // 3. LOGIKA BARU: Cek jika Transfer, tampilkan Popup Info ke Grup
+            if (window.tempPaymentData && window.tempPaymentData.type === 'Transfer' && !window.isRestingAfterFinish) {
+                setTimeout(() => {
+                    window.showTransferGroupPopup();
+                }, 1000); // Beri jeda 1 detik agar WA terbuka dulu
+            }
+        };
+
+        // --- FUNGSI BARU: POPUP INFO TRANSFER GRUP ---
+        window.showTransferGroupPopup = function() {
+            let popup = document.getElementById('transfer-group-popup');
+            if (!popup) {
+                // Buat elemen popup secara dinamis agar tidak perlu edit HTML manual
+                popup = document.createElement('div');
+                popup.id = 'transfer-group-popup';
+                popup.className = 'fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300';
+                popup.innerHTML = `
+                    <div class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 text-center shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col items-center">
+                        <div class="absolute top-0 left-0 w-full h-3 bg-blue-500"></div>
+                        <div class="w-20 h-20 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center text-4xl mb-4 shadow-inner border-4 border-white">
+                            <i class="fa-solid fa-building-columns animate-pulse"></i>
+                        </div>
+                        <h2 class="text-2xl font-black text-blue-600 mb-2 leading-tight tracking-tight uppercase">INFO TRANSFER</h2>
+                        <p class="text-gray-700 font-bold text-xs leading-relaxed mb-6 bg-blue-50 p-4 rounded-xl border border-blue-100 italic">
+                            "Posisi antrean radar kamu <span class="text-red-500 font-black">DITAHAN SEMENTARA</span>. Jangan lupa infokan bukti transfer pelanggan ke Grup WhatsApp ya! Jika sudah, klik tombol di bawah agar kembali masuk radar."
+                        </p>
+                        
+                        <div class="w-full space-y-3">
+                            <button onclick="window.openWaGroupTransfer()" class="w-full py-4 bg-green-500 hover:bg-green-600 text-white font-black rounded-2xl shadow-xl shadow-green-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                <i class="fa-brands fa-whatsapp text-xl"></i> Ke WA Grup
+                            </button>
+                            <!-- LOGIKA BARU: Tombol dikunci (disabled) secara bawaan -->
+                            <button id="btn-confirm-transfer-info" disabled onclick="window.confirmTransferGroupInfo()" class="w-full py-4 bg-gray-400 text-gray-200 cursor-not-allowed font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-lock" id="icon-confirm-transfer"></i> Sudah Diinfokan
+                            </button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(popup);
+            } else {
+                // LOGIKA BARU: Reset tombol menjadi terkunci lagi setiap kali popup muncul
+                const btnConfirm = document.getElementById('btn-confirm-transfer-info');
+                const iconConfirm = document.getElementById('icon-confirm-transfer');
+                if (btnConfirm) {
+                    btnConfirm.disabled = true;
+                    btnConfirm.className = "w-full py-4 bg-gray-400 text-gray-200 cursor-not-allowed font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2";
+                }
+                if (iconConfirm) {
+                    iconConfirm.className = "fa-solid fa-lock";
+                }
+            }
+
+            popup.classList.remove('hidden');
+            popup.classList.add('flex');
+            setTimeout(() => {
+                popup.classList.remove('opacity-0');
+                const content = popup.querySelector('.transform');
+                if (content) {
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                }
+            }, 10);
+            try { playBeep(500, 0.2); } catch(e){}
+        };
+
+        window.openWaGroupTransfer = function() {
+            // Membuka WA dengan template pesan grup
+            let waMsg = `Admin, mau info transfer atas nama pelanggan: *${window.currentActiveCustomerName || 'Pelanggan'}*. Tolong dicek ya.`;
+            window.openWaSelector("", waMsg);
+
+            // LOGIKA BARU: Buka kunci tombol "Sudah Diinfokan" setelah tombol WA diklik
+            const btnConfirm = document.getElementById('btn-confirm-transfer-info');
+            const iconConfirm = document.getElementById('icon-confirm-transfer');
+            if (btnConfirm) {
+                btnConfirm.disabled = false;
+                // Kembalikan tampilan tombol ke warna biru dan bisa di-klik
+                btnConfirm.className = "w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl shadow-xl shadow-blue-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2";
+            }
+            if (iconConfirm) {
+                iconConfirm.className = "fa-solid fa-check-double"; // Ganti ikon gembok jadi centang ganda
+            }
+        };
+
+        window.confirmTransferGroupInfo = function() {
+            const popup = document.getElementById('transfer-group-popup');
+            if (popup) {
+                popup.classList.add('opacity-0');
+                const content = popup.querySelector('.transform');
+                if (content) {
+                    content.classList.remove('scale-100');
+                    content.classList.add('scale-90');
+                }
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
+            }
+
+            // Panggil fungsi di dalam module Firebase untuk mengembalikan status available
+            if (typeof window.resumeQueueAfterTransfer === 'function') {
+                window.resumeQueueAfterTransfer();
+            }
         };
 
         // FUNGSI BUKA TUTUP POPUP PERINGATAN NOTA
@@ -10220,10 +10323,16 @@
                       window.isRestingAfterFinish = false; // Reset flag
                   }
                   
+                  // LOGIKA BARU: Jika Transfer, pending masuk antrean (is_available = false)
+                  let finalAvailableStatus = newOnbidStatus;
+                  if (window.tempPaymentData && window.tempPaymentData.type === 'Transfer' && !isResting) {
+                      finalAvailableStatus = false;
+                  }
+
                   if (currentUserUID) {
                       const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
                       await setDoc(statusRef, { 
-                          is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
+                          is_available: finalAvailableStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya, kecuali Transfer
                           is_online: newOnbidStatus,
                           in_main_queue: newOnbidStatus,
                           last_drop_time: serverTimestamp(),
@@ -10299,6 +10408,30 @@
               }
           }
           window.executeFinishOrder = executeFinishOrder;
+
+          // --- FUNGSI BARU: MENGEMBALIKAN ANTREAN SETELAH KONFIRMASI TRANSFER ---
+          window.resumeQueueAfterTransfer = async function() {
+              const currentUserUID = localStorage.getItem('rider_uid');
+              const toggleEl = document.getElementById('onbid-toggle');
+              const isToggleOn = toggleEl ? toggleEl.checked : false;
+
+              if (currentUserUID && isToggleOn) {
+                  try {
+                      const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                      await updateDoc(statusRef, { 
+                          is_available: true 
+                      });
+                      
+                      if (typeof window.showCustomToast === 'function') {
+                          window.showCustomToast("Terkonfirmasi! Anda telah kembali ke antrean Radar.");
+                      }
+                      try { playBeep(880, 0.1); } catch(e){}
+                  } catch (e) {
+                      console.error("Gagal mengembalikan antrean:", e);
+                      alert("Gagal memperbarui status radar. Periksa koneksi internet Anda.");
+                  }
+              }
+          };
 
           // -------------------------------------------------------------
           // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
