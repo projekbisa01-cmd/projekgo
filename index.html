@@ -911,6 +911,28 @@
         </main>
     </div>
 
+    <!-- POPUP PENGINGAT TRANSFER (BARU) -->
+    <div id="transfer-reminder-popup" class="fixed inset-0 z-[999999] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col max-h-[80vh] overflow-hidden" id="transfer-reminder-content">
+            <div class="absolute top-0 left-0 w-full h-2 bg-blue-500"></div>
+            <div class="flex justify-between items-center mb-4 mt-2 shrink-0">
+                <div class="flex items-center gap-3">
+                    <img src="https://i.ibb.co.com/dsZF3XvQ/PROJEKITA-9.png" class="w-10 h-10 rounded-full border border-blue-200 shadow-sm object-cover bg-white">
+                    <div>
+                        <h3 class="font-black text-gray-800 text-lg leading-tight">Pesan Admin</h3>
+                        <p class="text-[10px] text-gray-500">Konfirmasi Transfer Pelanggan</p>
+                    </div>
+                </div>
+                <button onclick="closeTransferReminderPopup()" class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-200">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="popup-transfer-list" class="flex-1 overflow-y-auto custom-scrollbar space-y-3 pb-2 pr-1">
+                <!-- List pesan masuk di sini -->
+            </div>
+        </div>
+    </div>
+
     <!-- POPUP BANNED (DARI ADMIN) -->
     <div id="banned-overlay" class="fixed inset-0 z-[9999999] bg-gray-900/95 backdrop-blur-md hidden flex-col items-center justify-center p-6 text-center transition-opacity duration-300 opacity-0">
         <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 text-center shadow-2xl relative overflow-hidden">
@@ -1754,6 +1776,17 @@
             </header>
 
             <main class="p-5 max-w-md mx-auto flex-1 flex flex-col w-full pb-48 pt-2">
+                <!-- KOSONGKAN CONTAINER LAMA -->
+                <div id="transfer-reminder-container" class="hidden"></div>
+
+                <!-- FLOATING ADMIN TRANSFER REMINDER BADGE -->
+                <button id="floating-transfer-badge" onclick="openTransferReminderPopup()" class="fixed left-0 top-[40%] z-[60] bg-white border border-gray-200 border-l-0 rounded-r-2xl shadow-[5px_5px_15px_rgba(0,0,0,0.1)] p-2 pr-3 flex flex-col items-center gap-1 transition-transform duration-300 hidden active:scale-95">
+                    <div class="relative">
+                        <img src="https://i.ibb.co.com/dsZF3XvQ/PROJEKITA-9.png" class="w-10 h-10 rounded-full border-2 border-blue-500 object-cover bg-white shadow-sm">
+                        <span id="transfer-badge-count" class="absolute -top-1 -right-1 bg-red-600 text-white text-[10px] font-black w-4 h-4 flex items-center justify-center rounded-full shadow-md animate-pulse">0</span>
+                    </div>
+                </button>
+
                 <!-- AREA TERIMA ORDER (RADAR) -->
                 <div class="flex-1 flex flex-col">
                     <div class="hidden justify-between items-center mb-3 px-1 shrink-0">
@@ -6661,7 +6694,107 @@
                 const filteredData = rawData.filter(item => parseSheetDate(item.Tanggal) === window.activeDetailDateKey);
                 renderHistory(filteredData, 'daily-detail-list', ADM_RATE_FIXED_PRO);
             }
+
+            // CEK PENGINGAT TRANSFER DI BERANDA
+            if (typeof window.checkTransferReminders === 'function') {
+                window.checkTransferReminders();
+            }
         }
+
+        // --- FUNGSI PENGINGAT TRANSFER (BARU) ---
+        window.openTransferReminderPopup = function() {
+            const popup = document.getElementById('transfer-reminder-popup');
+            const content = document.getElementById('transfer-reminder-content');
+            if(popup && content) {
+                popup.classList.remove('hidden');
+                popup.classList.add('flex');
+                setTimeout(() => {
+                    popup.classList.remove('opacity-0');
+                    content.classList.remove('scale-90');
+                    content.classList.add('scale-100');
+                }, 10);
+            }
+        };
+
+        window.closeTransferReminderPopup = function() {
+            const popup = document.getElementById('transfer-reminder-popup');
+            const content = document.getElementById('transfer-reminder-content');
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
+            }
+        };
+
+        window.checkTransferReminders = function() {
+            const badgeBtn = document.getElementById('floating-transfer-badge');
+            const badgeCount = document.getElementById('transfer-badge-count');
+            const popupList = document.getElementById('popup-transfer-list');
+            
+            // Hapus isi container lama jika ada, agar tidak ganda di beranda
+            const oldContainer = document.getElementById('transfer-reminder-container');
+            if (oldContainer) oldContainer.innerHTML = '';
+            
+            if (!badgeBtn || !popupList) return;
+            
+            const todayStr = getJakartaDateString();
+            let html = '';
+            let count = 0;
+            
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(`pay_${currentUserUID}_`)) {
+                    try {
+                        const data = JSON.parse(localStorage.getItem(key));
+                        // Hanya tampilkan jika tipenya Transfer, di hari ini, dan belum ditandai sudah info
+                        if (data.type === 'Transfer' && data.dateStr === todayStr && !data.is_notified) {
+                            count++;
+                            html += `
+                                <div class="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex gap-3 shadow-sm relative overflow-hidden">
+                                    <div class="absolute top-0 left-0 w-1.5 h-full bg-blue-500"></div>
+                                    <div class="flex-1">
+                                        <p class="text-[11px] text-blue-800 font-medium italic leading-relaxed mb-3">
+                                            "Lik, <b>${data.orderName || 'pelanggan'}</b> dengan transaksi <b>Rp ${(data.nominal || 0).toLocaleString('id-ID')}</b> apa ws di infokna nang grup, jajal cek mening lik"
+                                        </p>
+                                        <button onclick="window.markTransferNotified('${key}')" class="w-full py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider active:scale-95 transition-all shadow-sm flex justify-center items-center gap-1.5">
+                                            <i class="fa-solid fa-check-double"></i> Sudah Info
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    } catch(e) {}
+                }
+            }
+            
+            popupList.innerHTML = html;
+            
+            if (count > 0) {
+                badgeBtn.classList.remove('hidden');
+                if (badgeCount) badgeCount.innerText = count;
+            } else {
+                badgeBtn.classList.add('hidden');
+                window.closeTransferReminderPopup(); // Tutup popup otomatis jika pesan habis
+            }
+        };
+
+        window.markTransferNotified = function(key) {
+            try {
+                const dataStr = localStorage.getItem(key);
+                if (dataStr) {
+                    const data = JSON.parse(dataStr);
+                    data.is_notified = true; // Tandai bahwa sudah info
+                    localStorage.setItem(key, JSON.stringify(data));
+                    window.checkTransferReminders(); // Refresh otomatis (mengurangi angka badge)
+                    try { playBeep(880, 0.1); } catch(e){} // Suara sukses
+                }
+            } catch(e) {}
+        };
+        // ----------------------------------------
 
         // Variabel global untuk menyimpan cache grafik
         window.lastChartDataCache = "";
