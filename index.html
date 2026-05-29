@@ -6965,6 +6965,31 @@
 
             const currentIds = new Set();
 
+            // --- OPTIMASI: AMBIL SEMUA DATA PEMBAYARAN LOKAL SEKALIGUS ---
+            // Ini mencegah memanggil localStorage berulang kali di dalam loop yang membebani HP
+            const localPaymentsMap = {};
+            const localPaymentsByDate = {};
+            
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(`pay_${currentUserUID}_`)) {
+                    try {
+                        const dataStr = localStorage.getItem(key);
+                        if (dataStr) {
+                            const pData = JSON.parse(dataStr);
+                            localPaymentsMap[key] = pData;
+                            if (pData.dateStr) {
+                                if (!localPaymentsByDate[pData.dateStr]) {
+                                    localPaymentsByDate[pData.dateStr] = [];
+                                }
+                                localPaymentsByDate[pData.dateStr].push({ key: key, ...pData });
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+            // -------------------------------------------------------------
+
             sortedData.forEach((item, index) => {
                 const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai' || item.is_leftover_live;
                 
@@ -7101,42 +7126,71 @@
                     `;
                 }
 
-                // Terapkan style kotorStyle pada elemen Nominal Kotor (Sembunyikan jika menunggu admin)
                 innerHtml += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 hidden flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold ${admBadgeColor} border px-2 py-0.5 rounded-full">${admText}</div></div>` : ''}`;
 
-                // NEW: Catatan Pembayaran Lokal (Tunai/Transfer) - Tampilan Otomatis Berlabel
+                // --- LOGIKA BARU PENCARIAN METODE PEMBAYARAN YANG AKURAT ---
                 if (isDone) {
                     const dateStr = parseSheetDate(item.Tanggal);
                     const timeStr = parseSheetTime(item.Jam);
                     
-                    // KUNCI BARU: Prioritaskan pencarian menggunakan ID Document Firebase yang 100% akurat
-                    let orderKey = item.id ? `pay_${currentUserUID}_${item.id}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                    let savedPaymentStr = localStorage.getItem(orderKey);
-                    
-                    // Jika kunci akurat tidak ketemu (mungkin orderan format lama), coba cari pakai fallback kunci lama
-                    if (!savedPaymentStr && item.id) {
-                        const fallbackKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                        savedPaymentStr = localStorage.getItem(fallbackKey);
-                        if (savedPaymentStr) {
-                            // Upgrade/Perbarui ke kunci yang lebih akurat
-                            localStorage.setItem(orderKey, savedPaymentStr);
-                            localStorage.removeItem(fallbackKey);
+                    let savedPayment = { type: 'Tunai', nominal: '' };
+                    let foundMatch = false;
+
+                    // 1. Coba pencocokan PASTI dengan ID Document (jika orderan masih memiliki id Firebase)
+                    if (item.id) {
+                        const exactKey = `pay_${currentUserUID}_${item.id}`;
+                        if (localPaymentsMap[exactKey]) {
+                            savedPayment = localPaymentsMap[exactKey];
+                            foundMatch = true;
                         }
                     }
-                    
-                    // --- LANGKAH 3: HAPUS FUZZY MATCH (TEBAK WAKTU 15 MENIT) ---
-                    // Cukup gunakan savedPaymentStr yang sudah dicari pakai orderKey 100% akurat di atas.
-                    // Loop for(...) yang boros memori sekarang sudah dihapus total!
 
-                    // Default dianggap Tunai jika tidak ada catatan transfer
-                    let savedPayment = { type: 'Tunai', nominal: '' };
-                    if (savedPaymentStr) {
-                        try { 
-                            const parsed = JSON.parse(savedPaymentStr); 
-                            if (parsed && parsed.type) savedPayment = parsed;
-                        } catch(e){}
+                    // 2. Coba pencocokan PASTI dengan kunci Format Lama
+                    if (!foundMatch) {
+                        const fallbackKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
+                        if (localPaymentsMap[fallbackKey]) {
+                            savedPayment = localPaymentsMap[fallbackKey];
+                            foundMatch = true;
+                        }
                     }
 
+                    // 3. Pencocokan CERDAS (Fuzzy Match) jika kunci tidak ketemu (Berguna untuk riwayat lama dari Sheet)
+                    if (!foundMatch && localPaymentsByDate[dateStr]) {
+                        const orderTimeMinutes = (() => {
+                            const [h, m] = timeStr.split(':').map(Number);
+                            return (h * 60) + (m || 0);
+                        })();
+
+                        let bestMatch = null;
+                        let minTimeDiff = 9999;
+
+                        for (const pay of localPaymentsByDate[dateStr]) {
+                            if (pay._used) continue; // Jangan pakai data yang sudah dicocokkan ke order lain
+
+                            const isNameMatch = pay.orderName && safeName && pay.orderName.toLowerCase() === safeName.toLowerCase();
+                            
+                            let timeDiff = 9999;
+                            if (pay.timeStr) {
+                                const [pH, pM] = pay.timeStr.split(':').map(Number);
+                                timeDiff = Math.abs(orderTimeMinutes - ((pH * 60) + (pM || 0)));
+                            }
+
+                            // Match jika nama sama atau selisih waktu kurang dari 30 menit
+                            if (isNameMatch || timeDiff <= 30) {
+                                if (timeDiff < minTimeDiff) {
+                                    minTimeDiff = timeDiff;
+                                    bestMatch = pay;
+                                }
+                            }
+                        }
+
+                        if (bestMatch) {
+                            savedPayment = bestMatch;
+                            bestMatch._used = true; // Tandai sudah terpakai agar tidak kembar
+                        }
+                    }
+
+                    // Render Label
                     let paymentLabel = '';
                     if (savedPayment.type === 'Transfer') {
                         const nomStr = savedPayment.nominal ? `Rp ${Number(savedPayment.nominal).toLocaleString('id-ID')}` : 'Rp 0';
@@ -7155,7 +7209,7 @@
 
                 innerHtml += `</div>`; // Menutup wrapper inner
 
-                // PROSES DOM DIFFING (CEK DAN UPDATE ELEMEN YANG BERUBAH)
+                // PROSES DOM DIFFING
                 let existingCard = document.getElementById(itemId);
                 if (existingCard) {
                     if (existingCard.innerHTML !== innerHtml) {
