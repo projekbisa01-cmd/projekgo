@@ -1152,6 +1152,11 @@
     <div id="payment-check-popup" class="fixed inset-0 z-[999998] flex-col items-center justify-center px-4 bg-gray-900/90 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
         <div class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-2 bg-orange-500"></div>
+            
+            <!-- INPUT TERSEMBUNYI UNTUK MENGIKAT DATA ORDER (LANGKAH 1) -->
+            <input type="hidden" id="payment-hidden-order-id" value="">
+            <input type="hidden" id="payment-hidden-customer-name" value="">
+            
             <div class="flex items-center gap-3 mb-3 mt-2">
                 <div class="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center text-orange-500 shrink-0">
                     <i class="fa-solid fa-wallet text-lg"></i>
@@ -3618,6 +3623,13 @@
         window.showPaymentPopupInternal = function() {
             const popup = document.getElementById('payment-check-popup');
             if (popup) {
+                // --- LANGKAH 1: IKAT DATA KE POPUP ---
+                const hiddenOrderId = document.getElementById('payment-hidden-order-id');
+                const hiddenCustomerName = document.getElementById('payment-hidden-customer-name');
+                if (hiddenOrderId) hiddenOrderId.value = window.currentActiveOrderId || "";
+                if (hiddenCustomerName) hiddenCustomerName.value = window.currentActiveCustomerName || "Pelanggan";
+                // --------------------------------------
+
                 // Reset form di dalam popup
                 document.querySelectorAll('input[name="payment_method"]').forEach(r => r.checked = false);
                 document.querySelectorAll('.payment-radio-label').forEach(l => l.classList.remove('border-orange-500', 'bg-orange-50'));
@@ -3728,15 +3740,7 @@
         };
 
         window.submitPaymentCheck = function() {
-            const method = document.querySelector('input[name="payment_method"]:checked')?.value;
-            let nominal = 0;
-            if (method === 'Transfer') {
-                const nominalStr = document.getElementById('payment-nominal-input').value;
-                nominal = parseInt(nominalStr.replace(/\./g, '')) || 0;
-            }
-
-            // Simpan data pembayaran ke memori sementara untuk digunakan oleh executeFinishOrder()
-            window.tempPaymentData = { type: method, nominal: nominal };
+            // Hapus penggunaan window.tempPaymentData (Titipan Global)
 
             // Tutup popup pembayaran
             const popup = document.getElementById('payment-check-popup');
@@ -6747,6 +6751,8 @@
             
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
+                // LANGKAH 2: Key sudah akurat pay_[UID]_[ID_ORDER], perulangan ini otomatis tetap berfungsi 
+                // karena prefix-nya tetap sama.
                 if (key && key.startsWith(`pay_${currentUserUID}_`)) {
                     try {
                         const data = JSON.parse(localStorage.getItem(key));
@@ -7118,76 +7124,9 @@
                         }
                     }
                     
-                    // LOGIKA SINKRONISASI JAM TRANSFER DENGAN JAM HISTORY (FUZZY MATCH YANG DIPERBAIKI)
-                if (!savedPaymentStr) {
-                    let closestKey = null;
-                    let bestScore = -1; // Skor kecocokan (Semakin tinggi semakin cocok)
-                    
-                    const tParts = timeStr.split(':');
-                    let targetTimeMin = 0;
-                    if(tParts.length >= 2) targetTimeMin = parseInt(tParts[0], 10) * 60 + parseInt(tParts[1], 10);
-                    
-                    const prefix = `pay_${currentUserUID}_`;
-                    const currentCustomerName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '').toLowerCase().trim();
-                    
-                    // Iterasi mencari catatan transfer milik rider ini
-                    for (let i = 0; i < localStorage.length; i++) {
-                        const key = localStorage.key(i);
-                        if (key && key.startsWith(prefix)) {
-                            try {
-                                const storedDataStr = localStorage.getItem(key);
-                                if (!storedDataStr) continue;
-                                const parsed = JSON.parse(storedDataStr);
-                                
-                                // Wajib di tanggal yang sama
-                                if (parsed.dateStr !== dateStr) continue;
-                                
-                                let score = 0;
-                                
-                                // Kriteria 1: Nama Pelanggan Sama (Skor Tinggi: 100)
-                                const savedName = (parsed.orderName || '').toLowerCase().trim();
-                                const isNameMatch = (savedName !== '' && savedName !== 'pelanggan' && savedName === currentCustomerName);
-                                if (isNameMatch) score += 100;
-                                
-                                // Kriteria 2: Jam Admin vs Jam Selesai Rider (Selisih <= 15 menit)
-                                const savedTimeStr = parsed.timeStr || '';
-                                const sParts = savedTimeStr.split(':');
-                                let savedTimeMin = 0;
-                                if (sParts.length >= 2) savedTimeMin = parseInt(sParts[0], 10) * 60 + parseInt(sParts[1], 10);
-                                
-                                const diff = Math.abs(targetTimeMin - savedTimeMin);
-                                if (diff <= 15) {
-                                    score += (20 - diff); // Skor 5 - 20 (Semakin dekat, semakin tinggi)
-                                } else if (!isNameMatch) {
-                                    // Jika nama tidak sama dan selisih jam lebih dari 15 menit, lewati
-                                    continue;
-                                }
-                                
-                                // Set sebagai kandidat terbaik jika skornya mengalahkan yang sebelumnya
-                                if (score > bestScore && score > 0) {
-                                    bestScore = score;
-                                    closestKey = key;
-                                }
-                            } catch(e){}
-                        }
-                    }
-                    
-                    // Jika ketemu catatan yang cocok, sinkronkan ID-nya dengan data terbaru dari Admin
-                    if (closestKey) {
-                        savedPaymentStr = localStorage.getItem(closestKey);
-                            try {
-                                const savedData = JSON.parse(savedPaymentStr);
-                                // Sinkronkan jam dengan history admin/server
-                                savedData.timeStr = timeStr; 
-                                // Update nama pelanggan agar lebih akurat
-                                const safeName = (item.Nama_Pelanggan || item.customer_name || item.Customer_Name || item.Pelanggan || 'Pelanggan').replace(/['"\\]/g, '');
-                                savedData.orderName = safeName;
-                                
-                                localStorage.setItem(orderKey, JSON.stringify(savedData));
-                                localStorage.removeItem(closestKey); // Hapus catatan lama agar rapi
-                            } catch(e){}
-                        }
-                    }
+                    // --- LANGKAH 3: HAPUS FUZZY MATCH (TEBAK WAKTU 15 MENIT) ---
+                    // Cukup gunakan savedPaymentStr yang sudah dicari pakai orderKey 100% akurat di atas.
+                    // Loop for(...) yang boros memori sekarang sudah dihapus total!
 
                     // Default dianggap Tunai jika tidak ada catatan transfer
                     let savedPayment = { type: 'Tunai', nominal: '' };
@@ -10403,19 +10342,30 @@
                   }
                   
                   // --- SIMPAN RIWAYAT PEMBAYARAN TRANSFER (CROSCEK LOKAL) ---
-                  if (window.tempPaymentData && currentUserUID) {
+                  // MENGAMBIL DATA LANGSUNG DARI POPUP (LANGKAH 1)
+                  const method = document.querySelector('input[name="payment_method"]:checked')?.value;
+                  let nominal = 0;
+                  if (method === 'Transfer') {
+                      const nominalStr = document.getElementById('payment-nominal-input').value;
+                      nominal = parseInt(nominalStr.replace(/\./g, '')) || 0;
+                  }
+                  
+                  const lockedOrderId = document.getElementById('payment-hidden-order-id')?.value;
+                  const lockedCustomerName = document.getElementById('payment-hidden-customer-name')?.value;
+
+                  if (method && currentUserUID) {
                       const dateStr = getJakartaDateString();
                       const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                       const totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
                       
-                      const safeName = (window.currentActiveCustomerName || "Orderan").replace(/['"\\]/g, '');
+                      const safeName = (lockedCustomerName || "Orderan").replace(/['"\\]/g, '');
                       
-                      // KUNCI BARU: Gunakan ID Order Firebase yang 100% akurat agar sinkron
-                      const orderKey = window.currentActiveOrderId ? `pay_${currentUserUID}_${window.currentActiveOrderId}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
+                      // KUNCI BARU: Gunakan ID Order Firebase yang sudah dikunci di popup
+                      const orderKey = lockedOrderId ? `pay_${currentUserUID}_${lockedOrderId}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
                       
                       let saved = {
-                          type: window.tempPaymentData.type,
-                          nominal: window.tempPaymentData.nominal,
+                          type: method,
+                          nominal: nominal,
                           timestamp: Date.now(),
                           orderName: safeName,
                           dateStr: dateStr,
