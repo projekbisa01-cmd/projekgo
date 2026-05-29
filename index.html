@@ -6790,7 +6790,7 @@
 
                                             <div class="bg-white border-2 border-orange-800 rounded-2xl p-3 shadow-sm relative z-0">
                                                 <p class="text-[11px] text-gray-800 font-bold leading-relaxed mb-3">
-                                                    "Lik, <span class="text-orange-600 uppercase">${data.orderName || 'pelanggan'}</span> transfer <span class="text-green-600">Rp ${(data.nominal || 0).toLocaleString('id-ID')}</span> apa ws di infokna nang grup, jajal cek mening lik"
+                                                    "Wa, <span class="text-orange-600 uppercase">${data.orderName || 'pelanggan'}</span> transfer <span class="text-green-600">Rp ${(data.nominal || 0).toLocaleString('id-ID')}</span> apa ws di infokna nang grup, Mbok urung ,mung ngelingna wa"
                                                 </p>
                                                 <!-- Tombol Bergaya 2D Flat -->
                                                 <button onclick="window.markTransferNotified('${key}')" class="w-full py-2 bg-orange-500 hover:bg-orange-600 text-white border-2 border-orange-800 rounded-xl text-[10px] font-black uppercase tracking-wider active:translate-y-1 active:shadow-none transition-all shadow-[2px_2px_0px_#9a3412] flex justify-center items-center gap-1.5">
@@ -10048,6 +10048,27 @@
               } else {
                   window.currentOrderAcceptedTime = Date.now();
               }
+
+              // --- LOGIKA BARU: AMBIL JAM & TANGGAL ORDER DARI ADMIN ---
+              // Menghindari pakai jam DO (Drop-Off) saat klik tombol Selesai
+              let orderTime = "";
+              let orderDate = "";
+              
+              if (data.Jam || data.jam) {
+                  orderTime = data.Jam || data.jam;
+              } else if (data.created_at?.seconds || data.timestamp?.seconds) {
+                  const d = new Date((data.created_at || data.timestamp).seconds * 1000);
+                  orderTime = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                  orderDate = d.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+              }
+              
+              if (data.Tanggal || data.tanggal) {
+                  orderDate = data.Tanggal || data.tanggal;
+              }
+              
+              window.currentActiveOrderAdminTime = orderTime;
+              window.currentActiveOrderAdminDate = orderDate;
+              // ----------------------------------------------------
               
               const overlay = document.getElementById('active-order-overlay');
               if (!overlay) return;
@@ -10066,7 +10087,7 @@
               let waMessage = `Halo kak, saya Rider PROJEKGO ${riderNameForWA} sedang menuju lokasi penjual/jemput untuk memproses pesanan,mohon ditunggu yah kak.`;
               const phoneStr = data.customer_phone?.replace(/^0/, '62') || "";
               
-              // Hitung ongkir (jangan ditotalkan, tambahkan fallback huruf besar/kecil)
+              // Hitung ongkir (jangan ditotalkan, tambahkan fallback huruf besar/kecil untuk antisipasi database admin)
               const baseFee = parseInt(data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor) || 0;
               const extraFee = parseInt(data.tambahan || data.Tambahan || data.extra || data.Extra) || 0;
 
@@ -10243,233 +10264,246 @@
               if(finishPlaceholder) finishPlaceholder.classList.remove('hidden');
               
               const removeBtn = document.getElementById('btn-remove-photo');
-              if (removeBtn) {
+              if(removeBtn) {
                   removeBtn.classList.add('hidden');
                   removeBtn.classList.remove('flex');
               }
               
-              const finishDesc = document.getElementById('finish-photo-desc');
-              if(finishDesc) finishDesc.value = "";
-              
+              // Reset nilai foto
               document.querySelectorAll('.finish-photo-input').forEach(input => input.value = "");
               window.finishPhotoBase64 = null;
               
-              // Restore konten tombol agar icon tidak null saat divalidasi
-              const btnFinishOrder = document.getElementById('btn-finish-order');
-              if (btnFinishOrder) {
-                  btnFinishOrder.innerHTML = '<i class="fa-solid fa-lock text-[#facc15]" id="finish-lock-icon"></i> SELESAIKAN ORDERAN';
-              }
-              const btnFinishAndRest = document.getElementById('btn-finish-and-rest');
-              if (btnFinishAndRest) {
-                  btnFinishAndRest.innerHTML = '<i class="fa-solid fa-lock" id="rest-lock-icon"></i> SELESAI & OFF/ISTIRAHAT';
-              }
-              
-              if(typeof window.validateFinishOrder === 'function') window.validateFinishOrder();
-              
-              // Bersihkan memori Nota Aktif agar tidak bocor ke orderan berikutnya
-              if (typeof activeNotaItems !== 'undefined') {
-                  activeNotaItems = [];
-              }
-              const activeOngkirEl = document.getElementById('active-nota-input-ongkir');
-              const activeExtraEl = document.getElementById('active-nota-input-extra');
-              if (activeOngkirEl) activeOngkirEl.value = "";
-              if (activeExtraEl) activeExtraEl.value = "";
-              if (typeof updateActiveNotaPreview === 'function') updateActiveNotaPreview();
-              
-              // Bersihkan ID Aktif
-              window.currentActiveOrderId = null;
-          }
+              if (typeof window.validateFinishOrder === 'function') window.validateFinishOrder();
+          };
 
-          // Menambahkan listener tombol di luar fungsi agar tidak double
-          const btnFinishOrder = document.getElementById('btn-finish-order');
-          if (btnFinishOrder) {
-              btnFinishOrder.addEventListener('click', () => {
-                  if (!window.finishPhotoBase64) return; // Tambahan proteksi
-                  window.isRestingAfterFinish = false;
-                  window.showPaymentPopupInternal(); // Langsung ke Cek Pembayaran
-              });
-          }
-          
-          const btnFinishAndRest = document.getElementById('btn-finish-and-rest');
-          if (btnFinishAndRest) {
-              btnFinishAndRest.addEventListener('click', () => {
-                  if (!window.finishPhotoBase64) return; // Tambahan proteksi
-                  window.isRestingAfterFinish = true;
-                  window.showPaymentPopupInternal(); // Langsung ke Cek Pembayaran
-              });
-          }
+        window.submitPaymentCheck = function() {
+            const method = document.querySelector('input[name="payment_method"]:checked')?.value;
+            let nominal = 0;
+            
+            if (!method) {
+                alert("Silakan pilih metode pembayaran terlebih dahulu!");
+                return;
+            }
 
-          // --- FUNGSI ASLI UNTUK MENYELESAIKAN ORDER & KIRIM KE FIREBASE ---
-          async function executeFinishOrder() {
-              const currentUserUID = localStorage.getItem('rider_uid');
-              const desc = document.getElementById('finish-photo-desc').value.trim();
-              const btnMain = document.getElementById('btn-finish-order');
-              const btnRest = document.getElementById('btn-finish-and-rest');
-              
-              const isResting = window.isRestingAfterFinish === true;
-              
-              const originalHtmlMain = btnMain ? btnMain.innerHTML : '';
-              const originalHtmlRest = btnRest ? btnRest.innerHTML : '';
-              
-              if (btnMain) {
-                  btnMain.disabled = true;
-                  btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
-              }
-              if (btnRest) {
-                  btnRest.disabled = true;
-                  if (isResting) {
-                      btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
-                  }
-              }
-              
-              window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
-              
-              try {
-                  // --- LOGIKA BARU: UPLOAD FOTO KE FIREBASE STORAGE ---
-                  if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
-                  if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
-                  
-                  let proofImageUrl = ""; 
-                  
-                  try {
-                      // Buang bagian depan (header) dari Base64
-                      const pureBase64 = window.finishPhotoBase64.split(',')[1];
-                      
-                      // Tentukan lokasi penyimpanan di Firebase Storage
-                      const storagePath = `artifacts/${appId}/public/data/order_proofs/${window.currentActiveOrderId}_${Date.now()}.jpg`;
-                      const imageRef = ref(storage, storagePath);
-                      
-                      // Unggah string base64 ke Storage
-                      await uploadString(imageRef, pureBase64, 'base64', {
-                          contentType: 'image/jpeg',
-                      });
-                      
-                      // Ambil URL publik gambar tersebut
-                      proofImageUrl = await getDownloadURL(imageRef);
+            if (method === 'Transfer') {
+                const nominalStr = document.getElementById('payment-nominal-input').value;
+                nominal = parseInt(nominalStr.replace(/\./g, '')) || 0;
+                
+                // VALIDASI EKSTRA: Tolak jika nominal nol atau kosong
+                if (nominal <= 0) {
+                    alert("Peringatan: Nominal transfer tidak boleh Rp 0 atau kosong!");
+                    return;
+                }
+            } else if (method === 'Tunai') {
+                // Pastikan nominal 0 untuk Tunai agar tidak masuk laporan / perhitungan Transfer ganda
+                nominal = 0;
+            }
 
-                  } catch (uploadErr) {
-                      console.error("Gagal mengunggah ke Firebase Storage:", uploadErr);
-                      alert("Gagal mengunggah foto! Pastikan koneksi internet stabil.");
-                      if (btnMain) {
-                          btnMain.disabled = false;
-                          btnMain.innerHTML = originalHtmlMain;
-                      }
-                      if (btnRest) {
-                          btnRest.disabled = false;
-                          btnRest.innerHTML = originalHtmlRest;
-                      }
-                      window.isFinishingOrder = false;
-                      return; // HENTIKAN PROSES! Jangan lanjutkan jika foto gagal
-                  }
+            // Simpan data pembayaran ke memori sementara untuk digunakan oleh executeFinishOrder()
+            window.tempPaymentData = { type: method, nominal: nominal };
 
-                  // 1. Update status order menjadi completed di koleksi Admin
-                  if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
-                  if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
-                  
-                  const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
-                  await updateDoc(orderRef, {
-                      status: 'completed',
-                      finished_at: serverTimestamp(),
-                      proof_desc: desc,
-                      proof_image: proofImageUrl // SEKARANG MENYIMPAN URL YANG RINGAN
-                  });
-                  
-                  const toggleEl = document.getElementById('onbid-toggle');
-                  const isToggleOn = toggleEl ? toggleEl.checked : false;
-                  let newOnbidStatus = isToggleOn;
+            // Tutup popup pembayaran
+            const popup = document.getElementById('payment-check-popup');
+            if (popup) {
+                popup.classList.add('opacity-0');
+                const content = popup.querySelector('.transform');
+                if (content) {
+                    content.classList.remove('scale-100');
+                    content.classList.add('scale-90');
+                }
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                }, 300);
+            }
 
-                  if (isResting) {
-                      newOnbidStatus = false;
-                      if (toggleEl) toggleEl.checked = false;
-                      if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
-                      localStorage.setItem('rider_onbid_status', 'false');
-                      if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
-                      
-                      window.isRestingAfterFinish = false; // Reset flag
-                  }
-                  
-                  if (currentUserUID) {
-                      const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                      await setDoc(statusRef, { 
-                          is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
-                          is_online: newOnbidStatus,
-                          in_main_queue: newOnbidStatus,
-                          last_drop_time: serverTimestamp(),
-                          last_drop_desc: desc,
-                          proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
-                          last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
-                          last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
-                      }, { merge: true });
-                  }
-                  
-                  // --- SIMPAN RIWAYAT PEMBAYARAN TRANSFER (CROSCEK LOKAL) ---
-                  if (window.tempPaymentData && currentUserUID) {
-                      const dateStr = getJakartaDateString();
-                      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
-                      const totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
-                      
-                      const safeName = (window.currentActiveCustomerName || "Orderan").replace(/['"\\]/g, '');
-                      
-                      // KUNCI BARU: Gunakan ID Order Firebase yang 100% akurat agar sinkron
-                      const orderKey = window.currentActiveOrderId ? `pay_${currentUserUID}_${window.currentActiveOrderId}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
-                      
-                      let saved = {
-                          type: window.tempPaymentData.type,
-                          nominal: window.tempPaymentData.nominal,
-                          timestamp: Date.now(),
-                          orderName: safeName,
-                          dateStr: dateStr,
-                          timeStr: timeStr
-                      };
-                      localStorage.setItem(orderKey, JSON.stringify(saved));
-                      if (typeof window.cleanupOldPayments === 'function') window.cleanupOldPayments();
-                      
-                      // Refresh daftar di background agar jika rider buka menu transfer, data sudah ada
-                      if (typeof window.renderTransferHistory === 'function') {
-                          window.renderTransferHistory();
-                      }
-                  }
+            // LANJUTKAN EKSEKUSI PENYELESAIAN ORDER KE FIREBASE
+            if (typeof window.executeFinishOrder === 'function') {
+                window.executeFinishOrder();
+            } else if (typeof executeFinishOrder === 'function') {
+                executeFinishOrder();
+            }
+        };
 
-                  if(typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
-                  
-                  // PENEGASAN: Pastikan memori dan Android service tidak terputus setelah order selesai
-                  if (newOnbidStatus) {
-                      localStorage.setItem('rider_onbid_status', 'true');
-                      if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
-                  }
+        // --- FUNGSI ASLI UNTUK MENYELESAIKAN ORDER & KIRIM KE FIREBASE ---
+        async function executeFinishOrder() {
+            const currentUserUID = localStorage.getItem('rider_uid');
+            const desc = document.getElementById('finish-photo-desc').value.trim();
+            const btnMain = document.getElementById('btn-finish-order');
+            const btnRest = document.getElementById('btn-finish-and-rest');
+            
+            const isResting = window.isRestingAfterFinish === true;
+            
+            const originalHtmlMain = btnMain ? btnMain.innerHTML : '';
+            const originalHtmlRest = btnRest ? btnRest.innerHTML : '';
+            
+            if (btnMain) {
+                btnMain.disabled = true;
+                btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
+            }
+            if (btnRest) {
+                btnRest.disabled = true;
+                if (isResting) {
+                    btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyelesaikan...';
+                }
+            }
+            
+            window.isFinishingOrder = true; // Tandai bahwa Rider sedang menyelesaikan secara sadar
+            
+            try {
+                // --- LOGIKA BARU: UPLOAD FOTO KE FIREBASE STORAGE ---
+                if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto...';
+                
+                let proofImageUrl = ""; 
+                
+                try {
+                    // Buang bagian depan (header) dari Base64
+                    const pureBase64 = window.finishPhotoBase64.split(',')[1];
+                    
+                    // Tentukan lokasi penyimpanan di Firebase Storage
+                    const storagePath = `artifacts/${appId}/public/data/order_proofs/${window.currentActiveOrderId}_${Date.now()}.jpg`;
+                    const imageRef = ref(storage, storagePath);
+                    
+                    // Unggah string base64 ke Storage
+                    await uploadString(imageRef, pureBase64, 'base64', {
+                        contentType: 'image/jpeg',
+                    });
+                    
+                    // Ambil URL publik gambar tersebut
+                    proofImageUrl = await getDownloadURL(imageRef);
 
-                  const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
-                  const isFastCompletion = duration < 600000;
+                } catch (uploadErr) {
+                    console.error("Gagal mengunggah ke Firebase Storage:", uploadErr);
+                    alert("Gagal mengunggah foto! Pastikan koneksi internet stabil.");
+                    if (btnMain) {
+                        btnMain.disabled = false;
+                        btnMain.innerHTML = originalHtmlMain;
+                    }
+                    if (btnRest) {
+                        btnRest.disabled = false;
+                        btnRest.innerHTML = originalHtmlRest;
+                    }
+                    window.isFinishingOrder = false;
+                    return; // HENTIKAN PROSES! Jangan lanjutkan jika foto gagal
+                }
 
-                  if (isFastCompletion && typeof window.showFastCompletionWarning === 'function') {
-                      window.showFastCompletionWarning();
-                  } else if (typeof window.showOrderSuccessPopup === 'function') {
-                      window.showOrderSuccessPopup();
-                  } else {
-                      try { playBeep(880, 0.1); } catch(e){}
-                      alert("Order Selesai! Cek menu Riwayat Hari Ini.");
-                  }
-                  
-              } catch (e) {
-                  console.error("Error update status selesai:", e);
-                  alert("Gagal menyelesaikan order. Pastikan koneksi internet stabil.");
-                  if (btnMain) {
-                      btnMain.disabled = false;
-                      btnMain.innerHTML = originalHtmlMain;
-                  }
-                  if (btnRest) {
-                      btnRest.disabled = false;
-                      btnRest.innerHTML = originalHtmlRest;
-                  }
-                  throw e; // PERBAIKAN: Lempar error agar submitPaymentCheck tahu proses gagal
-              } finally {
-                  window.isFinishingOrder = false;
-              }
-          }
-          window.executeFinishOrder = executeFinishOrder;
+                // 1. Update status order menjadi completed di koleksi Admin
+                if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
+                if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
+                
+                const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
+                await updateDoc(orderRef, {
+                    status: 'completed',
+                    finished_at: serverTimestamp(),
+                    proof_desc: desc,
+                    proof_image: proofImageUrl // SEKARANG MENYIMPAN URL YANG RINGAN
+                });
+                
+                const toggleEl = document.getElementById('onbid-toggle');
+                const isToggleOn = toggleEl ? toggleEl.checked : false;
+                let newOnbidStatus = isToggleOn;
 
-          // -------------------------------------------------------------
-          // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
+                if (isResting) {
+                    newOnbidStatus = false;
+                    if (toggleEl) toggleEl.checked = false;
+                    if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
+                    localStorage.setItem('rider_onbid_status', 'false');
+                    if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
+                    
+                    window.isRestingAfterFinish = false; // Reset flag
+                }
+                
+                if (currentUserUID) {
+                    const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                    await setDoc(statusRef, { 
+                        is_available: newOnbidStatus, // PENTING: Otomatis kembali tersedia untuk orderan berikutnya
+                        is_online: newOnbidStatus,
+                        in_main_queue: newOnbidStatus,
+                        last_drop_time: serverTimestamp(),
+                        last_drop_desc: desc,
+                        proof_desc: desc, // TAMBAHAN: Menyimpan keterangan lokasi foto ke proof_desc
+                        last_drop_image: proofImageUrl, // SEKARANG MENYIMPAN URL
+                        last_order_id: window.currentActiveOrderId // NEW: Menyimpan ID orderan untuk referensi fetch gambar di WebView
+                    }, { merge: true });
+                }
+                
+                // --- SIMPAN RIWAYAT PEMBAYARAN TRANSFER (CROSCEK LOKAL) ---
+                if (window.tempPaymentData && currentUserUID) {
+                    // AMBIL WAKTU DARI ADMIN (Bukan waktu Drop Off/Selesai/Timer HP)
+                    let dateStr = window.currentActiveOrderAdminDate;
+                    if (!dateStr || dateStr === '') dateStr = getJakartaDateString();
+                    else if (typeof parseSheetDate === 'function') dateStr = parseSheetDate(dateStr) || getJakartaDateString();
+
+                    let timeStr = window.currentActiveOrderAdminTime;
+                    if (!timeStr || timeStr === '') timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                    else if (typeof parseSheetTime === 'function') timeStr = parseSheetTime(timeStr);
+
+                    const totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
+                    
+                    const safeName = (window.currentActiveCustomerName || "Orderan").replace(/['"\\]/g, '');
+                    
+                    // KUNCI BARU: Gunakan ID Order Firebase yang 100% akurat agar tidak pernah tertimpa atau dobel
+                    const orderKey = window.currentActiveOrderId ? `pay_${currentUserUID}_${window.currentActiveOrderId}` : `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${totalKotor}`;
+                    
+                    let saved = {
+                        type: window.tempPaymentData.type,
+                        nominal: window.tempPaymentData.nominal,
+                        timestamp: Date.now(), // Untuk fungsi auto-delete 5 hari
+                        orderName: safeName,
+                        dateStr: dateStr, // Jam admin tersimpan di sini
+                        timeStr: timeStr  // Jam admin tersimpan di sini
+                    };
+
+                    localStorage.setItem(orderKey, JSON.stringify(saved));
+                    if (typeof window.cleanupOldPayments === 'function') window.cleanupOldPayments();
+                    
+                    // Refresh daftar di background agar jika rider buka menu transfer, data sudah ada di tanggal Admin
+                    if (typeof window.renderTransferHistory === 'function') {
+                        window.renderTransferHistory();
+                    }
+                }
+
+                if(typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
+                
+                // PENEGASAN: Pastikan memori dan Android service tidak terputus setelah order selesai
+                if (newOnbidStatus) {
+                    localStorage.setItem('rider_onbid_status', 'true');
+                    if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+                }
+
+                const duration = Date.now() - (window.currentOrderAcceptedTime || Date.now());
+                const isFastCompletion = duration < 600000;
+
+                if (isFastCompletion && typeof window.showFastCompletionWarning === 'function') {
+                    window.showFastCompletionWarning();
+                } else if (typeof window.showOrderSuccessPopup === 'function') {
+                    window.showOrderSuccessPopup();
+                } else {
+                    try { playBeep(880, 0.1); } catch(e){}
+                    alert("Order Selesai! Cek menu Riwayat Hari Ini.");
+                }
+                
+            } catch (e) {
+                console.error("Error update status selesai:", e);
+                alert("Gagal menyelesaikan order. Pastikan koneksi internet stabil.");
+                if (btnMain) {
+                    btnMain.disabled = false;
+                    btnMain.innerHTML = originalHtmlMain;
+                }
+                if (btnRest) {
+                    btnRest.disabled = false;
+                    btnRest.innerHTML = originalHtmlRest;
+                }
+                throw e; // PERBAIKAN: Lempar error agar submitPaymentCheck tahu proses gagal
+            } finally {
+                window.isFinishingOrder = false;
+            }
+        }
+        window.executeFinishOrder = executeFinishOrder;
+
+        // -------------------------------------------------------------
+        // NEW: SISTEM LISTENER ANTREAN RIDER (LIVE RADAR)
           // -------------------------------------------------------------
           let queueUnsubscribe = null;
           let globalActiveOrdersUnsubscribe = null;
