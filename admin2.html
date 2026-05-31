@@ -529,6 +529,7 @@
         <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
             <div class="flex justify-between items-center mb-1 border-b border-gray-100 pb-2">
                 <h2 class="font-black text-black text-[11px] uppercase tracking-wider"><i class="fa-solid fa-chart-line text-blue-500 mr-1.5"></i> Laporan Omset</h2>
+                <button onclick="window.cetakLaporanA4()" class="bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase hover:bg-indigo-500 hover:text-white transition-colors border border-indigo-200 flex items-center gap-1.5 shadow-sm"><i class="fa-solid fa-print"></i> Cetak A4</button>
             </div>
             <p class="text-[9px] text-slate-500 leading-relaxed mb-3">Pantau dan kelola data omset pemasukan di sini.</p>
 
@@ -5140,8 +5141,20 @@
                 // LOGIKA BARU: Hanya menghitung "fee" (Ongkir murni) tanpa tambahan
                 window.currentHistoryData.forEach(o => { totalFee += parseInt(o.fee || 0); });
 
+                // Merekam Pemasukan Saldo (Top-Up) yang diinput hari ini
+                let topUpHariIni = 0;
+                if (window.dailyBalanceTracker && window.dailyBalanceTracker.shift_date === dateVal) {
+                    topUpHariIni = parseInt(window.dailyBalanceTracker.top_up || 0);
+                }
+
                 const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', dateVal);
-                await setDoc(docRef, { tanggal: dateVal, total_orders: window.currentHistoryData.length, total_omset: totalFee, updated_at: serverTimestamp() }, { merge: true });
+                await setDoc(docRef, { 
+                    tanggal: dateVal, 
+                    total_orders: window.currentHistoryData.length, 
+                    total_omset: totalFee, 
+                    total_topup: topUpHariIni, // <- Menyimpan total top-up ke cloud rekap
+                    updated_at: serverTimestamp() 
+                }, { merge: true });
                 window.showAlert('Tersimpan', 'Rekap tanggal ' + dateVal + ' berhasil dicadangkan ke Database Cloud.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
         };
@@ -6778,6 +6791,405 @@
                 <p class="text-[8px] text-slate-400 text-center mt-2 italic">*Skor dihitung dari rasio penyelesaian order hari ini.</p>
             `;
         };
+
+        // FUNGSI BARU: GENERATE LAPORAN & CETAK KE UKURAN A4
+        window._cacheTopRiderA4 = window._cacheTopRiderA4 || {};
+
+        window.cetakLaporanA4 = () => {
+            if (!allCloudRecaps || allCloudRecaps.length === 0) {
+                window.showAlert('Kosong', 'Belum ada data rekap di Cloud untuk dicetak.', 'warning');
+                return;
+            }
+
+            const modal = document.getElementById('custom-modal');
+            const icon = document.getElementById('custom-modal-icon');
+            const inputEl = document.getElementById('custom-modal-input');
+            const selectEl = document.getElementById('custom-modal-select-wrapper');
+            const selectBox = document.getElementById('custom-modal-select');
+
+            icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-indigo-50 text-indigo-500 border-indigo-100';
+            icon.innerHTML = '<i class="fa-solid fa-calendar-days"></i>';
+
+            document.getElementById('custom-modal-title').innerText = 'Pilih Bulan Laporan';
+            document.getElementById('custom-modal-text').innerText = 'Pilih bulan untuk mencetak laporan A4 (Harian, Mingguan, Grafik & Top Rider):';
+
+            if(inputEl) inputEl.classList.add('hidden');
+            if(selectEl) selectEl.classList.remove('hidden');
+
+            // Menghasilkan opsi dropdown untuk 12 bulan terakhir
+            let optionsHtml = '';
+            const today = new Date();
+            const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+            for (let i = 0; i < 12; i++) {
+                const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                const label = `${namaBulan[d.getMonth()]} ${d.getFullYear()}`;
+                optionsHtml += `<option value="${val}">${label}</option>`;
+            }
+            selectBox.innerHTML = optionsHtml;
+
+            document.getElementById('custom-modal-actions').innerHTML = `
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button id="btn-confirm-cetak" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i> Lanjut Cetak</button>
+            `;
+
+            document.getElementById('btn-confirm-cetak').onclick = () => {
+                modal.classList.add('hidden'); modal.classList.remove('flex');
+                const parts = selectBox.value.split('-');
+                window.prosesCetakA4(parseInt(parts[0]), parseInt(parts[1]));
+            };
+
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        };
+
+        window.prosesCetakA4 = async (year, month) => {
+            // Buka window BERSAMAAN dengan klik untuk mencegah pemblokiran Pop-Up dari browser
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                window.showAlert('Pop-up Diblokir', 'Browser memblokir pop-up. Harap izinkan pop-up (Pop-up Blocker) pada browser Anda untuk mencetak laporan.', 'error');
+                return;
+            }
+            printWindow.document.write('<html><head><title>Memuat Laporan...</title></head><body style="font-family: sans-serif; text-align: center; margin-top: 50px; color: #333;"><h2>Sedang menyusun data laporan...</h2><p>Mohon tunggu sebentar, sedang menarik data dari server.</p></body></html>');
+
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden'); loader.classList.add('flex');
+
+            try {
+                const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                const bulanNama = namaBulan[month - 1];
+                const daysInMonth = new Date(year, month, 0).getDate();
+
+                // 1. OLAH DATA HARIAN
+                let htmlHarian = '';
+                let totalOmsetBulanIni = 0;
+                let totalOrderBulanIni = 0;
+                let totalTopUpBulanIni = 0;
+                let chartLabels = [];
+                let chartOmsetData = [];
+                let chartOrderData = [];
+                let maxOmsetHari = { tgl: '-', val: 0 };
+                let maxOrderHari = { tgl: '-', val: 0 };
+
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                    const rekap = allCloudRecaps.find(r => r.tanggal === dateStr);
+
+                    const orders = rekap ? parseInt(rekap.total_orders || 0) : 0;
+                    const omsetKotor = rekap ? parseInt(rekap.total_omset || 0) : 0;
+                    const topup = rekap ? parseInt(rekap.total_topup || 0) : 0;
+                    const adminCut = Math.round(omsetKotor * 0.16);
+
+                    totalOmsetBulanIni += adminCut;
+                    totalOrderBulanIni += orders;
+                    totalTopUpBulanIni += topup;
+
+                    chartLabels.push(d);
+                    chartOmsetData.push(adminCut);
+                    chartOrderData.push(orders);
+
+                    if (adminCut > maxOmsetHari.val) maxOmsetHari = { tgl: d, val: adminCut };
+                    if (orders > maxOrderHari.val) maxOrderHari = { tgl: d, val: orders };
+
+                    // Tetap tampilkan hari walaupun tidak ada data supaya tabel A4 penuh dari tgl 1 s/d selesai
+                    htmlHarian += `
+                        <tr>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">${String(d).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">${orders}</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: right;">Rp ${adminCut.toLocaleString('id-ID')}</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: right; color:#059669;">Rp ${topup.toLocaleString('id-ID')}</td>
+                        </tr>
+                    `;
+                }
+
+                // 2. OLAH DATA MINGGUAN (Dibagi 4 minggu)
+                let htmlMingguan = '';
+                for (let w = 0; w < 4; w++) {
+                    let startDay = (w * 7) + 1;
+                    let endDay = startDay + 6;
+                    if (w === 3 && endDay < daysInMonth) endDay = daysInMonth; 
+
+                    let wOrders = 0, wOmset = 0, wTopup = 0;
+                    for (let d = startDay; d <= endDay; d++) {
+                        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                        const rekap = allCloudRecaps.find(r => r.tanggal === dateStr);
+                        if (rekap) {
+                            wOrders += parseInt(rekap.total_orders || 0);
+                            wOmset += Math.round(parseInt(rekap.total_omset || 0) * 0.16);
+                            wTopup += parseInt(rekap.total_topup || 0);
+                        }
+                    }
+                    htmlMingguan += `
+                        <tr>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">Minggu ${w+1} (${startDay} - ${endDay})</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">${wOrders}</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: right;">Rp ${wOmset.toLocaleString('id-ID')}</td>
+                            <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: right; color:#059669;">Rp ${wTopup.toLocaleString('id-ID')}</td>
+                        </tr>
+                    `;
+                }
+
+                // 3. FETCH DATA PERFORMA RIDER KHUSUS BULAN INI DARI FIREBASE (DENGAN CACHE HEMAT LIMIT)
+                let topRiderText = 'Belum ada data/orderan yang selesai di bulan ini.';
+                let riderStatsArray = [];
+                const cacheKey = `${year}-${month}`;
+
+                // Ambil dari CACHE jika sudah pernah di-load untuk bulan tersebut (Hemat Read Firebase)
+                if (window._cacheTopRiderA4[cacheKey]) {
+                    topRiderText = window._cacheTopRiderA4[cacheKey].topText;
+                    riderStatsArray = window._cacheTopRiderA4[cacheKey].dataArray;
+                } else {
+                    try {
+                        const startOfMonth = new Date(year, month - 1, 1, 0, 0, 0);
+                        const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+                        
+                        const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                        const qMonth = query(
+                            activeOrdersCol, 
+                            where("status", "==", "completed"),
+                            where("created_at", ">=", startOfMonth),
+                            where("created_at", "<=", endOfMonth)
+                        );
+                        
+                        // Gunakan getDocs biasa agar bisa memanfaatkan cache lokal Firebase jika tersedia
+                        const snapMonth = await getDocs(qMonth);
+                        let riderStats = {};
+                        
+                        snapMonth.forEach(docSnap => {
+                            const o = docSnap.data();
+                            const uid = o.rider_uid;
+                            if(!uid) return;
+                            
+                            // Deteksi tanggal untuk menghitung jumlah hari aktif (On)
+                            let dateStr = "";
+                            if (o.created_at && o.created_at.seconds) {
+                                const d = new Date(o.created_at.seconds * 1000);
+                                dateStr = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+                            }
+                            
+                            const feeKotor = parseFloat(o.fee) || 0;
+                            const tambahan = parseFloat(o.tambahan) || 0;
+                            const adminCut = Math.round(feeKotor * 0.16);
+                            const pendapatanBersih = (feeKotor - adminCut) + tambahan;
+
+                            if(!riderStats[uid]) {
+                                // Menggunakan Set() agar tanggal yang sama tidak dihitung ganda
+                                riderStats[uid] = { name: o.rider_name || uid, orders: 0, omset: 0, activeDaysSet: new Set() };
+                            }
+                            
+                            riderStats[uid].orders++;
+                            riderStats[uid].omset += pendapatanBersih;
+                            if (dateStr) riderStats[uid].activeDaysSet.add(dateStr);
+                        });
+
+                        // Konversi ke Array dan Urutkan berdasarkan Order Terbanyak (Rank Peringkat)
+                        riderStatsArray = Object.values(riderStats).map(r => ({
+                            name: r.name,
+                            orders: r.orders,
+                            omset: r.omset,
+                            daysOn: r.activeDaysSet.size
+                        })).sort((a,b) => b.orders - a.orders);
+
+                        if (riderStatsArray.length > 0) {
+                            const top = riderStatsArray[0];
+                            topRiderText = `<b>${top.name.toUpperCase()}</b> (Menyelesaikan ${top.orders} Order | Pendapatan Bersih: Rp ${top.omset.toLocaleString('id-ID')})`;
+                        }
+                        
+                        // Simpan ke cache JS memori (Cukup load database 1x selama tidak di refresh)
+                        window._cacheTopRiderA4[cacheKey] = {
+                            topText: topRiderText,
+                            dataArray: riderStatsArray
+                        };
+
+                    } catch(e) {
+                        console.warn("Gagal fetch performa rider", e);
+                        topRiderText = "Data peringkat rider tidak tersedia. Index cloud belum siap.";
+                    }
+                }
+                
+                // Susun HTML untuk Tabel Peringkat Rider
+                let htmlRiderTable = '';
+                if (riderStatsArray && riderStatsArray.length > 0) {
+                    riderStatsArray.forEach((r, idx) => {
+                        let rankStyle = "text-align: center;";
+                        // Warna khusus untuk Top 3
+                        if (idx === 0) rankStyle = "text-align: center; font-weight: bold; background-color: #fef3c7; color: #b45309;"; // Emas
+                        else if (idx === 1) rankStyle = "text-align: center; font-weight: bold; background-color: #f1f5f9; color: #475569;"; // Perak
+                        else if (idx === 2) rankStyle = "text-align: center; font-weight: bold; background-color: #ffedd5; color: #c2410c;"; // Perunggu
+                        
+                        htmlRiderTable += `
+                            <tr>
+                                <td style="padding: 4px; border: 1px solid #cbd5e1; ${rankStyle}">${idx + 1}</td>
+                                <td style="padding: 4px; border: 1px solid #cbd5e1; font-weight: 600;">${r.name.toUpperCase()}</td>
+                                <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">${r.orders}</td>
+                                <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: right; color: #059669; font-weight: bold;">Rp ${r.omset.toLocaleString('id-ID')}</td>
+                                <td style="padding: 4px; border: 1px solid #cbd5e1; text-align: center;">${r.daysOn} Hari</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    htmlRiderTable = `<tr><td colspan="5" style="padding: 10px; border: 1px solid #cbd5e1; text-align: center; color: #64748b; font-style: italic;">Belum ada data rider yang menyelesaikan orderan bulan ini.</td></tr>`;
+                }
+
+                // 4. GAMBAR GRAFIK CHART.JS DI BELAKANG LAYAR (HIDDEN CANVAS)
+                let chartBase64 = '';
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 750;
+                    canvas.height = 250;
+                    
+                    new Chart(canvas, {
+                        type: 'line',
+                        data: {
+                            labels: chartLabels,
+                            datasets: [
+                                {
+                                    label: 'Omset 16% (Rp)',
+                                    data: chartOmsetData,
+                                    borderColor: '#4f46e5',
+                                    backgroundColor: 'rgba(79, 70, 229, 0.2)',
+                                    fill: true,
+                                    yAxisID: 'y'
+                                },
+                                {
+                                    label: 'Jumlah Order',
+                                    data: chartOrderData,
+                                    type: 'bar',
+                                    backgroundColor: 'rgba(148, 163, 184, 0.5)',
+                                    yAxisID: 'y1'
+                                }
+                            ]
+                        },
+                        options: {
+                            animation: false, // Matikan animasi agar langsung selesai digambar
+                            responsive: false,
+                            plugins: { legend: { position: 'top' } },
+                            scales: {
+                                y: { type: 'linear', position: 'left', beginAtZero: true },
+                                y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, beginAtZero: true }
+                            }
+                        }
+                    });
+                    // Konversi ke Base64 Image untuk ditaruh di dokumen Print
+                    chartBase64 = canvas.toDataURL('image/png');
+                } catch(e) { console.warn('Gagal render grafik:', e); }
+
+                // 5. TEKS ANALISIS
+                const analisisText = `Pada bulan <b>${bulanNama} ${year}</b>, total omset bersih admin (16%) mencapai <b>Rp ${totalOmsetBulanIni.toLocaleString('id-ID')}</b> dari <b>${totalOrderBulanIni}</b> orderan yang terselesaikan. Pemasukan dari Top-Up saldo rider tercatat sebesar <b>Rp ${totalTopUpBulanIni.toLocaleString('id-ID')}</b>. Hari tersibuk adalah tanggal ${maxOrderHari.tgl} dengan ${maxOrderHari.val} order, sementara pemasukan tertinggi terjadi pada tanggal ${maxOmsetHari.tgl} (Rp ${maxOmsetHari.val.toLocaleString('id-ID')}).`;
+
+                // 6. TULIS HASIL KE PRINT WINDOW YANG SUDAH DIBUKA (DENGAN LAYOUT HEMAT KERTAS)
+                const scriptOpen = "<scr" + "ipt>";
+                const scriptClose = "</scr" + "ipt>";
+                
+                printWindow.document.open();
+                printWindow.document.write(`
+                    <html>
+                    <head>
+                        <title>Laporan Bulanan A4 - ${bulanNama} ${year}</title>
+                        <style>
+                            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+                            
+                            /* ATURAN PRINT HEMAT KERTAS & ANTI TERPOTONG */
+                            @page { size: A4; margin: 10mm; } 
+                            body { font-family: 'Plus Jakarta Sans', sans-serif; color: #1e293b; font-size: 10px; line-height: 1.3; }
+                            h2 { text-align: center; margin-bottom: 2px; color: #0f172a; font-weight: 800; font-size: 14px; text-transform: uppercase; }
+                            p.info { text-align: center; color: #64748b; font-size: 9px; margin-bottom: 8px; }
+                            .section-title { font-weight: 800; color: #0284c7; font-size: 11px; border-bottom: 1px solid #0284c7; padding-bottom: 2px; margin-top: 10px; margin-bottom: 5px; text-transform: uppercase; }
+                            
+                            /* Penanganan Tabel agar baris tidak terpotong (Split) */
+                            table { width: 100%; border-collapse: collapse; margin-bottom: 5px; page-break-inside: auto; }
+                            tr { page-break-inside: avoid; page-break-after: auto; }
+                            thead { display: table-header-group; }
+                            tfoot { display: table-footer-group; }
+                            th { background-color: #f8fafc; padding: 4px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; font-size: 9px; }
+                            td { border: 1px solid #cbd5e1; font-size: 9px; padding: 4px; }
+                            
+                            .flex-row { display: flex; gap: 10px; align-items: flex-start; }
+                            .col-50 { width: 50%; }
+                            .highlight-box { background: #f0f9ff; border: 1px solid #bae6fd; padding: 8px; border-radius: 6px; margin-bottom: 10px; page-break-inside: avoid; }
+                            .highlight-box b { color: #0369a1; }
+                            .footer { margin-top: 20px; text-align: right; padding-right: 20px; page-break-inside: avoid; }
+                            .chart-img { width: 100%; max-height: 160px; object-fit: contain; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; page-break-inside: avoid; }
+                        </style>
+                    </head>
+                    <body>
+                        <h2>LAPORAN KINERJA BULANAN : ${bulanNama} ${year}</h2>
+                        <p class="info">Sistem Admin Dispatch PROJEKGO - Dicetak pada: ${new Date().toLocaleString('id-ID')}</p>
+
+                        <div class="highlight-box">
+                            <div style="font-size: 11px; font-weight: 800; margin-bottom: 3px; color:#0c4a6e;">📊 RINGKASAN & ANALISIS</div>
+                            <p style="margin-top:0;">${analisisText}</p>
+                            <p style="margin-bottom:0; margin-top:5px; border-top: 1px dashed #7dd3fc; padding-top: 5px;">🏆 <b>RIDER TERBAIK BULAN INI:</b> ${topRiderText}</p>
+                        </div>
+
+                        ${chartBase64 ? `<img src="${chartBase64}" class="chart-img" />` : ''}
+
+                        <div class="flex-row">
+                            <div class="col-50">
+                                <div class="section-title">1. REKAP MINGGUAN (${bulanNama})</div>
+                                <table>
+                                    <thead><tr><th>Minggu</th><th>Order</th><th>Omset (16%)</th><th>Top-Up</th></tr></thead>
+                                    <tbody>${htmlMingguan}</tbody>
+                                    <tfoot>
+                                        <tr style="background:#f8fafc; font-weight:bold;">
+                                            <td style="padding:4px; border:1px solid #cbd5e1; text-align:center;">TOTAL</td>
+                                            <td style="padding:4px; border:1px solid #cbd5e1; text-align:center;">${totalOrderBulanIni}</td>
+                                            <td style="padding:4px; border:1px solid #cbd5e1; text-align:right;">Rp ${totalOmsetBulanIni.toLocaleString('id-ID')}</td>
+                                            <td style="padding:4px; border:1px solid #cbd5e1; text-align:right;">Rp ${totalTopUpBulanIni.toLocaleString('id-ID')}</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <div class="col-50">
+                                <div class="section-title">2. RINCIAN HARIAN (${bulanNama})</div>
+                                <table>
+                                    <thead><tr><th>Tanggal</th><th>Order</th><th>Omset (16%)</th><th>Top-Up</th></tr></thead>
+                                    <tbody>${htmlHarian}</tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- TABEL TAMBAHAN: PERFORMA & PERINGKAT RIDER -->
+                        <div>
+                            <div class="section-title">3. PERFORMA & PERINGKAT RIDER (${bulanNama})</div>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;">Rank</th>
+                                        <th style="text-align: left; padding-left: 6px;">Nama Rider</th>
+                                        <th>Jml Order</th>
+                                        <th style="text-align: right; padding-right: 6px;">Pendapatan Bersih</th>
+                                        <th>Hari Aktif (On)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${htmlRiderTable}</tbody>
+                            </table>
+                            <p style="font-size: 8px; color: #64748b; font-style: italic; margin-top: -3px;">*Hari Aktif (On) dihitung berdasarkan jumlah hari rider berhasil menyelesaikan setidaknya 1 orderan.</p>
+                        </div>
+
+                        <div class="footer">
+                            <p style="font-weight:600; margin-bottom: 40px;">Disetujui Oleh,</p>
+                            <p style="font-weight:800; border-top: 1px solid #cbd5e1; display:inline-block; padding-top: 5px; width: 150px; text-align:center;">ADMIN PROJEKGO</p>
+                        </div>
+
+                        ${scriptOpen}
+                            window.onload = function() { 
+                                setTimeout(() => { window.print(); window.close(); }, 800); 
+                            };
+                        ${scriptClose}
+                    </body>
+                    </html>
+                `);
+                printWindow.document.close();
+            } catch(e) {
+                console.error(e);
+                if (printWindow) printWindow.close();
+                window.showAlert('Gagal', 'Terjadi kesalahan sistem saat membuat laporan cetak.', 'error');
+            } finally {
+                loader.classList.add('hidden'); loader.classList.remove('flex');
+            }
+        };
+
     </script>
 </body>
 </html>
