@@ -11057,6 +11057,7 @@
           // FUNGSI LISTENER STATUS RIDER PRIBADI
           // -------------------------------------------------------------
           let myStatusUnsubscribe = null;
+          let lastMyStatusDataStr = ""; // Tambahan: Menyimpan cache status terakhir untuk hemat pemrosesan UI
 
           window.startMyStatusListener = (uid) => {
               if (!uid || !isAuthReady) return;
@@ -11066,11 +11067,26 @@
                   myStatusUnsubscribe();
               }
 
+              // MENDENGARKAN 1 DOKUMEN SPESIFIK (Paling hemat kuota read Firebase: 1 Read per perubahan khusus dokumen rider ini saja)
               const statusRef = doc(db, '/status_rider_aktif', cleanUid);
 
               myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
                   if (docSnap.exists()) {
                       const data = docSnap.data();
+                      
+                      // PENGHEMATAN PROSES UI & BATERAI: 
+                      // Cek apakah ada perubahan status penting sebelum merender ulang.
+                      // Mengabaikan pembaruan field yang tidak penting agar layar tidak berkedip/kerja berat.
+                      const currentDataStr = JSON.stringify({
+                          ik: data.force_kill,
+                          im: data.in_main_queue,
+                          io: data.is_online,
+                          ia: data.is_available
+                      });
+                      
+                      if (lastMyStatusDataStr === currentDataStr) return; // Abaikan jika tidak ada perubahan penting
+                      lastMyStatusDataStr = currentDataStr;
+
                       const toggle = document.getElementById('onbid-toggle');
                       
                       const myPosEl = document.getElementById('my-queue-position');
