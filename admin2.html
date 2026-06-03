@@ -536,6 +536,15 @@
             </div>
             <p class="text-[9px] text-slate-500 leading-relaxed mb-3">Pantau dan kelola data omset pemasukan di sini.</p>
 
+            <!-- DROPDOWN PILIH BULAN BARU -->
+            <div class="bg-slate-50 border border-slate-200 rounded-xl p-2 mb-2 flex items-center gap-2">
+                <i class="fa-solid fa-calendar-days text-slate-400 ml-1"></i>
+                <select id="omset-month-filter" onchange="window.handleOmsetMonthChange()" class="w-full bg-transparent text-[10px] font-black text-slate-700 focus:outline-none cursor-pointer appearance-none">
+                </select>
+                <i class="fa-solid fa-caret-down text-slate-400 mr-1"></i>
+            </div>
+            <!-- SELESAI DROPDOWN -->
+
             <div class="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-2">
                 <button onclick="window.switchOmsetTab('harian')" id="tab-omset-harian" class="shrink-0 px-4 py-2 rounded-full bg-blue-500 text-white text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-blue-500">Harian</button>
                 <button onclick="window.switchOmsetTab('mingguan')" id="tab-omset-mingguan" class="shrink-0 px-4 py-2 rounded-full bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-slate-200 hover:bg-slate-100">Mingguan</button>
@@ -715,13 +724,16 @@
             <h2 class="font-black text-black text-[11px] uppercase tracking-wider mb-2 border-b border-gray-100 pb-2"><i class="fa-solid fa-wallet text-sky-500 mr-1.5"></i> Kelola Saldo / Kredit</h2>
             <p class="text-[9px] text-slate-500 leading-relaxed mb-3">Sistem mencatat setiap aliran dana secara independen. Data potongan dan omset di sini dihitung berdasarkan <b class="text-indigo-600">Buku Kas Mutasi Admin</b>, terpisah dari halaman Histori.</p>
 
-            <div class="bg-slate-800 border border-slate-700 p-4 rounded-2xl flex justify-between items-center shadow-sm mb-3 mt-4">
-                <div>
-                    <p class="text-[9px] font-bold text-slate-300 uppercase tracking-widest mb-1" title="Total uang deposit seluruh rider yang ada di sistem">Total Dompet Keseluruhan Rider</p>
-                    <p id="stat-total-dompet" class="text-xl font-black text-white">Rp 0</p>
+            <!-- KARTU SALDO & PEMASUKAN HARIAN (DIPERBARUI) -->
+            <div class="grid grid-cols-2 gap-3 mb-3 mt-4">
+                <div class="bg-slate-800 border border-slate-700 p-4 rounded-2xl flex flex-col justify-center shadow-sm">
+                    <p class="text-[8px] font-bold text-slate-300 uppercase tracking-widest mb-1" title="Total uang deposit seluruh rider yang ada di sistem">Total Dompet Rider</p>
+                    <p id="stat-total-dompet" class="text-lg font-black text-white leading-none">Rp 0</p>
                 </div>
-                <div class="w-10 h-10 bg-slate-700 text-sky-400 rounded-full flex items-center justify-center text-lg shadow-inner">
-                    <i class="fa-solid fa-wallet"></i>
+                <div class="bg-emerald-800 border border-emerald-700 p-4 rounded-2xl flex flex-col justify-center shadow-sm relative overflow-hidden">
+                    <i class="fa-solid fa-arrow-trend-up absolute right-[-5px] bottom-[-5px] text-4xl text-white/10"></i>
+                    <p class="text-[8px] font-bold text-emerald-200 uppercase tracking-widest mb-1" title="Total penambahan saldo manual / top-up hari ini">Pemasukan Harian</p>
+                    <p id="stat-topup-harian" class="text-lg font-black text-white leading-none">Rp 0</p>
                 </div>
             </div>
         </section>
@@ -1816,6 +1828,7 @@
             if (page === 'cicilan') window.renderCicilanList();
             if (page === 'tabungan') window.renderTabunganList();
             if (page === 'omset') {
+                if (typeof window.initOmsetMonthFilter === 'function') window.initOmsetMonthFilter();
                 if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
                 if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
                 if (typeof window.renderOmsetBulanan === 'function') window.renderOmsetBulanan();
@@ -5148,6 +5161,9 @@
                     if (!document.getElementById('page-history').classList.contains('hidden-page')) {
                         window.renderHistoryOrders();
                     }
+                    if (!document.getElementById('page-saldo').classList.contains('hidden-page')) {
+                        if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
+                    }
                 } else {
                     const initTracker = async () => {
                         try {
@@ -5266,71 +5282,112 @@
             });
         };
 
+        // ============================================
+        // LOGIKA BARU OMSET (BERDASARKAN BULAN PILIHAN)
+        // ============================================
+        
+        window.initOmsetMonthFilter = () => {
+            const select = document.getElementById('omset-month-filter');
+            if (!select) return;
+            
+            // Hanya buat ulang opsi jika masih kosong
+            if (select.options.length === 0) {
+                const today = new Date();
+                const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                let html = '';
+                
+                // Menghasilkan 12 bulan terakhir sebagai opsi
+                for(let i = 0; i < 12; i++) {
+                    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                    const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                    const label = `${namaBulan[d.getMonth()]} ${d.getFullYear()}`;
+                    html += `<option value="${val}">${label}</option>`;
+                }
+                select.innerHTML = html;
+            }
+        };
+
+        window.handleOmsetMonthChange = () => {
+            // Reset cache hash agar sistem memaksa render ulang saat bulan diganti
+            window._lastOmsetCacheHash = null;
+            window._lastOmsetMingguanCacheHash = null;
+            window._lastOmsetBulananCacheHash = null;
+            
+            if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
+            if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
+            if (typeof window.renderOmsetBulanan === 'function') window.renderOmsetBulanan();
+        };
+
         window._lastOmsetCacheHash = null;
 
         window.renderOmsetHarian = () => {
             const container = document.getElementById('content-omset-harian');
             if (!container) return;
 
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            
+            const filterVal = document.getElementById('omset-month-filter')?.value;
+            if (!filterVal) return;
+
+            const [yearStr, monthStr] = filterVal.split('-');
+            const year = parseInt(yearStr);
+            const month = parseInt(monthStr);
+
             let listHtml = '';
-            
-            // Hash untuk mengecek cache perubahan
-            let currentDataHash = '';
+            let currentDataHash = filterVal + '-harian';
 
             const namaHari = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
             const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 
-            // Looping dari 1 hari kebelakang sampai 10 hari kebelakang
-            for (let i = 1; i <= 10; i++) {
-                const pastDate = new Date(today);
-                pastDate.setDate(today.getDate() - i);
-                
-                const dd = String(pastDate.getDate()).padStart(2, '0');
-                const mm = String(pastDate.getMonth() + 1).padStart(2, '0');
-                const yyyy = pastDate.getFullYear();
-                const dateStr = `${yyyy}-${mm}-${dd}`;
-                
-                const displayDateStr = `${namaHari[pastDate.getDay()]}, ${pastDate.getDate()} ${namaBulan[pastDate.getMonth()]} ${yyyy}`;
+            // Hitung total hari dalam bulan yang dipilih
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const today = new Date();
+            today.setHours(0,0,0,0);
 
-                // Mencari rekap yang cocok dari allCloudRecaps yang didownload dari firebase
+            // Tampilkan dari tanggal akhir ke tanggal 1 (Descending)
+            for (let d = daysInMonth; d >= 1; d--) {
+                const dateObj = new Date(year, month - 1, d);
+                const dd = String(d).padStart(2, '0');
+                const dateStr = `${year}-${monthStr}-${dd}`;
+                
+                const displayDateStr = `${namaHari[dateObj.getDay()]}, ${d} ${namaBulan[month - 1]} ${year}`;
+
+                // Cari data di memori allCloudRecaps
                 const rekap = allCloudRecaps.find(r => r.tanggal === dateStr);
                 const totalOmsetKotor = rekap ? parseInt(rekap.total_omset || 0) : 0;
                 const orders = rekap ? parseInt(rekap.total_orders || 0) : 0;
                 
-                // Menghitung Omset Bersih Admin (16% dari total kotor)
+                // Menghitung Omset Bersih Admin (16%)
                 const adminCut = Math.round(totalOmsetKotor * 0.16);
-
                 currentDataHash += `${dateStr}:${adminCut}:${orders}|`;
 
-                const omsetClass = adminCut > 0 ? 'text-indigo-600' : 'text-slate-400';
-                const iconClass = adminCut > 0 ? 'text-indigo-500 bg-indigo-50 border-indigo-100' : 'text-slate-400 bg-slate-50 border-slate-100';
+                // Tampilkan jika ada order atau jika hari tersebut adalah masa lalu/hari ini (jangan tampilkan masa depan)
+                if (orders > 0 || adminCut > 0 || dateObj <= today) {
+                    const omsetClass = adminCut > 0 ? 'text-indigo-600' : 'text-slate-400';
+                    const iconClass = adminCut > 0 ? 'text-indigo-500 bg-indigo-50 border-indigo-100' : 'text-slate-400 bg-slate-50 border-slate-100';
 
-                listHtml += `
-                    <div class="flex justify-between items-center p-3 border border-gray-100 rounded-xl bg-slate-50 shadow-sm gap-2">
-                        <div class="flex items-center gap-3">
-                            <div class="w-8 h-8 rounded-full ${iconClass} flex items-center justify-center border shrink-0 shadow-inner">
-                                <i class="fa-solid fa-calendar-day text-[10px]"></i>
+                    listHtml += `
+                        <div class="flex justify-between items-center p-3 border border-gray-100 rounded-xl bg-slate-50 shadow-sm gap-2">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full ${iconClass} flex items-center justify-center border shrink-0 shadow-inner">
+                                    <i class="fa-solid fa-calendar-day text-[10px]"></i>
+                                </div>
+                                <div>
+                                    <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${displayDateStr}</p>
+                                    <p class="text-[9px] text-slate-500 font-bold mt-0.5"><i class="fa-solid fa-bag-shopping mr-1"></i>${orders} Order</p>
+                                </div>
                             </div>
-                            <div>
-                                <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${displayDateStr}</p>
-                                <p class="text-[9px] text-slate-500 font-bold mt-0.5"><i class="fa-solid fa-bag-shopping mr-1"></i>${orders} Order</p>
+                            <div class="text-right">
+                                <p class="text-[13px] font-black ${omsetClass} leading-none mb-0.5">Rp ${adminCut.toLocaleString('id-ID')}</p>
+                                <p class="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Omset (16%)</p>
                             </div>
                         </div>
-                        <div class="text-right">
-                            <p class="text-[13px] font-black ${omsetClass} leading-none mb-0.5">Rp ${adminCut.toLocaleString('id-ID')}</p>
-                            <p class="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Omset (16%)</p>
-                        </div>
-                    </div>
-                `;
+                    `;
+                }
             }
 
-            // CEK CACHE: Jika data sama dengan sebelumnya dan UI bukan teks kosong default, jangan render ulang
-            if (window._lastOmsetCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) {
-                return; 
-            }
+            if (listHtml === '') listHtml = '<p class="text-[10px] text-slate-400 italic text-center py-8">Belum ada data di bulan ini.</p>';
+
+            // CEK CACHE
+            if (window._lastOmsetCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) return; 
             window._lastOmsetCacheHash = currentDataHash;
 
             container.innerHTML = `<div class="space-y-2 mt-2 animate-in fade-in duration-300">${listHtml}</div>`;
@@ -5342,42 +5399,33 @@
             const container = document.getElementById('content-omset-mingguan');
             if (!container) return;
 
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            
+            const filterVal = document.getElementById('omset-month-filter')?.value;
+            if (!filterVal) return;
+
+            const [yearStr, monthStr] = filterVal.split('-');
+            const year = parseInt(yearStr);
+            const month = parseInt(monthStr);
+            const daysInMonth = new Date(year, month, 0).getDate();
+
             let listHtml = '';
-            let currentDataHash = '';
+            let currentDataHash = filterVal + '-mingguan';
 
-            const namaBulanSingkat = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'];
-            const labelMinggu = ['Minggu Ini', 'Minggu Lalu', '2 Minggu Lalu', '3 Minggu Lalu'];
+            // Membagi 1 bulan menjadi 4 rentang minggu tetap
+            const ranges = [
+                { start: 1, end: 7, label: 'Minggu 1' },
+                { start: 8, end: 14, label: 'Minggu 2' },
+                { start: 15, end: 21, label: 'Minggu 3' },
+                { start: 22, end: daysInMonth, label: 'Minggu 4' }
+            ];
 
-            // Cari hari Senin di minggu ini
-            const dayOfWeek = today.getDay(); // 0 (Minggu) - 6 (Sabtu)
-            const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-            const currentMonday = new Date(today);
-            currentMonday.setDate(today.getDate() - diffToMonday);
-
-            // Looping 4 minggu kebelakang (Berdasarkan Senin - Minggu)
-            for (let w = 0; w < 4; w++) {
+            // Render minggu 4 ke minggu 1 (Descending)
+            for (let i = ranges.length - 1; i >= 0; i--) {
+                const range = ranges[i];
                 let weeklyOmsetKotor = 0;
                 let weeklyOrders = 0;
-                
-                let startDate = new Date(currentMonday);
-                startDate.setDate(currentMonday.getDate() - (w * 7)); // Mundur w minggu
-                
-                let endDate = new Date(startDate);
-                endDate.setDate(startDate.getDate() + 6); // Tambah 6 hari ke depan (hari Minggu)
-                
-                // Mengambil data rekap harian dari Senin sampai Minggu
-                for (let i = 0; i <= 6; i++) {
-                    const pastDate = new Date(startDate);
-                    pastDate.setDate(startDate.getDate() + i);
-                    
-                    const dd = String(pastDate.getDate()).padStart(2, '0');
-                    const mm = String(pastDate.getMonth() + 1).padStart(2, '0');
-                    const yyyy = pastDate.getFullYear();
-                    const dateStr = `${yyyy}-${mm}-${dd}`;
-                    
+
+                for (let d = range.start; d <= range.end; d++) {
+                    const dateStr = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
                     const rekap = allCloudRecaps.find(r => r.tanggal === dateStr);
                     if (rekap) {
                         weeklyOmsetKotor += parseInt(rekap.total_omset || 0);
@@ -5385,12 +5433,10 @@
                     }
                 }
                 
-                // Menghitung Omset Bersih Admin (16% dari total kotor per minggu)
                 const adminCut = Math.round(weeklyOmsetKotor * 0.16);
-                currentDataHash += `${w}:${adminCut}:${weeklyOrders}|`;
+                currentDataHash += `${i}:${adminCut}:${weeklyOrders}|`;
 
-                const dateRangeStr = `${startDate.getDate()} ${namaBulanSingkat[startDate.getMonth()]} - ${endDate.getDate()} ${namaBulanSingkat[endDate.getMonth()]} ${endDate.getFullYear()}`;
-
+                const dateRangeStr = `${range.start} - ${range.end} / ${monthStr} / ${year}`;
                 const omsetClass = adminCut > 0 ? 'text-indigo-600' : 'text-slate-400';
                 const iconClass = adminCut > 0 ? 'text-indigo-500 bg-indigo-50 border-indigo-100' : 'text-slate-400 bg-slate-50 border-slate-100';
 
@@ -5401,7 +5447,7 @@
                                 <i class="fa-solid fa-calendar-week text-[10px]"></i>
                             </div>
                             <div>
-                                <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${labelMinggu[w]}</p>
+                                <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${range.label}</p>
                                 <p class="text-[9px] text-slate-500 font-bold mt-0.5">${dateRangeStr} <span class="text-slate-300 mx-1">•</span> <i class="fa-solid fa-bag-shopping mx-0.5"></i>${weeklyOrders} Order</p>
                             </div>
                         </div>
@@ -5413,10 +5459,7 @@
                 `;
             }
 
-            // CEK CACHE: Jika data sama dengan sebelumnya dan UI bukan teks kosong default, jangan render ulang
-            if (window._lastOmsetMingguanCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) {
-                return; 
-            }
+            if (window._lastOmsetMingguanCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) return; 
             window._lastOmsetMingguanCacheHash = currentDataHash;
 
             container.innerHTML = `<div class="space-y-2 mt-2 animate-in fade-in duration-300">${listHtml}</div>`;
@@ -5428,53 +5471,46 @@
             const container = document.getElementById('content-omset-bulanan');
             if (!container) return;
 
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            
+            const filterVal = document.getElementById('omset-month-filter')?.value;
+            if (!filterVal) return;
+
+            const [yearStr, monthStr] = filterVal.split('-');
+            const year = parseInt(yearStr);
+            const month = parseInt(monthStr);
+
             let listHtml = '';
-            let currentDataHash = '';
+            let currentDataHash = filterVal + '-bulanan';
 
             const namaBulanFull = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-            const labelBulan = ['Bulan Ini', 'Bulan Lalu'];
 
-            // Looping 2 bulan (0 = Bulan Ini, 1 = Bulan Lalu)
-            for (let m = 0; m < 2; m++) {
-                let targetMonth = today.getMonth() - m;
-                let targetYear = today.getFullYear();
-                
-                // Handle perhitungan mundur tahun (Januari -> Desember tahun sebelumnya)
-                if (targetMonth < 0) {
-                    targetMonth += 12;
-                    targetYear -= 1;
-                }
+            // Tampilkan bulan yang dipilih dan sebagai perbandingan tampilkan bulan sebelumnya
+            const prevMonth = month === 1 ? 12 : month - 1;
+            const prevYear = month === 1 ? year - 1 : year;
 
+            const monthsToProcess = [
+                { y: year, m: month, title: 'Bulan Dipilih' },
+                { y: prevYear, m: prevMonth, title: 'Bulan Sebelumnya' }
+            ];
+
+            monthsToProcess.forEach((t, index) => {
                 let monthlyOmsetKotor = 0;
                 let monthlyOrders = 0;
+                const mStr = String(t.m).padStart(2, '0');
 
+                // Filter dari memori tanpa query database
                 allCloudRecaps.forEach(rekap => {
                     if (!rekap.tanggal) return;
-                    const parts = rekap.tanggal.split('-');
-                    if (parts.length !== 3) return;
-                    
-                    const rY = parseInt(parts[0]);
-                    const rM = parseInt(parts[1]) - 1; // 0-indexed month
-                    const rD = parseInt(parts[2]);
-                    const rDate = new Date(rY, rM, rD);
-                    rDate.setHours(0,0,0,0);
-
-                    // Hanya ambil yang bulan & tahunnya cocok, serta tanggalnya SEBELUM hari ini
-                    if (rM === targetMonth && rY === targetYear && rDate.getTime() < today.getTime()) {
+                    if (rekap.tanggal.startsWith(`${t.y}-${mStr}`)) {
                         monthlyOmsetKotor += parseInt(rekap.total_omset || 0);
                         monthlyOrders += parseInt(rekap.total_orders || 0);
                     }
                 });
 
-                // Menghitung Omset Bersih Admin (16% dari total kotor per bulan)
                 const adminCut = Math.round(monthlyOmsetKotor * 0.16);
-                currentDataHash += `${m}:${adminCut}:${monthlyOrders}|`;
+                currentDataHash += `${index}:${adminCut}:${monthlyOrders}|`;
 
-                const labelTitle = labelBulan[m];
-                const labelSub = `${namaBulanFull[targetMonth]} ${targetYear}`;
+                const labelTitle = t.title;
+                const labelSub = `${namaBulanFull[t.m - 1]} ${t.y}`;
 
                 const omsetClass = adminCut > 0 ? 'text-indigo-600' : 'text-slate-400';
                 const iconClass = adminCut > 0 ? 'text-indigo-500 bg-indigo-50 border-indigo-100' : 'text-slate-400 bg-slate-50 border-slate-100';
@@ -5496,12 +5532,9 @@
                         </div>
                     </div>
                 `;
-            }
+            });
 
-            // CEK CACHE
-            if (window._lastOmsetBulananCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) {
-                return; 
-            }
+            if (window._lastOmsetBulananCacheHash === currentDataHash && container.innerHTML.trim() !== '' && !container.innerHTML.includes('Masih Kosong')) return; 
             window._lastOmsetBulananCacheHash = currentDataHash;
 
             container.innerHTML = `<div class="space-y-2 mt-2 animate-in fade-in duration-300">${listHtml}</div>`;
@@ -5521,6 +5554,14 @@
             window._currentTotalSaldo = totalSisaSaldo;
             const dompetEl = document.getElementById('stat-total-dompet');
             if (dompetEl) dompetEl.innerText = `Rp ${totalSisaSaldo.toLocaleString('id-ID')}`;
+
+            // LOGIKA BARU: Update Kartu Pemasukan Saldo Harian
+            let topUpHarian = 0;
+            if (window.dailyBalanceTracker && window.dailyBalanceTracker.top_up) {
+                topUpHarian = parseInt(window.dailyBalanceTracker.top_up || 0);
+            }
+            const topupEl = document.getElementById('stat-topup-harian');
+            if (topupEl) topupEl.innerText = `Rp ${topUpHarian.toLocaleString('id-ID')}`;
 
             let filtered = [...allRiderBalances];
             if (searchQuery) filtered = filtered.filter(c => (c.name || '').toLowerCase().includes(searchQuery) || (c.id || '').toLowerCase().includes(searchQuery));
