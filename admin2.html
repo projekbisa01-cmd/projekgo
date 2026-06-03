@@ -172,7 +172,10 @@
             <section>
                 <div class="flex justify-between items-center mb-2 px-1">
                     <h2 class="font-black text-black text-[11px] uppercase tracking-wider">Antrean Radar Aktif</h2>
-                    <span class="text-[8px] font-bold text-sky-600 bg-sky-100 px-1.5 py-0.5 rounded uppercase border border-sky-200">Siap Order</span>
+                    <div class="flex items-center gap-1.5">
+                        <button onclick="window.manualAddRiderToQueue()" class="text-[8px] font-bold text-white bg-sky-500 hover:bg-sky-600 px-1.5 py-0.5 rounded uppercase shadow-sm transition-colors" title="Tambah Rider Manual"><i class="fa-solid fa-plus mr-1"></i> Manual</button>
+                        <span class="text-[8px] font-bold text-sky-600 bg-sky-100 px-1.5 py-0.5 rounded uppercase border border-sky-200">Siap Order</span>
+                    </div>
                 </div>
 
                 <div id="rider-queue-list" class="space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar pr-1">
@@ -3197,6 +3200,92 @@
                     window.showAlert('Berhasil', `${name} diletakkan di antrean paling bawah.`, 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
+        };
+
+        // FUNGSI BARU: Tambah Rider Manual via Drop-down
+        window.manualAddRiderToQueue = () => {
+            const mergedRiders = getMergedRidersForDropdown();
+            const currentlyInQueueUids = new Set(mainQueueRiders.map(r => r.uid));
+            
+            // Saring rider yang BELUM ada di antrean utama
+            const ridersToShow = mergedRiders.filter(r => !currentlyInQueueUids.has(r.uid));
+
+            if (ridersToShow.length === 0) {
+                window.showAlert('Info', 'Semua rider terdaftar sudah berada di dalam antrean.', 'info');
+                return;
+            }
+
+            let optionsHtml = '<option value="">-- Pilih Rider --</option>';
+            ridersToShow.forEach((r, idx) => {
+                optionsHtml += `<option value="${r.uid}">${idx + 1}. ${getRiderCode(r.uid)} - ${r.name}</option>`;
+            });
+
+            const modal = document.getElementById('custom-modal');
+            const icon = document.getElementById('custom-modal-icon');
+            const input = document.getElementById('custom-modal-input');
+            const selectWrapper = document.getElementById('custom-modal-select-wrapper');
+            const select = document.getElementById('custom-modal-select');
+            
+            input.classList.add('hidden'); 
+            selectWrapper.classList.remove('hidden');
+            select.innerHTML = optionsHtml;
+            
+            document.getElementById('custom-modal-title').innerText = 'Tambah Manual ke Antrean';
+            document.getElementById('custom-modal-text').innerText = 'Pilih rider dari menu drop-down di bawah untuk dimasukkan paksa ke Antrean Radar Aktif:';
+            
+            icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-sky-50 text-sky-500 border-sky-100';
+            icon.innerHTML = '<i class="fa-solid fa-satellite-dish"></i>';
+            
+            document.getElementById('custom-modal-actions').innerHTML = `
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex'); document.getElementById('custom-modal-select-wrapper').classList.add('hidden');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button id="modal-confirm-manual-add-btn" class="flex-1 py-3 bg-sky-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-plus"></i> Tambahkan</button>
+            `;
+
+            modal.classList.remove('hidden'); 
+            modal.classList.add('flex');
+
+            document.getElementById('modal-confirm-manual-add-btn').onclick = async () => {
+                const selectedUid = select.value;
+                if (!selectedUid) {
+                    window.showAlert('Pilih Rider', 'Silakan pilih rider terlebih dahulu dari drop-down.', 'warning');
+                    return;
+                }
+
+                const nextRider = ridersToShow.find(r => r.uid === selectedUid);
+                modal.classList.add('hidden'); 
+                modal.classList.remove('flex'); 
+                selectWrapper.classList.add('hidden');
+                
+                const loader = document.getElementById('loading-overlay');
+                loader.classList.remove('hidden'); 
+                loader.classList.add('flex');
+                
+                try {
+                    const ref = doc(db, 'status_rider_aktif', selectedUid);
+                    const liveData = allRiders.find(r => r.uid === selectedUid);
+                    const retainedLoc = liveData ? window.getKetLokasi(liveData) : "Posisi / Standby";
+
+                    await setDoc(ref, { 
+                        uid: selectedUid,
+                        nama: nextRider.name,
+                        is_online: true, 
+                        is_available: true, 
+                        in_main_queue: true, 
+                        force_kill: false, // Pastikan tidak disuspend
+                        last_drop_time: serverTimestamp(), 
+                        last_drop_desc: "Masuk Manual via Admin", 
+                        proof_desc: retainedLoc,
+                        last_updated: serverTimestamp()
+                    }, { merge: true });
+
+                    window.showAlert('Berhasil', `${nextRider.name} berhasil ditambahkan manual ke Antrean Radar Aktif.`, 'success');
+                } catch(e) { 
+                    window.showAlert('Gagal', 'Terjadi kesalahan sistem saat menambahkan rider ke antrean.', 'error'); 
+                } finally { 
+                    loader.classList.add('hidden'); 
+                    loader.classList.remove('flex'); 
+                }
+            };
         };
 
         window.selectRider = (uid, name, autoSwitch = true) => {
