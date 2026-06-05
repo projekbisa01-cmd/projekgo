@@ -4244,10 +4244,13 @@
                 
                 allFetchedOrders.forEach(o => {
                     const feeReal = (parseFloat(o.Nominal_Kotor) || 0) * 1000;
-                    totalKotor += feeReal; totalTambahan += (parseFloat(o.Tambahan) || 0) * 1000; totalAdminCut += feeReal * 0.16;
+                    const tamReal = (parseFloat(o.Tambahan) || 0) * 1000;
+                    totalKotor += feeReal; 
+                    totalTambahan += tamReal; 
+                    totalAdminCut += feeReal * 0.16;
                 });
 
-                // MENGGABUNGKAN POTENSI OMSET DARI ORDER AKTIF (PANTAUAN)
+                // MENGGABUNGKAN POTENSI OMSET DARI ORDER AKTIF (PANTAUAN) & PENDING
                 // Hanya ditambahkan jika admin melihat histori hari ini
                 const today = new Date();
                 const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -4257,13 +4260,41 @@
                     
                     finalOrderCount += (activeOrders.length + pendingOrders.length);
                     
+                    // Tambahkan ke Total Ongkir & Tambahan dari Order Aktif
                     activeOrders.forEach(o => {
-                        totalAdminCut += (parseFloat(o.fee) || 0) * 0.16;
+                        const feeReal = parseFloat(o.fee) || 0;
+                        const tamReal = parseFloat(o.tambahan) || 0;
+                        totalKotor += feeReal;
+                        totalTambahan += tamReal;
+                        totalAdminCut += feeReal * 0.16;
+                    });
+
+                    // Tambahkan ke Total Ongkir & Tambahan dari Order Pending
+                    pendingOrders.forEach(o => {
+                        const feeReal = parseFloat(o.fee) || 0;
+                        const tamReal = parseFloat(o.tambahan) || 0;
+                        totalKotor += feeReal;
+                        totalTambahan += tamReal;
                     });
                 }
                 
                 if(totalCountEl) totalCountEl.innerText = window.userRole === 'admin' ? '****' : finalOrderCount;
-                if(totalFeeEl) totalFeeEl.innerText = window.userRole === 'admin' ? '****' : `Rp ${(totalKotor + totalTambahan).toLocaleString('id-ID')}`;
+                
+                // --- BAGIAN YANG DIPERBAIKI UNTUK MENAMPILKAN TOTAL ONGKIR + TAMBAHAN ---
+                if(totalFeeEl) {
+                    if (window.userRole === 'admin') {
+                        totalFeeEl.innerText = '****';
+                    } else {
+                        const grandTotal = totalKotor + totalTambahan;
+                        if (totalTambahan > 0) {
+                            totalFeeEl.innerHTML = `Rp ${grandTotal.toLocaleString('id-ID')} <span class="block text-[9px] font-bold text-emerald-600 mt-1 uppercase tracking-tight">(Termasuk Tambahan Rp ${totalTambahan.toLocaleString('id-ID')})</span>`;
+                        } else {
+                            totalFeeEl.innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
+                        }
+                    }
+                }
+                // -------------------------------------------------------------------------
+                
                 if(totalAdminEl) totalAdminEl.innerText = window.userRole === 'admin' ? '****' : `Rp ${Math.round(totalAdminCut).toLocaleString('id-ID')}`;
 
                 // TRIGGER PERBANDINGAN DATA OMSET
@@ -4271,7 +4302,7 @@
                     window.compareOmsetAdmin(totalAdminCut);
                 }
 
-                if (allFetchedOrders.length === 0) {
+                if (allFetchedOrders.length === 0 && finalOrderCount === 0) {
                     container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
                     return;
                 }
@@ -4305,6 +4336,18 @@
                             </div>
                         </div>`;
                 });
+                
+                // Tambahkan info jika ada orderan aktif/pending tapi belum masuk list history selesai
+                const pendingOrActiveCount = finalOrderCount - allFetchedOrders.length;
+                if (pendingOrActiveCount > 0) {
+                    html = `<div class="bg-indigo-50 border border-indigo-200 p-2 rounded-xl mb-3 flex items-center justify-between shadow-sm">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-circle-notch fa-spin text-indigo-500"></i>
+                            <span class="text-[9px] font-black text-indigo-700 uppercase tracking-widest">+ ${pendingOrActiveCount} Orderan belum selesai</span>
+                        </div>
+                    </div>` + html;
+                }
+                
                 container.innerHTML = html;
             } catch(e) { if (typeof window.showAlert === 'function') window.showAlert('Gagal', 'Sistem error saat memuat histori.', 'error'); } finally { if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); } }
         };
