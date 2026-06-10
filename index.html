@@ -2017,19 +2017,21 @@
                             <div id="installments-progress-bar" class="bg-orange-500 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
                         </div>
 
-                        <div class="flex justify-between items-start mt-4">
-                            <div class="w-1/2">
-                                <p class="text-[11px] text-gray-500 mb-1">Sudah dibayar</p>
-                                <p id="installments-paid-amount" class="text-[17px] font-bold text-gray-900 leading-tight">Rp0</p>
+                        <!-- MENU JUMLAH NOMINAL POTONGAN PER MINGGU DITAMBAHKAN DI SINI -->
+                        <div class="grid grid-cols-2 gap-3 mt-4">
+                            <div class="bg-gray-50 p-3 rounded-xl border border-gray-100">
+                                <p class="text-[9px] text-gray-500 mb-1 uppercase font-bold tracking-wider">Potongan /minggu</p>
+                                <p id="installments-weekly-amount" class="text-sm font-black text-red-500 leading-tight">Rp 0</p>
                             </div>
-                            <div class="w-1/2 text-left pl-2">
-                                <p class="text-[11px] text-gray-500 mb-1">Tersisa</p>
-                                <p id="installments-remaining-total" class="text-[17px] font-bold text-gray-900 leading-tight">Rp0</p>
+                            <div class="bg-gray-50 p-3 rounded-xl border border-gray-100">
+                                <p class="text-[9px] text-gray-500 mb-1 uppercase font-bold tracking-wider">Sudah dibayar</p>
+                                <p id="installments-paid-amount" class="text-sm font-black text-green-600 leading-tight">Rp 0</p>
                             </div>
                         </div>
-                        
-                        <!-- Element tersembunyi agar fungsi/logika JS lama tidak error -->
-                        <span id="installments-weekly-amount" class="hidden">Rp0</span>
+                        <div class="mt-3 bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center shadow-inner">
+                            <p class="text-[11px] text-orange-700 font-bold uppercase tracking-wider">Sisa Hutang</p>
+                            <p id="installments-remaining-total" class="text-[17px] font-black text-orange-600 leading-tight">Rp 0</p>
+                        </div>
                     </div>
                 </div>
 
@@ -5658,7 +5660,11 @@
         // --- FUNGSI BUKA TUTUP DOMPET ---
         function openWallet() {
             window.walletHistoryLimit = 3; // Reset limit ke 3 setiap kali dompet dibuka
-            if (typeof window.renderWalletHistoryUI === 'function') window.renderWalletHistoryUI();
+            if (typeof window.loadRiwayatSaldo === 'function') {
+                window.loadRiwayatSaldo(); // Panggil fungsi asinkron baru
+            } else if (typeof window.renderWalletHistoryUI === 'function') {
+                window.renderWalletHistoryUI();
+            }
 
             const modal = document.getElementById('wallet-modal');
             const content = document.getElementById('wallet-content');
@@ -5676,6 +5682,176 @@
                 setTimeout(() => { modal.classList.add('opacity-0', 'pointer-events-none'); }, 300);
             }
         }
+
+        // --- FUNGSI BARU: LOAD RIWAYAT SALDO KREDIT (FINAL TAHAP 1-4) ---
+        window.loadRiwayatSaldo = async function() {
+            const uid = localStorage.getItem('rider_uid');
+            if (!uid) return;
+            const cleanUid = String(uid).trim().toUpperCase();
+            
+            const historyContainer = document.getElementById('rider-history-list');
+            if (historyContainer) {
+                historyContainer.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold animate-pulse">Menarik data riwayat...</p>';
+            }
+
+            try {
+                const { getFirestore, doc, getDoc, collection, query, where, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                const db = getFirestore();
+                const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                
+                // ==========================================
+                // LANGKAH 1: Ambil Data Manual (Top Up / Tarik) dari Array edit_logs
+                // ==========================================
+                const balanceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_balances', cleanUid);
+                const balanceSnap = await getDoc(balanceRef);
+                
+                let manualLogs = [];
+                if (balanceSnap.exists()) {
+                    const data = balanceSnap.data();
+                    const editLogs = data.edit_logs || [];
+                    
+                    manualLogs = editLogs.map(item => {
+                        let timeMs = 0;
+                        if (item.time) {
+                            // Deteksi field 'time' berbentuk angka milidetik (int64) dari database admin
+                            timeMs = Number(item.time);
+                        } else if (item.timestamp && item.timestamp.seconds) {
+                            timeMs = item.timestamp.seconds * 1000;
+                        } else if (item.timestamp) {
+                            timeMs = new Date(item.timestamp).getTime();
+                        } else {
+                            timeMs = Date.now(); 
+                        }
+
+                        return {
+                            type: 'manual',
+                            action: item.action || 'Penyesuaian',
+                            amount: Number(item.amount || item.nominal || 0),
+                            time: timeMs
+                        };
+                    });
+                }
+                
+                // ==========================================
+                // LANGKAH 2: Ambil Data Otomatis (Potongan Sistem) dari Koleksi
+                // ==========================================
+                const potonganRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'riwayat_potongan');
+                const qPotongan = query(potonganRef, where('rider_uid', '==', cleanUid));
+                const potonganSnap = await getDocs(qPotongan);
+
+                let systemLogs = [];
+                potonganSnap.forEach(docSnap => {
+                    const data = docSnap.data();
+                    let timeMs = 0;
+                    
+                    if (data.created_at && typeof data.created_at.toMillis === 'function') {
+                        timeMs = data.created_at.toMillis();
+                    } else if (data.created_at && data.created_at.seconds) {
+                        timeMs = data.created_at.seconds * 1000;
+                    } else if (data.timestamp) {
+                        timeMs = new Date(data.timestamp).getTime();
+                    } else {
+                        timeMs = Date.now();
+                    }
+
+                    systemLogs.push({
+                        type: 'sistem',
+                        action: data.type || 'Potongan',
+                        desc: data.desc || data.keterangan || 'Potongan Otomatis Sistem',
+                        amount: Number(data.amount || data.nominal || 0),
+                        time: timeMs
+                    });
+                });
+
+                // ==========================================
+                // LANGKAH 3: Gabungkan dan Urutkan (Z ke A)
+                // ==========================================
+                let combinedLogs = [...manualLogs, ...systemLogs];
+                
+                // Urutkan berdasarkan waktu (timestamp) Descending
+                combinedLogs.sort((a, b) => b.time - a.time);
+                
+                // Batasi array hanya menampilkan 50 data terakhir agar HP tidak lag
+                combinedLogs = combinedLogs.slice(0, 50);
+
+                // ==========================================
+                // LANGKAH 4: Render ke UI dengan Tailwind CSS
+                // ==========================================
+                if (combinedLogs.length === 0) {
+                    if (historyContainer) {
+                        historyContainer.innerHTML = `
+                            <div class="text-center py-10 bg-white rounded-3xl border border-gray-100 shadow-sm flex flex-col items-center">
+                                <img src="https://cdn-icons-png.flaticon.com/512/7486/7486754.png" alt="Kosong" class="w-24 h-24 mb-4 opacity-60 drop-shadow-sm">
+                                <p class="text-sm font-bold text-gray-400">Belum ada riwayat transaksi</p>
+                            </div>`;
+                    }
+                    return;
+                }
+
+                let html = '';
+                combinedLogs.forEach(log => {
+                    // Format waktu: DD/MM/YYYY HH:mm
+                    const d = new Date(log.time);
+                    const day = String(d.getDate()).padStart(2, '0');
+                    const month = String(d.getMonth() + 1).padStart(2, '0');
+                    const year = d.getFullYear();
+                    const hours = String(d.getHours()).padStart(2, '0');
+                    const mins = String(d.getMinutes()).padStart(2, '0');
+                    const formattedTime = `${day}/${month}/${year} ${hours}:${mins}`;
+
+                    // Cek Tipe Aksi: Penambahan (+) atau Pengurangan (-)
+                    const actionLower = String(log.action).toLowerCase();
+                    let isAddition = false;
+                    
+                    if (actionLower.includes('top up') || actionLower.includes('refund') || actionLower.includes('tambah')) {
+                        isAddition = true;
+                    } else if (actionLower.includes('tarik') || actionLower.includes('potong') || actionLower.includes('denda') || actionLower.includes('cicilan') || actionLower.includes('adm')) {
+                        isAddition = false;
+                    } else {
+                        // Secara default jika tidak diketahui, log manual dianggap penambahan (+)
+                        isAddition = log.type === 'manual'; 
+                    }
+
+                    // Tentukan Warna & Icon
+                    const colorClass = isAddition ? 'text-emerald-500' : 'text-rose-500';
+                    const sign = isAddition ? '+' : '-';
+                    const icon = isAddition ? 'fa-arrow-down' : 'fa-arrow-up';
+                    const bgIcon = isAddition ? 'bg-emerald-50 text-emerald-500 border-emerald-100' : 'bg-rose-50 text-rose-500 border-rose-100';
+
+                    // Deskripsi Detail
+                    const displayDesc = log.desc ? log.desc : (log.type === 'manual' ? 'Penyesuaian Saldo Manual' : 'Sistem Otomatis');
+
+                    html += `
+                        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:bg-gray-50 transition-colors mb-3">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-10 h-10 ${bgIcon} rounded-xl flex items-center justify-center border shrink-0">
+                                    <i class="fa-solid ${icon}"></i>
+                                </div>
+                                <div class="flex-1 pr-2">
+                                    <h4 class="text-xs font-bold text-gray-800 leading-tight line-clamp-1">${log.action}</h4>
+                                    <p class="text-[10px] text-gray-500 leading-tight mt-0.5 line-clamp-1">${displayDesc}</p>
+                                    <p class="text-[9px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${formattedTime}</p>
+                                </div>
+                            </div>
+                            <div class="text-right shrink-0">
+                                <p class="text-sm font-extrabold ${colorClass}">${sign} Rp ${log.amount.toLocaleString('id-ID')}</p>
+                                <p class="text-[8px] text-gray-400 font-bold uppercase mt-1">${log.type === 'manual' ? 'Manual' : 'Sistem'}</p>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                if (historyContainer) {
+                    historyContainer.innerHTML = html;
+                }
+
+            } catch (error) {
+                console.error("Error loadRiwayatSaldo:", error);
+                if (historyContainer) {
+                    historyContainer.innerHTML = '<p class="text-xs text-center text-red-500 py-6 font-bold">Gagal memuat riwayat dompet.</p>';
+                }
+            }
+        };
         
         // --- FUNGSI NAVIGASI KE RIWAYAT HARIAN ---
         function goToHistory() {
@@ -8307,7 +8483,6 @@
 
         // --- FUNGSI RIWAYAT CICILAN ---
         function renderInstallmentsHistory() {
-            const config = getInstallmentInfo(currentUserUID);
             const container = document.getElementById('installments-history-list');
             const remainEl = document.getElementById('installments-remaining-total');
             const weeklyEl = document.getElementById('installments-weekly-amount');
@@ -8322,16 +8497,14 @@
             if (!container) return;
 
             const uidKey = String(currentUserUID).trim().toUpperCase().replace(/\s/g, '');
-            
-            // Ambil murni dari Firebase
-            const originalConfig = window.firebaseInstallmentsData ? window.firebaseInstallmentsData[uidKey] : null;
+            const config = window.firebaseInstallmentsData ? window.firebaseInstallmentsData[uidKey] : null;
 
-            if (!originalConfig || (config && config.weekly === 0 && config.total_remaining === undefined && config.remaining === 0)) {
-                if (remainEl) remainEl.innerText = "Rp0";
-                if (weeklyEl) weeklyEl.innerText = "Rp0 /minggu";
-                if (totalDebtEl) totalDebtEl.innerText = "Rp0";
+            if (!config || (config.weekly === 0 && config.remaining_amount === 0 && (!config.deduction_logs || config.deduction_logs.length === 0))) {
+                if (remainEl) remainEl.innerText = "Rp 0";
+                if (weeklyEl) weeklyEl.innerText = "Rp 0";
+                if (totalDebtEl) totalDebtEl.innerText = "Rp 0";
                 if (startDateEl) startDateEl.innerText = "Tidak ada pinjaman";
-                if (paidAmountEl) paidAmountEl.innerText = "Rp0";
+                if (paidAmountEl) paidAmountEl.innerText = "Rp 0";
                 if (progressBar) progressBar.style.width = "0%";
                 if (statusBadge) {
                     statusBadge.innerText = "Tidak Aktif";
@@ -8347,31 +8520,31 @@
             }
 
             // Hitung kalkulasi UI baru
-            const remainingDebt = Math.max(0, config.remaining);
-            const totalDebt = originalConfig.total_remaining || 0;
-            const paidAmount = Math.max(0, totalDebt - remainingDebt);
+            const remainingDebt = Math.max(0, config.remaining_amount || 0);
+            const weeklyAmount = config.weekly || 0; // Mengambil langsung dari amount_per_week di Firestore
+            const logs = config.deduction_logs || [];
+            
+            // Hitung total bayar dari riwayat potongan (deduction_logs)
+            let paidAmount = 0;
+            logs.forEach(log => {
+                paidAmount += Number(log.amount) || 0;
+            });
+
+            // Total hutang awal = sisa hutang saat ini + total yang sudah dibayar
+            const totalDebt = remainingDebt + paidAmount;
             let progressPercent = totalDebt > 0 ? (paidAmount / totalDebt) * 100 : 0;
             progressPercent = Math.min(100, Math.max(0, progressPercent));
 
-            let startDateStr = "Diajukan tanggal --";
-            if (originalConfig.start_date) {
-                try {
-                    const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
-                    const d = originalConfig.start_date;
-                    startDateStr = `Diajukan tanggal ${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
-                } catch(e){}
-            }
-
-            // Set Data ke UI
-            if (remainEl) remainEl.innerText = `Rp${remainingDebt.toLocaleString('id-ID')}`;
-            if (weeklyEl) weeklyEl.innerText = `Rp${originalConfig.weekly.toLocaleString('id-ID')} /minggu`;
-            if (totalDebtEl) totalDebtEl.innerText = `Rp${totalDebt.toLocaleString('id-ID')}`;
-            if (startDateEl) startDateEl.innerText = startDateStr;
-            if (paidAmountEl) paidAmountEl.innerText = `Rp${paidAmount.toLocaleString('id-ID')}`;
+            // Set Data ke UI (Hanya Angka Rupiah Saja, Tanpa "/minggu" agar rapi di kotak)
+            if (remainEl) remainEl.innerText = `Rp ${remainingDebt.toLocaleString('id-ID')}`;
+            if (weeklyEl) weeklyEl.innerText = `Rp ${weeklyAmount.toLocaleString('id-ID')}`;
+            if (totalDebtEl) totalDebtEl.innerText = `Rp ${totalDebt.toLocaleString('id-ID')}`;
+            if (startDateEl) startDateEl.innerText = "Cicilan Aktif";
+            if (paidAmountEl) paidAmountEl.innerText = `Rp ${paidAmount.toLocaleString('id-ID')}`;
             if (progressBar) progressBar.style.width = `${progressPercent}%`;
 
             if (statusBadge) {
-                if (remainingDebt <= 0) {
+                if (remainingDebt <= 0 && totalDebt > 0) {
                     statusBadge.innerText = "Lunas";
                     statusBadge.className = "text-[10px] font-bold bg-gray-100 text-gray-600 px-2.5 py-1 rounded-md";
                 } else {
@@ -8380,9 +8553,7 @@
                 }
             }
 
-            const historyData = window.firebaseInstallmentHistoryData || [];
-
-            if (historyData.length === 0) {
+            if (logs.length === 0) {
                  container.innerHTML = `
                     <div class="text-center py-10 bg-white rounded-3xl border border-gray-100 shadow-sm">
                         <p class="text-sm font-bold text-gray-400">Belum ada pemotongan dilakukan</p>
@@ -8390,16 +8561,29 @@
                  return;
             }
 
+            // Urutkan log dari tanggal yang terbaru ke terlama
+            const sortedLogs = [...logs].sort((a, b) => {
+                const dateA = new Date(a.date || 0);
+                const dateB = new Date(b.date || 0);
+                return dateB - dateA;
+            });
+
             let html = '';
-            historyData.forEach((item, index) => {
-                let dateFormatted = "Tanggal tidak diketahui";
-                if (item.created_at && item.created_at.seconds) {
-                    const d = new Date(item.created_at.seconds * 1000);
-                    dateFormatted = d.toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'}) + ' ' + d.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'}) + ' WIB';
+            sortedLogs.forEach((item) => {
+                let dateFormatted = item.date || "Tanggal tidak diketahui";
+                
+                // Format YYYY-MM-DD ke teks yang mudah dibaca, misal: 25 Jan 2026
+                if (item.date && item.date.includes('-')) {
+                    try {
+                        const parts = item.date.split('-');
+                        if(parts.length === 3) {
+                             const d = new Date(parts[0], parts[1]-1, parts[2]);
+                             dateFormatted = d.toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'});
+                        }
+                    } catch(e){}
                 }
                 
                 const paymentAmount = Number(item.amount) || 0;
-                const desc = item.desc || 'Potongan Otomatis Cicilan Mingguan';
 
                 html += `
                     <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between hover:bg-gray-50 transition-colors mb-3">
@@ -8408,7 +8592,7 @@
                                 <i class="fa-solid fa-receipt"></i>
                             </div>
                             <div class="flex-1 pr-2">
-                                <h4 class="text-xs font-bold text-gray-800 line-clamp-2 leading-tight">${desc}</h4>
+                                <h4 class="text-xs font-bold text-gray-800 line-clamp-2 leading-tight">Potongan Otomatis Cicilan</h4>
                                 <p class="text-[9px] text-gray-400 font-medium mt-1"><i class="fa-regular fa-clock mr-1"></i>${dateFormatted}</p>
                             </div>
                         </div>
@@ -11496,126 +11680,76 @@
                   if (saldoEl) saldoEl.innerText = "Error";
               });
 
-              const historyCol = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
-
-              walletHistoryUnsubscribe = onSnapshot(historyCol, (snapshot) => {
-                  let userHistory = [];
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
-                      const status = String(data.Status || data.status || '').trim().toLowerCase();
-                      if (status === 'selesai') {
-                          userHistory.push(data);
-                      }
-                  });
-
-                  userHistory.sort((a, b) => {
-                      const timeA = a.created_at?.seconds || 0;
-                      const timeB = b.created_at?.seconds || 0;
-                      return timeB - timeA;
-                  });
-
-                  // Menyimpan ke memori global dan render UI
-                  window.currentWalletHistoryData = userHistory;
-                  if (typeof window.renderWalletHistoryUI === 'function') {
-                      window.renderWalletHistoryUI();
-                  }
-
-              }, (error) => {
-                  console.error("Error fetching wallet history:", error);
-                  const historyList = document.getElementById('rider-history-list');
-                  if (historyList) historyList.innerHTML = '<p class="text-xs text-center text-red-400 py-6 font-bold">Gagal memuat riwayat.</p>';
-              });
+              // KODE LAMA HISTORY (daily_orders) DIHAPUS SEMENTARA
+              // Karena kita menggantinya ke fungsi loadRiwayatSaldo()
           };
 
           // -------------------------------------------------------------
           // FUNGSI LISTENER CICILAN JAKET
           // -------------------------------------------------------------
           let installmentsUnsubscribe = null;
-          let installmentsHistoryUnsubscribe = null;
 
           window.startInstallmentsListener = (uid) => {
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
 
+              // Bersihkan listener lama untuk mencegah tumpukan data
               if (installmentsUnsubscribe) {
                   installmentsUnsubscribe();
               }
-              if (installmentsHistoryUnsubscribe) {
-                  installmentsHistoryUnsubscribe();
-              }
 
-              const targetProjectId = "onbid-2f87a";
-              const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_installments', cleanUid);
+              const targetProjectId = firebaseConfig.projectId;
+              
+              // Menggunakan query collection ke path baru: rider_cicilan
+              const cicilanRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_cicilan');
+              const qCicilan = query(cicilanRef, where('rider_uid', '==', cleanUid));
 
-              installmentsUnsubscribe = onSnapshot(docRef, (docSnap) => {
-                  if (docSnap.exists()) {
+              installmentsUnsubscribe = onSnapshot(qCicilan, (snapshot) => {
+                  if (!snapshot.empty) {
+                      // Ambil dokumen pertama yang cocok dengan UID
+                      const docSnap = snapshot.docs[0];
                       const data = docSnap.data();
                       
-                      let startDate = new Date(2026, 0, 19); 
-                      if (data.start_date) {
-                          if (data.start_date.seconds) {
-                              startDate = new Date(data.start_date.seconds * 1000);
-                          } else {
-                              const parsed = new Date(data.start_date);
-                              if (!isNaN(parsed.getTime())) startDate = parsed;
-                          }
-                      }
+                      const logs = data.deduction_logs || [];
 
                       window.firebaseInstallmentsData[cleanUid] = {
-                          weekly: data.weekly_amount || data.weekly || 0,
-                          total_remaining: data.total_amount || data.total_debt || data.total_remaining || 0,
-                          start_date: startDate,
+                          weekly: data.amount_per_week || 0,
+                          remaining_amount: data.remaining_amount || 0,
+                          deduction_logs: logs,
                           is_from_firebase: true
                       };
+
+                      // Konversi array deduction_logs ke format yang dibutuhkan Wallet History (Tabungan/Dompet UI di Beranda)
+                      window.firebaseInstallmentHistoryData = logs.map(log => {
+                          let timeSeconds = 0;
+                          if (log.date) {
+                              const d = new Date(log.date);
+                              timeSeconds = Math.floor(d.getTime() / 1000); // Ubah tanggal ke hitungan detik (timestamp firebase format)
+                          }
+                          return {
+                              amount: log.amount,
+                              desc: 'Potongan Otomatis Cicilan Mingguan',
+                              created_at: { seconds: timeSeconds }
+                          };
+                      });
+
                   } else {
+                      // Jika dokumen cicilan rider tidak ditemukan
                       window.firebaseInstallmentsData[cleanUid] = {
                           weekly: 0,
-                          total_remaining: 0,
-                          start_date: new Date(),
+                          remaining_amount: 0,
+                          deduction_logs: [],
                           is_from_firebase: true
                       };
+                      window.firebaseInstallmentHistoryData = [];
                   }
 
+                  // Update UI Kalkulator Jika Beranda Terbuka
                   if (typeof window.processData === 'function' && window.rawData && window.rawData.length > 0) {
                       window.processData();
                   }
                   
-                  const pageInstallments = document.getElementById('page-installments');
-                  if (pageInstallments && !pageInstallments.classList.contains('hidden-page')) {
-                      if (typeof window.renderInstallmentsHistory === 'function') {
-                          window.renderInstallmentsHistory();
-                      }
-                  }
-              }, (error) => {
-                  console.error("Error fetching installments:", error);
-              });
-
-              // LISTENER BARU UNTUK RIWAYAT POTONGAN CICILAN
-              const historyCollectionRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'riwayat_potongan');
-              const qHistory = query(historyCollectionRef, where('rider_uid', '==', cleanUid));
-              
-              installmentsHistoryUnsubscribe = onSnapshot(qHistory, (snapshot) => {
-                  let historyItems = [];
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
-                      // Filter berdasarkan tipe 'auto_cicilan' di JavaScript memory
-                      if (data.type === 'auto_cicilan') {
-                          historyItems.push({
-                              id: docSnap.id,
-                              ...data
-                          });
-                      }
-                  });
-
-                  // Urutkan dari yang terbaru (descending)
-                  historyItems.sort((a, b) => {
-                      const timeA = a.created_at?.seconds || 0;
-                      const timeB = b.created_at?.seconds || 0;
-                      return timeB - timeA;
-                  });
-
-                  window.firebaseInstallmentHistoryData = historyItems;
-                  
+                  // Update UI Halaman Cicilan Langsung
                   const pageInstallments = document.getElementById('page-installments');
                   if (pageInstallments && !pageInstallments.classList.contains('hidden-page')) {
                       if (typeof window.renderInstallmentsHistory === 'function') {
@@ -11623,12 +11757,12 @@
                       }
                   }
                   
-                  // REFRESH LIST DOMPET JIKA ADA PERUBAHAN DATA CICILAN
+                  // Refresh Daftar Riwayat di Popup Dompet (Wallet)
                   if (typeof window.renderWalletHistoryUI === 'function') {
                       window.renderWalletHistoryUI();
                   }
               }, (error) => {
-                  console.error("Error fetching installments history:", error);
+                  console.error("Error fetching installments:", error);
               });
           };
 
