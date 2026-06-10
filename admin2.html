@@ -6025,38 +6025,129 @@
             container.innerHTML = html;
         };
 
-        window.openRiwayatSaldo = (rawUid) => {
+        window.openRiwayatSaldo = async (rawUid) => {
             const uid = String(rawUid);
             const currentData = allRiderBalances.find(r => String(r.id) === uid) || {};
-            const logs = currentData.edit_logs || [];
+            const editLogs = currentData.edit_logs || [];
             
             document.getElementById('riwayat-modal-name').innerText = currentData.name || uid;
+            
+            // Update teks keterangan (Subtitle)
+            const subtitleEl = document.getElementById('riwayat-modal-name').nextElementSibling;
+            if (subtitleEl) subtitleEl.innerText = 'Menampilkan riwayat transaksi (Top Up, ADM, Cicilan)';
+
             const listContainer = document.getElementById('riwayat-modal-list');
-
-            if (logs.length === 0) {
-                listContainer.innerHTML = '<p class="text-[10px] text-slate-500 text-center py-5 bg-slate-50 rounded-xl border border-dashed border-gray-200">Belum ada riwayat pengeditan manual.</p>';
-            } else {
-                let html = '';
-                logs.forEach(log => {
-                    const date = new Date(log.time);
-                    const timeStr = date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' }) + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-                    
-                    let icon = '', colorClass = '', sign = '';
-                    if (log.action === 'Top Up') { icon = '<i class="fa-solid fa-plus text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; } 
-                    else if (log.action === 'Kurangi') { icon = '<i class="fa-solid fa-minus text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; } 
-                    else { icon = '<i class="fa-solid fa-pen text-sky-500"></i>'; colorClass = 'text-sky-600'; sign = '='; }
-
-                    html += `
-                        <div class="bg-white p-2.5 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center gap-2">
-                            <div class="flex flex-col"><div class="flex items-center gap-1.5 mb-1">${icon}<span class="text-[10px] font-black text-black uppercase tracking-wider">${log.action}</span></div><span class="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">${timeStr}</span></div>
-                            <div class="text-right"><p class="text-[11px] font-black ${colorClass} mb-0.5">${sign} Rp ${(log.amount || 0).toLocaleString('id-ID')}</p><p class="text-[8px] font-bold text-slate-500">Sblm: Rp ${(log.prev || 0).toLocaleString('id-ID')} <i class="fa-solid fa-arrow-right mx-0.5"></i> Rp ${(log.now || 0).toLocaleString('id-ID')}</p></div>
-                        </div>`;
-                });
-                listContainer.innerHTML = html;
-            }
+            
+            // Tampilkan animasi loading saat menarik data potongan
+            listContainer.innerHTML = '<div class="text-center py-6 flex flex-col items-center"><div class="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin mb-2"></div><p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Menarik Data Riwayat...</p></div>';
 
             const modal = document.getElementById('riwayat-saldo-modal');
             modal.classList.remove('hidden'); modal.classList.add('flex');
+
+            try {
+                // Ambil data potongan (ADM, Cicilan, dll) dari Firestore tanpa orderBy agar aman dari error Index Firebase
+                const q = query(
+                    collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
+                    where("rider_uid", "==", uid)
+                );
+                const snap = await getDocs(q);
+
+                let combinedLogs = [];
+
+                // 1. Masukkan log manual (Top Up / Set / Kurangi)
+                editLogs.forEach(log => {
+                    combinedLogs.push({
+                        type: 'manual_edit',
+                        action: log.action,
+                        amount: log.amount,
+                        prev: log.prev,
+                        now: log.now,
+                        time: log.time,
+                        desc: ''
+                    });
+                });
+
+                // 2. Masukkan log sistem (Potongan ADM, Cicilan, Refund)
+                snap.forEach(doc => {
+                    const data = doc.data();
+                    let timeMs = 0;
+                    if (data.created_at && data.created_at.seconds) timeMs = data.created_at.seconds * 1000;
+                    
+                    let actionText = 'Potongan ADM';
+                    if (data.type === 'auto_cicilan') actionText = 'Potongan Cicilan';
+                    else if (data.type && data.type.includes('refund')) actionText = 'Refund Saldo';
+                    else if (data.type === 'manual_sub') actionText = 'Potong Manual';
+                    else if (data.type === 'koreksi_order') actionText = 'Koreksi Saldo';
+                    else if (data.type === 'manual_order') actionText = 'Potongan Susulan';
+                    
+                    combinedLogs.push({
+                        type: 'system_cut',
+                        action: actionText,
+                        amount: data.amount,
+                        desc: data.desc || '',
+                        time: timeMs
+                    });
+                });
+
+                // Urutkan di memori berdasarkan waktu terbaru (Descending)
+                combinedLogs.sort((a, b) => b.time - a.time);
+
+                // Batasi tampilan maksimal 50 riwayat terakhir agar modal tidak berat
+                combinedLogs = combinedLogs.slice(0, 50);
+
+                if (combinedLogs.length === 0) {
+                    listContainer.innerHTML = '<p class="text-[10px] text-slate-500 text-center py-5 bg-slate-50 rounded-xl border border-dashed border-gray-200">Belum ada riwayat transaksi saldo.</p>';
+                } else {
+                    let html = '';
+                    combinedLogs.forEach(log => {
+                        const date = new Date(log.time);
+                        const timeStr = date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' }) + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                        
+                        let icon = '', colorClass = '', sign = '', amountDisplay = 0;
+                        let prevNowHtml = '';
+
+                        if (log.type === 'manual_edit') {
+                            if (log.action === 'Top Up') { icon = '<i class="fa-solid fa-plus text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; } 
+                            else if (log.action === 'Kurangi') { icon = '<i class="fa-solid fa-minus text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; } 
+                            else { icon = '<i class="fa-solid fa-pen text-sky-500"></i>'; colorClass = 'text-sky-600'; sign = '='; }
+                            
+                            amountDisplay = log.amount;
+                            prevNowHtml = `<p class="text-[8px] font-bold text-slate-500 mt-1">Sblm: Rp ${(log.prev || 0).toLocaleString('id-ID')} <i class="fa-solid fa-arrow-right mx-0.5"></i> Rp ${(log.now || 0).toLocaleString('id-ID')}</p>`;
+                        } else {
+                            // Untuk system_cut (ADM, Cicilan, Refund)
+                            if (log.amount > 0) {
+                                // Potongan (Pengurangan saldo)
+                                icon = '<i class="fa-solid fa-scissors text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; amountDisplay = log.amount;
+                            } else {
+                                // Refund / Penambahan saldo
+                                icon = '<i class="fa-solid fa-arrow-rotate-left text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; amountDisplay = Math.abs(log.amount);
+                            }
+                            if (log.desc) {
+                                prevNowHtml = `<p class="text-[8px] font-bold text-slate-500 mt-1 truncate max-w-[140px]" title="${log.desc}">${log.desc}</p>`;
+                            }
+                        }
+
+                        html += `
+                            <div class="bg-white p-2.5 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center gap-2">
+                                <div class="flex flex-col overflow-hidden w-2/3">
+                                    <div class="flex items-center gap-1.5 mb-1">
+                                        ${icon}
+                                        <span class="text-[10px] font-black text-black uppercase tracking-wider truncate">${log.action}</span>
+                                    </div>
+                                    <span class="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">${timeStr}</span>
+                                </div>
+                                <div class="text-right shrink-0 w-1/3 flex flex-col items-end">
+                                    <p class="text-[11px] font-black ${colorClass} mb-0.5">${sign} Rp ${amountDisplay.toLocaleString('id-ID')}</p>
+                                    ${prevNowHtml}
+                                </div>
+                            </div>`;
+                    });
+                    listContainer.innerHTML = html;
+                }
+            } catch (err) {
+                console.error("Gagal menarik riwayat gabungan:", err);
+                listContainer.innerHTML = '<p class="text-[10px] text-rose-500 text-center py-5 bg-rose-50 rounded-xl border border-dashed border-rose-200">Gagal memuat riwayat dari server.</p>';
+            }
         };
 
         window.openSaldoModal = (rawUid) => {
