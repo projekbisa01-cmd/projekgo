@@ -6092,6 +6092,24 @@
                 // Urutkan di memori berdasarkan waktu terbaru (Descending)
                 combinedLogs.sort((a, b) => b.time - a.time);
 
+                // KALKULASI SALDO TERSISA (Retroactive Calculation)
+                let tempBalance = parseInt(currentData.saldo || 0);
+                combinedLogs.forEach(log => {
+                    if (log.type === 'manual_edit') {
+                        log.saldo_tersisa = log.now; // Pakai saldo 'now' yang pasti akurat
+                        tempBalance = log.prev; // Mundur ke saldo sebelum transaksi ini
+                    } else {
+                        log.saldo_tersisa = tempBalance; // Saldo setelah potongan ini terjadi
+                        
+                        // Mundur ke saldo sebelum potongan sistem ini terjadi
+                        if (log.amount > 0) { 
+                            tempBalance += log.amount; // Jika potongan, berarti sebelumnya saldo lebih besar
+                        } else { 
+                            tempBalance -= Math.abs(log.amount); // Jika refund, berarti sebelumnya saldo lebih kecil
+                        }
+                    }
+                });
+
                 // Batasi tampilan maksimal 50 riwayat terakhir agar modal tidak berat
                 combinedLogs = combinedLogs.slice(0, 50);
 
@@ -6106,13 +6124,16 @@
                         let icon = '', colorClass = '', sign = '', amountDisplay = 0;
                         let prevNowHtml = '';
 
+                        // Format Teks Saldo Tersisa
+                        let sisaText = `<p class="text-[9px] font-black text-sky-600 mt-1.5 bg-sky-50 px-1.5 py-0.5 rounded w-max border border-sky-100">Sisa: Rp ${(log.saldo_tersisa || 0).toLocaleString('id-ID')}</p>`;
+
                         if (log.type === 'manual_edit') {
                             if (log.action === 'Top Up') { icon = '<i class="fa-solid fa-plus text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; } 
                             else if (log.action === 'Kurangi') { icon = '<i class="fa-solid fa-minus text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; } 
                             else { icon = '<i class="fa-solid fa-pen text-sky-500"></i>'; colorClass = 'text-sky-600'; sign = '='; }
                             
                             amountDisplay = log.amount;
-                            prevNowHtml = `<p class="text-[8px] font-bold text-slate-500 mt-1">Sblm: Rp ${(log.prev || 0).toLocaleString('id-ID')} <i class="fa-solid fa-arrow-right mx-0.5"></i> Rp ${(log.now || 0).toLocaleString('id-ID')}</p>`;
+                            prevNowHtml = sisaText;
                         } else {
                             // Untuk system_cut (ADM, Cicilan, Refund)
                             if (log.amount > 0) {
@@ -6122,8 +6143,10 @@
                                 // Refund / Penambahan saldo
                                 icon = '<i class="fa-solid fa-arrow-rotate-left text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; amountDisplay = Math.abs(log.amount);
                             }
+                            
+                            prevNowHtml = sisaText;
                             if (log.desc) {
-                                prevNowHtml = `<p class="text-[8px] font-bold text-slate-500 mt-1 truncate max-w-[140px]" title="${log.desc}">${log.desc}</p>`;
+                                prevNowHtml += `<p class="text-[8px] font-bold text-slate-400 mt-0.5 truncate max-w-[140px]" title="${log.desc}">${log.desc}</p>`;
                             }
                         }
 
