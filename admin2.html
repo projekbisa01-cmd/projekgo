@@ -292,6 +292,9 @@
                 <button onclick="submitOrder()" id="btn-submit-order" class="w-full py-3 btn-primary text-white font-black rounded-xl shadow-lg shadow-sky-200/50 active:scale-95 transition-all text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 mt-1">
                     <i class="fa-solid fa-paper-plane"></i> Kirim Order
                 </button>
+                <button onclick="window.submitPendingOrder()" id="btn-submit-pending" class="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg shadow-amber-200/50 active:scale-95 transition-all text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 mt-2">
+                    <i class="fa-solid fa-clock-rotate-left"></i> Masukkan ke Pending
+                </button>
             </section>
         </div>
 
@@ -4764,6 +4767,66 @@
                 document.getElementById('cust-phone').value = ''; document.getElementById('cust-name').value = '';
                 document.getElementById('order-details').value = ''; document.getElementById('order-fee').value = '';
                 document.getElementById('order-tambahan').value = ''; window.clearSelection();
+                
+            } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+        };
+
+        window.submitPendingOrder = async () => {
+            const phone = document.getElementById('cust-phone').value.trim();
+            const custName = document.getElementById('cust-name').value.trim();
+            const rawFee = document.getElementById('order-fee').value.trim().toLowerCase();
+            const rawTambahan = document.getElementById('order-tambahan').value.trim().toLowerCase();
+            let details = document.getElementById('order-details').value;
+            
+            // CLEAN UP DETAILS (Menghilangkan list strip / bullet point otomatis)
+            details = details.split('\n').map(l => l.replace(/^[-•\s]+/, '').trim()).filter(l => l !== '').join('\n');
+
+            if (!phone || !details.trim() || !rawFee) { window.showAlert('Lengkapi Form', 'Isi WA, rincian, dan ongkir.', 'warning'); return; }
+
+            const parseNominal = (rawStr) => {
+                let str = String(rawStr).toLowerCase().replace(',', '.');
+                let isK = str.includes('k');
+                let val = parseFloat(str.replace(/[^0-9.]/g, '')) || 0;
+                if (isK || (val > 0 && val < 1000)) return { real: val * 1000, saved: val };
+                else return { real: val, saved: val / 1000 };
+            };
+
+            const feeParsed = parseNominal(rawFee);
+            const tamParsed = parseNominal(rawTambahan);
+
+            const loader = document.getElementById('loading-overlay');
+            loader.classList.remove('hidden'); loader.classList.add('flex');
+
+            try {
+                const batch = writeBatch(db);
+                const items = details.split('\n').map(l => ({ name: l, qty: 1 }));
+                const pesanan_text = details;
+                const orderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'));
+
+                // LOGIKA UNTUK MENYIMPAN KE DAFTAR PENDING (UNASSIGNED)
+                batch.set(orderRef, {
+                    rider_uid: null, rider_name: null, customer_phone: phone, customer_name: custName,
+                    fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false,
+                    created_at: serverTimestamp(), missed_by: null,
+                    pesanan_text: pesanan_text
+                });
+                
+                window.showAlert('Disimpan ke Pending', 'Orderan berhasil dimasukkan ke tab Pending secara manual.', 'success');
+
+                let cleanPhone = phone.replace(/[^0-9+]/g, '');
+                if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
+                    fetch(GAS_CUSTOMER_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ phone: cleanPhone, name: custName || 'Pelanggan' }) }).catch(e => {});
+                }
+
+                await batch.commit();
+
+                // Bersihkan form
+                document.getElementById('cust-phone').value = ''; document.getElementById('cust-name').value = '';
+                document.getElementById('order-details').value = ''; document.getElementById('order-fee').value = '';
+                document.getElementById('order-tambahan').value = ''; window.clearSelection();
+                
+                // Arahkan admin ke halaman pending agar bisa melihat orderan yang baru ditambahkan
+                window.switchPage('pending');
                 
             } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
         };
