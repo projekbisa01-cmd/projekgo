@@ -1861,6 +1861,73 @@
             }
         };
 
+        // FUNGSI BARU: Untuk mengontrol perpindahan menu tab di halaman Rider Off
+        window.switchRiderOffTab = (tab) => {
+            const btnOff = document.getElementById('tab-rider-off');
+            const btnShift = document.getElementById('tab-rider-shift');
+            const btnRekomendasi = document.getElementById('tab-rider-rekomendasi');
+            
+            const viewOff = document.getElementById('view-rider-off-list');
+            const viewShift = document.getElementById('view-rider-shift');
+            const viewRekomendasi = document.getElementById('view-rider-rekomendasi');
+
+            // Reset semua tombol ke tampilan tidak aktif
+            const inactiveClass = "shrink-0 px-4 py-2.5 rounded-full bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-slate-200 hover:bg-slate-100";
+            if(btnOff) btnOff.className = inactiveClass;
+            if(btnShift) btnShift.className = inactiveClass;
+            if(btnRekomendasi) btnRekomendasi.className = inactiveClass;
+
+            // Sembunyikan semua tampilan konten
+            if(viewOff) viewOff.classList.add('hidden');
+            if(viewShift) viewShift.classList.add('hidden');
+            if(viewRekomendasi) viewRekomendasi.classList.add('hidden');
+
+            // Tampilkan konten yang dipilih dan beri warna tombol yang aktif
+            if (tab === 'off') {
+                if(btnOff) btnOff.className = "shrink-0 px-4 py-2.5 rounded-full bg-rose-500 text-white text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-rose-500";
+                if(viewOff) viewOff.classList.remove('hidden');
+            } else if (tab === 'shift') {
+                if(btnShift) btnShift.className = "shrink-0 px-4 py-2.5 rounded-full bg-indigo-500 text-white text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-indigo-500";
+                if(viewShift) viewShift.classList.remove('hidden');
+            } else if (tab === 'rekomendasi') {
+                if(btnRekomendasi) btnRekomendasi.className = "shrink-0 px-4 py-2.5 rounded-full bg-amber-500 text-white text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border border-amber-500";
+                if(viewRekomendasi) viewRekomendasi.classList.remove('hidden');
+                
+                // TAMBAHAN: Memanggil fungsi load data otomatis ketika tab ini diklik
+                if (typeof window.loadRekomendasiOff === 'function') window.loadRekomendasiOff();
+            }
+        };
+
+        // FUNGSI BARU: Untuk mengontrol perpindahan menu Shift Pagi/Siang/Part-time
+        window.switchShiftList = (tab) => {
+            const tabs = ['pagi', 'siang', 'parttime'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`tab-shift-${t}`);
+                const container = document.getElementById(`container-shift-${t}`);
+                const badge = document.getElementById(`count-${t}`);
+                
+                if (btn && container) {
+                    if (t === tab) {
+                        container.classList.remove('hidden');
+                        if (t === 'pagi') {
+                            btn.className = "shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border flex items-center gap-1.5 bg-amber-500 text-white border-amber-500";
+                            if(badge) badge.className = "px-1.5 rounded-full bg-white/20 text-white";
+                        } else if (t === 'siang') {
+                            btn.className = "shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border flex items-center gap-1.5 bg-sky-500 text-white border-sky-500";
+                            if(badge) badge.className = "px-1.5 rounded-full bg-white/20 text-white";
+                        } else if (t === 'parttime') {
+                            btn.className = "shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border flex items-center gap-1.5 bg-indigo-500 text-white border-indigo-500";
+                            if(badge) badge.className = "px-1.5 rounded-full bg-white/20 text-white";
+                        }
+                    } else {
+                        container.classList.add('hidden');
+                        btn.className = "shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border flex items-center gap-1.5 bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100";
+                        if(badge) badge.className = "px-1.5 rounded-full bg-slate-200 text-slate-600";
+                    }
+                }
+            });
+        };
+
         // --- LOGIKA MODE MALAM KHUSUS BERANDA ---
         window.isHomeDarkMode = false;
         window.toggleHomeDarkMode = () => {
@@ -2397,6 +2464,103 @@
                 `;
             });
             container.innerHTML = html;
+        };
+
+        // FUNGSI BARU: Untuk meload data Rekomendasi Off dari GAS (Google Sheet) dengan Pengelompokan Hari
+        window._cacheRekomendasiOff = null;
+        window.loadRekomendasiOff = async () => {
+            const container = document.getElementById('rekomendasi-off-list');
+            if (!container) return;
+
+            // 1. FITUR CACHING (Hemat Kuota API)
+            // Jika data sudah pernah ditarik, gunakan cache HTML yang tersimpan
+            if (window._cacheRekomendasiOff) {
+                container.innerHTML = window._cacheRekomendasiOff;
+                return;
+            }
+
+            // Tampilkan animasi loading
+            container.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">Menarik data dari Sheet...</p></div>';
+
+            try {
+                // 2. FETCH DATA DARI GOOGLE APPS SCRIPT (GAS)
+                const url = "https://script.google.com/macros/s/AKfycby5fdgopf9gCle1qUVZpfTObuICIMZ1DZWBvuYJAct4C1yj-S52gWNaOffYCJtDq2k/exec?action=getAllSchedules";
+                const response = await fetch(url);
+                if (!response.ok) throw new Error("Gagal mengambil data");
+                
+                const jsonResponse = await response.json();
+                
+                // 3. VALIDASI DATA
+                if (!jsonResponse.success || !jsonResponse.data || jsonResponse.data.length === 0) {
+                    container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Data rekomendasi off masih kosong.</p>';
+                    return;
+                }
+
+                const dataArray = jsonResponse.data;
+                const mergedRiders = typeof getMergedRidersForDropdown === 'function' ? getMergedRidersForDropdown() : [];
+
+                // 4. LOGIKA PENGELOMPOKAN BERDASARKAN HARI
+                const groupedData = {};
+                dataArray.forEach(item => {
+                    const hari = item.rekomendasi_hari || "Belum Diatur";
+                    if (!groupedData[hari]) {
+                        groupedData[hari] = [];
+                    }
+                    groupedData[hari].push(item); // Memasukkan rider ke dalam array harinya masing-masing
+                });
+
+                // 5. SORTING URUTAN HARI (Senin -> Minggu)
+                const dayOrder = { 'Senin': 1, 'Selasa': 2, 'Rabu': 3, 'Kamis': 4, 'Jumat': 5, 'Sabtu': 6, 'Minggu': 7, '-': 8, 'Belum Diatur': 9 };
+                const sortedDays = Object.keys(groupedData).sort((a, b) => (dayOrder[a] || 99) - (dayOrder[b] || 99));
+
+                let html = '';
+                sortedDays.forEach(hari => {
+                    // Kode styling untuk header hari
+                    html += `<div class="bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-wider mb-2 mt-3 flex items-center shadow-sm"><i class="fa-regular fa-calendar-check mr-1.5"></i> ${hari}</div>`;
+                    
+                    // 6. RENDER HTML PER RIDER DALAM KELOMPOK HARI TERSEBUT
+                    groupedData[hari].forEach(item => {
+                        let name = "Rider " + (item.uid || "");
+                        
+                        // Mencocokkan UID dari Sheet dengan Nama Rider yang ada di database lokal Firebase
+                        if (item.uid) {
+                            const matchedRider = mergedRiders.find(r => String(r.uid).trim() === String(item.uid).trim());
+                            if (matchedRider) {
+                                name = matchedRider.name;
+                            }
+                        }
+
+                        let dateOff = item.rekomendasi_tanggal || '-';
+
+                        // Penyusunan string HTML untuk kartu rider
+                        html += `
+                            <div class="bg-white rounded-xl p-3 border border-slate-100 shadow-sm mb-1.5 flex items-center justify-between hover:border-amber-200 transition-colors">
+                                <div class="flex items-center gap-2.5 overflow-hidden w-full pr-2">
+                                    <div class="w-8 h-8 rounded-full bg-slate-50 text-slate-400 border border-slate-200 flex items-center justify-center shrink-0">
+                                        <i class="fa-solid fa-motorcycle text-[10px]"></i>
+                                    </div>
+                                    <div class="flex flex-col overflow-hidden">
+                                        <span class="font-black text-slate-700 text-[11px] uppercase truncate">${name}</span>
+                                        <span class="text-[9px] font-bold text-slate-500 mt-0.5 truncate"><i class="fa-regular fa-calendar-xmark text-amber-500 mr-1"></i>Tgl: ${dateOff}</span>
+                                    </div>
+                                </div>
+                                <div class="shrink-0 text-right">
+                                    <span class="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 shadow-sm">REKOMENDASI</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                });
+
+                // 7. SIMPAN KE CACHE DAN TAMPILKAN
+                window._cacheRekomendasiOff = html;
+                container.innerHTML = html;
+
+            } catch (e) {
+                // Penanganan jika error koneksi / fetch gagal
+                console.error("Error Load GAS Rekomendasi:", e);
+                container.innerHTML = '<div class="text-center py-4 bg-rose-50 rounded-xl border border-rose-100 p-3 mt-2"><i class="fa-solid fa-triangle-exclamation text-rose-500 text-xl mb-2"></i><p class="text-[10px] text-rose-600 font-bold mb-1">Gagal load data Google Sheet. Periksa koneksi.</p></div>';
+            }
         };
 
         window.updateDayName = () => {
