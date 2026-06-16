@@ -4776,143 +4776,171 @@
                 }
                 
                 // Membuat nomor order otomatis dengan format order#(tanggal)(urutan)
-                // Urutan dipastikan menjadi 3 digit (001, 002, dst) berdasarkan baris ekspor.
-                const urutan = String(index + 1).padStart(3, '0');
-                const keteranganOrder = `order#${dayStr}${urutan}`;
+                const orderId = `ORD-${formatTanggal.replace(/-/g, '')}-${String(index + 1).padStart(3, '0')}`;
                 
                 return {
-                    "UID": String(o.rider_uid || ''), 
-                    "Nama_Rider": String(o.rider_name || ''), 
-                    "Tanggal": formatTanggal, 
-                    "Jam": formatJam, 
-                    "Keterangan": keteranganOrder,
-                    "Nominal_Kotor": ongkir, 
-                    "Tambahan": tambahan,
-                    "Status": String(o.Status || 'Selesai')
+                    "No": index + 1,
+                    "ID Order": orderId,
+                    "Tanggal": formatTanggal,
+                    "Jam": formatJam,
+                    "Nama Rider": o.rider_name || '-',
+                    "Pelanggan": o.Nama_Pelanggan || '-',
+                    "Rincian": o.Keterangan || 'Orderan Biasa',
+                    "Ongkir (Ribuan)": ongkir,
+                    "Tambahan (Ribuan)": tambahan,
+                    "Total (Ribuan)": ongkir + tambahan
                 };
             });
 
-            // Tambahkan baris TOTAL di bawah (dengan angka mentah untuk format Excel)
-            excelData.push({
-                "UID": "TOTAL",
-                "Nama_Rider": "",
-                "Tanggal": "",
-                "Jam": "",
-                "Keterangan": "",
-                "Nominal_Kotor": parseFloat(totalOngkir.toFixed(2)),
-                "Tambahan": parseFloat(totalTambahan.toFixed(2)),
-                "Status": ""
-            });
-
-            // Pastikan library XLSX sudah termuat
             if (typeof XLSX === 'undefined') {
                 window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
                 return;
             }
 
             const worksheet = XLSX.utils.json_to_sheet(excelData);
-
-            // Menerapkan Format Accounting Rupiah untuk kolom Nominal_Kotor dan Tambahan
-            const range = XLSX.utils.decode_range(worksheet['!ref']);
-            // Format standar Accounting Excel untuk Rupiah dengan dukungan Desimal
-            const formatAccounting = '_("Rp"* #,##0.##_);_("Rp"* \\(#,##0.##\\);_("Rp"* "-"_);_(@_)';
-
-            for(let R = range.s.r + 1; R <= range.e.r; ++R) {
-                // Karena ada tambahan kolom "Keterangan" sebelumnya, 
-                // index kolom bergeser menjadi c:5 (Kolom F) dan c:6 (Kolom G)
-                const cellF = worksheet[XLSX.utils.encode_cell({c:5, r:R})]; // Nominal_Kotor
-                const cellG = worksheet[XLSX.utils.encode_cell({c:6, r:R})]; // Tambahan
-                
-                if(cellF && cellF.t === 'n') cellF.z = formatAccounting;
-                if(cellG && cellG.t === 'n') cellG.z = formatAccounting;
-            }
-
             const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Rekap Selesai");
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Rekap Order");
             
-            // Trigger download langsung dengan format asli .xlsx (Excel)
-            XLSX.writeFile(workbook, `Rekap_PROJEKGO_${dateVal}.xlsx`);
+            XLSX.writeFile(workbook, `Rekap_Order_${dateVal}.xlsx`);
         };
-        
-        window.scrollToBookmark = () => { window.showAlert('Info', 'Fungsi ini dapat Anda kembangkan lebih lanjut.', 'info'); };
 
-        window.exportRiwayatSaldoToExcel = () => {
+        window.exportRiwayatSaldoToExcel = async () => {
             if (!allRiderBalances || allRiderBalances.length === 0) {
                 window.showAlert('Kosong', 'Tidak ada data saldo rider.', 'warning');
                 return;
             }
 
-            // Ambil tanggal target dari input history-date, jika kosong gunakan hari ini
-            let targetDateVal = document.getElementById('history-date').value;
-            if (!targetDateVal) {
-                const now = new Date();
-                const dd = String(now.getDate()).padStart(2, '0');
-                const mm = String(now.getMonth() + 1).padStart(2, '0');
-                const yyyy = now.getFullYear();
-                targetDateVal = `${yyyy}-${mm}-${dd}`;
-            }
+            const loader = document.getElementById('loading-overlay');
+            if (loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
-            let allLogs = [];
+            try {
+                // Ambil tanggal target dari input history-date, jika kosong gunakan hari ini
+                let targetDateVal = document.getElementById('history-date').value;
+                if (!targetDateVal) {
+                    const now = new Date();
+                    const dd = String(now.getDate()).padStart(2, '0');
+                    const mm = String(now.getMonth() + 1).padStart(2, '0');
+                    const yyyy = now.getFullYear();
+                    targetDateVal = `${yyyy}-${mm}-${dd}`;
+                }
 
-            // Kumpulkan log riwayat dari semua rider yang SESUAI dengan tanggal target
-            allRiderBalances.forEach(rider => {
-                const logs = rider.edit_logs || [];
-                logs.forEach(log => {
-                    const logDateObj = new Date(log.time);
-                    const logDd = String(logDateObj.getDate()).padStart(2, '0');
-                    const logMm = String(logDateObj.getMonth() + 1).padStart(2, '0');
-                    const logYyyy = logDateObj.getFullYear();
-                    const logDateStr = `${logYyyy}-${logMm}-${logDd}`;
+                let allLogs = [];
 
-                    if (logDateStr === targetDateVal) {
+                // Kumpulkan log riwayat dari semua rider yang SESUAI dengan tanggal target
+                allRiderBalances.forEach(rider => {
+                    const logs = rider.edit_logs || [];
+                    logs.forEach(log => {
+                        const logDateObj = new Date(log.time);
+                        const logDd = String(logDateObj.getDate()).padStart(2, '0');
+                        const logMm = String(logDateObj.getMonth() + 1).padStart(2, '0');
+                        const logYyyy = logDateObj.getFullYear();
+                        const logDateStr = `${logYyyy}-${logMm}-${logDd}`;
+
+                        if (logDateStr === targetDateVal) {
+                            allLogs.push({
+                                type: 'manual',
+                                name: rider.name || rider.id,
+                                amount: log.amount,
+                                action: log.action,
+                                time: log.time
+                            });
+                        }
+                    });
+                });
+
+                // Trik: Ambil juga dari arsip riwayat_potongan permanen agar histori lama ikut ke-export
+                try {
+                    const startOfDay = new Date(`${targetDateVal}T00:00:00`);
+                    const endOfDay = new Date(`${targetDateVal}T23:59:59.999`);
+                    
+                    const q = query(
+                        collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
+                        where("created_at", ">=", startOfDay),
+                        where("created_at", "<=", endOfDay)
+                    );
+                    const snap = await getDocs(q);
+                    
+                    snap.forEach(doc => {
+                        const data = doc.data();
+                        let actionText = 'Potongan ADM';
+                        if (data.type === 'auto_cicilan') actionText = 'Potongan Cicilan';
+                        else if (data.type && data.type.includes('refund')) actionText = 'Refund Saldo';
+                        else if (data.type === 'manual_sub') actionText = 'Kurangi';
+                        else if (data.type === 'manual_add') actionText = 'Top Up Saldo';
+                        else if (data.type === 'manual_set') actionText = 'Set Manual Saldo';
+                        else if (data.type === 'manual_order') actionText = 'Order Susulan';
+                        
+                        let amt = Math.abs(data.amount);
+                        let timeMs = data.created_at ? data.created_at.seconds * 1000 : 0;
+                        
                         allLogs.push({
-                            name: rider.name || rider.id,
-                            amount: log.amount,
-                            action: log.action,
-                            time: log.time
+                            type: 'system',
+                            name: data.rider_name || data.rider_uid,
+                            amount: amt,
+                            action: actionText,
+                            time: timeMs
                         });
+                    });
+                } catch(e) {
+                    console.warn("Gagal tarik arsip riwayat_potongan:", e);
+                }
+
+                // Deduplikasi (Agar data di hari ini tidak double antara edit_logs dengan riwayat permanen)
+                let uniqueLogs = [];
+                allLogs.forEach(log => {
+                    const duplicateIndex = uniqueLogs.findIndex(u => u.name === log.name && Math.abs(u.time - log.time) < 60000 && Math.abs(u.amount) === Math.abs(log.amount));
+                    if (duplicateIndex === -1) {
+                        uniqueLogs.push(log);
+                    } else {
+                        if (log.type === 'manual') uniqueLogs[duplicateIndex] = log;
                     }
                 });
-            });
-
-            // Urutkan berdasarkan waktu pengeditan terbaru
-            allLogs.sort((a, b) => b.time - a.time);
-
-            if (allLogs.length === 0) {
-                const [y, m, d] = targetDateVal.split('-');
-                window.showAlert('Kosong', `Tidak ada riwayat perubahan saldo untuk tanggal ${d}-${m}-${y}.`, 'warning');
-                return;
-            }
-
-            // Format data untuk SheetJS (Excel Asli)
-            const excelData = allLogs.map(log => {
-                const dateObj = new Date(log.time);
-                const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-                const formatWaktu = dateObj.toLocaleDateString('id-ID', optionsDate);
-                const formatJam = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':');
                 
-                return {
-                    "Nama Rider": log.name,
-                    "Nominal": Number(log.amount) || 0, // Dibiarkan sebagai Number agar bisa di-SUM di Excel
-                    "Tindakan": log.action,
-                    "Waktu": formatWaktu,
-                    "Jam": formatJam
-                };
-            });
+                // Urutkan berdasarkan waktu pengeditan terbaru
+                uniqueLogs.sort((a, b) => b.time - a.time);
 
-            // Pastikan library XLSX sudah termuat dari CDN
-            if (typeof XLSX === 'undefined') {
-                window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
-                return;
+                if (uniqueLogs.length === 0) {
+                    const [y, m, d] = targetDateVal.split('-');
+                    window.showAlert('Kosong', `Tidak ada riwayat perubahan saldo untuk tanggal ${d}-${m}-${y}.`, 'warning');
+                    return;
+                }
+
+                // Format data untuk SheetJS (Excel Asli)
+                const excelData = uniqueLogs.map(log => {
+                    const dateObj = new Date(log.time);
+                    const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+                    const formatWaktu = dateObj.toLocaleDateString('id-ID', optionsDate);
+                    const formatJam = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':');
+                    
+                    return {
+                        "Nama Rider": log.name,
+                        "Nominal": Number(log.amount) || 0, // Dibiarkan sebagai Number agar bisa di-SUM di Excel
+                        "Tindakan": log.action,
+                        "Waktu": formatWaktu,
+                        "Jam": formatJam
+                    };
+                });
+
+                // Pastikan library XLSX sudah termuat dari CDN
+                if (typeof XLSX === 'undefined') {
+                    window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
+                    return;
+                }
+
+                // Generate worksheet dan workbook
+                const worksheet = XLSX.utils.json_to_sheet(excelData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Riwayat Saldo");
+                
+                // Trigger download dengan ekstensi .xlsx
+                XLSX.writeFile(workbook, `Riwayat_Saldo_Rider_${targetDateVal.replace(/-/g, '')}.xlsx`);
+
+            } catch (err) {
+                console.error(err);
+                window.showAlert('Error', 'Gagal memproses ekspor Excel.', 'error');
+            } finally {
+                if (loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             }
-
-            // Generate worksheet dan workbook
-            const worksheet = XLSX.utils.json_to_sheet(excelData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Riwayat Saldo");
-            
-            // Trigger download dengan ekstensi .xlsx
-            XLSX.writeFile(workbook, `Riwayat_Saldo_Rider_${targetDateVal.replace(/-/g, '')}.xlsx`);
         };
 
         window.submitOrder = async () => {
@@ -6561,6 +6589,8 @@
                     else if (data.type === 'manual_sub') actionText = 'Potong Manual';
                     else if (data.type === 'koreksi_order') actionText = 'Koreksi Saldo';
                     else if (data.type === 'manual_order') actionText = 'Potongan Susulan';
+                    else if (data.type === 'manual_add') actionText = 'Top Up Saldo';
+                    else if (data.type === 'manual_set') actionText = 'Set Manual Saldo';
                     
                     combinedLogs.push({
                         type: 'system_cut',
@@ -6570,6 +6600,23 @@
                         time: timeMs
                     });
                 });
+
+                // DEDUPLIKASI LOGS (Agar Top Up hari ini yang ada di edit_logs tidak double dengan riwayat_potongan)
+                let uniqueLogs = [];
+                combinedLogs.forEach(log => {
+                    const duplicateIndex = uniqueLogs.findIndex(u => Math.abs(u.time - log.time) < 60000 && Math.abs(u.amount) === Math.abs(log.amount));
+                    
+                    if (duplicateIndex === -1) {
+                        uniqueLogs.push(log);
+                    } else {
+                        // Jika duplikat, prioritaskan yang tipe 'manual_edit' karena punya info 'prev' dan 'now' akurat
+                        if (log.type === 'manual_edit') {
+                            uniqueLogs[duplicateIndex] = log;
+                        }
+                    }
+                });
+                
+                combinedLogs = uniqueLogs;
 
                 // Urutkan di memori berdasarkan waktu terbaru (Descending)
                 combinedLogs.sort((a, b) => b.time - a.time);
@@ -7239,7 +7286,7 @@
             try {
                 let logs = tx.editLogs || [];
                 logs.unshift({ action: (tx.module === 'saldo' && tx.actionType === 'set') ? 'Set Manual' : tx.actionText, amount: tx.amount, prev: tx.current, now: tx.newSaldo, time: Date.now() });
-                logs = logs.slice(0, tx.module === 'saldo' ? 10 : 20);
+                logs = logs.slice(0, tx.module === 'saldo' ? 20 : 20);
 
                 if (tx.module === 'saldo') {
                     const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', tx.uid);
@@ -7252,6 +7299,17 @@
                         await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
                             rider_uid: tx.uid, rider_name: tx.name, amount: tx.amount, omset_order: 0, 
                             type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
+                        });
+                    } else if (tx.actionType === 'add') {
+                        await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
+                            rider_uid: tx.uid, rider_name: tx.name, amount: -tx.amount, omset_order: 0, 
+                            type: 'manual_add', desc: 'Top Up Saldo', created_at: serverTimestamp()
+                        });
+                    } else if (tx.actionType === 'set') {
+                        let diff = tx.current - tx.amount; 
+                        await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
+                            rider_uid: tx.uid, rider_name: tx.name, amount: diff, omset_order: 0, 
+                            type: 'manual_set', desc: 'Set Manual Saldo', created_at: serverTimestamp()
                         });
                     }
                     
