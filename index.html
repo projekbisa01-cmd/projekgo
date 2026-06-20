@@ -5087,6 +5087,237 @@
             }
         }
 
+        // ===================================================================
+        // FUNGSI NOTA TUGAS BERJALAN (ACTIVE NOTA - STEP 2)
+        // ===================================================================
+        window.activeNotaItems = [];
+        window.hasInitializedActiveNota = false;
+
+        window.addActiveNotaItem = function() {
+            const nameInput = document.getElementById('active-nota-item');
+            const priceInput = document.getElementById('active-nota-price');
+            const name = nameInput.value.trim();
+            const qty = 1;
+            const price = parseInt((priceInput.value || "").replace(/\./g, '')) || 0;
+            
+            if (!name) { 
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Masukkan nama barang!"); 
+                } else {
+                    alert("Masukkan nama barang!");
+                }
+                return; 
+            }
+            
+            window.activeNotaItems.push({ name, qty, price });
+            nameInput.value = ""; 
+            priceInput.value = ""; 
+            nameInput.focus();
+            
+            if (typeof window.updateActiveNotaPreview === 'function') {
+                window.updateActiveNotaPreview(); 
+            }
+            try { playBeep(600, 0.05); } catch(e){}
+        };
+
+        window.resetActiveNota = function() {
+            if(confirm("Hapus semua item dan kembalikan ongkir ke awal?")) { 
+                window.activeNotaItems = []; 
+                // Kembalikan ongkir ke nilai awal
+                const ongkir = (window.currentActiveOrderBaseFee || 0) * 1000;
+                const extra = (window.currentActiveOrderExtraFee || 0) * 1000;
+                
+                const ongkirInput = document.getElementById('active-nota-input-ongkir');
+                const extraInput = document.getElementById('active-nota-input-extra');
+                
+                if (ongkirInput) ongkirInput.value = ongkir > 0 ? ongkir.toLocaleString('id-ID') : "";
+                if (extraInput) extraInput.value = extra > 0 ? extra.toLocaleString('id-ID') : "";
+                
+                if (typeof window.updateActiveNotaPreview === 'function') {
+                    window.updateActiveNotaPreview(); 
+                }
+            }
+        };
+
+        window.deleteActiveNotaItem = function(index) {
+            if(confirm("Hapus item belanja ini?")) {
+                window.activeNotaItems.splice(index, 1);
+                if (typeof window.updateActiveNotaPreview === 'function') {
+                    window.updateActiveNotaPreview();
+                }
+            }
+        };
+
+        window.editActiveNotaItem = function(index) {
+            const item = window.activeNotaItems[index];
+            document.getElementById('active-nota-item').value = item.name;
+            document.getElementById('active-nota-price').value = item.price.toLocaleString('id-ID');
+            
+            window.activeNotaItems.splice(index, 1);
+            if (typeof window.updateActiveNotaPreview === 'function') {
+                window.updateActiveNotaPreview();
+            }
+            
+            document.getElementById('active-nota-item').focus();
+        };
+
+        window.updateActiveNotaPreview = function() {
+            const customer = document.getElementById('active-nota-customer').value || "Pelanggan";
+            const itemsListContainer = document.getElementById('active-nota-items-list');
+            const totalPriceEl = document.getElementById('active-nota-preview-total');
+            const riderName = document.getElementById('profile-name').innerText;
+            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
+            
+            const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
+            const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
+            const ongkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
+            const extra = parseInt(extraInput.replace(/\./g, '')) || 0;
+
+            document.getElementById('active-nota-preview-customer').innerText = customer;
+            document.getElementById('active-nota-preview-rider').innerText = riderName;
+            document.getElementById('active-nota-preview-date').innerText = dateStr;
+            
+            if (window.activeNotaItems.length === 0 && ongkir === 0 && extra === 0) {
+                itemsListContainer.innerHTML = `<div class="text-center text-gray-400 italic text-[10px] py-2">- Belum ada item ditambahkan -</div>`;
+                totalPriceEl.innerText = "Rp 0";
+                return;
+            }
+            
+            let html = ''; let grandTotal = 0;
+            if (window.activeNotaItems.length > 0) {
+                window.activeNotaItems.forEach((item, index) => {
+                    grandTotal += item.price;
+                    html += `
+                        <div class="flex justify-between items-start border-b border-dashed border-gray-300 pb-1 mb-1">
+                            <div class="flex-1 pr-2">
+                                <div class="flex items-center flex-wrap gap-1">
+                                    <span class="font-bold text-black text-[11px]">${item.name}</span>
+                                    <div class="flex gap-1">
+                                        <button onclick="window.editActiveNotaItem(${index})" class="text-[8px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100"><i class="fa-solid fa-pen"></i></button>
+                                        <button onclick="window.deleteActiveNotaItem(${index})" class="text-[8px] text-red-600 font-bold bg-red-50 px-1.5 py-0.5 rounded border border-red-100"><i class="fa-solid fa-trash"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="font-bold text-black mt-0.5 text-[11px]">Rp ${item.price.toLocaleString('id-ID')}</div>
+                        </div>`;
+                });
+            }
+            
+            if (ongkir > 0 || extra > 0) {
+                html += `<div class="mt-1 pt-1 border-t border-gray-300">`;
+                if (ongkir > 0) {
+                    grandTotal += ongkir;
+                    html += `
+                        <div class="flex justify-between items-start mb-0.5">
+                            <div><span class="font-bold text-gray-700 text-[11px]">Ongkos Kirim</span></div>
+                            <div class="font-bold text-black text-[11px]">Rp ${ongkir.toLocaleString('id-ID')}</div>
+                        </div>`;
+                }
+                if (extra > 0) {
+                    grandTotal += extra;
+                    html += `
+                        <div class="flex justify-between items-start mb-0.5">
+                            <div><span class="font-bold text-gray-700 text-[11px]">Tambahan Ongkir</span></div>
+                            <div class="font-bold text-black text-[11px]">Rp ${extra.toLocaleString('id-ID')}</div>
+                        </div>`;
+                }
+                html += `</div>`;
+            }
+            
+            itemsListContainer.innerHTML = html;
+            totalPriceEl.innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
+            
+            const uid = localStorage.getItem('rider_uid');
+            const qrisImgEl = document.getElementById('active-nota-qris-img');
+            if (uid && qrisImgEl && typeof window.getAssignedQrisUrl === 'function') {
+                qrisImgEl.src = window.getAssignedQrisUrl(uid);
+                qrisImgEl.parentElement.parentElement.style.display = 'block';
+            }
+        };
+
+        window.sendActiveNotaWhatsApp = function() {
+            const customer = document.getElementById('active-nota-customer').value || "Pelanggan";
+            const riderName = document.getElementById('profile-name').innerText;
+            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
+            const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
+            const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
+            const ongkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
+            const extra = parseInt(extraInput.replace(/\./g, '')) || 0;
+            
+            if (window.activeNotaItems.length === 0 && ongkir === 0 && extra === 0) {
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Nota masih kosong!");
+                } else {
+                    alert("Nota masih kosong!");
+                }
+                return;
+            }
+
+            let textMsg = `*PROJEKGO DELIVERY ORDER*\n`;
+            textMsg += `-----------------------------------\n`;
+            textMsg += `Tanggal  : ${dateStr}\n`;
+            textMsg += `Rider    : ${riderName}\n`;
+            textMsg += `Customer : ${customer}\n`;
+            textMsg += `-----------------------------------\n`;
+            
+            let grandTotal = 0;
+            
+            if (window.activeNotaItems.length > 0) {
+                textMsg += `*Rincian Pesanan:*\n`;
+                window.activeNotaItems.forEach(item => {
+                    textMsg += `- ${item.name}\n`;
+                    textMsg += `  Rp ${item.price.toLocaleString('id-ID')}\n`;
+                    grandTotal += item.price;
+                });
+                textMsg += `\n`;
+            }
+            
+            if (ongkir > 0 || extra > 0) {
+                textMsg += `*Biaya Pengiriman:*\n`;
+                if (ongkir > 0) {
+                    textMsg += `- Ongkos Kirim: Rp ${ongkir.toLocaleString('id-ID')}\n`;
+                    grandTotal += ongkir;
+                }
+                if (extra > 0) {
+                    textMsg += `- Tambahan: Rp ${extra.toLocaleString('id-ID')}\n`;
+                    grandTotal += extra;
+                }
+                textMsg += `\n`;
+            }
+            
+            textMsg += `-----------------------------------\n`;
+            textMsg += `*TOTAL BIAYA : Rp ${grandTotal.toLocaleString('id-ID')}*\n`;
+            textMsg += `-----------------------------------\n`;
+            textMsg += `Terima kasih atas kepercayaan Anda.\n`;
+            textMsg += `_#pesansekarangdiantarsekarang_\n\n`;
+            textMsg += `*(Mohon dicek dan dikoreksi lagi yah kak,TOTALAN dari saya,Apakah sudah sesuai.Mohon maaf jika ada kesalah)*`;
+            
+            const uid = localStorage.getItem('rider_uid');
+            if (uid && typeof window.getAssignedQrisUrl === 'function') {
+                const qrisUrl = window.getAssignedQrisUrl(uid);
+                textMsg += `\n\n*Ingin Bayar Pakai QRIS?*\nSilakan klik link/gambar berikut ini kak:\n🔗 ${qrisUrl}`;
+            }
+
+            if (window.currentRiderBankName === 'BCA') {
+                textMsg += `\n\nBisa juga ke rekening saya kak ${window.currentRiderBankName} no.rekening ${window.currentRiderBankAccount || '-'} atas nama ${window.currentRiderBankAccountName || '-'}`;
+            }
+
+            window.hasSentActiveNotaWA = true;
+            const btnLanjut = document.getElementById('btn-lanjut-foto');
+            const iconLock = document.getElementById('icon-lock-foto');
+            if (btnLanjut) {
+                btnLanjut.classList.remove('bg-gray-400');
+                btnLanjut.classList.add('bg-[#ea580c]', 'active:scale-95');
+            }
+            if (iconLock) {
+                iconLock.classList.add('hidden');
+            }
+
+            const phone = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
+            window.openWaSelector(phone, textMsg);
+        };
+        // ===================================================================
+
         function addNotaItem() {
             const nameInput = document.getElementById('nota-input-item');
             const priceInput = document.getElementById('nota-input-price');
