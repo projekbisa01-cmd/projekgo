@@ -761,8 +761,8 @@
                                 <i class="fa-solid fa-qrcode text-sm"></i> QRIS Cus
                             </button>
                         </div>
-                        <button onclick="window.goToPage(3)" class="w-full py-3.5 bg-[#ea580c] text-white font-bold rounded-xl shadow-md active:scale-95 transition-all text-xs uppercase tracking-widest flex justify-center items-center gap-2">
-                            Lanjut Foto Bukti <i class="fa-solid fa-arrow-right"></i>
+                        <button id="btn-lanjut-foto" onclick="window.checkAndGoToStep3()" class="w-full py-3.5 bg-gray-400 text-white font-bold rounded-xl shadow-md transition-all text-xs uppercase tracking-widest flex justify-center items-center gap-2">
+                            <i class="fa-solid fa-lock" id="icon-lock-foto"></i> Lanjut Foto Bukti <i class="fa-solid fa-arrow-right"></i>
                         </button>
                         <button onclick="window.goToPage(1)" class="w-full py-3 bg-transparent border border-slate-600 text-gray-400 font-bold rounded-xl active:scale-95 transition-all text-[10px] uppercase tracking-widest flex justify-center items-center gap-2 hover:bg-slate-800">
                             <i class="fa-solid fa-arrow-left"></i> KEMBALI KE DETAIL
@@ -3353,6 +3353,21 @@
         };
 
         // --- FUNGSI NAVIGASI STEP TUGAS BERJALAN ---
+        window.hasSentActiveNotaWA = false;
+
+        window.checkAndGoToStep3 = function() {
+            if (!window.hasSentActiveNotaWA) {
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Kirim nota dulu ke pelanggan via WA!");
+                } else {
+                    alert("Kirim nota dulu ke pelanggan via WA!");
+                }
+                try { playBeep(400, 0.2); } catch(e){} // Nada peringatan
+                return;
+            }
+            window.goToPage(3);
+        };
+
         window.goToPage = function(step) {
             const step1 = document.getElementById('step1');
             const step2 = document.getElementById('step2');
@@ -5283,265 +5298,18 @@
             }
             // -----------------------------------
 
-            window.openWaSelector("", textMsg);
-        }
-        
-        // --- FUNGSI NOTA DARI PESANAN DIPROSES ---
-        let activeNotaItems = [];
-        window.hasInitializedActiveNota = false;
-
-        function openActiveNota() {
-            document.getElementById('active-nota-customer').value = window.currentActiveCustomerName || "Pelanggan PROJEKGO";
-            
-            // Auto-fill ongkir dan tambahan dari data pesanan aktif HANYA sekali per order
-            if (!window.hasInitializedActiveNota) {
-                const ongkir = (window.currentActiveOrderBaseFee || 0) * 1000;
-                const extra = (window.currentActiveOrderExtraFee || 0) * 1000;
-                
-                document.getElementById('active-nota-input-ongkir').value = ongkir > 0 ? ongkir.toLocaleString('id-ID') : "";
-                document.getElementById('active-nota-input-extra').value = extra > 0 ? extra.toLocaleString('id-ID') : "";
-                
-                window.hasInitializedActiveNota = true; // Tandai bahwa nota sudah diinisialisasi
+            // --- UNLOCK TOMBOL LANJUT FOTO BUKTI ---
+            window.hasSentActiveNotaWA = true;
+            const btnLanjut = document.getElementById('btn-lanjut-foto');
+            const iconLock = document.getElementById('icon-lock-foto');
+            if (btnLanjut) {
+                btnLanjut.classList.remove('bg-gray-400');
+                btnLanjut.classList.add('bg-[#ea580c]', 'active:scale-95');
             }
-
-            document.getElementById('active-nota-modal').classList.remove('hidden');
-            document.getElementById('active-nota-modal').classList.add('flex');
-            updateActiveNotaPreview();
-            
-            // Tampilkan popup peringatan cek pesanan
-            setTimeout(() => {
-                if(typeof window.showNotaWarningPopup === 'function') {
-                    window.showNotaWarningPopup();
-                }
-            }, 300);
-        }
-
-        function closeActiveNota() {
-            document.getElementById('active-nota-modal').classList.add('hidden');
-            document.getElementById('active-nota-modal').classList.remove('flex');
-        }
-
-        function addActiveNotaItem() {
-            const nameInput = document.getElementById('active-nota-item');
-            const priceInput = document.getElementById('active-nota-price');
-            const name = nameInput.value.trim();
-            const qty = 1;
-            const price = parseInt((priceInput.value || "").replace(/\./g, '')) || 0;
-            if (!name) { alert("Masukkan nama barang!"); return; }
-            activeNotaItems.push({ name, qty, price });
-            nameInput.value = ""; priceInput.value = ""; nameInput.focus();
-            updateActiveNotaPreview(); 
-            playBeep(600, 0.05);
-        }
-
-        function resetActiveNota() {
-            if(confirm("Hapus semua item dan buat nota baru?")) { 
-                activeNotaItems = []; 
-                document.getElementById('active-nota-input-ongkir').value = "";
-                document.getElementById('active-nota-input-extra').value = "";
-                updateActiveNotaPreview(); 
+            if (iconLock) {
+                iconLock.classList.add('hidden');
             }
-        }
-
-        function updateActiveNotaPreview() {
-            const customer = "Pelanggan PROJEKGO";
-            const itemsListContainer = document.getElementById('active-nota-items-list');
-            const totalPriceEl = document.getElementById('active-nota-preview-total');
-            const riderName = document.getElementById('profile-name').innerText;
-            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
-            
-            const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
-            const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
-            const ongkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
-            const extra = parseInt(extraInput.replace(/\./g, '')) || 0;
-
-            document.getElementById('active-nota-preview-customer').innerText = customer;
-            document.getElementById('active-nota-preview-rider').innerText = riderName;
-            document.getElementById('active-nota-preview-date').innerText = dateStr;
-            
-            if (activeNotaItems.length === 0 && ongkir === 0 && extra === 0) {
-                itemsListContainer.innerHTML = `<div class="text-center text-gray-400 italic text-xs py-4">- Belum ada item ditambahkan -</div>`;
-                totalPriceEl.innerText = "Rp 0";
-                return;
-            }
-            
-            let html = ''; let grandTotal = 0;
-            if (activeNotaItems.length > 0) {
-                activeNotaItems.forEach((item, index) => {
-                    grandTotal += item.price;
-                    html += `
-                        <div class="flex justify-between items-start border-b border-dashed border-gray-200 pb-2 mb-2">
-                            <div class="flex-1 pr-2">
-                                <div class="flex items-center flex-wrap gap-2">
-                                    <span class="font-bold text-black">${item.name}</span>
-                                    <div class="flex gap-1" data-html2canvas-ignore="true">
-                                        <button onclick="editActiveNotaItem(${index})" class="text-[9px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 active:scale-95 transition-transform"><i class="fa-solid fa-pen mr-1"></i>Edit</button>
-                                        <button onclick="deleteActiveNotaItem(${index})" class="text-[9px] text-red-600 font-bold bg-red-50 px-1.5 py-0.5 rounded border border-red-100 active:scale-95 transition-transform"><i class="fa-solid fa-trash mr-1"></i>Hapus</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="font-bold text-black mt-0.5">Rp ${item.price.toLocaleString('id-ID')}</div>
-                        </div>`;
-                });
-            }
-            if (ongkir > 0 || extra > 0) {
-                html += `<div class="mt-2 pt-1 border-t border-gray-200">`;
-                if (ongkir > 0) {
-                    grandTotal += ongkir;
-                    html += `
-                        <div class="flex justify-between items-start mb-1">
-                            <div><span class="font-bold text-gray-700 text-xs">Ongkos Kirim</span></div>
-                            <div class="font-bold text-black text-xs">Rp ${ongkir.toLocaleString('id-ID')}</div>
-                        </div>`;
-                }
-                if (extra > 0) {
-                    grandTotal += extra;
-                    html += `
-                        <div class="flex justify-between items-start mb-1">
-                            <div><span class="font-bold text-gray-700 text-xs">Tambahan Ongkir</span></div>
-                            <div class="font-bold text-black text-xs">Rp ${extra.toLocaleString('id-ID')}</div>
-                        </div>`;
-                }
-                html += `</div>`;
-            }
-            
-            itemsListContainer.innerHTML = html;
-            totalPriceEl.innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
-            
-            // --- TAMBAHAN MENAMPILKAN GAMBAR QRIS DI NOTA ---
-            const uid = localStorage.getItem('rider_uid');
-            const qrisImgEl = document.getElementById('active-nota-qris-img');
-            if (uid && qrisImgEl && typeof window.getAssignedQrisUrl === 'function') {
-                qrisImgEl.src = window.getAssignedQrisUrl(uid);
-                qrisImgEl.style.display = 'block';
-            }
-        }
-
-        function deleteActiveNotaItem(index) {
-            if(confirm("Hapus item belanja ini?")) {
-                activeNotaItems.splice(index, 1);
-                updateActiveNotaPreview();
-            }
-        }
-
-        function editActiveNotaItem(index) {
-            const item = activeNotaItems[index];
-            document.getElementById('active-nota-item').value = item.name;
-            document.getElementById('active-nota-price').value = item.price.toLocaleString('id-ID');
-            
-            activeNotaItems.splice(index, 1);
-            updateActiveNotaPreview();
-            
-            // Fokus dan scroll ke inputan agar mudah langsung diedit
-            document.getElementById('active-nota-item').focus();
-            document.getElementById('active-nota-item').scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-
-        function downloadActiveNota(e) {
-            const ev = e || window.event;
-            const element = document.getElementById("active-receipt-preview");
-            const btn = ev ? ev.currentTarget : document.querySelector('button[onclick^="downloadActiveNota"]');
-            const originalContent = btn.innerHTML;
-            btn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i><span>Memproses...</span>`;
-            
-            html2canvas(element, { scale: 2, backgroundColor: "#ffffff", useCORS: true }).then(canvas => {
-                const fileName = `NOTA-PESANAN-${(window.currentActiveCustomerName || 'Pelanggan').replace(/\s+/g, '-')}-${Date.now()}.png`;
-                
-                // 1. Simpan gambar ke HP (Galeri)
-                window.saveCanvasAsImage(canvas, fileName);
-                
-                // 2. Otomatis arahkan ke WA pelanggan dengan pesan pengantar
-                const phone = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
-                const textMsg = `Halo Kak! 🙏\n\nIni nota pesanannya ya Kak. Silakan dicek kembali.\n\nPesanan sudah siap saya menuju lokasi antar,Mohon Ditunggu Yah Kak `;
-                
-                // Jeda 800ms agar Android selesai memproses simpan gambar sebelum melompat ke WA
-                setTimeout(() => {
-                    if (phone) {
-                        window.openWaSelector(phone, textMsg);
-                        // Tampilkan toast agar rider ingat melampirkan gambarnya
-                        if (typeof window.showCustomToast === 'function') {
-                            window.showCustomToast("Gambar tersimpan! Jangan lupa lampirkan gambar nota di chat ini.");
-                        }
-                    } else {
-                        alert("Gambar berhasil disimpan! Namun nomor HP pelanggan tidak ditemukan untuk membuka otomatis WhatsApp.");
-                    }
-                }, 800);
-
-                btn.innerHTML = originalContent;
-                playBeep(880, 0.1);
-            }).catch(err => { 
-                console.error(err); 
-                alert("Gagal membuat gambar."); 
-                btn.innerHTML = originalContent; 
-            });
-        }
-
-       function sendActiveNotaWhatsApp() {
-            const customer = "Pelanggan PROJEKGO";
-            const riderName = document.getElementById('profile-name').innerText;
-            const dateStr = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'numeric', year: 'numeric' });
-            const ongkirInput = document.getElementById('active-nota-input-ongkir')?.value || "";
-            const extraInput = document.getElementById('active-nota-input-extra')?.value || "";
-            const ongkir = parseInt(ongkirInput.replace(/\./g, '')) || 0;
-            const extra = parseInt(extraInput.replace(/\./g, '')) || 0;
-            
-            if (activeNotaItems.length === 0 && ongkir === 0 && extra === 0) {
-                alert("Nota masih kosong!");
-                return;
-            }
-
-            let textMsg = `*PROJEKGO DELIVERY ORDER*\n`;
-            textMsg += `-----------------------------------\n`;
-            textMsg += `Tanggal  : ${dateStr}\n`;
-            textMsg += `Rider    : ${riderName}\n`;
-            textMsg += `Customer : ${customer}\n`;
-            textMsg += `-----------------------------------\n`;
-            
-            let grandTotal = 0;
-            
-            if (activeNotaItems.length > 0) {
-                textMsg += `*Rincian Pesanan:*\n`;
-                activeNotaItems.forEach(item => {
-                    textMsg += `- ${item.name}\n`;
-                    textMsg += `  Rp ${item.price.toLocaleString('id-ID')}\n`;
-                    grandTotal += item.price;
-                });
-                textMsg += `\n`;
-            }
-            
-            if (ongkir > 0 || extra > 0) {
-                textMsg += `*Biaya Pengiriman:*\n`;
-                if (ongkir > 0) {
-                    textMsg += `- Ongkos Kirim: Rp ${ongkir.toLocaleString('id-ID')}\n`;
-                    grandTotal += ongkir;
-                }
-                if (extra > 0) {
-                    textMsg += `- Tambahan: Rp ${extra.toLocaleString('id-ID')}\n`;
-                    grandTotal += extra;
-                }
-                textMsg += `\n`;
-            }
-            
-            textMsg += `-----------------------------------\n`;
-            textMsg += `*TOTAL BIAYA : Rp ${grandTotal.toLocaleString('id-ID')}*\n`;
-            textMsg += `-----------------------------------\n`;
-            textMsg += `Terima kasih atas kepercayaan Anda.\n`;
-            textMsg += `_#pesansekarangdiantarsekarang_\n\n`;
-            textMsg += `*(Mohon dicek dan dikoreksi lagi yah kak,TOTALAN dari saya,Apakah sudah sesuai.Mohon maaf jika ada kesalah)*`;
-            
-            // --- TAMBAHAN LINK QRIS OTOMATIS ---
-            const uid = localStorage.getItem('rider_uid');
-            if (uid && typeof window.getAssignedQrisUrl === 'function') {
-                const qrisUrl = window.getAssignedQrisUrl(uid);
-                textMsg += `\n\n*Ingin Bayar Pakai QRIS?*\nSilakan klik link/gambar berikut ini kak:\n🔗 ${qrisUrl}`;
-            }
-            // -----------------------------------
-
-            // --- TAMBAHAN INFO REKENING BCA ---
-            if (window.currentRiderBankName === 'BCA') {
-                textMsg += `\n\nBisa juga ke rekening saya kak ${window.currentRiderBankName} no.rekening ${window.currentRiderBankAccount || '-'} atas nama ${window.currentRiderBankAccountName || '-'}`;
-            }
-            // -----------------------------------
+            // ---------------------------------------
 
             // Coba kirim langsung ke WA customer jika nomornya ada
             const phone = (window.currentActiveCustomerPhone || "").replace(/^0/, '62');
@@ -10633,6 +10401,19 @@
                   overlay.classList.remove('flex');
               }
               
+              // --- KEMBALIKAN KUNCI TOMBOL LANJUT FOTO BUKTI ---
+              window.hasSentActiveNotaWA = false;
+              const btnLanjut = document.getElementById('btn-lanjut-foto');
+              const iconLock = document.getElementById('icon-lock-foto');
+              if (btnLanjut) {
+                  btnLanjut.classList.remove('bg-[#ea580c]', 'active:scale-95');
+                  btnLanjut.classList.add('bg-gray-400');
+              }
+              if (iconLock) {
+                  iconLock.classList.remove('hidden');
+              }
+              // -------------------------------------------------
+
               // Reset tampilan selalu ke Step 1
               if (typeof window.goToPage === 'function') window.goToPage(1);
               
