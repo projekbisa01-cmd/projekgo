@@ -1618,12 +1618,34 @@
 
         window.getKetLokasi = (rider) => {
             if (!rider) return "Posisi / Standby";
-            if (rider.proof_desc && String(rider.proof_desc).trim() !== "") return rider.proof_desc;
+
+            // TAHAP 3: Penentuan Keterangan Berdasarkan Hari Ini
+            let lastDropDate = new Date(2000, 0, 1);
+            if (rider.last_drop_time) {
+                if (typeof rider.last_drop_time.toDate === 'function') lastDropDate = rider.last_drop_time.toDate();
+                else if (rider.last_drop_time.seconds) lastDropDate = new Date(rider.last_drop_time.seconds * 1000);
+                else lastDropDate = new Date(rider.last_drop_time);
+            }
+
+            const today = new Date();
+            const isToday = lastDropDate.getDate() === today.getDate() &&
+                            lastDropDate.getMonth() === today.getMonth() &&
+                            lastDropDate.getFullYear() === today.getFullYear();
+
+            // 1. Jika BUKAN hari ini, paksa tampilkan "Baru Masuk Shift"
+            if (!isToday) {
+                return "Baru Masuk Shift";
+            }
+
+            // 2. Jika HARI INI, mutlak hormati inputan lokasi dari Rider
             if (rider.last_drop_desc && String(rider.last_drop_desc).trim() !== "") {
-                // Filter kata kunci dihapus, sekarang sistem akan selalu menghormati teks asli
                 return rider.last_drop_desc;
             }
+
+            // 3. Fallback jika kosong
+            if (rider.proof_desc && String(rider.proof_desc).trim() !== "") return rider.proof_desc;
             if (rider.location && String(rider.location).trim() !== "") return rider.location;
+            
             return "Posisi / Standby";
         };
 
@@ -2754,48 +2776,9 @@
         }
 
         function checkOfflineRiders() {
-            const now = Date.now();
-            allRiders.forEach(rider => {
-                const isOnline = rider.is_online === true || rider.is_online === 'true';
-                const isAvailable = rider.is_available === true || rider.is_available === 'true';
-                const isActiveNow = isOnline && isAvailable;
-                const inMainQueue = rider.in_main_queue === true || rider.in_main_queue === 'true';
-
-                // Jika terdeteksi tidak aktif, pastikan dibuang dari antrean visual dan cek durasi untuk reset tiket
-                if (!isActiveNow) {
-                    const lastUpdatedMs = getTimestampMs(rider.last_updated);
-                    const dropTimeCheck = getTimestampMs(rider.last_drop_time);
-                    const dropDateCheck = new Date(dropTimeCheck);
-                    
-                    let updates = {};
-                    let needUpdate = false;
-
-                    // 1. (DIHAPUS) Rider TIDAK BOLEH langsung dibuang dari antrean saat toggle off.
-                    // Posisinya aman. Mereka hanya dibuang jika geser swipe merah (APK) atau lewat batas 30 menit.
-
-                    // 2. Cek apakah sudah offline > 30 menit untuk mereset tiket DO
-                    if (lastUpdatedMs > 0 && dropDateCheck.getFullYear() > 2000) {
-                        const lamaOffMins = (now - lastUpdatedMs) / (1000 * 60);
-                        if (lamaOffMins > 30) {
-                            updates.in_main_queue = false; // <-- Baru ditendang dari antrean setelah > 30 menit
-                            updates.last_drop_time = new Date("2000-01-01T00:00:00Z");
-                            updates.last_drop_desc = "on lagi";
-                            updates.proof_desc = "Rider masuk shift";
-                            updates.proof_url = ""; 
-                            updates.photo_url = ""; 
-                            updates.image_url = ""; 
-                            updates.location = "";
-                            updates.last_updated = serverTimestamp();
-                            needUpdate = true;
-                        }
-                    }
-
-                    if (needUpdate) {
-                        const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        updateDoc(ref, updates).catch(e => {});
-                    }
-                }
-            });
+            // TAHAP 1: Fitur Auto-Tendang 30 Menit Dihilangkan Total.
+            // Biarkan Firebase mendeteksi online/offline secara natural lewat status is_online.
+            // Kita tidak lagi memodifikasi in_main_queue atau last_drop_time di sini untuk menjaga keamanan antrean.
         };
 
         window.handleJamTimeframeChange = () => {
@@ -3251,59 +3234,36 @@
                             if (wasActive && !isNowActive && (prevRider.in_main_queue === true || prevRider.in_main_queue === 'true')) {
                                 const ref = doc(db, 'status_rider_aktif', uid);
                                 updateDoc(ref, {
-                                    // in_main_queue: false, <-- DIHAPUS agar selaras dengan APK Rider
                                     last_updated: serverTimestamp()
                                 }).catch(e => {});
                             }
 
-                            // LOGIKA TIKET DO (ARGOMETER OFFLINE MAKS 30 MENIT)
-                            // 1. Trigger mendeteksi rider yang kembali On-Bid setelah sebelumnya Off-Bid
-                            if (!wasActive && isNowActive) {
-                                const timeSinceDropUpdate = Math.abs(getTimestampMs(data.last_drop_time) - getTimestampMs(prevRider.last_drop_time));
-                                const isJustFinishedDO = timeSinceDropUpdate > 1000; // Deteksi apakah ini karena Selesai Order
+                            // TAHAP 2: LOGIKA KEMBALI ONLINE (ISTIRAHAT VS SINYAL JELEK)
+                            const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
+                            const isNowAvailable = data.is_available === true || data.is_available === 'true';
+                            
+                            const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
+                            const isNowOnline = data.is_online === true || data.is_online === 'true';
 
-                                if (!isJustFinishedDO) {
-                                    // Patokan hitungan mundur adalah last_updated (waktu persis ketika mereka menekan tombol OFF)
-                                    const waktuMulaiOffMs = getTimestampMs(prevRider.last_updated);
-                                    
-                                    if (waktuMulaiOffMs > 0) {
-                                        // 2. Argometer: Selisih waktu sejak OFF sampai nyala kembali
-                                        const lamaOffMins = (Date.now() - waktuMulaiOffMs) / (1000 * 60);
-                                        const ref = doc(db, 'status_rider_aktif', uid);
-                                        
-                                        if (lamaOffMins > 30) {
-                                            // 3. Tiket Hangus: OFF lebih dari 30 menit. Reset tiket ke 0 dan tolak masuk antrean (verifikasi ulang)
-                                            // MENGUBAH DATA LOKAL SECARA INSTAN AGAR UI TIDAK BERKEDIP MENAMPILKAN DATA LAMA
-                                            data.in_main_queue = false;
-                                            data.last_drop_time = new Date("2000-01-01T00:00:00Z");
-                                            data.last_drop_desc = "on lagi";
-                                            data.proof_desc = "Rider masuk shift";
-                                            data.proof_url = ""; data.photo_url = ""; data.image_url = ""; data.location = "";
-
-                                            updateDoc(ref, { 
-                                                in_main_queue: false, 
-                                                last_drop_time: new Date("2000-01-01T00:00:00Z"), // Tiket DO direset (Nol)
-                                                last_drop_desc: "on lagi", 
-                                                proof_desc: "Rider masuk shift", 
-                                                proof_url: "",
-                                                photo_url: "",
-                                                image_url: "",
-                                                location: "",
-                                                last_updated: serverTimestamp() 
-                                            });
-                                        } else {
-                                            // 4. Tiket Masih Berlaku: OFF masih di bawah 30 menit. Kembalikan ke antrean utama
-                                            let ketDesc = `Aktif Kembali`;
-                                            if (lamaOffMins >= 1) ketDesc = `Aktif Kembali (${Math.round(lamaOffMins)} mnt)`;
-                                            
-                                            updateDoc(ref, { 
-                                                in_main_queue: true, 
-                                                last_drop_desc: ketDesc, 
-                                                last_updated: serverTimestamp() 
-                                            });
-                                        }
-                                    }
-                                }
+                            // Kasus 1: Sengaja kembali dari Istirahat (Tersedia OFF lalu ON)
+                            if (!wasAvailable && isNowAvailable) {
+                                // Masuk antrean paling bawah! Reset waktunya.
+                                const ref = doc(db, 'status_rider_aktif', uid);
+                                updateDoc(ref, { 
+                                    in_main_queue: true,
+                                    last_drop_time: serverTimestamp(), 
+                                    last_updated: serverTimestamp() 
+                                }).catch(e => {});
+                            }
+                            
+                            // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
+                            if (!wasOnline && isNowOnline && isNowAvailable && wasAvailable) {
+                                // Sinyal jelek -> Posisi diamankan! Jangan sentuh last_drop_time.
+                                const ref = doc(db, 'status_rider_aktif', uid);
+                                updateDoc(ref, { 
+                                    in_main_queue: true, 
+                                    last_updated: serverTimestamp() 
+                                }).catch(e => {});
                             }
                         }
                     }
@@ -3323,58 +3283,40 @@
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     let inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    // FILTER 10 JAM (SHIFT BERAKHIR)
-                    if (inMainQueue) {
-                        const lastDropMs = getTimestampMs(data.last_drop_time);
-                        const desc = (data.last_drop_desc || "").toLowerCase();
-                        const isKompensasi = desc.includes("kompensasi") || desc.includes("prioritas") || desc.includes("batal");
-
-                        if (lastDropMs > 0 && !isKompensasi) {
-                            const diffHours = (Date.now() - lastDropMs) / (1000 * 60 * 60);
-                            if (diffHours > 10) { 
-                                inMainQueue = false; data.in_main_queue = false;
-                                
-                                // UBAH LOKAL INSTAN
-                                data.last_drop_time = new Date("2000-01-01T00:00:00Z");
-                                data.last_drop_desc = "Baru Masuk Shift";
-                                data.proof_desc = "Rider masuk shift";
-                                data.proof_url = ""; data.photo_url = ""; data.image_url = ""; data.location = "";
-
-                                updateDoc(doc(db, 'status_rider_aktif', uid), { 
-                                    in_main_queue: false, 
-                                    last_drop_time: new Date("2000-01-01T00:00:00Z"),
-                                    last_drop_desc: "Baru Masuk Shift", 
-                                    proof_desc: "Rider masuk shift",
-                                    proof_url: "",
-                                    photo_url: "",
-                                    image_url: "",
-                                    location: "" 
-                                }).catch(e => {});
-                            }
-                        }
+                    // TAHAP 2: KUNCI ANTREAN BERDASARKAN "HARI INI"
+                    let lastDropDate = new Date(2000, 0, 1);
+                    if (data.last_drop_time) {
+                        if (typeof data.last_drop_time.toDate === 'function') lastDropDate = data.last_drop_time.toDate();
+                        else if (data.last_drop_time.seconds) lastDropDate = new Date(data.last_drop_time.seconds * 1000);
+                        else lastDropDate = new Date(data.last_drop_time);
                     }
 
-                    // PERISAI TAMBAHAN: Jika terdeteksi tiket hangus (tahun 2000) dan di luar antrean, pastikan foto dll bersih
-                    const dropTimeCheck = getTimestampMs(data.last_drop_time);
-                    const dropDateCheck = new Date(dropTimeCheck);
-                    if (dropDateCheck.getFullYear() === 2000 && !inMainQueue) {
-                        if (data.proof_desc !== "Rider masuk shift" || (data.proof_url && data.proof_url !== "")) {
-                            data.last_drop_desc = "Baru Masuk Shift";
-                            data.proof_desc = "Rider masuk shift";
-                            data.proof_url = ""; data.photo_url = ""; data.image_url = ""; data.location = "";
-                            
-                            updateDoc(doc(db, 'status_rider_aktif', uid), {
-                                last_drop_desc: "Baru Masuk Shift", 
-                                proof_desc: "Rider masuk shift",
-                                proof_url: "", photo_url: "", image_url: "", location: "" 
-                            }).catch(e=>{});
+                    const today = new Date();
+                    const isToday = lastDropDate.getDate() === today.getDate() &&
+                                    lastDropDate.getMonth() === today.getMonth() &&
+                                    lastDropDate.getFullYear() === today.getFullYear();
+
+                    const isNowActive = isOnline && isAvailable;
+
+                    // Jika rider onbid dan PUNYA orderan hari ini, MUTLAK masuk Antrean Utama
+                    if (isNowActive && isToday) {
+                        if (!inMainQueue) {
+                            inMainQueue = true;
+                            data.in_main_queue = true;
+                            // Update ke server agar konsisten
+                            const ref = doc(db, 'status_rider_aktif', uid);
+                            updateDoc(ref, { in_main_queue: true }).catch(e => {});
                         }
                     }
 
                     allRiders.push(data);
-                    window.riderStates[uid] = isOnline && isAvailable;
-                    if (inMainQueue) mainQueueRiders.push(data);
-                    else if (isOnline && isAvailable) newShiftRiders.push(data);
+                    window.riderStates[uid] = isNowActive;
+                    
+                    if (inMainQueue) {
+                        mainQueueRiders.push(data);
+                    } else if (isNowActive) {
+                        newShiftRiders.push(data);
+                    }
                 });
 
                 mainQueueRiders.sort((a, b) => {
@@ -5195,16 +5137,53 @@
                     batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id));
                     if (order.daily_order_id && order.rider_uid) batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
 
+                    // --- LOGIKA MURNI: REKAYASA WAKTU KE 00:00:01 HARI INI ---
+                    const fakeTime = new Date();
+                    fakeTime.setHours(0, 0, 1, 0); // Mengunci tepat di jam 00:00:01
+
                     if (order.rider_uid) {
                         const rdr = allRiders.find(r => r.uid === order.rider_uid);
+                        
+                        // [SUPER PENTING] MANIPULASI MEMORI LOKAL ADMIN
+                        // Mencegah listener web admin ini salah paham mengira rider "baru aktif lagi" 
+                        // yang biasanya memicu admin web menimpa ulang posisinya sendiri ke jam terbaru.
+                        if (rdr) {
+                            rdr.is_available = true;
+                            rdr.in_main_queue = true;
+                            rdr.last_drop_time = fakeTime;
+                        }
+
                         const riderRef = doc(db, 'status_rider_aktif', order.rider_uid);
-                        batch.update(riderRef, { in_main_queue: true, is_available: true, last_drop_time: new Date("2000-01-01T00:00:00Z"), last_drop_desc: "Prioritas: Dibatalkan Admin", proof_desc: rdr ? window.getKetLokasi(rdr) : "Posisi / Standby" });
+                        batch.update(riderRef, { 
+                            in_main_queue: true, 
+                            is_available: true, 
+                            last_drop_time: fakeTime, 
+                            last_drop_desc: "Prioritas: Dibatalkan Admin", 
+                            proof_desc: rdr ? window.getKetLokasi(rdr) : "Posisi / Standby",
+                            last_updated: serverTimestamp()
+                        });
                     }
                     
                     await batch.commit();
+
+                    // --- ANTI-OVERWRITE EXTREME (MENCEGAH APLIKASI RIDER MERESET WAKTU) ---
+                    if (order.rider_uid) {
+                        const forcePriorityRank = () => {
+                            const riderRef = doc(db, 'status_rider_aktif', order.rider_uid);
+                            updateDoc(riderRef, { 
+                                in_main_queue: true, 
+                                is_available: true,
+                                last_drop_time: fakeTime,
+                                last_drop_desc: "Prioritas: Dibatalkan Admin"
+                            }).catch(e => {});
+                        };
+                        // Tembak berulang hingga 12 detik untuk menang atas segala delay aplikasi rider / sinyal!
+                        [1000, 3000, 5000, 8000, 12000].forEach(delay => setTimeout(forcePriorityRank, delay));
+                    }
+                    
                     if (order.rider_uid) sendPushNotification(order.rider_uid, "❌ ORDERAN DIBATALKAN ❌", "Orderan barusan telah dibatalkan admin. Kamu dikembalikan ke antrean prioritas atas! (Saldo dikembalikan)");
                     
-                    window.showAlert('Berhasil', 'Orderan dibatalkan. Rider kembali ke antrean teratas dan potongan 16% berhasil di-refund.', 'success');
+                    window.showAlert('Berhasil', 'Orderan dibatalkan. Rider dipaksa kembali ke antrean teratas dan potongan di-refund.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat membatalkan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
