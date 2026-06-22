@@ -11994,5 +11994,249 @@
 
       } catch (e) { console.error("Firebase Init Error:", e); }
     </script>
+
+      <!-- POPUP KENDALA HARIAN (LAPORAN OPERASIONAL) -->
+<div id="kendala-harian-popup" class="fixed inset-0 z-[9999999] flex-col items-center justify-center px-4 bg-gray-900/95 backdrop-blur-md hidden opacity-0 transition-opacity duration-300">
+    <div class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col max-h-[90vh] overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-2 bg-orange-600"></div>
+        
+        <div class="flex items-center gap-3 mb-4 mt-2 shrink-0">
+            <div class="w-12 h-12 bg-orange-50 rounded-full flex items-center justify-center text-orange-600 shrink-0 border border-orange-100 shadow-sm">
+                <i class="fa-solid fa-clipboard-list text-xl"></i>
+            </div>
+            <div>
+                <h3 class="font-black text-gray-800 text-lg leading-tight">KENDALA HARIAN</h3>
+                <p class="text-[10px] text-gray-500 font-bold" id="kendala-target-date">Tanggal: --</p>
+            </div>
+        </div>
+
+        <div class="bg-orange-50 p-3 rounded-xl border border-orange-100 mb-4 flex items-start gap-2 shadow-inner shrink-0">
+            <i class="fa-solid fa-circle-info text-orange-500 mt-0.5 text-xs shrink-0"></i>
+            <p class="text-[10px] text-orange-800 leading-relaxed font-bold italic" id="kendala-instruksi-text">
+                Wajib diisi setiap hari setelah jam 21:00 WIB untuk evaluasi operasional.
+            </p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1 pb-2">
+            <!-- Kategori -->
+            <div>
+                <label class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">Kategori Kendala</label>
+                <select id="kendala-kategori" onchange="toggleKendalaDetail()" class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-800 focus:outline-none focus:border-orange-500 transition-colors">
+                    <option value="" disabled selected>-- Pilih Kategori --</option>
+                    <option value="Pelanggan">Pelanggan</option>
+                    <option value="Proses">Proses (Pick-up/Antar)</option>
+                    <option value="Aplikasi">Aplikasi / Sistem</option>
+                    <option value="Resto">Resto / Penjual</option>
+                    <option value="Tidak Ada Kendala">Tidak Ada Kendala (Aman)</option>
+                </select>
+            </div>
+
+            <div id="kendala-details-container" class="space-y-4">
+                <!-- Detail -->
+                <div>
+                    <label class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">Detail Kejadian</label>
+                    <textarea id="kendala-detail" rows="3" placeholder="Ceritakan detail kendala yang kamu alami..." class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-800 focus:outline-none focus:border-orange-500 transition-colors resize-none"></textarea>
+                </div>
+
+                <!-- Solusi / Asumsi -->
+                <div>
+                    <label class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 block">Kira kira Solusi Kamu apa</label>
+                    <textarea id="kendala-solusi" rows="2" placeholder="Gimana seharusnya menurut kamu?" class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-800 focus:outline-none focus:border-orange-500 transition-colors resize-none"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <button id="btn-submit-kendala" onclick="submitKendalaHarian()" class="w-full mt-2 py-4 bg-orange-600 hover:bg-orange-700 text-white font-black rounded-2xl shadow-lg shadow-orange-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2 shrink-0">
+            <i class="fa-solid fa-paper-plane"></i> Kirim Laporan
+        </button>
+    </div>
+</div>
+
+<script>
+    // --- SISTEM KENDALA HARIAN RIDER (MODUL MANDIRI) ---
+    
+    // !--- GANTI DENGAN URL WEB APP GOOGLE APPS SCRIPT ANDA ---!
+    const URL_GAS_KENDALA = "https://script.google.com/macros/s/AKfycbx1ag_hJhDscMuAoRQaF8qsa5W31CmLv-qONOvJ1WHl815vmmVsasuCtBvWoFLaPNRM/exec"; 
+    
+    window.kendalaTargetDateStr = "";
+
+    window.checkKendalaHarian = function() {
+        // Ambil UID Rider (menyesuaikan dengan variabel Anda, asumsi menggunakan localStorage)
+        const uid = localStorage.getItem('rider_uid') || (typeof currentUserUID !== 'undefined' ? currentUserUID : null);
+        if (!uid) return; // Jangan muncul jika belum login
+
+        const now = new Date();
+        const currentHour = now.getHours();
+        
+        // Format YYYY-MM-DD
+        const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+        
+        const todayParts = formatter.formatToParts(now);
+        const todayStr = `${todayParts.find(p => p.type === 'year').value}-${todayParts.find(p => p.type === 'month').value}-${todayParts.find(p => p.type === 'day').value}`;
+
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yestParts = formatter.formatToParts(yesterday);
+        const yesterdayStr = `${yestParts.find(p => p.type === 'year').value}-${yestParts.find(p => p.type === 'month').value}-${yestParts.find(p => p.type === 'day').value}`;
+
+        const lastReported = localStorage.getItem('rider_last_kendala_date');
+
+        let isTunggakan = false;
+
+        // Logika Target Hari
+        if (currentHour >= 21) {
+            window.kendalaTargetDateStr = todayStr;
+        } else {
+            window.kendalaTargetDateStr = yesterdayStr;
+            isTunggakan = true;
+        }
+
+        // TRIGGER POPUP JIKA: Tanggal target belum dilaporkan, DAN yang sudah dilaporkan bukan hari ini
+        if (lastReported !== window.kendalaTargetDateStr && lastReported !== todayStr) {
+            window.showKendalaPopup(isTunggakan);
+        }
+    };
+
+    window.showKendalaPopup = function(isTunggakan) {
+        const popup = document.getElementById('kendala-harian-popup');
+        const content = popup.querySelector('.transform');
+        const dateLabel = document.getElementById('kendala-target-date');
+        const instruksiText = document.getElementById('kendala-instruksi-text');
+        
+        if(dateLabel) {
+            const p = window.kendalaTargetDateStr.split('-');
+            if(p.length === 3) {
+                const d = new Date(p[0], p[1]-1, p[2]);
+                dateLabel.innerText = `Tanggal: ${d.toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric'})}`;
+            }
+        }
+
+        if (instruksiText) {
+            if (isTunggakan) {
+                instruksiText.innerHTML = `<span class="text-red-600 uppercase">Laporan Tertunda!</span> Anda belum mengisi laporan kendala kemarin. Mohon isi sekarang untuk evaluasi.`;
+            } else {
+                instruksiText.innerHTML = `Wajib diisi setiap hari setelah jam 21:00 WIB untuk evaluasi operasional.`;
+            }
+        }
+
+        // Reset Form
+        document.getElementById('kendala-kategori').value = "";
+        document.getElementById('kendala-details-container').classList.remove('hidden');
+        document.getElementById('kendala-detail').value = "";
+        document.getElementById('kendala-solusi').value = "";
+
+        // Animasi Tampil
+        if(popup && content) {
+            popup.classList.remove('hidden');
+            popup.classList.add('flex');
+            setTimeout(() => {
+                popup.classList.remove('opacity-0');
+                content.classList.remove('scale-90');
+                content.classList.add('scale-100');
+            }, 10);
+        }
+    };
+
+    window.toggleKendalaDetail = function() {
+        const cat = document.getElementById('kendala-kategori').value;
+        const container = document.getElementById('kendala-details-container');
+        const detailInput = document.getElementById('kendala-detail');
+        const solusiInput = document.getElementById('kendala-solusi');
+
+        if (cat === 'Tidak Ada Kendala') {
+            container.classList.add('hidden');
+            detailInput.value = 'Aman';
+            solusiInput.value = 'Aman';
+        } else {
+            container.classList.remove('hidden');
+            if(detailInput.value === 'Aman') detailInput.value = '';
+            if(solusiInput.value === 'Aman') solusiInput.value = '';
+        }
+    };
+
+    window.submitKendalaHarian = async function() {
+        const uid = localStorage.getItem('rider_uid') || "Unknown UID";
+        
+        // Coba ambil nama rider dari elemen UI jika ada, jika tidak fallback ke 'Rider'
+        let rName = "Rider";
+        const nameEl = document.getElementById('display-rider-name') || document.getElementById('rider-name');
+        if (nameEl && nameEl.innerText) rName = nameEl.innerText.trim();
+
+        const cat = document.getElementById('kendala-kategori').value;
+        const detail = document.getElementById('kendala-detail').value.trim();
+        const solusi = document.getElementById('kendala-solusi').value.trim();
+
+        if (!cat) { alert("Pilih kategori kendala!"); return; }
+        if (cat !== 'Tidak Ada Kendala' && (!detail || !solusi)) {
+            alert("Detail kejadian dan Asumsi Solusi wajib diisi!"); return;
+        }
+
+        const btn = document.getElementById('btn-submit-kendala');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Mengirim...';
+        btn.disabled = true;
+
+        try {
+            const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });
+
+            const payload = {
+                action: 'insertKendala',
+                tanggal: window.kendalaTargetDateStr,
+                jam: timeStr,
+                uid: uid,
+                nama: rName,
+                kategori: cat,
+                detail: detail,
+                solusi: solusi
+            };
+
+            // Mengirim data ke Google Sheets menggunakan fetch
+            await fetch(URL_GAS_KENDALA, {
+                method: 'POST',
+                body: JSON.stringify(payload)
+                // Menggunakan text/plain bawaan agar terhindar dari CORS Block di browser HP
+            });
+
+            // Berhasil simpan
+            localStorage.setItem('rider_last_kendala_date', window.kendalaTargetDateStr);
+            
+            // Animasi Tutup
+            const popup = document.getElementById('kendala-harian-popup');
+            const content = popup.querySelector('.transform');
+            
+            if(popup && content) {
+                popup.classList.add('opacity-0');
+                content.classList.remove('scale-100');
+                content.classList.add('scale-90');
+                setTimeout(() => {
+                    popup.classList.add('hidden');
+                    popup.classList.remove('flex');
+                    if(typeof window.showCustomToast === 'function') {
+                        window.showCustomToast("Laporan kendala berhasil dikirim!");
+                    } else {
+                        alert("Laporan kendala berhasil dikirim!");
+                    }
+                }, 300);
+            }
+        } catch (e) {
+            alert("Gagal mengirim laporan. Pastikan internet Anda stabil.");
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    };
+
+    // --- TRIGGER OTOMATIS: Berjalan tanpa mengganggu fungsi lain ---
+    // Cek pertama kali saat halaman baru dimuat (delay 4 detik agar loading selesai)
+    setTimeout(() => {
+        window.checkKendalaHarian();
+    }, 4000);
+
+    // Cek rutin setiap 5 Menit selama aplikasi masih terbuka
+    setInterval(() => {
+        window.checkKendalaHarian();
+    }, 5 * 60 * 1000); 
+
+</script>
 </body>
 </html>
