@@ -1536,9 +1536,6 @@
         const processingMissedOrders = new Set(); 
         let isBalancesLoaded = false;
         
-        // LANGKAH 4: Menyimpan semua jalur pipa data (listener)
-        window.unsubscribers = [];
-
         // Cache variables untuk Analytics
         window._cacheAnalisisRingkasan = null;
         window._cacheAnalisisTren = null;
@@ -1600,15 +1597,6 @@
                         await deleteDoc(sessionRef);
                     } catch(e) {}
                 }
-                
-                // LANGKAH 4: Memutus semua listener saat logout agar tidak menyedot kuota Read di background
-                if (window.unsubscribers && window.unsubscribers.length > 0) {
-                    window.unsubscribers.forEach(unsub => {
-                        if (typeof unsub === 'function') unsub();
-                    });
-                    window.unsubscribers = []; // Kosongkan kembali
-                }
-
                 window.userRole = null;
                 document.getElementById('login-password').value = '';
                 document.getElementById('login-overlay').classList.remove('hidden');
@@ -2856,7 +2844,7 @@
                 where("created_at", "<=", endDate)
             );
             
-            const snapActive = await getDocs(qActive);
+            const snapActive = await getDocsFromServer(qActive);
             snapActive.forEach(docSnap => {
                 dataOrder.push(docSnap.data());
             });
@@ -3233,7 +3221,7 @@
 
         function startRiderListener() {
             const statusCol = collection(db, 'status_rider_aktif');
-            const unsub = onSnapshot(statusCol, (snapshot) => {
+            onSnapshot(statusCol, (snapshot) => {
                 snapshot.docChanges().forEach((change) => {
                     const data = change.doc.data();
                     const uid = change.doc.id;
@@ -3398,7 +3386,6 @@
                 //     window.autoAssignPendingOrder(pendingOrders[0].id);
                 // }
             }, (error) => {});
-            window.unsubscribers.push(unsub);
         }
 
         function updateNewShiftUI() {
@@ -3469,6 +3456,36 @@
                 }
             }
 
+            // SINKRONISASI ANGKA ANTREAN (QUEUE NUMBER) KE DATABASE
+            try {
+                const batch = writeBatch(db);
+                let hasQueueUpdates = false;
+                const newQueueNumbers = new Map();
+                
+                // Beri nomor antrean mulai dari 1 untuk yang sedang standby
+                availableMainQueue.forEach((rider, index) => {
+                    newQueueNumbers.set(rider.uid, index + 1);
+                });
+                
+                // Update ke database, jika tidak standby berikan nomor 0
+                allRiders.forEach(rider => {
+                    const expectedNumber = newQueueNumbers.has(rider.uid) ? newQueueNumbers.get(rider.uid) : 0;
+                    if (rider.queue_number !== expectedNumber) {
+                        const ref = doc(db, 'status_rider_aktif', rider.uid);
+                        batch.update(ref, { queue_number: expectedNumber });
+                        hasQueueUpdates = true;
+                        rider.queue_number = expectedNumber; // Simpan di memori lokal agar tidak memicu infinite loop
+                    }
+                });
+                
+                if (hasQueueUpdates) {
+                    batch.commit().catch(e => {});
+                }
+            } catch (e) {
+                console.warn("Queue update error:", e);
+            }
+            // AKHIR SINKRONISASI ANGKA ANTREAN
+
             if(countEl) countEl.innerText = availableMainQueue.length;
 
             if (availableMainQueue.length === 0) {
@@ -3476,23 +3493,6 @@
                 const currentId = document.getElementById('selected-rider-uid').value;
                 if(currentId && !availableMainQueue.find(r => r.uid === currentId)) window.clearSelection();
                 return;
-            }
-
-            // KEMBALIKAN SINKRONISASI ANGKA ANTREAN (DIBUTUHKAN OLEH APK RIDER)
-            // Dioptimalkan: Hanya menulis ke database JIKA angka urutan benar-benar bergeser
-            let hasQueueChanges = false;
-            const qBatch = writeBatch(db);
-            availableMainQueue.forEach((rider, index) => {
-                const currentRank = index + 1;
-                if (rider.queue_number !== currentRank) {
-                    const ref = doc(db, 'status_rider_aktif', rider.uid);
-                    qBatch.update(ref, { queue_number: currentRank });
-                    hasQueueChanges = true;
-                    rider.queue_number = currentRank; // Hindari infinite loop
-                }
-            });
-            if (hasQueueChanges) {
-                qBatch.commit().catch(e => {});
             }
 
             let html = '';
@@ -4109,7 +4109,7 @@
             const ordersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
             const q = query(ordersCol, where("status", "in", ["assigned", "processing", "missed", "unassigned"]));
             
-            const unsub = onSnapshot(q, (snapshot) => {
+            onSnapshot(q, (snapshot) => {
                 const newGlobalOrders = [];
                 let hasNewOrder = false;
 
@@ -4144,14 +4144,10 @@
                 if (hasNewOrder && document.getElementById('page-active').classList.contains('hidden-page')) window.hideActiveBadge = false;
                 renderActiveOrders();
                 if (typeof window.renderPendingOrders === 'function') window.renderPendingOrders();
-                
-                // LANGKAH 2: CASCADE READ DIHAPUS. History tidak ditarik berulang-ulang secara otomatis saat ada pergerakan order aktif.
-                // if (!document.getElementById('page-history').classList.contains('hidden-page')) window.renderHistoryOrders();
-                
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) window.renderHistoryOrders();
                 updateNewShiftUI(); updateMainQueueUI();
                 if (typeof window.updatePendingPrompt === 'function') window.updatePendingPrompt();
             });
-            window.unsubscribers.push(unsub);
         }
 
         window.renderPendingOrders = () => {
@@ -5245,7 +5241,7 @@
 
         function startRiderBalancesListener() {
             const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
-            const unsub = onSnapshot(balancesCol, (snapshot) => {
+            onSnapshot(balancesCol, (snapshot) => {
                 isBalancesLoaded = true;
                 allRiderBalances = [];
                 snapshot.forEach(docSnap => { allRiderBalances.push({ id: docSnap.id, ...docSnap.data() }); });
@@ -5255,12 +5251,11 @@
                 if (typeof updateNewShiftUI === 'function') updateNewShiftUI();
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
             });
-            window.unsubscribers.push(unsub);
         }
 
         function startCloudRecapsListener() {
             const recapsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian');
-            const unsub = onSnapshot(recapsCol, (snapshot) => {
+            onSnapshot(recapsCol, (snapshot) => {
                 allCloudRecaps = [];
                 snapshot.forEach(docSnap => { allCloudRecaps.push({ id: docSnap.id, ...docSnap.data() }); });
                 if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
@@ -5274,12 +5269,11 @@
                     if (typeof window.renderAnalisisTren === 'function') window.renderAnalisisTren();
                 }
             });
-            window.unsubscribers.push(unsub);
         }
 
         function startCicilanListener() {
             const cicilanCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan');
-            const unsub = onSnapshot(cicilanCol, (snapshot) => {
+            onSnapshot(cicilanCol, (snapshot) => {
                 allCicilan = [];
                 snapshot.forEach(docSnap => { allCicilan.push({ id: docSnap.id, ...docSnap.data() }); });
                 if (typeof window.renderCicilanList === 'function') window.renderCicilanList();
@@ -5290,22 +5284,20 @@
                     if (typeof window.renderPemasukanLainnya === 'function') window.renderPemasukanLainnya();
                 }
             });
-            window.unsubscribers.push(unsub);
         }
 
         function startTabunganListener() {
             const tabunganCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_tabungan');
-            const unsub = onSnapshot(tabunganCol, (snapshot) => {
+            onSnapshot(tabunganCol, (snapshot) => {
                 allTabungan = [];
                 snapshot.forEach(docSnap => { allTabungan.push({ id: docSnap.id, ...docSnap.data() }); });
                 if (typeof window.renderTabunganList === 'function') window.renderTabunganList();
             });
-            window.unsubscribers.push(unsub);
         }
 
         function startAnalyticsTargetsListener() {
             const docRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'analytics_targets');
-            const unsub = onSnapshot(docRef, (docSnap) => {
+            onSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
                     window.analyticsTargets = docSnap.data();
                 } else {
@@ -5319,7 +5311,6 @@
                     if (typeof window.renderAnalisisRingkasan === 'function') window.renderAnalisisRingkasan();
                 }
             });
-            window.unsubscribers.push(unsub);
         }
 
         window.renderTabunganList = () => {
@@ -5729,7 +5720,7 @@
         
         function startDailyBalanceTrackerListener() {
             const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
-            const unsub = onSnapshot(trackerRef, (docSnap) => {
+            onSnapshot(trackerRef, (docSnap) => {
                 const today = new Date();
                 const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
                 
@@ -5744,10 +5735,10 @@
                 } else {
                     const initTracker = async () => {
                         try {
-                            // PERBAIKAN: Menggunakan getDocs (Cache-Aware) 
-                            // Untuk menghemat kuota read tanpa mengorbankan sinkronisasi
+                            // PERBAIKAN: Tarik langsung dari server Firebase secara real-time
+                            // Mencegah bug data tercatat 0 saat loading internet melambat
                             const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
-                            const snap = await getDocs(balancesCol);
+                            const snap = await getDocsFromServer(balancesCol);
                             let realServerSaldo = 0;
                             snap.forEach(d => { realServerSaldo += parseInt(d.data().saldo || 0); });
                             
@@ -5774,7 +5765,6 @@
                     initTracker();
                 }
             });
-            window.unsubscribers.push(unsub);
         }
 
         window.renderCloudRecaps = () => {
@@ -5855,14 +5845,20 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', id));
-                    window.showAlert('Berhasil', 'Arsip rekap tanggal ' + dateFormatted + ' dihapus.', 'success');
-                } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+                    window.showAlert('Berhasil', 'Arsip rekap berhasil dihapus.', 'success');
+                } catch(e) { window.showAlert('Gagal', 'Sistem error saat menghapus arsip.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
 
+        // ============================================
+        // LOGIKA BARU OMSET (BERDASARKAN BULAN PILIHAN)
+        // ============================================
+        
         window.initOmsetMonthFilter = () => {
             const select = document.getElementById('omset-month-filter');
             if (!select) return;
+            
+            // Hanya buat ulang opsi jika masih kosong
             if (select.options.length === 0) {
                 const today = new Date();
                 const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
@@ -6327,14 +6323,13 @@
 
         function startLanggananListener() {
             const langgananCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'pemasukan_langganan');
-            const unsub = onSnapshot(langgananCol, (snapshot) => {
+            onSnapshot(langgananCol, (snapshot) => {
                 allLangganan = [];
                 snapshot.forEach(docSnap => { allLangganan.push({ id: docSnap.id, ...docSnap.data() }); });
                 if (!document.getElementById('page-pemasukan-lainnya').classList.contains('hidden-page')) {
                     if (typeof window.renderLanggananList === 'function') window.renderLanggananList();
                 }
             });
-            window.unsubscribers.push(unsub);
         }
 
         window.renderLanggananList = () => {
@@ -7371,7 +7366,7 @@
         // --- MULAI FUNGSI JADWAL SHIFT ---
         function startShiftScheduleListener() {
             const shiftCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_shifts');
-            const unsub = onSnapshot(shiftCol, (snapshot) => {
+            onSnapshot(shiftCol, (snapshot) => {
                 allShiftSchedules = [];
                 snapshot.forEach(docSnap => {
                     allShiftSchedules.push({ id: docSnap.id, ...docSnap.data() });
@@ -7381,7 +7376,6 @@
                 // Memicu pengecekan ulang suspend jika ada perubahan data shift (misal dihapus dari shift)
                 checkAndEnforceRiderBalances();
             });
-            window.unsubscribers.push(unsub);
         }
 
         window.renderShiftSchedule = () => {
