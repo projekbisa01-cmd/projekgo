@@ -1662,7 +1662,7 @@
                 startRiderListener();
                 startGlobalOrdersListener();
                 startRiderBalancesListener(); 
-                startCloudRecapsListener();
+                // startCloudRecapsListener(); <-- DIHAPUS, DIGANTI LAZY LOAD
                 startLiveTimers(); 
                 startDailyBalanceTrackerListener();
                 startCicilanListener();
@@ -2094,9 +2094,21 @@
             }
             if (page === 'omset') {
                 if (typeof window.initOmsetMonthFilter === 'function') window.initOmsetMonthFilter();
-                if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
-                if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
-                if (typeof window.renderOmsetBulanan === 'function') window.renderOmsetBulanan();
+                if (typeof window.loadCloudRecapsData === 'function') {
+                    window.loadCloudRecapsData().then(() => {
+                        if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
+                        if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
+                        if (typeof window.renderOmsetBulanan === 'function') window.renderOmsetBulanan();
+                    });
+                }
+            }
+            if (page === 'analisis') {
+                if (typeof window.loadCloudRecapsData === 'function') {
+                    window.loadCloudRecapsData().then(() => {
+                        if (typeof window.renderAnalisisRingkasan === 'function') window.renderAnalisisRingkasan();
+                        if (typeof window.renderAnalisisTren === 'function') window.renderAnalisisTren();
+                    });
+                }
             }
             if (page === 'manage-riders' && typeof window.renderManageRiders === 'function') window.renderManageRiders();
             
@@ -4420,6 +4432,7 @@
             const dateVal = document.getElementById('history-date').value; 
             
             // SINKRONISASI FILTER CLOUD DENGAN TANGGAL YANG DIPILIH
+            if (typeof window.loadCloudRecapsData === 'function') await window.loadCloudRecapsData();
             if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
 
             if(!container) return;
@@ -5253,23 +5266,34 @@
             });
         }
 
-        function startCloudRecapsListener() {
+        window._isCloudRecapsLoaded = false;
+        window.loadCloudRecapsData = async () => {
+            if (window._isCloudRecapsLoaded) return; // Hanya narik data 1x per sesi
+            
             const recapsCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian');
-            onSnapshot(recapsCol, (snapshot) => {
+            
+            // Filter hanya dari tanggal 1 bulan lalu hingga hari ini
+            const today = new Date();
+            let prevMonth = today.getMonth() - 1;
+            let yearForPrevMonth = today.getFullYear();
+            
+            if (prevMonth < 0) {
+                prevMonth = 11; // Desember
+                yearForPrevMonth--;
+            }
+            
+            const startDateStr = `${yearForPrevMonth}-${String(prevMonth + 1).padStart(2, '0')}-01`;
+            const q = query(recapsCol, where("tanggal", ">=", startDateStr));
+
+            try {
+                const snapshot = await getDocs(q); // LAZY LOAD: Tarik 1x, bukan onSnapshot
                 allCloudRecaps = [];
                 snapshot.forEach(docSnap => { allCloudRecaps.push({ id: docSnap.id, ...docSnap.data() }); });
-                if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
-                if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
-                if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
-                if (typeof window.renderOmsetBulanan === 'function') window.renderOmsetBulanan();
-                
-                // Render Analisis jika user sedang di tab tersebut
-                if (!document.getElementById('page-analisis').classList.contains('hidden-page')) {
-                    if (typeof window.renderAnalisisRingkasan === 'function') window.renderAnalisisRingkasan();
-                    if (typeof window.renderAnalisisTren === 'function') window.renderAnalisisTren();
-                }
-            });
-        }
+                window._isCloudRecapsLoaded = true;
+            } catch (error) {
+                console.error("Gagal load data rekap cloud:", error);
+            }
+        };
 
         function startCicilanListener() {
             const cicilanCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan');
@@ -5828,6 +5852,17 @@
                     total_topup: topUpHariIni, // <- Menyimpan total top-up ke cloud rekap
                     updated_at: serverTimestamp() 
                 }, { merge: true });
+
+                // UPDATE MEMORI LOKAL KARENA LISTENER ONSNAPSHOT SUDAH DIMATIKAN
+                const existingIndex = allCloudRecaps.findIndex(r => r.id === dateVal);
+                const newData = { id: dateVal, tanggal: dateVal, total_orders: window.currentHistoryData.length, total_omset: totalFee, total_topup: topUpHariIni };
+                if (existingIndex > -1) {
+                    allCloudRecaps[existingIndex] = { ...allCloudRecaps[existingIndex], ...newData };
+                } else {
+                    allCloudRecaps.push(newData);
+                }
+                if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+
                 window.showAlert('Tersimpan', 'Rekap tanggal ' + dateVal + ' berhasil dicadangkan ke Database Cloud.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
         };
@@ -5845,6 +5880,11 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rekap_harian', id));
+                    
+                    // UPDATE MEMORI LOKAL KARENA LISTENER ONSNAPSHOT SUDAH DIMATIKAN
+                    allCloudRecaps = allCloudRecaps.filter(r => r.id !== id);
+                    if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+
                     window.showAlert('Berhasil', 'Arsip rekap berhasil dihapus.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Sistem error saat menghapus arsip.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
@@ -8015,8 +8055,12 @@
                 <button id="btn-confirm-cetak" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i> Lanjut Cetak</button>
             `;
 
-            document.getElementById('btn-confirm-cetak').onclick = () => {
+            document.getElementById('btn-confirm-cetak').onclick = async () => {
                 modal.classList.add('hidden'); modal.classList.remove('flex');
+                
+                // Pastikan data rekap sudah terload sebelum mencetak
+                if (typeof window.loadCloudRecapsData === 'function') await window.loadCloudRecapsData();
+
                 const parts = selectBox.value.split('-');
                 window.prosesCetakA4(parseInt(parts[0]), parseInt(parts[1]));
             };
