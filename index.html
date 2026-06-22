@@ -10130,8 +10130,10 @@
                   }
               };
 
-              // FUNGSI PEMULIHAN STANDBY JIKA ORDER DIBATALKAN/DIHAPUS OLEH ADMIN
-              const handleCanceledOrderProcess = () => {
+              let cancelProcessTimeout = null;
+
+              // FUNGSI EKSEKUSI PEMULIHAN STANDBY JIKA ORDER DIBATALKAN/DIHAPUS OLEH ADMIN
+              const executeCancelProcess = () => {
                   let wasActiveTask = false;
                   let wasRinging = false;
                   const currentUserUID = localStorage.getItem('rider_uid');
@@ -10199,21 +10201,23 @@
                   }
               };
 
-              let checkOrderTimeout = null;
+              // FUNGSI TRIGGER PEMBATALAN DENGAN DEBOUNCE (Mencegah kedip karena sinyal)
+              const handleCanceledOrderProcess = () => {
+                  if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
+                  
+                  // Jeda 1.5 detik. Jika dalam 1.5 detik data kembali ada (karena koneksi pulih), eksekusi akan dibatalkan
+                  cancelProcessTimeout = setTimeout(() => {
+                      if (window._hasActiveDocOrder === false && window._hasActiveQueryOrder === false) {
+                          if (!window.isMissingOrder) {
+                              executeCancelProcess();
+                          }
+                      }
+                  }, 1500);
+              };
 
               // FUNGSI PENGECEKAN JIKA TIDAK ADA ORDER (Dihapus admin)
               const checkNoOrderLogic = () => {
-                  if (checkOrderTimeout) clearTimeout(checkOrderTimeout);
-                  
-                  // Menggunakan jeda 2000ms untuk memberikan toleransi jaringan fluktuatif sebelum menyimpulkan order dihapus admin
-                  checkOrderTimeout = setTimeout(() => {
-                      if (window._hasActiveDocOrder === false && window._hasActiveQueryOrder === false) {
-                          // Mencegah logic berjalan jika rider yang sengaja melewatkan (missed order)
-                          if (!window.isMissingOrder) {
-                              handleCanceledOrderProcess();
-                          }
-                      }
-                  }, 2000);
+                  handleCanceledOrderProcess();
               };
 
               // Inisialisasi awal nilai flag listener
@@ -10241,7 +10245,9 @@
                   }
                   
                   window._hasActiveDocOrder = hasValidActiveOrder;
-                  if (!hasValidActiveOrder) {
+                  if (hasValidActiveOrder) {
+                      if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
+                  } else {
                       checkNoOrderLogic(); // Memicu pengecekan fallback
                   }
               }, (error) => { console.error("Error listening doc order:", error); });
@@ -10272,7 +10278,9 @@
                   });
                   
                   window._hasActiveQueryOrder = hasValidActiveOrder;
-                  if (!hasValidActiveOrder) {
+                  if (hasValidActiveOrder) {
+                      if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
+                  } else {
                       checkNoOrderLogic(); // Memicu pengecekan jika hasil query tidak ada yang aktif
                   }
               }, (error) => { console.error("Error listening query order:", error); });
