@@ -4092,10 +4092,9 @@
         window.autoCorrectRiderQueueAfterOrder = async (uid) => {
             if (!uid) return;
             try {
-                const riderRef = doc(db, 'status_rider_aktif', uid);
-                const riderSnap = await getDoc(riderRef);
-                if (riderSnap.exists()) {
-                    const data = riderSnap.data();
+                // ZERO-READ: Mengambil status terbaru dari ingatan lokal (memori), bukan dari Firebase Server
+                const data = allRiders.find(r => r.uid === uid);
+                if (data) {
                     const isOnline = data.is_online === true || data.is_online === 'true';
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
@@ -4105,6 +4104,7 @@
                     if (isOnline && isAvailable && !inMainQueue) {
                         // Pastikan dia bukan benar-benar rider yang baru pencet "Online" awal shift
                         if (!desc.includes("baru masuk shift") && !desc.includes("standby di basecamp")) {
+                            const riderRef = doc(db, 'status_rider_aktif', uid);
                             await updateDoc(riderRef, {
                                 in_main_queue: true,
                                 last_drop_time: serverTimestamp(),
@@ -4133,10 +4133,13 @@
                         // Kemungkinan besar orderan tersebut statusnya menjadi 'completed'
                         if (orderData.status === 'processing' || orderData.status === 'assigned') {
                             if (orderData.rider_uid) {
-                                // Tunggu 2.5 detik agar Aplikasi Rider selesai update datanya ke Firebase
-                                setTimeout(() => {
-                                    window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid);
-                                }, 2500); 
+                                // PENGAMAN 3 LAPIS (Zero-Read Idempotent Retry)
+                                // Lapis 1: Eksekusi kilat untuk rider dengan sinyal normal (0.5 Detik)
+                                setTimeout(() => { window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid); }, 500); 
+                                // Lapis 2: Pengaman menengah jika sinkronisasi awal tertunda (1.5 Detik)
+                                setTimeout(() => { window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid); }, 1500); 
+                                // Lapis 3: Sapu bersih jika sinyal rider sedang buruk (3.5 Detik)
+                                setTimeout(() => { window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid); }, 3500); 
                             }
                         }
                     }
