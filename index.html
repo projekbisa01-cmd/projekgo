@@ -3449,6 +3449,9 @@
 
         // --- FUNGSI NAVIGASI STEP TUGAS BERJALAN ---
         window.goToPage = function(step) {
+            // PERBAIKAN STEP 3: Simpan memori posisi halaman (Step 1 / 2) agar aman dari reset kamera
+            localStorage.setItem('active_order_step', step.toString());
+
             const step1 = document.getElementById('step1');
             const step2 = document.getElementById('step2');
             const step3 = document.getElementById('step3'); // Menjaga jika ada referensi lama
@@ -6722,8 +6725,13 @@
                 // Saat Rider kembali membuka aplikasi (layar menyala/dari latar belakang),
                 // paksa sistem untuk mengecek ulang orderan aktif detik itu juga.
                 if (window.isFirebaseReady && typeof window.startOrderListener === 'function') {
-                    console.log("Memaksa sinkronisasi orderan karena aplikasi kembali aktif...");
-                    window.startOrderListener(currentUserUID);
+                    // PERBAIKAN STEP 1: Cegah restart paksa jika sedang mengerjakan orderan (melindungi Nota & Kamera)
+                    if (!window.currentActiveOrderId) {
+                        console.log("Aplikasi kembali aktif, sinkronisasi orderan...");
+                        window.startOrderListener(currentUserUID);
+                    } else {
+                        console.log("Aplikasi kembali aktif. Ada order berjalan, abaikan restart listener.");
+                    }
                 }
             }
         });
@@ -6733,7 +6741,10 @@
             console.log("Menerima tendangan bangun dari Notifikasi Android!");
             const uid = localStorage.getItem('rider_uid');
             if (uid && window.isFirebaseReady && typeof window.startOrderListener === 'function') {
-                window.startOrderListener(uid);
+                // PERBAIKAN STEP 1: Lindungi juga dari klik notifikasi agar nota/kamera tidak kerestart
+                if (!window.currentActiveOrderId) {
+                    window.startOrderListener(uid);
+                }
                 
                 // Beri getaran ringan sebagai tanda respon bahwa webview sudah bangun
                 try {
@@ -10160,14 +10171,15 @@
               const handleCanceledOrderProcess = () => {
                   if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
                   
-                  // Jeda 1.5 detik. Jika dalam 1.5 detik data kembali ada (karena koneksi pulih), eksekusi akan dibatalkan
+                  // PERBAIKAN STEP 2: Jeda diperpanjang menjadi 7 detik (7000ms) kebal sinyal lemot.
+                  // Jika dalam 7 detik data kembali ada (karena koneksi pulih), eksekusi pembatalan akan digagalkan.
                   cancelProcessTimeout = setTimeout(() => {
                       if (window._hasActiveDocOrder === false && window._hasActiveQueryOrder === false) {
                           if (!window.isMissingOrder) {
                               executeCancelProcess();
                           }
                       }
-                  }, 1500);
+                  }, 7000);
               };
 
               // FUNGSI PENGECEKAN JIKA TIDAK ADA ORDER (Dihapus admin)
@@ -10533,9 +10545,17 @@
           };
 
           window.showActiveOrderOverlay = function(data, docId) {
+              // PERBAIKAN STEP 4: Cegah layar render ulang (kedip/balik layar) saat proses upload foto berjalan
+              if (window.isFinishingOrder === true) {
+                  console.log("Abaikan render UI dari Firebase, Rider sedang memproses penyelesaian...");
+                  return;
+              }
+
               // Jika pesanan baru (ID berbeda), pastikan flag nota direset
               if (window.currentActiveOrderId !== docId) {
                   window.hasInitializedActiveNota = false;
+                  // PERBAIKAN STEP 3: Hapus memori step untuk orderan yang benar-benar baru
+                  localStorage.removeItem('active_order_step'); 
               }
 
               window.currentActiveOrderId = docId;
@@ -10707,6 +10727,14 @@
               overlay.classList.remove('hidden');
               overlay.classList.add('flex');
               
+              // PERBAIKAN STEP 3: Otomatis kembali ke Step 2 jika HP habis nge-refresh akibat buka Kamera
+              const savedStep = localStorage.getItem('active_order_step');
+              if (savedStep === '2') {
+                  if (typeof window.goToPage === 'function') window.goToPage(2);
+              } else {
+                  if (typeof window.goToPage === 'function') window.goToPage(1);
+              }
+              
               // Start listener untuk info antrean
               if (typeof window.startActiveQueueCountListener === 'function') {
                   window.startActiveQueueCountListener();
@@ -10729,6 +10757,9 @@
               
               // Reset tampilan selalu ke Step 1
               if (typeof window.goToPage === 'function') window.goToPage(1);
+              
+              // PERBAIKAN STEP 3: Bersihkan memori HP saat order selesai/dibatalkan
+              localStorage.removeItem('active_order_step');
               
               // Stop listener info antrean
               if (typeof window.stopActiveQueueCountListener === 'function') {
