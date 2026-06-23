@@ -2755,6 +2755,32 @@
             return Array.from(mergedRidersMap.values()).sort((a,b) => a.name.localeCompare(b.name));
         }
 
+        function checkRiderOrderDate(rider) {
+             let lastOrderDate = new Date(2000, 0, 1);
+             if (rider.tanggal_order_pertama) {
+                  if (typeof rider.tanggal_order_pertama.toDate === 'function') lastOrderDate = rider.tanggal_order_pertama.toDate();
+                  else if (rider.tanggal_order_pertama.seconds) lastOrderDate = new Date(rider.tanggal_order_pertama.seconds * 1000);
+                  else lastOrderDate = new Date(rider.tanggal_order_pertama);
+             }
+
+             const today = new Date();
+             return lastOrderDate.getDate() === today.getDate() &&
+                    lastOrderDate.getMonth() === today.getMonth() &&
+                    lastOrderDate.getFullYear() === today.getFullYear();
+        }
+
+        async function resetRiderOrderDateIfOutdated(uid, rider) {
+             if (rider.tanggal_order_pertama && !checkRiderOrderDate(rider)) {
+                 try {
+                     const ref = doc(db, 'status_rider_aktif', uid);
+                     await updateDoc(ref, {
+                         tanggal_order_pertama: null,
+                         in_main_queue: false
+                     });
+                 } catch(e) { }
+             }
+        }
+
         function autoCleanUpOldData() {
             const now = Date.now();
             // Umur data diubah menjadi 5 tahun (5 tahun * 365 hari * 24 jam * 60 menit * 60 detik * 1000 ms)
@@ -3245,23 +3271,37 @@
                             const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
                             const isNowOnline = data.is_online === true || data.is_online === 'true';
 
+                            const hasOrderToday = checkRiderOrderDate(data);
+
                             // Kasus 1: Sengaja kembali dari Istirahat (Tersedia OFF lalu ON)
                             if (!wasAvailable && isNowAvailable) {
                                 // Masuk antrean paling bawah! Reset waktunya.
-                                const ref = doc(db, 'status_rider_aktif', uid);
-                                updateDoc(ref, { 
-                                    in_main_queue: true,
-                                    last_drop_time: serverTimestamp(), 
-                                    last_updated: serverTimestamp() 
-                                }).catch(e => {});
+                                // TAPI hanya jika sudah dapat orderan hari ini.
+                                if (hasOrderToday) {
+                                    const ref = doc(db, 'status_rider_aktif', uid);
+                                    updateDoc(ref, { 
+                                        in_main_queue: true,
+                                        last_drop_time: serverTimestamp(), 
+                                        last_updated: serverTimestamp() 
+                                    }).catch(e => {});
+                                } else {
+                                     // Masuk ke antrean shift.
+                                     const ref = doc(db, 'status_rider_aktif', uid);
+                                     updateDoc(ref, { 
+                                         in_main_queue: false,
+                                         last_drop_time: serverTimestamp(), 
+                                         last_updated: serverTimestamp() 
+                                     }).catch(e => {});
+                                }
                             }
                             
                             // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
                             if (!wasOnline && isNowOnline && isNowAvailable && wasAvailable) {
                                 // Sinyal jelek -> Posisi diamankan! Jangan sentuh last_drop_time.
+                                // Tapi pastikan tetap di queue yang benar.
                                 const ref = doc(db, 'status_rider_aktif', uid);
                                 updateDoc(ref, { 
-                                    in_main_queue: true, 
+                                    in_main_queue: hasOrderToday, 
                                     last_updated: serverTimestamp() 
                                 }).catch(e => {});
                             }
@@ -3283,23 +3323,13 @@
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     let inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    // TAHAP 2: KUNCI ANTREAN BERDASARKAN "HARI INI"
-                    let lastDropDate = new Date(2000, 0, 1);
-                    if (data.last_drop_time) {
-                        if (typeof data.last_drop_time.toDate === 'function') lastDropDate = data.last_drop_time.toDate();
-                        else if (data.last_drop_time.seconds) lastDropDate = new Date(data.last_drop_time.seconds * 1000);
-                        else lastDropDate = new Date(data.last_drop_time);
-                    }
-
-                    const today = new Date();
-                    const isToday = lastDropDate.getDate() === today.getDate() &&
-                                    lastDropDate.getMonth() === today.getMonth() &&
-                                    lastDropDate.getFullYear() === today.getFullYear();
+                    resetRiderOrderDateIfOutdated(uid, data);
+                    const hasOrderToday = checkRiderOrderDate(data);
 
                     const isNowActive = isOnline && isAvailable;
 
                     // Jika rider onbid dan PUNYA orderan hari ini, MUTLAK masuk Antrean Utama
-                    if (isNowActive && isToday) {
+                    if (isNowActive && hasOrderToday) {
                         if (!inMainQueue) {
                             inMainQueue = true;
                             data.in_main_queue = true;
@@ -3307,6 +3337,15 @@
                             const ref = doc(db, 'status_rider_aktif', uid);
                             updateDoc(ref, { in_main_queue: true }).catch(e => {});
                         }
+                    } else if (isNowActive && !hasOrderToday) {
+                         // Jika belum punya order hari ini, JANGAN MASUK antrean utama.
+                         if (inMainQueue) {
+                             inMainQueue = false;
+                             data.in_main_queue = false;
+                             // Update ke server agar konsisten
+                             const ref = doc(db, 'status_rider_aktif', uid);
+                             updateDoc(ref, { in_main_queue: false }).catch(e => {});
+                         }
                     }
 
                     allRiders.push(data);
@@ -3575,7 +3614,7 @@
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
                         const simulatedTime = new Date(now.getTime() + (index * 1000));
                         // Hapus last_drop_desc dan proof_desc hardcode
-                        return updateDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime });
+                        return updateDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, tanggal_order_pertama: serverTimestamp() });
                     });
                     await Promise.all(promises);
                     window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar paling bawah secara berurutan.', 'success');
@@ -3591,7 +3630,7 @@
                     const ref = doc(db, 'status_rider_aktif', uid);
                     
                     // Hapus last_drop_desc dan proof_desc hardcode
-                    await updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp() });
+                    await updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), tanggal_order_pertama: serverTimestamp() });
                     window.showAlert('Berhasil', `${name} diletakkan di antrean paling bawah.`, 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
@@ -3763,6 +3802,8 @@
 
                     const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                     const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', selectedUid, 'daily_orders'));
+                    
+                    const riderStatusRef = doc(db, 'status_rider_aktif', selectedUid);
 
                     await runTransaction(db, async (transaction) => {
                         const orderDoc = await transaction.get(orderRef);
@@ -3790,6 +3831,11 @@
                         transaction.update(orderRef, {
                             rider_uid: selectedUid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
                             status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                        });
+                        
+                        transaction.update(riderStatusRef, {
+                             tanggal_order_pertama: serverTimestamp(),
+                             in_main_queue: true
                         });
                     });
                     
@@ -3839,6 +3885,8 @@
 
                 const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                 const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
+                
+                const riderStatusRef = doc(db, 'status_rider_aktif', nextRider.uid);
 
                 await runTransaction(db, async (transaction) => {
                     const orderDoc = await transaction.get(orderRef);
@@ -3868,6 +3916,11 @@
                     transaction.update(orderRef, {
                         rider_uid: nextRider.uid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
                         status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                    });
+                    
+                    transaction.update(riderStatusRef, {
+                         tanggal_order_pertama: serverTimestamp(),
+                         in_main_queue: true
                     });
                 });
                 
@@ -3980,6 +4033,8 @@
                     const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                     const newDailyOrderRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', nextRider.uid, 'daily_orders'));
 
+                    const riderStatusRef = doc(db, 'status_rider_aktif', nextRider.uid);
+
                     await runTransaction(db, async (transaction) => {
                         const orderDoc = await transaction.get(orderRef);
                         if (!orderDoc.exists()) throw "Order tidak ditemukan";
@@ -4020,6 +4075,11 @@
                         transaction.update(orderRef, {
                             rider_uid: nextRider.uid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
                             status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                        });
+                        
+                        transaction.update(riderStatusRef, {
+                             tanggal_order_pertama: serverTimestamp(),
+                             in_main_queue: true
                         });
                     });
                     window.showAlert('Berhasil', `Orderan dialihkan ke ${nextRiderName}.`, 'success');
@@ -4950,6 +5010,8 @@
                     const Jam = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
                     const dailyOrdersRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders'));
+                    
+                    const riderStatusRef = doc(db, 'status_rider_aktif', riderUid);
 
                     batch.set(orderRef, {
                         rider_uid: riderUid, rider_name: riderName, customer_phone: phone, customer_name: custName,
@@ -4962,6 +5024,11 @@
                         UID: riderUid, Nama_Rider: riderName, Tanggal: Tanggal, Jam: Jam, Nama_Pelanggan: custName,
                         Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp(),
                         pesanan_text: pesanan_text
+                    });
+                    
+                    batch.update(riderStatusRef, {
+                         tanggal_order_pertama: serverTimestamp(),
+                         in_main_queue: true
                     });
 
                     const adminCut = Math.round(feeParsed.real * 0.16);
