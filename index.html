@@ -2202,8 +2202,8 @@
                         <p id="top-riders-period" class="text-xs text-gray-500">Peringkat penyelesaian order</p>
                     </div>
                 </div>
-                <!-- TOMBOL REFRESH MANUAL UNTUK SINKRONISASI GAS -->
-                <button onclick="manualRefresh().then(() => switchPage('top-riders'))" class="w-8 h-8 flex items-center justify-center bg-orange-50 text-orange-600 rounded-full shadow-sm hover:bg-orange-100 active:scale-90 transition-all">
+                <!-- TOMBOL REFRESH MANUAL MENGAMBIL DARI FIREBASE (LEADERBOARD) -->
+                <button onclick="window.renderTopRiders(true)" class="w-8 h-8 flex items-center justify-center bg-orange-50 text-orange-600 rounded-full shadow-sm hover:bg-orange-100 active:scale-90 transition-all">
                     <i class="fa-solid fa-rotate"></i>
                 </button>
             </header>
@@ -8675,7 +8675,7 @@
                 if(window.loadAdminInfo) window.loadAdminInfo(); 
             }
             
-            if (page === 'top-riders') { renderTopRiders(); } 
+            if (page === 'top-riders') { window.renderTopRiders(); } 
             if (page === 'calculator') { initProfitCalculator(); } 
             if (page === 'installments') { renderInstallmentsHistory(); } 
             if (page === 'transfer-history') { renderTransferHistory(); } 
@@ -8691,226 +8691,213 @@
         }
 
         // --- FUNGSI BARU: RENDER TOP RIDERS (LEADERBOARD) ---
-        function renderTopRiders() {
+        window.currentLeaderboardDate = null; // Menyimpan status navigasi bulan yang sedang dilihat
+
+        window.changeLeaderboardMonth = function(offset) {
+            if (!window.currentLeaderboardDate) return;
+            // Geser bulan ke depan/belakang sesuai tombol panah
+            window.currentLeaderboardDate.setMonth(window.currentLeaderboardDate.getMonth() + offset);
+            window.renderTopRiders(); // Render ulang dokumen yang baru
+        };
+
+        window.renderTopRiders = async function(forceRefresh = false) {
             const container = document.getElementById('leaderboard-container');
             const periodLabel = document.getElementById('top-riders-period');
             
             if (!container) return;
 
-            // Gunakan allRiderData jika ada, jika tidak fallback ke rawData
-            const sourceData = (allRiderData && allRiderData.length > 0) ? allRiderData : rawData;
-
-            if (sourceData.length === 0) {
-                // UPDATE PESAN LOADING SESUAI REQUEST
-                container.innerHTML = `
-                    <div class="text-center py-10">
-                        <i class="fa-solid fa-cloud-arrow-down text-4xl text-blue-200 mb-4 animate-bounce"></i>
-                        <p class="text-xs font-bold text-gray-500 italic">tunggu yah..data sedang diunduh dari admin PROVELO TM</p>
-                    </div>`;
-                return;
-            }
-
             const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-            const now = new Date();
 
-            // --- LOGIKA BARU: FIX HANYA BULAN LALU DAN PENGELOMPOKAN BERDASARKAN UID ---
+            // 1. TENTUKAN TARGET BULAN (Default: Bulan Ini)
+            if (!window.currentLeaderboardDate) {
+                window.currentLeaderboardDate = new Date();
+                // Boleh diatur -1 jika ingin defaultnya bulan lalu
+                // window.currentLeaderboardDate.setMonth(window.currentLeaderboardDate.getMonth() - 1);
+            }
             
-            // 1. Setup Target (Hanya Bulan Lalu)
-            let targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            let targetMonth = targetDate.getMonth() + 1; 
-            let targetYear = targetDate.getFullYear();
-            let displayPeriod = `Periode ${monthNames[targetDate.getMonth()]} ${targetYear}`;
+            const targetMonth = window.currentLeaderboardDate.getMonth() + 1; 
+            const targetYear = window.currentLeaderboardDate.getFullYear();
+            
+            // Format ID Dokumen: YYYY-MM (Misal: 2026-06)
+            const yyyy_mm = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+            const displayPeriod = `${monthNames[targetMonth - 1]} ${targetYear}`;
 
-            // Update Label di Header
+            // Update Teks Periode di Header Atas
             if (periodLabel) {
-                periodLabel.innerText = displayPeriod;
+                periodLabel.innerText = "Periode " + displayPeriod;
             }
 
-            // --- SISTEM CACHE BULANAN ---
-            const cacheKey = `leaderboard_cache_${targetYear}_${targetMonth}`;
-            const isNewDataAvailable = (allRiderData && allRiderData.length > 0);
-            const cachedData = localStorage.getItem(cacheKey);
-            let sortedRiders = [];
+            // 2. TAMPILAN LOADING SEMENTARA (Sambil menampilkan Navigasi Bulan)
+            container.innerHTML = `
+                <div class="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border border-gray-100 mb-6">
+                    <button onclick="window.changeLeaderboardMonth(-1)" class="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600 active:scale-90"><i class="fa-solid fa-chevron-left"></i></button>
+                    <span class="font-bold text-sm text-gray-800">${displayPeriod}</span>
+                    <button onclick="window.changeLeaderboardMonth(1)" class="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600 active:scale-90"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+                <div class="text-center py-10">
+                    <i class="fa-solid fa-spinner animate-spin text-4xl text-orange-500 mb-4"></i>
+                    <p class="text-xs font-bold text-gray-500 italic">Mengambil data dari server...</p>
+                </div>`;
 
-            if (cachedData && !isNewDataAvailable) {
-                // 1. GUNAKAN CACHE MEMORI HP (Super Cepat, Tidak perlu hitung / unduh GAS)
+            // 3. LOGIKA CACHE MEMORI (SANGAT HEMAT BIAYA FIREBASE)
+            const cacheKey = `leaderboard_cache_${yyyy_mm}`;
+            let rankings = [];
+
+            if (!forceRefresh && localStorage.getItem(cacheKey)) {
                 try {
-                    sortedRiders = JSON.parse(cachedData);
+                    rankings = JSON.parse(localStorage.getItem(cacheKey));
                 } catch(e) { console.error("Cache leaderboard rusak"); }
-            } else {
-                // 2. HITUNG ULANG & SIMPAN KE CACHE
-                const sourceData = isNewDataAvailable ? allRiderData : rawData;
+            }
 
-                // Jika data kosong dan belum ada cache (Misal: Awal bulan baru atau HP direstart bersih)
-                if (sourceData.length === 0 && !cachedData) {
-                    container.innerHTML = `
-                        <div class="text-center py-10">
-                            <i class="fa-solid fa-cloud-arrow-down text-4xl text-blue-200 mb-4 animate-bounce"></i>
-                            <p class="text-xs font-bold text-gray-500 italic">tunggu yah..data sedang diunduh dari admin PROVELO TM</p>
-                        </div>`;
-                    
-                    // Otomatis tarik data GAS khusus untuk update bulan baru
-                    if (!window.isFetchingLeaderboard) {
-                        window.isFetchingLeaderboard = true;
-                        manualRefresh().then(() => {
-                            window.isFetchingLeaderboard = false;
-                            switchPage('top-riders');
+            // 4. JIKA CACHE KOSONG ATAU RIDER TEKAN REFRESH -> TEMBAK FIREBASE (1x READ)
+            if (rankings.length === 0 || forceRefresh) {
+                try {
+                    // Import Firestore secara aman jika belum terinisialisasi
+                    const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                    const db = getFirestore();
+                    const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+
+                    // Mengakses dokumen YYYY-MM
+                    const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'leaderboard', yyyy_mm);
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        rankings = data.rankings || []; // Array siap saji dari admin
+                        
+                        // Sortir ulang demi keamanan, jaga-jaga kalau data dari admin belum disortir
+                        // PERBAIKAN: Menambahkan `a.orders` dan `b.orders` karena data Firebase Anda menggunakan field "orders"
+                        rankings.sort((a, b) => {
+                            const tripsA = Number(a.trips || a.orders || a.orderan || a.total_trips || 0);
+                            const tripsB = Number(b.trips || b.orders || b.orderan || b.total_trips || 0);
+                            return tripsB - tripsA;
                         });
+
+                        // Batasi hanya 15 data
+                        rankings = rankings.slice(0, 15);
+
+                        // Simpan ke HP untuk di-reuse
+                        localStorage.setItem(cacheKey, JSON.stringify(rankings));
+                    } else {
+                        // Jika dokumennya memang belum dibuat oleh Admin
+                        rankings = []; 
+                        if (forceRefresh) localStorage.removeItem(cacheKey);
                     }
+                } catch (error) {
+                    console.error("Gagal mengambil leaderboard dari Firestore:", error);
+                    container.innerHTML = `
+                        <div class="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border border-gray-100 mb-6">
+                            <button onclick="window.changeLeaderboardMonth(-1)" class="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600"><i class="fa-solid fa-chevron-left"></i></button>
+                            <span class="font-bold text-sm text-gray-800">${displayPeriod}</span>
+                            <button onclick="window.changeLeaderboardMonth(1)" class="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-600"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                        <div class="text-center py-20 bg-white rounded-3xl shadow-sm border border-red-100">
+                            <i class="fa-solid fa-wifi text-4xl text-red-300 mb-4 block"></i>
+                            <p class="text-sm font-bold text-red-500">Koneksi internet bermasalah.</p>
+                            <button onclick="window.renderTopRiders(true)" class="mt-4 px-4 py-2 bg-red-50 text-red-600 rounded-full text-xs font-bold shadow-sm border border-red-200 active:scale-95 transition-all">Coba Lagi</button>
+                        </div>`;
                     return;
                 }
-
-                // Helper function untuk memfilter dan menghitung ranking
-                const getRankings = (tMonth, tYear) => {
-                    const stats = {};
-                    sourceData.forEach(item => {
-                        const dateStr = parseSheetDate(item.Tanggal); // Format internal: MM-DD-YYYY
-                        if (!dateStr) return;
-
-                        const parts = dateStr.split('-'); 
-                        if (parts.length !== 3) return;
-
-                        const m = parseInt(parts[0]);
-                        const y = parseInt(parts[2]);
-
-                        // Filter: Bulan Sesuai & Status Selesai
-                        if (m === tMonth && y === tYear && String(item.Status || '').trim().toLowerCase() === 'selesai') {
-                            const rawName = item.Nama_Rider || "Tanpa Nama";
-                            const cleanName = rawName.trim(); 
-                            
-                            // Gunakan UID sebagai pengelompokan agar rider dengan beda penulisan nama tetap tergabung
-                            const rawUid = item.UID || item.uid || "Tanpa UID";
-                            const cleanUid = String(rawUid).trim().toUpperCase();
-                            
-                            if (!stats[cleanUid]) {
-                                stats[cleanUid] = { name: cleanName, uid: cleanUid, trips: 0 };
-                            }
-                            // Update nama jika sebelumnya tersimpan "Tanpa Nama"
-                            if (stats[cleanUid].name === "Tanpa Nama" && cleanName !== "Tanpa Nama") {
-                                stats[cleanUid].name = cleanName;
-                            }
-
-                            stats[cleanUid].trips += 1;
-                        }
-                    });
-                    return Object.values(stats).sort((a, b) => b.trips - a.trips);
-                };
-
-                // Ambil data dari kalkulasi ulang
-                sortedRiders = getRankings(targetMonth, targetYear);
-
-                // SIMPAN KE CACHE (Hanya jika kita menggunakan allRiderData lengkap dari GAS)
-                if (isNewDataAvailable) {
-                    localStorage.setItem(cacheKey, JSON.stringify(sortedRiders));
-                }
             }
 
-            // 3. Jika Masih Kosong Juga (Misal: Memang tidak ada order selesai bulan lalu)
-            if (sortedRiders.length === 0) {
-                container.innerHTML = `
-                    <div class="text-center py-20">
-                        <i class="fa-solid fa-calendar-xmark text-4xl text-gray-200 mb-4"></i>
-                        <p class="text-sm font-bold text-gray-400">Belum ada data trip di periode ini</p>
-                        <button onclick="manualRefresh()" class="mt-4 px-4 py-2 bg-orange-50 text-orange-600 rounded-full text-xs font-bold active:scale-95 transition-transform">
-                            <i class="fa-solid fa-rotate-right mr-1"></i> Coba Refresh Data
+            // ============================================
+            // 5. RENDER UI FINAL (PODIUM & LIST)
+            // ============================================
+            let html = `
+                <!-- NAVIGASI BULAN YANG BISA DIKLIK -->
+                <div class="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border border-gray-100 mb-6">
+                    <button onclick="window.changeLeaderboardMonth(-1)" class="w-8 h-8 rounded-full bg-orange-50 hover:bg-orange-100 flex items-center justify-center text-orange-600 active:scale-90 transition-colors"><i class="fa-solid fa-chevron-left"></i></button>
+                    <span class="font-bold text-sm text-gray-800 uppercase tracking-widest">${displayPeriod}</span>
+                    <button onclick="window.changeLeaderboardMonth(1)" class="w-8 h-8 rounded-full bg-orange-50 hover:bg-orange-100 flex items-center justify-center text-orange-600 active:scale-90 transition-colors"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            `;
+
+            // JIKA DATA BULAN INI KOSONG
+            if (rankings.length === 0) {
+                html += `
+                    <div class="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm mt-4">
+                        <i class="fa-solid fa-ranking-star text-5xl text-gray-200 mb-4 block"></i>
+                        <p class="text-sm font-bold text-gray-400">Belum ada data juara di periode ini.</p>
+                        <p class="text-[10px] text-gray-400 mt-2 italic">*Admin belum merilis hasil bulanan</p>
+                        <button onclick="window.renderTopRiders(true)" class="mt-6 px-5 py-2.5 bg-orange-50 text-orange-600 rounded-full text-xs font-bold active:scale-95 transition-transform border border-orange-100 shadow-sm">
+                            <i class="fa-solid fa-rotate-right mr-1"></i> Cek Ulang
                         </button>
-                    </div>
-                `;
+                    </div>`;
+                container.innerHTML = html;
                 return;
             }
 
-            // 4. Render UI (Top 10 & Harapan)
-            const top10 = sortedRiders.slice(0, 10);
-            const harapan = sortedRiders.slice(10, 15);
+            // Helper untuk mengambil nama dan trip yang valid
+            // PERBAIKAN: Menambahkan `r.orders` karena data Firebase Anda menggunakan field tersebut
+            const getRiderName = (r) => r.name || r.nama || 'Rider';
+            const getRiderTrips = (r) => Number(r.trips || r.orders || r.orderan || r.total_trips || 0);
 
-            let html = '';
-
-            // Render Top 3 (Podium Style)
-            if (top10.length > 0) {
-                html += `<div class="flex justify-center items-end gap-2 mb-8 mt-4">`;
+            // A. PODIUM TOP 3 (Index 0, 1, 2)
+            const top3 = rankings.slice(0, 3);
+            if (top3.length > 0) {
+                html += `<div class="flex justify-center items-end gap-2 mb-8 mt-6">`;
                 
-                // Juara 2 (Kiri)
-                if (top10[1]) {
+                // JUARA 2 (KIRI)
+                if (top3[1]) {
                     html += `
                         <div class="flex flex-col items-center w-1/3">
                             <div class="relative mb-2">
-                                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(top10[1].name)}&background=94a3b8&color=fff&size=64" class="w-12 h-12 rounded-full border-2 border-gray-300 shadow-md">
+                                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(getRiderName(top3[1]))}&background=94a3b8&color=fff&size=64" class="w-12 h-12 rounded-full border-2 border-gray-300 shadow-md">
                                 <div class="absolute -bottom-2 inset-x-0 text-center"><span class="bg-gray-400 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-sm">2</span></div>
                             </div>
-                            <p class="text-[10px] font-bold text-gray-700 text-center leading-tight line-clamp-2 h-6 overflow-hidden w-full">${top10[1].name}</p>
-                            <p class="text-[10px] font-extrabold text-gray-500 mt-1">${top10[1].trips} Trip</p>
+                            <p class="text-[10px] font-bold text-gray-700 text-center leading-tight line-clamp-2 h-6 overflow-hidden w-full">${getRiderName(top3[1])}</p>
+                            <p class="text-[10px] font-extrabold text-gray-500 mt-1">${getRiderTrips(top3[1])} Trip</p>
                         </div>
                     `;
                 }
 
-                // Juara 1 (Tengah - Besar)
-                html += `
-                    <div class="flex flex-col items-center w-1/3 -mt-6">
-                        <div class="relative mb-2">
-                            <i class="fa-solid fa-crown text-yellow-400 text-xl absolute -top-5 animate-bounce"></i>
-                            <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(top10[0].name)}&background=ffd700&color=fff&size=80" class="w-16 h-16 rounded-full border-4 border-yellow-300 shadow-xl z-10">
-                            <div class="absolute -bottom-3 inset-x-0 text-center z-20"><span class="bg-yellow-500 text-white text-[10px] font-bold px-3 py-0.5 rounded-full shadow-md">1</span></div>
+                // JUARA 1 (TENGAH - MAHKOTA EMAS)
+                if (top3[0]) {
+                    html += `
+                        <div class="flex flex-col items-center w-1/3 -mt-6">
+                            <div class="relative mb-2">
+                                <i class="fa-solid fa-crown text-yellow-400 text-2xl absolute -top-6 left-1/2 transform -translate-x-1/2 drop-shadow-md animate-bounce"></i>
+                                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(getRiderName(top3[0]))}&background=f59e0b&color=fff&size=80" class="w-16 h-16 rounded-full border-4 border-yellow-400 shadow-xl z-10">
+                                <div class="absolute -bottom-3 inset-x-0 text-center z-20"><span class="bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-[10px] font-bold px-3 py-0.5 rounded-full shadow-md border border-yellow-200">1</span></div>
+                            </div>
+                            <p class="text-xs font-black text-gray-800 text-center leading-tight mt-1 line-clamp-2 w-full">${getRiderName(top3[0])}</p>
+                            <p class="text-xs font-black text-orange-600 mt-1 bg-orange-50 px-2 py-0.5 rounded-md border border-orange-100">${getRiderTrips(top3[0])} Trip</p>
                         </div>
-                        <p class="text-xs font-bold text-gray-800 text-center leading-tight mt-1 line-clamp-2 w-full">${top10[0].name}</p>
-                        <p class="text-xs font-extrabold text-orange-500 mt-1">${top10[0].trips} Trip</p>
-                    </div>
-                `;
+                    `;
+                }
 
-                // Juara 3 (Kanan)
-                if (top10[2]) {
+                // JUARA 3 (KANAN)
+                if (top3[2]) {
                     html += `
                         <div class="flex flex-col items-center w-1/3">
                             <div class="relative mb-2">
-                                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(top10[2].name)}&background=b45309&color=fff&size=64" class="w-12 h-12 rounded-full border-2 border-orange-700 shadow-md">
-                                <div class="absolute -bottom-2 inset-x-0 text-center"><span class="bg-orange-700 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-sm">3</span></div>
+                                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(getRiderName(top3[2]))}&background=b45309&color=fff&size=64" class="w-12 h-12 rounded-full border-2 border-orange-800 shadow-md">
+                                <div class="absolute -bottom-2 inset-x-0 text-center"><span class="bg-orange-800 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-sm">3</span></div>
                             </div>
-                            <p class="text-[10px] font-bold text-gray-700 text-center leading-tight line-clamp-2 h-6 overflow-hidden w-full">${top10[2].name}</p>
-                            <p class="text-[10px] font-extrabold text-gray-500 mt-1">${top10[2].trips} Trip</p>
+                            <p class="text-[10px] font-bold text-gray-700 text-center leading-tight line-clamp-2 h-6 overflow-hidden w-full">${getRiderName(top3[2])}</p>
+                            <p class="text-[10px] font-extrabold text-gray-500 mt-1">${getRiderTrips(top3[2])} Trip</p>
                         </div>
                     `;
                 }
                 html += `</div>`;
             }
 
-            // Render Sisa Top 10 (Rank 4-10)
-            if (top10.length > 3) {
-                html += `<div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-6">`;
-                top10.slice(3).forEach((rider, index) => {
-                    const rank = index + 4;
+            // B. LIST BIASA (Index 3 sampai 14)
+            const listRiders = rankings.slice(3, 15);
+            if (listRiders.length > 0) {
+                html += `<div class="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden mb-6">`;
+                listRiders.forEach((rider, index) => {
+                    const rank = index + 4; // Lanjutan rank setelah 1,2,3
                     html += `
-                        <div class="flex items-center justify-between p-3 border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                            <div class="flex items-center gap-3">
-                                <span class="text-sm font-bold text-gray-400 w-4 text-center">${rank}</span>
-                                <div class="flex flex-col">
-                                    <span class="text-[11px] font-bold text-gray-700">${rider.name}</span>
+                        <div class="flex items-center justify-between p-4 border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                            <div class="flex items-center gap-4">
+                                <span class="text-sm font-black text-gray-300 w-5 text-center">${rank}</span>
+                                <div class="w-8 h-8 rounded-full bg-gray-100 border border-gray-200 overflow-hidden shadow-inner shrink-0">
+                                    <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(getRiderName(rider))}&background=f1f5f9&color=64748b&size=64" class="w-full h-full object-cover">
                                 </div>
+                                <span class="text-xs font-bold text-gray-700">${getRiderName(rider)}</span>
                             </div>
-                            <span class="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-lg">${rider.trips} Trip</span>
-                        </div>
-                    `;
-                });
-                html += `</div>`;
-            }
-
-            // Render Rider Harapan (Rank 11-15)
-            if (harapan.length > 0) {
-                html += `
-                    <div class="flex items-center gap-2 mb-3 mt-6">
-                        <div class="h-px bg-gray-200 flex-1"></div>
-                        <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Rider Harapan</span>
-                        <div class="h-px bg-gray-200 flex-1"></div>
-                    </div>
-                    <div class="bg-white/50 rounded-xl border border-gray-100/50 space-y-2 p-2">
-                `;
-                harapan.forEach((rider, index) => {
-                    const rank = index + 11;
-                    html += `
-                        <div class="flex items-center justify-between p-2 rounded-lg bg-white border border-gray-50">
-                            <div class="flex items-center gap-3">
-                                <span class="text-xs font-bold text-gray-300 w-4 text-center">${rank}</span>
-                                <span class="text-[10px] font-medium text-gray-600">${rider.name}</span>
-                            </div>
-                            <span class="text-[9px] font-bold text-gray-400">${rider.trips} Trip</span>
+                            <span class="text-[10px] font-black text-gray-600 bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-lg shadow-sm">${getRiderTrips(rider)} Trip</span>
                         </div>
                     `;
                 });
@@ -8918,7 +8905,7 @@
             }
 
             container.innerHTML = html;
-        }
+        };
 
         // --- FUNGSI RIWAYAT CICILAN ---
         function renderInstallmentsHistory() {
