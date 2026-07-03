@@ -4823,137 +4823,207 @@
                 return;
             }
 
-            const loader = document.getElementById('loading-overlay');
-            if (loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
+            // Membuat Custom Modal untuk Input Rentang Tanggal
+            const modal = document.getElementById('custom-modal');
+            const icon = document.getElementById('custom-modal-icon');
+            const inputEl = document.getElementById('custom-modal-input');
+            const selectEl = document.getElementById('custom-modal-select-wrapper');
 
-            try {
-                // Ambil tanggal target dari input history-date, jika kosong gunakan hari ini
-                let targetDateVal = document.getElementById('history-date').value;
-                if (!targetDateVal) {
-                    const now = new Date();
-                    const dd = String(now.getDate()).padStart(2, '0');
-                    const mm = String(now.getMonth() + 1).padStart(2, '0');
-                    const yyyy = now.getFullYear();
-                    targetDateVal = `${yyyy}-${mm}-${dd}`;
+            icon.className = 'w-12 h-12 rounded-full flex items-center justify-center text-xl mb-3 border-4 bg-emerald-50 text-emerald-500 border-emerald-100';
+            icon.innerHTML = '<i class="fa-regular fa-calendar-days"></i>';
+
+            document.getElementById('custom-modal-title').innerText = 'Pilih Rentang Tanggal';
+            document.getElementById('custom-modal-text').innerHTML = 'Silakan tentukan <b>Tanggal Awal</b> dan <b>Tanggal Akhir</b> untuk mengekspor data riwayat.';
+
+            if (selectEl) selectEl.classList.add('hidden');
+            if (inputEl) inputEl.classList.add('hidden');
+
+            // Kita gunakan div khusus untuk memuat 2 input date (Awal & Akhir)
+            let dateInputsHtml = `
+                <div id="date-range-container" class="w-full flex gap-2 mb-4">
+                    <div class="flex-1 text-left">
+                        <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1">Dari Tanggal</label>
+                        <input type="date" id="export-start-date" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-2.5 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm">
+                    </div>
+                    <div class="flex-1 text-left">
+                        <label class="text-[9px] font-black text-black uppercase ml-1 block mb-1">Sampai Tanggal</label>
+                        <input type="date" id="export-end-date" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-2.5 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm">
+                    </div>
+                </div>
+            `;
+
+            // Cek apakah kontainer rentang tanggal sudah ada, jika belum, tambahkan sebelum tombol aksi
+            const actionDiv = document.getElementById('custom-modal-actions');
+            let dateContainer = document.getElementById('date-range-container');
+            if (!dateContainer) {
+                actionDiv.insertAdjacentHTML('beforebegin', dateInputsHtml);
+            } else {
+                dateContainer.classList.remove('hidden');
+            }
+
+            // Set default value ke hari ini untuk memudahkan
+            const today = new Date();
+            const dd = String(today.getDate()).padStart(2, '0');
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const yyyy = today.getFullYear();
+            const todayStr = `${yyyy}-${mm}-${dd}`;
+            
+            document.getElementById('export-start-date').value = todayStr;
+            document.getElementById('export-end-date').value = todayStr;
+
+            document.getElementById('custom-modal-actions').innerHTML = `
+                <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex'); document.getElementById('date-range-container')?.classList.add('hidden');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
+                <button id="btn-process-export-range" class="flex-1 py-3 bg-emerald-500 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5 hover:bg-emerald-600 transition-colors"><i class="fa-solid fa-download"></i> Download Excel</button>
+            `;
+
+            modal.classList.remove('hidden'); 
+            modal.classList.add('flex');
+
+            document.getElementById('btn-process-export-range').onclick = async () => {
+                const startDateVal = document.getElementById('export-start-date').value;
+                const endDateVal = document.getElementById('export-end-date').value;
+
+                if (!startDateVal || !endDateVal) {
+                    window.showAlert('Peringatan', 'Tanggal awal dan akhir harus diisi.', 'warning');
+                    return;
                 }
 
-                let allLogs = [];
+                // Tutup modal dan sembunyikan form input date-nya
+                modal.classList.add('hidden'); 
+                modal.classList.remove('flex');
+                document.getElementById('date-range-container').classList.add('hidden');
 
-                // Kumpulkan log riwayat dari semua rider yang SESUAI dengan tanggal target
-                allRiderBalances.forEach(rider => {
-                    const logs = rider.edit_logs || [];
-                    logs.forEach(log => {
-                        const logDateObj = new Date(log.time);
-                        const logDd = String(logDateObj.getDate()).padStart(2, '0');
-                        const logMm = String(logDateObj.getMonth() + 1).padStart(2, '0');
-                        const logYyyy = logDateObj.getFullYear();
-                        const logDateStr = `${logYyyy}-${logMm}-${logDd}`;
+                const loader = document.getElementById('loading-overlay');
+                if (loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
-                        if (logDateStr === targetDateVal) {
-                            allLogs.push({
-                                type: 'manual',
-                                name: rider.name || rider.id,
-                                amount: log.amount,
-                                action: log.action,
-                                time: log.time
-                            });
-                        }
-                    });
-                });
-
-                // Trik: Ambil juga dari arsip riwayat_potongan permanen agar histori lama ikut ke-export
                 try {
-                    const startOfDay = new Date(`${targetDateVal}T00:00:00`);
-                    const endOfDay = new Date(`${targetDateVal}T23:59:59.999`);
-                    
-                    const q = query(
-                        collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
-                        where("created_at", ">=", startOfDay),
-                        where("created_at", "<=", endOfDay)
-                    );
-                    const snap = await getDocs(q);
-                    
-                    snap.forEach(doc => {
-                        const data = doc.data();
-                        let actionText = 'Potongan ADM';
-                        if (data.type === 'auto_cicilan') actionText = 'Potongan Cicilan';
-                        else if (data.type && data.type.includes('refund')) actionText = 'Refund Saldo';
-                        else if (data.type === 'manual_sub') actionText = 'Kurangi';
-                        else if (data.type === 'manual_add') actionText = 'Top Up Saldo';
-                        else if (data.type === 'manual_set') actionText = 'Set Manual Saldo';
-                        else if (data.type === 'manual_order') actionText = 'Order Susulan';
-                        
-                        let amt = Math.abs(data.amount);
-                        let timeMs = data.created_at ? data.created_at.seconds * 1000 : 0;
-                        
-                        allLogs.push({
-                            type: 'system',
-                            name: data.rider_name || data.rider_uid,
-                            amount: amt,
-                            action: actionText,
-                            time: timeMs
+                    // Konversi string input date ke format ms untuk filtering JavaScript
+                    const startTimeMs = new Date(`${startDateVal}T00:00:00`).getTime();
+                    const endTimeMs = new Date(`${endDateVal}T23:59:59.999`).getTime();
+
+                    if (startTimeMs > endTimeMs) {
+                        window.showAlert('Error', 'Tanggal mulai tidak boleh lebih besar dari tanggal akhir.', 'error');
+                        return;
+                    }
+
+                    let allLogs = [];
+
+                    // Kumpulkan log riwayat dari semua rider berdasarkan rentang tanggal
+                    allRiderBalances.forEach(rider => {
+                        const logs = rider.edit_logs || [];
+                        logs.forEach(log => {
+                            if (log.time >= startTimeMs && log.time <= endTimeMs) {
+                                allLogs.push({
+                                    type: 'manual',
+                                    name: rider.name || rider.id,
+                                    amount: log.amount,
+                                    action: log.action,
+                                    time: log.time
+                                });
+                            }
                         });
                     });
-                } catch(e) {
-                    console.warn("Gagal tarik arsip riwayat_potongan:", e);
-                }
 
-                // Deduplikasi (Agar data di hari ini tidak double antara edit_logs dengan riwayat permanen)
-                let uniqueLogs = [];
-                allLogs.forEach(log => {
-                    const duplicateIndex = uniqueLogs.findIndex(u => u.name === log.name && Math.abs(u.time - log.time) < 60000 && Math.abs(u.amount) === Math.abs(log.amount));
-                    if (duplicateIndex === -1) {
-                        uniqueLogs.push(log);
-                    } else {
-                        if (log.type === 'manual') uniqueLogs[duplicateIndex] = log;
+                    // Tarik juga dari arsip riwayat_potongan permanen berdasarkan rentang waktu
+                    try {
+                        const startOfDay = new Date(`${startDateVal}T00:00:00`);
+                        const endOfDay = new Date(`${endDateVal}T23:59:59.999`);
+                        
+                        const q = query(
+                            collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
+                            where("created_at", ">=", startOfDay),
+                            where("created_at", "<=", endOfDay)
+                        );
+                        const snap = await getDocs(q);
+                        
+                        snap.forEach(doc => {
+                            const data = doc.data();
+                            
+                            // HANYA EXPORT MANUAL ACTION
+                            if (data.type === 'manual_add' || data.type === 'manual_sub' || data.type === 'manual_set') {
+                                let actionText = '';
+                                if (data.type === 'manual_sub') actionText = 'Kurangi';
+                                else if (data.type === 'manual_add') actionText = 'Top Up Saldo';
+                                else if (data.type === 'manual_set') actionText = 'Set Manual Saldo';
+                                
+                                let amt = Math.abs(data.amount);
+                                let timeMs = data.created_at ? data.created_at.seconds * 1000 : 0;
+                                
+                                allLogs.push({
+                                    type: 'system',
+                                    name: data.rider_name || data.rider_uid,
+                                    amount: amt,
+                                    action: actionText,
+                                    time: timeMs
+                                });
+                            }
+                        });
+                    } catch(e) {
+                        console.warn("Gagal tarik arsip riwayat_potongan:", e);
                     }
-                });
-                
-                // Urutkan berdasarkan waktu pengeditan terbaru
-                uniqueLogs.sort((a, b) => b.time - a.time);
 
-                if (uniqueLogs.length === 0) {
-                    const [y, m, d] = targetDateVal.split('-');
-                    window.showAlert('Kosong', `Tidak ada riwayat perubahan saldo untuk tanggal ${d}-${m}-${y}.`, 'warning');
-                    return;
-                }
-
-                // Format data untuk SheetJS (Excel Asli)
-                const excelData = uniqueLogs.map(log => {
-                    const dateObj = new Date(log.time);
-                    const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-                    const formatWaktu = dateObj.toLocaleDateString('id-ID', optionsDate);
-                    const formatJam = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':');
+                    // Deduplikasi (Agar data tidak double antara edit_logs dengan riwayat permanen)
+                    let uniqueLogs = [];
+                    allLogs.forEach(log => {
+                        const duplicateIndex = uniqueLogs.findIndex(u => u.name === log.name && Math.abs(u.time - log.time) < 60000 && Math.abs(u.amount) === Math.abs(log.amount));
+                        if (duplicateIndex === -1) {
+                            uniqueLogs.push(log);
+                        } else {
+                            if (log.type === 'manual') uniqueLogs[duplicateIndex] = log;
+                        }
+                    });
                     
-                    return {
-                        "Nama Rider": log.name,
-                        "Nominal": Number(log.amount) || 0, // Dibiarkan sebagai Number agar bisa di-SUM di Excel
-                        "Tindakan": log.action,
-                        "Waktu": formatWaktu,
-                        "Jam": formatJam
-                    };
-                });
+                    // Urutkan berdasarkan waktu pengeditan terbaru
+                    uniqueLogs.sort((a, b) => b.time - a.time);
 
-                // Pastikan library XLSX sudah termuat dari CDN
-                if (typeof XLSX === 'undefined') {
-                    window.showAlert('Error', 'Sistem Excel belum dimuat. Pastikan ada koneksi internet.', 'error');
-                    return;
+                    if (uniqueLogs.length === 0) {
+                        const [sy, sm, sd] = startDateVal.split('-');
+                        const [ey, em, ed] = endDateVal.split('-');
+                        let rangeText = `${sd}/${sm}/${sy} s/d ${ed}/${em}/${ey}`;
+                        if (startDateVal === endDateVal) rangeText = `${sd}/${sm}/${sy}`;
+
+                        window.showAlert('Kosong', `Tidak ada riwayat perubahan manual (Top-Up/Kurangi) yang ditemukan pada periode ${rangeText}.`, 'warning');
+                        return;
+                    }
+
+                    // Format data untuk SheetJS (Excel Asli)
+                    const excelData = uniqueLogs.map(log => {
+                        const dateObj = new Date(log.time);
+                        // Atur tanggal menjadi string dengan format standar DD/MM/YYYY
+                        const formatWaktu = dateObj.toLocaleDateString('id-ID', { year: 'numeric', month: '2-digit', day: '2-digit' });
+                        const formatJam = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/\./g, ':');
+                        
+                        return {
+                            "Nama Rider": log.name,
+                            "Nominal": Number(log.amount) || 0,
+                            "Tindakan": log.action,
+                            "Tanggal": formatWaktu,
+                            "Jam": formatJam
+                        };
+                    });
+
+                    // Pastikan library XLSX sudah termuat
+                    if (typeof XLSX === 'undefined') {
+                        window.showAlert('Error', 'Library Excel (SheetJS) belum dimuat. Pastikan ada koneksi internet yang stabil.', 'error');
+                        return;
+                    }
+
+                    // Generate worksheet dan workbook
+                    const worksheet = XLSX.utils.json_to_sheet(excelData);
+                    const workbook = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(workbook, worksheet, "Riwayat Saldo");
+                    
+                    // Trigger download
+                    const fileNameStr = startDateVal === endDateVal ? startDateVal : `${startDateVal}_to_${endDateVal}`;
+                    XLSX.writeFile(workbook, `Riwayat_Manual_${fileNameStr}.xlsx`);
+
+                } catch (err) {
+                    console.error("Kesalahan Export Range Excel:", err);
+                    window.showAlert('Error', 'Gagal memproses ekspor Excel. Cek log konsol.', 'error');
+                } finally {
+                    if (loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
                 }
-
-                // Generate worksheet dan workbook
-                const worksheet = XLSX.utils.json_to_sheet(excelData);
-                const workbook = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(workbook, worksheet, "Riwayat Saldo");
-                
-                // Trigger download dengan ekstensi .xlsx
-                XLSX.writeFile(workbook, `Riwayat_Saldo_Rider_${targetDateVal.replace(/-/g, '')}.xlsx`);
-
-            } catch (err) {
-                console.error(err);
-                window.showAlert('Error', 'Gagal memproses ekspor Excel.', 'error');
-            } finally {
-                if (loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
-            }
+            };
         };
 
         window.submitOrder = async () => {
@@ -5908,6 +5978,11 @@
                     allCloudRecaps.push(newData);
                 }
                 if (typeof window.renderCloudRecaps === 'function') window.renderCloudRecaps();
+
+                // UPDATE RANKING BULANAN SECARA OTOMATIS (DI BELAKANG LAYAR)
+                if (typeof window.updateMonthlyLeaderboard === 'function') {
+                    window.updateMonthlyLeaderboard(true);
+                }
 
                 window.showAlert('Tersimpan', 'Rekap tanggal ' + dateVal + ' berhasil dicadangkan ke Database Cloud.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
@@ -8002,61 +8077,296 @@
             `;
         };
 
+        // Cache untuk menyimpan data ranking yang sudah di fetch agar hemat limit read Firebase
+        window._cacheLeaderboardData = window._cacheLeaderboardData || {};
+
         window.renderAnalisisKinerja = () => {
             const container = document.getElementById('kinerja-container-results');
             if (!container) return;
 
             const dataOrder = window.currentHistoryData || [];
+            
+            // --- 1. KINERJA HARIAN (RIDER RELIABILITY SCORE) ---
+            let dailyHtml = '';
             if (dataOrder.length === 0) {
-                container.innerHTML = `<p class="text-[10px] text-slate-400 italic text-center py-6 border border-dashed border-gray-200 rounded-xl mt-2">Pilih tanggal di menu Histori terlebih dahulu.</p>`;
+                dailyHtml = `<p class="text-[10px] text-slate-400 italic text-center py-6 border border-dashed border-gray-200 rounded-xl mt-2">Pilih tanggal di menu Histori terlebih dahulu.</p>`;
+            } else {
+                const riderScores = {};
+                dataOrder.forEach(o => {
+                    const uid = o.rider_uid;
+                    if(!uid) return;
+                    
+                    if(!riderScores[uid]) riderScores[uid] = { uid: uid, name: o.rider_name || uid, score: 100, orders: 0 };
+                    riderScores[uid].orders++;
+                    // Logika skor sederhana: +2 setiap order selesai.
+                    if (riderScores[uid].score < 100) riderScores[uid].score += 2; 
+                });
+
+                const sortedRiders = Object.values(riderScores).sort((a, b) => b.orders - a.orders).slice(0, 5); // Tampilkan Top 5
+
+                let htmlList = '';
+                sortedRiders.forEach((r, i) => {
+                    let stars = '';
+                    const totalStars = r.orders > 10 ? 5 : (r.orders > 5 ? 4 : 3);
+                    for(let s=0; s<5; s++) { stars += s < totalStars ? '<i class="fa-solid fa-star text-amber-400 text-[8px]"></i>' : '<i class="fa-regular fa-star text-slate-300 text-[8px]"></i>'; }
+
+                    htmlList += `
+                        <div class="flex justify-between items-center p-3 rounded-xl border bg-white border-gray-100 shadow-sm mb-2">
+                            <div class="flex flex-col overflow-hidden">
+                                <span class="font-black text-[11px] text-slate-700 truncate uppercase">${r.name}</span>
+                                <div class="flex items-center gap-0.5 mt-0.5">${stars}</div>
+                            </div>
+                            <div class="text-right shrink-0">
+                                <span class="text-[10px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 block mb-0.5">${r.score}% Reliable</span>
+                                <span class="text-[8px] font-bold text-slate-400">${r.orders} Order Valid</span>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                dailyHtml = `
+                    <div class="mb-3 flex justify-between items-end border-b border-gray-100 pb-2 mt-1">
+                        <div>
+                            <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Rider Reliability Score</p>
+                            <p class="text-[10px] font-bold text-slate-700 mt-0.5">Skor Keandalan Rider Hari Ini</p>
+                        </div>
+                    </div>
+                    <div class="space-y-1">
+                        ${htmlList}
+                    </div>
+                    <p class="text-[8px] text-slate-400 text-center mt-2 mb-4 italic">*Skor dihitung dari rasio penyelesaian order hari ini.</p>
+                `;
+            }
+
+            // --- 2. DROPDOWN PILIHAN BULAN RANKING ---
+            let monthOptions = '';
+            const today = new Date();
+            const namaBulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            
+            for(let i = 0; i < 12; i++) {
+                const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                const label = `${namaBulan[d.getMonth()]} ${d.getFullYear()}`;
+                monthOptions += `<option value="${val}">${label}</option>`;
+            }
+
+            container.innerHTML = `
+                ${dailyHtml}
+                
+                <!-- BAGIAN BARU: LEADERBOARD BULANAN (RANKING) -->
+                <div class="pt-3 border-t border-dashed border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <p class="text-[9px] font-black text-slate-600 uppercase tracking-widest"><i class="fa-solid fa-trophy text-amber-500 mr-1"></i> Ranking Bulanan (Top 15)</p>
+                        
+                        <!-- Dropdown Filter Bulan -->
+                        <div class="relative w-max">
+                            <select id="leaderboard-month-filter" onchange="window.fetchAndRenderLeaderboard()" class="bg-slate-50 border border-slate-200 text-[9px] font-bold text-slate-600 rounded-lg px-2 py-1 pr-6 focus:outline-none focus:ring-1 focus:ring-indigo-500 shadow-sm cursor-pointer appearance-none">
+                                ${monthOptions}
+                            </select>
+                            <i class="fa-solid fa-caret-down absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none"></i>
+                        </div>
+                    </div>
+                    
+                    <!-- Tempat Munculnya Daftar Ranking -->
+                    <div id="leaderboard-container-results" class="min-h-[150px]">
+                        <p class="text-[9px] text-slate-400 italic text-center py-4">Memuat data ranking...</p>
+                    </div>
+
+                    <!-- Tombol Manual Update Ranking -->
+                    <div class="mt-4 pt-3 border-t border-slate-100">
+                        <p class="text-[8px] text-slate-500 mb-2 leading-relaxed text-center">Publikasikan peringkat orderan bulan berjalan ke aplikasi rider. Cukup update 1x sehari di akhir shift agar hemat kuota server.</p>
+                        <button onclick="window.updateMonthlyLeaderboard()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-lg text-[9px] uppercase shadow-md transition-colors flex items-center justify-center gap-1.5">
+                            Update & Publikasikan Peringkat
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            // Langsung otomatis menarik dan memunculkan ranking untuk bulan yang saat ini terpilih di dropdown
+            window.fetchAndRenderLeaderboard();
+        };
+
+        // FUNGSI BARU: Mengambil data ranking dari Firebase berdasarkan bulan yang dipilih
+        window.fetchAndRenderLeaderboard = async () => {
+            const container = document.getElementById('leaderboard-container-results');
+            const monthVal = document.getElementById('leaderboard-month-filter')?.value;
+            
+            if (!container || !monthVal) return;
+
+            // 1. CEK CACHE MEMORI (Sangat Hemat Kuota - 0 Read)
+            if (window._cacheLeaderboardData[monthVal]) {
+                window.renderLeaderboardUI(window._cacheLeaderboardData[monthVal]);
                 return;
             }
 
-            const riderScores = {};
-            dataOrder.forEach(o => {
-                const uid = o.rider_uid;
-                if(!uid) return;
+            container.innerHTML = '<div class="flex flex-col items-center justify-center py-6"><div class="w-6 h-6 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mb-2"></div><p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">Menarik data dari database...</p></div>';
+
+            try {
+                // 2. MENGAMBIL DATA DARI FIREBASE (Hanya 1 Read!)
+                const leaderboardRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'leaderboard', monthVal);
+                const docSnap = await getDoc(leaderboardRef);
+
+                let rankings = [];
+                if (docSnap.exists() && docSnap.data().rankings) {
+                    rankings = docSnap.data().rankings;
+                }
+
+                // 3. SIMPAN KE CACHE LOKAL
+                window._cacheLeaderboardData[monthVal] = rankings;
+
+                // 4. RENDER KE LAYAR
+                window.renderLeaderboardUI(rankings);
+
+            } catch (e) {
+                console.error("Gagal menarik ranking bulanan:", e);
+                container.innerHTML = '<p class="text-[10px] text-rose-500 italic text-center py-4 bg-rose-50 border border-dashed border-rose-200 rounded-xl">Gagal terhubung ke database. Periksa koneksi internet Anda.</p>';
+            }
+        };
+
+        // FUNGSI BARU: Melukis/Merender UI Desain Ranking (Emas, Perak, Perunggu, & Biasa)
+        window.renderLeaderboardUI = (rankings) => {
+            const container = document.getElementById('leaderboard-container-results');
+            if (!container) return;
+
+            if (!rankings || rankings.length === 0) {
+                container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-6 bg-slate-50 border border-dashed border-slate-200 rounded-xl">Belum ada data ranking yang tersimpan untuk bulan ini.</p>';
+                return;
+            }
+
+            let html = '<div class="space-y-2.5">';
+            
+            rankings.forEach((r, idx) => {
+                const rank = idx + 1;
+                let bgClass = 'bg-white border-gray-100 hover:border-slate-300';
+                let badgeHtml = `<div class="w-6 h-6 rounded bg-slate-100 text-slate-500 flex items-center justify-center font-black text-[10px] shrink-0 border border-slate-200">${rank}</div>`;
                 
-                if(!riderScores[uid]) riderScores[uid] = { uid: uid, name: o.rider_name || uid, score: 100, orders: 0 };
-                riderScores[uid].orders++;
-                // Logika skor sederhana: +2 setiap order selesai. (Nanti bisa dikurangi jika ada cancel)
-                if (riderScores[uid].score < 100) riderScores[uid].score += 2; 
-            });
+                // DESAIN KHUSUS TOP 3
+                if (rank === 1) {
+                    bgClass = 'bg-amber-50/50 border-amber-300 shadow-sm transform scale-[1.02] z-10 relative';
+                    badgeHtml = '<div class="w-9 h-9 bg-gradient-to-br from-amber-300 to-amber-500 text-white rounded-full flex items-center justify-center font-black text-[14px] shadow-md border-2 border-white shrink-0"><i class="fa-solid fa-trophy"></i></div>';
+                } else if (rank === 2) {
+                    bgClass = 'bg-slate-50/80 border-slate-300 shadow-sm';
+                    badgeHtml = '<div class="w-8 h-8 bg-gradient-to-br from-slate-200 to-slate-400 text-slate-700 rounded-full flex items-center justify-center font-black text-[12px] shadow-md border-2 border-white shrink-0"><i class="fa-solid fa-medal"></i></div>';
+                } else if (rank === 3) {
+                    bgClass = 'bg-orange-50/50 border-orange-200 shadow-sm';
+                    badgeHtml = '<div class="w-8 h-8 bg-gradient-to-br from-orange-300 to-orange-500 text-white rounded-full flex items-center justify-center font-black text-[12px] shadow-md border-2 border-white shrink-0"><i class="fa-solid fa-medal"></i></div>';
+                }
 
-            const sortedRiders = Object.values(riderScores).sort((a, b) => b.orders - a.orders).slice(0, 5); // Tampilkan Top 5
-
-            let htmlList = '';
-            sortedRiders.forEach((r, i) => {
-                let stars = '';
-                const totalStars = r.orders > 10 ? 5 : (r.orders > 5 ? 4 : 3);
-                for(let s=0; s<5; s++) { stars += s < totalStars ? '<i class="fa-solid fa-star text-amber-400 text-[8px]"></i>' : '<i class="fa-regular fa-star text-slate-300 text-[8px]"></i>'; }
-
-                htmlList += `
-                    <div class="flex justify-between items-center p-3 rounded-xl border bg-white border-gray-100 shadow-sm mb-2">
-                        <div class="flex flex-col overflow-hidden">
-                            <span class="font-black text-[11px] text-slate-700 truncate uppercase">${r.name}</span>
-                            <div class="flex items-center gap-0.5 mt-0.5">${stars}</div>
+                html += `
+                    <div class="flex justify-between items-center p-3 rounded-xl border ${bgClass} transition-all duration-300 group">
+                        <div class="flex items-center gap-3 overflow-hidden pr-2">
+                            ${badgeHtml}
+                            <div class="flex flex-col overflow-hidden">
+                                <span class="font-black text-[12px] text-slate-700 truncate uppercase leading-tight">${r.name}</span>
+                                ${rank <= 3 ? '<span class="text-[8px] font-bold text-amber-600 mt-0.5">Top Performer Rider</span>' : ''}
+                            </div>
                         </div>
-                        <div class="text-right shrink-0">
-                            <span class="text-[10px] font-black text-sky-600 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 block mb-0.5">${r.score}% Reliable</span>
-                            <span class="text-[8px] font-bold text-slate-400">${r.orders} Order Valid</span>
+                        <div class="text-right shrink-0 ml-2">
+                            <span class="text-[11px] font-black text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 block shadow-sm"><i class="fa-solid fa-check-double mr-1 text-indigo-400"></i>${r.orders} Order</span>
                         </div>
                     </div>
                 `;
             });
+            
+            html += '</div>';
+            container.innerHTML = html;
+        };
 
-            container.innerHTML = `
-                <div class="mb-3 flex justify-between items-end border-b border-gray-100 pb-2 mt-1">
-                    <div>
-                        <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Rider Reliability Score</p>
-                        <p class="text-[10px] font-bold text-slate-700 mt-0.5">Skor Keandalan Rider</p>
-                    </div>
-                </div>
-                <div class="space-y-1">
-                    ${htmlList}
-                </div>
-                <p class="text-[8px] text-slate-400 text-center mt-2 italic">*Skor dihitung dari rasio penyelesaian order hari ini.</p>
-            `;
+        // PEMBARUAN: Menyimpan ke bulan spesifik (YYYY-MM) dan membersihkan cache agar update langsung terlihat
+        window.updateMonthlyLeaderboard = async (isSilent = false) => {
+            const processUpdate = async () => {
+                let loader;
+                if (!isSilent) {
+                    loader = document.getElementById('loading-overlay');
+                    loader.classList.remove('hidden'); loader.classList.add('flex');
+                }
+
+                try {
+                    let year, month;
+
+                    if (isSilent) {
+                        // Jika dipanggil otomatis di latar belakang, gunakan bulan saat ini
+                        const today = new Date();
+                        year = today.getFullYear();
+                        month = today.getMonth(); 
+                    } else {
+                        // Jika diklik manual oleh admin, baca dari dropdown
+                        const monthVal = document.getElementById('leaderboard-month-filter')?.value;
+                        if (!monthVal) throw new Error("Dropdown bulan tidak ditemukan");
+                        
+                        const parts = monthVal.split('-');
+                        year = parseInt(parts[0]);
+                        month = parseInt(parts[1]) - 1; // Index bulan JavaScript dimulai dari 0
+                    }
+                    
+                    const startOfMonth = new Date(year, month, 1, 0, 0, 0);
+                    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+                    const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                    const qMonth = query(
+                        activeOrdersCol, 
+                        where("status", "==", "completed"),
+                        where("created_at", ">=", startOfMonth),
+                        where("created_at", "<=", endOfMonth)
+                    );
+
+                    const snapMonth = await getDocs(qMonth);
+                    let riderStats = {};
+
+                    snapMonth.forEach(docSnap => {
+                        const data = docSnap.data();
+                        const uid = data.rider_uid;
+                        if(!uid) return;
+
+                        if(!riderStats[uid]) {
+                            riderStats[uid] = { uid: uid, name: data.rider_name || uid, orders: 0 };
+                        }
+                        riderStats[uid].orders++;
+                    });
+
+                    let rankings = Object.values(riderStats).sort((a, b) => b.orders - a.orders);
+                    rankings = rankings.slice(0, 15); // HANYA AMBIL 15 TERATAS!
+                    
+                    rankings = rankings.map((r, idx) => ({
+                        rank: idx + 1,
+                        uid: r.uid,
+                        name: r.name,
+                        orders: r.orders
+                    }));
+
+                    const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+                    
+                    const leaderboardRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'leaderboard', monthStr);
+                    await setDoc(leaderboardRef, {
+                        month: monthStr,
+                        updated_at: serverTimestamp(),
+                        rankings: rankings
+                    });
+
+                    // BERSIHKAN CACHE BULAN INI LALU REFRESH LAYAR (BILA ADMIN SEDANG BUKA)
+                    window._cacheLeaderboardData[monthStr] = null;
+                    if (document.getElementById('leaderboard-month-filter')?.value === monthStr) {
+                        window.fetchAndRenderLeaderboard();
+                    }
+
+                    if (!isSilent) window.showAlert('Berhasil', `Ranking bulan ${monthStr} berhasil dihitung dan dipublikasikan.`, 'success');
+                } catch (e) {
+                    console.error("Gagal update ranking bulanan:", e);
+                    if (!isSilent) window.showAlert('Gagal', 'Terjadi kesalahan sistem saat menghitung ranking.', 'error');
+                } finally {
+                    if (!isSilent && loader) {
+                        loader.classList.add('hidden'); loader.classList.remove('flex');
+                    }
+                }
+            };
+
+            if (isSilent) {
+                await processUpdate();
+            } else {
+                window.showConfirm('Publikasi Ranking?', 'Hitung ulang total orderan bulan berjalan ini dan publikasikan peringkat terbaru ke HP seluruh rider?', async () => {
+                    await processUpdate();
+                });
+            }
         };
 
         // FUNGSI BARU: GENERATE LAPORAN & CETAK KE UKURAN A4
@@ -8094,21 +8404,19 @@
                 const label = `${namaBulan[d.getMonth()]} ${d.getFullYear()}`;
                 optionsHtml += `<option value="${val}">${label}</option>`;
             }
-            selectBox.innerHTML = optionsHtml;
+            if (selectBox) selectBox.innerHTML = optionsHtml;
 
             document.getElementById('custom-modal-actions').innerHTML = `
                 <button onclick="document.getElementById('custom-modal').classList.add('hidden'); document.getElementById('custom-modal').classList.remove('flex');" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
-                <button id="btn-confirm-cetak" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i> Lanjut Cetak</button>
+                <button id="modal-confirm-print-btn" class="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-print"></i> Lanjut Cetak</button>
             `;
 
-            document.getElementById('btn-confirm-cetak').onclick = async () => {
+            document.getElementById('modal-confirm-print-btn').onclick = () => {
                 modal.classList.add('hidden'); modal.classList.remove('flex');
-                
-                // Pastikan data rekap sudah terload sebelum mencetak
-                if (typeof window.loadCloudRecapsData === 'function') await window.loadCloudRecapsData();
-
-                const parts = selectBox.value.split('-');
-                window.prosesCetakA4(parseInt(parts[0]), parseInt(parts[1]));
+                if (selectBox && selectBox.value) {
+                    const [y, m] = selectBox.value.split('-');
+                    window.prosesCetakA4(parseInt(y), parseInt(m));
+                }
             };
 
             modal.classList.remove('hidden'); modal.classList.add('flex');
