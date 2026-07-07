@@ -1574,6 +1574,9 @@
         const processingMissedOrders = new Set(); 
         let isBalancesLoaded = false;
         
+        // --- TAMBAHAN LANGKAH 1: CACHE HISTORI ---
+        window._localHistoryCache = {};
+        
         // Cache variables untuk Analytics
         window._cacheAnalisisRingkasan = null;
         window._cacheAnalisisTren = null;
@@ -2901,7 +2904,9 @@
                 where("created_at", "<=", endDate)
             );
             
-            const snapActive = await getDocsFromServer(qActive);
+            // --- OPTIMASI LANGKAH 3: getDocsFromServer diganti jadi getDocs standar ---
+            const snapActive = await getDocs(qActive);
+            
             snapActive.forEach(docSnap => {
                 dataOrder.push(docSnap.data());
             });
@@ -4494,36 +4499,55 @@
                 let allFetchedOrders = [];
 
                 try {
-                    // OPTIMASI 2: Range Query untuk filter tanggal di sisi server Firebase
+                    // --- OPTIMASI 2 & CACHE STEP 1: Range Query & Local Memory ---
                     const selectedDate = new Date(dateVal);
-                    const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
-                    const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
-
-                    const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
-                    const qActive = query(
-                        activeOrdersCol, 
-                        where("status", "==", "completed"),
-                        where("created_at", ">=", startOfDay),
-                        where("created_at", "<=", endOfDay)
-                    );
-                    const snapActive = await getDocsFromServer(qActive);
                     
-                    snapActive.forEach(docSnap => {
-                        const data = docSnap.data();
-                        const ts = data.finished_at || data.created_at;
+                    // Cek apakah tanggal yang dipilih adalah hari ini
+                    const today = new Date();
+                    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                    const isToday = (dateVal === todayStr);
+
+                    // LOGIKA BRANKAS MEMORI: Jika bukan hari ini dan data sudah ada di cache, pakai data cache!
+                    if (!isToday && window._localHistoryCache[dateVal]) {
+                        allFetchedOrders = [...window._localHistoryCache[dateVal]];
+                    } else {
+                        // Jika belum ada di cache atau ini hari ini, baru tarik dari Firebase
+                        const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
+                        const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
+
+                        const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                        const qActive = query(
+                            activeOrdersCol, 
+                            where("status", "==", "completed"),
+                            where("created_at", ">=", startOfDay),
+                            where("created_at", "<=", endOfDay)
+                        );
                         
-                        // Data sudah 100% difilter oleh server Firebase, tidak perlu "if (orderDateStr === dateVal)" lagi
-                        let detailText = "Orderan Biasa";
-                        if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
+                        // UBAH: getDocsFromServer diganti jadi getDocs biasa
+                        const snapActive = await getDocs(qActive);
                         
-                        allFetchedOrders.push({
-                            id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
-                            rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
-                            Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
-                            Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                            created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                        snapActive.forEach(docSnap => {
+                            const data = docSnap.data();
+                            const ts = data.finished_at || data.created_at;
+                            
+                            // Data sudah 100% difilter oleh server Firebase, tidak perlu "if (orderDateStr === dateVal)" lagi
+                            let detailText = "Orderan Biasa";
+                            if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
+                            
+                            allFetchedOrders.push({
+                                id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
+                                rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
+                                Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
+                                Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
+                                created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                            });
                         });
-                    });
+                        
+                        // Simpan hasil tarikan ke brankas memori agar besok/nanti tidak ditarik lagi jika dibuka
+                        if (!isToday) {
+                            window._localHistoryCache[dateVal] = [...allFetchedOrders];
+                        }
+                    }
                 } catch (errActive) {
                     console.error("Fetch history error:", errActive);
                     if (String(errActive).includes("index") || String(errActive).includes("failed-precondition")) {
@@ -5408,7 +5432,14 @@
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;
 
-            window.showConfirm('Batalkan Order?', 'Yakin ingin membatalkan orderan ini dari antrean? (Saldo yang terpotong akan dikembalikan)', async () => {
+            // --- TAMBAHAN LOGIKA UNTUK MENAMPILKAN NAMA RIDER ---
+            let confirmMessage = 'Yakin ingin membatalkan orderan ini dari antrean? (Saldo yang terpotong akan dikembalikan)';
+            if (order.rider_name) {
+                confirmMessage = `Yakin ingin membatalkan orderan milik ${order.rider_name} dari antrean? (Saldo yang terpotong akan dikembalikan)`;
+            }
+            // -----------------------------------------------------
+
+            window.showConfirm('Batalkan Order?', confirmMessage, async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
@@ -8998,4 +9029,4 @@
 
     </script>
 </body>
-</html> 
+</html>
