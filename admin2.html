@@ -772,7 +772,10 @@
 
             <div id="view-rider-shift" class="hidden space-y-4 animate-in fade-in duration-300 mt-3">
                 <div class="bg-indigo-50 p-3 rounded-xl border border-indigo-100 shadow-inner">
-                    <h3 class="font-black text-[10px] text-indigo-800 uppercase tracking-widest mb-2 border-b border-indigo-200 pb-1">Input Jadwal Shift</h3>
+                    <div class="flex justify-between items-center mb-2 border-b border-indigo-200 pb-1">
+                        <h3 class="font-black text-[10px] text-indigo-800 uppercase tracking-widest">Input Jadwal Shift</h3>
+                        <button onclick="window.exportJadwalShift()" class="bg-indigo-600 text-white px-2.5 py-1 rounded-md text-[9px] font-black uppercase hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-1.5"><i class="fa-solid fa-file-excel"></i> Cetak Excel</button>
+                    </div>
                     <div class="space-y-2 mb-2">
                         <div>
                             <label class="text-[9px] font-black text-indigo-900 uppercase tracking-widest ml-1 mb-1 block">Pilih Rider</label>
@@ -4877,6 +4880,64 @@
             XLSX.utils.book_append_sheet(workbook, worksheet, "Rekap Order");
             
             XLSX.writeFile(workbook, `Rekap_Order_${dateVal}.xlsx`);
+        };
+
+        // FUNGSI BARU: Cetak Excel Daftar Semua Rider & Shift (Sesuai Permintaan)
+        window.exportJadwalShift = () => {
+            // Tarik seluruh list rider yang terdaftar dari memori dropdown agar tidak baca database lagi
+            const mergedRiders = getMergedRidersForDropdown();
+            
+            if (mergedRiders.length === 0) {
+                if (typeof window.showAlert === 'function') window.showAlert('Kosong', 'Belum ada rider terdaftar di sistem.', 'warning');
+                return;
+            }
+
+            // Petakan / mapping semua rider untuk mencari shiftnya masing-masing
+            const excelData = mergedRiders.map((rider, index) => {
+                const shiftData = allShiftSchedules.find(s => String(s.uid).trim() === String(rider.uid).trim());
+                let shiftName = 'Belum Diatur';
+                
+                if (shiftData) {
+                    if (shiftData.shift_type === 'pagi') shiftName = 'Shift Pagi';
+                    else if (shiftData.shift_type === 'siang') shiftName = 'Shift Siang';
+                    else if (shiftData.shift_type === 'parttime') shiftName = 'Part-time';
+                    else shiftName = shiftData.shift_type;
+                }
+
+                return {
+                    "No": index + 1,
+                    "UID": rider.uid,
+                    "Nama Rider": rider.name,
+                    "Shift": shiftName
+                };
+            });
+
+            // Pastikan modul SheetJS (XLSX) telah berhasil diload browser
+            if (typeof XLSX === 'undefined') {
+                if (typeof window.showAlert === 'function') window.showAlert('Error', 'Library Excel (SheetJS) belum dimuat. Pastikan ada koneksi internet.', 'error');
+                return;
+            }
+
+            // Mengonversi Array of Object di atas menjadi Sheet Excel
+            const worksheet = XLSX.utils.json_to_sheet(excelData);
+            
+            // Mengatur otomatis lebar kolom biar rapi
+            const wscols = [
+                {wch: 5},   // No
+                {wch: 15},  // UID
+                {wch: 25},  // Nama Rider
+                {wch: 15}   // Shift
+            ];
+            worksheet['!cols'] = wscols;
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Daftar Rider & Shift");
+            
+            const today = new Date();
+            const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+            
+            // Download (Trigger save di Browser)
+            XLSX.writeFile(workbook, `Daftar_Rider_Shift_${dateStr}.xlsx`);
         };
 
         window.openRiwayatEditGlobalModal = () => {
