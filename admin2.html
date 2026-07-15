@@ -3666,15 +3666,20 @@
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
-                    const now = new Date();
-                    const promises = availableNewShift.map((rider, index) => {
+                    const batch = writeBatch(db);
+                    availableNewShift.forEach((rider) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        const simulatedTime = new Date(now.getTime() + (index * 1000));
-                        // Hapus last_drop_desc dan proof_desc hardcode
-                        return updateDoc(ref, { in_main_queue: true, last_drop_time: simulatedTime, tanggal_order_pertama: serverTimestamp() });
+                        // LOGIKA BARU: Gunakan waktu asli saat rider absen "Tersedia" pertama kali (last_updated)
+                        // Ini menjamin rider yang duluan masuk shift akan mutlak mendapat urutan pertama.
+                        const originalTime = rider.last_updated || serverTimestamp(); 
+                        batch.update(ref, { 
+                            in_main_queue: true, 
+                            last_drop_time: originalTime, 
+                            tanggal_order_pertama: serverTimestamp() 
+                        });
                     });
-                    await Promise.all(promises);
-                    window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar paling bawah secara berurutan.', 'success');
+                    await batch.commit();
+                    window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar sesuai urutan awal mereka masuk shift.', 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
@@ -3684,11 +3689,18 @@
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
+                    const rider = allRiders.find(r => r.uid === uid);
                     const ref = doc(db, 'status_rider_aktif', uid);
                     
-                    // Hapus last_drop_desc dan proof_desc hardcode
-                    await updateDoc(ref, { in_main_queue: true, last_drop_time: serverTimestamp(), tanggal_order_pertama: serverTimestamp() });
-                    window.showAlert('Berhasil', `${name} diletakkan di antrean paling bawah.`, 'success');
+                    // LOGIKA BARU: Gunakan waktu masuk shift asli milik rider tersebut
+                    const originalTime = (rider && rider.last_updated) ? rider.last_updated : serverTimestamp();
+                    
+                    await updateDoc(ref, { 
+                        in_main_queue: true, 
+                        last_drop_time: originalTime, 
+                        tanggal_order_pertama: serverTimestamp() 
+                    });
+                    window.showAlert('Berhasil', `${name} diletakkan di antrean sesuai waktu masuk shift-nya.`, 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
@@ -5784,6 +5796,8 @@
             }
 
             let html = '';
+            const nowMs = Date.now(); // BARU: Mengambil waktu saat ini
+
             filtered.forEach(b => {
                 const saldo = parseInt(b.saldo || 0);
                 const safeEncodedUid = encodeURIComponent(String(b.id || ''));
@@ -5795,7 +5809,9 @@
                     const log2 = b.edit_logs[1];
                     if (log1 && log2 && log1.action.includes('Setor') && log2.action.includes('Setor') && log1.amount === log2.amount) {
                         const timeDiff = Math.abs(log1.time - log2.time);
-                        if (timeDiff < 300000) { // 5 menit (300.000 ms)
+                        const isRecent = (nowMs - Math.max(log1.time, log2.time)) <= 86400000; // BARU: Hanya berlaku jika terjadi dalam 24 jam terakhir
+
+                        if (timeDiff < 300000 && isRecent) { // 5 menit (300.000 ms) DAN masih baru (hari ini)
                             doubleTabunganWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Setoran</span></div>';
                         }
                     }
@@ -6185,34 +6201,39 @@
                 } else {
                     const initTracker = async () => {
                         try {
-                            // PERBAIKAN: Tarik langsung dari server Firebase secara real-time
-                            // Mencegah bug data tercatat 0 saat loading internet melambat
-                            const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
-                            const snap = await getDocsFromServer(balancesCol);
-                            let realServerSaldo = 0;
-                            snap.forEach(d => { realServerSaldo += parseInt(d.data().saldo || 0); });
-                            
-                            await setDoc(trackerRef, {
-                                shift_date: dateStr,
-                                saldo_jam_6: realServerSaldo,
-                                top_up: 0,
-                                updated_at: serverTimestamp()
-                            }, { merge: true });
-                        } catch(error) {
-                            // Fallback jika tidak stabil
-                            if (isBalancesLoaded && typeof window._currentTotalSaldo !== 'undefined') {
-                                setDoc(trackerRef, {
+                            // PERBAIKAN FINAL: Gunakan runTransaction agar selalu mengecek data di Server Firebase aslinya.
+                            // Hal ini mencegah aplikasi tertipu oleh "Cache Lokal" yang masih menyangka ini hari kemarin.
+                            await runTransaction(db, async (transaction) => {
+                                const freshSnap = await transaction.get(trackerRef);
+                                
+                                // Jika ternyata di server aslinya SUDAH hari ini (cache lokal saja yang telat), batalkan reset!
+                                if (freshSnap.exists() && freshSnap.data().shift_date === dateStr) {
+                                    return; 
+                                }
+
+                                // Jika di server benar-benar belum direset (hari baru), tarik total saldo real-time
+                                const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
+                                const balancesSnap = await getDocsFromServer(balancesCol);
+                                let realServerSaldo = 0;
+                                balancesSnap.forEach(d => { realServerSaldo += parseInt(d.data().saldo || 0); });
+
+                                // Tulis / Reset ulang saldo awal secara aman di sisi server
+                                transaction.set(trackerRef, {
                                     shift_date: dateStr,
-                                    saldo_jam_6: window._currentTotalSaldo || 0,
+                                    saldo_jam_6: realServerSaldo,
                                     top_up: 0,
                                     updated_at: serverTimestamp()
-                                }).catch(err=>{});
-                            } else {
-                                setTimeout(initTracker, 2000);
-                            }
+                                }, { merge: true });
+                            });
+                        } catch(error) {
+                            console.warn("Gagal sinkronisasi pelacak saldo ke server:", error);
+                            // Jika koneksi gagal, coba ulangi lagi setelah 3 detik. Tidak menimpa secara sembarangan.
+                            setTimeout(initTracker, 3000);
                         }
                     };
-                    initTracker();
+                    
+                    // Beri jeda 1 detik sebelum eksekusi agar Firebase Auth dan sistem lebih stabil
+                    setTimeout(initTracker, 1000);
                 }
             });
         }
@@ -7041,6 +7062,8 @@
             }
 
             let html = '';
+            const nowMs = Date.now(); // BARU: Mengambil waktu saat ini
+
             filtered.forEach(b => {
                 const saldo = parseInt(b.saldo || 0);
                 const isLow = saldo < 10000;
@@ -7055,7 +7078,9 @@
                     const log2 = b.edit_logs[1];
                     if (log1 && log2 && log1.action.includes('Top Up') && log2.action.includes('Top Up') && log1.amount === log2.amount) {
                         const timeDiff = Math.abs(log1.time - log2.time);
-                        if (timeDiff < 300000) { // 5 menit (300.000 ms)
+                        const isRecent = (nowMs - Math.max(log1.time, log2.time)) <= 86400000; // BARU: Hanya berlaku jika terjadi dalam 24 jam terakhir
+
+                        if (timeDiff < 300000 && isRecent) { // 5 menit (300.000 ms) DAN masih baru (hari ini)
                             doubleTopUpWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Top-Up</span></div>';
                         }
                     }
