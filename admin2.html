@@ -3437,7 +3437,13 @@
                     let timeB = getTimestampMs(b.last_drop_time) || 1;
                     return timeA - timeB; 
                 });
-                newShiftRiders.sort((a, b) => getTimestampMs(a.last_updated) - getTimestampMs(b.last_updated));
+                
+                // MENGGUNAKAN LAST DROP TIME AGAR WAKTU SINKRON SAAT DIPINDAHKAN
+                newShiftRiders.sort((a, b) => {
+                    let timeA = getTimestampMs(a.last_drop_time) || 1;
+                    let timeB = getTimestampMs(b.last_drop_time) || 1;
+                    return timeA - timeB; 
+                });
 
                 updateNewShiftUI(); updateMainQueueUI(); checkAndEnforceRiderBalances();
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
@@ -3483,8 +3489,10 @@
                 const realName = rider.nama || rider.name || rider.displayName;
                 const displayName = realName && String(realName).trim() !== '' ? realName : rider.uid;
                 
+                // MENGGUNAKAN LAST DROP TIME SEBAGAI SUMBER UTAMA WAKTU
                 let timeAbsenStr = '--:--';
-                if (rider.last_updated && rider.last_updated.seconds) timeAbsenStr = new Date(rider.last_updated.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                const timeRawMs = getTimestampMs(rider.last_drop_time);
+                if (timeRawMs > 0) timeAbsenStr = new Date(timeRawMs).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                 
                 html += `
                     <div class="p-2.5 rounded-xl border border-indigo-200 bg-white/80 backdrop-blur-sm flex justify-between items-center shadow-sm relative group">
@@ -3686,12 +3694,9 @@
                     const batch = writeBatch(db);
                     availableNewShift.forEach((rider) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // LOGIKA BARU: Gunakan waktu asli saat rider absen "Tersedia" pertama kali (last_updated)
-                        // Ini menjamin rider yang duluan masuk shift akan mutlak mendapat urutan pertama.
-                        const originalTime = rider.last_updated || serverTimestamp(); 
+                        // KITA TIDAK MERUBAH last_drop_time DISINI AGAR WAKTU SAAT MASUK SHIFT TETAP TERBAWA (DIURUTKAN DARI TERLAMA)
                         batch.update(ref, { 
                             in_main_queue: true, 
-                            last_drop_time: originalTime, 
                             tanggal_order_pertama: serverTimestamp() 
                         });
                     });
@@ -3709,12 +3714,9 @@
                     const rider = allRiders.find(r => r.uid === uid);
                     const ref = doc(db, 'status_rider_aktif', uid);
                     
-                    // LOGIKA BARU: Gunakan waktu masuk shift asli milik rider tersebut
-                    const originalTime = (rider && rider.last_updated) ? rider.last_updated : serverTimestamp();
-                    
+                    // KITA TIDAK MERUBAH last_drop_time DISINI AGAR WAKTU SAAT MASUK SHIFT TETAP TERBAWA (DIURUTKAN DARI TERLAMA)
                     await updateDoc(ref, { 
                         in_main_queue: true, 
-                        last_drop_time: originalTime, 
                         tanggal_order_pertama: serverTimestamp() 
                     });
                     window.showAlert('Berhasil', `${name} diletakkan di antrean sesuai waktu masuk shift-nya.`, 'success');
