@@ -3326,8 +3326,6 @@
                             const wasActive = (prevRider.is_online === true || prevRider.is_online === 'true') && (prevRider.is_available === true || prevRider.is_available === 'true');
                             
                             // RIDER SEDANG ISTIRAHAT (TOGGLE OFF)
-                            // Jangan buang in_main_queue agar antreannya tidak hangus.
-                            // Kita hanya mencatat waktu mulai istirahat (last_updated) ke server.
                             if (wasActive && !isNowActive && (prevRider.in_main_queue === true || prevRider.in_main_queue === 'true')) {
                                 const ref = doc(db, 'status_rider_aktif', uid);
                                 updateDoc(ref, {
@@ -3335,27 +3333,16 @@
                                 }).catch(e => {});
                             }
 
-                            // TAHAP 2: LOGIKA KEMBALI ONLINE (ISTIRAHAT VS SINYAL JELEK)
+                            // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
                             const wasAvailable = prevRider.is_available === true || prevRider.is_available === 'true';
                             const isNowAvailable = data.is_available === true || data.is_available === 'true';
-                            
                             const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
                             const isNowOnline = data.is_online === true || data.is_online === 'true';
 
                             const hasOrderToday = checkRiderOrderDate(data);
 
-                            // Kasus 1: Sengaja kembali dari Istirahat (Tersedia OFF lalu ON)
-                            if (!wasAvailable && isNowAvailable) {
-                                // --- HAK ADMIN DICABUT ---
-                                // Admin web TIDAK BOLEH LAGI menembakkan serverTimestamp() untuk mereset antrean.
-                                // Tugas mereset waktu mutlak diserahkan ke sistem Firebase / Aplikasi Rider.
-                                // Ini untuk mencegah bug antrean lompat saat Admin buka-tutup aplikasi (minimize).
-                            }
-                            
-                            // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
                             if (!wasOnline && isNowOnline && isNowAvailable && wasAvailable) {
-                                // Sinyal jelek -> Posisi diamankan! Jangan sentuh last_drop_time.
-                                // Tapi pastikan tetap di queue yang benar.
+                                // Sinyal pulih -> Posisi diamankan! Jangan sentuh last_drop_time.
                                 const ref = doc(db, 'status_rider_aktif', uid);
                                 updateDoc(ref, { 
                                     in_main_queue: hasOrderToday, 
@@ -3382,30 +3369,35 @@
 
                     resetRiderOrderDateIfOutdated(uid, data);
                     const hasOrderToday = checkRiderOrderDate(data);
-
                     const isNowActive = isOnline && isAvailable;
 
-                    // --- PERUBAHAN LOGIKA DI SINI ---
+                    // --- PERBAIKAN LOGIKA WAKTU MASUK SHIFT ---
+                    const lastDropMs = getTimestampMs(data.last_drop_time);
+                    const lastDropDate = new Date(lastDropMs > 0 ? lastDropMs : 0);
+                    const today = new Date();
+                    const isDropTimeToday = lastDropDate.getDate() === today.getDate() && 
+                                            lastDropDate.getMonth() === today.getMonth() && 
+                                            lastDropDate.getFullYear() === today.getFullYear();
+
                     // Cek jika rider masuk shift (Aktif, tapi belum punya orderan hari ini)
                     if (isNowActive && !hasOrderToday) {
                          if (inMainQueue) {
-                             // Jika mereka masih di main queue (misal dari sisa kemarin), keluarkan
+                             // Jika mereka masih di main queue (misal dari sisa kemarin), keluarkan ke shift
                              inMainQueue = false;
                              data.in_main_queue = false;
+                             const updates = { in_main_queue: false };
+                             
+                             // Update ke waktu sekarang HANYA jika waktu sebelumnya bukan hari ini
+                             if (!isDropTimeToday) {
+                                 updates.last_drop_time = serverTimestamp();
+                             }
+                             
                              const ref = doc(db, 'status_rider_aktif', uid);
-                             // Saat dikeluarkan dari antrean utama untuk masuk antrean shift,
-                             // RESET last_drop_time ke waktu saat ini agar antreannya adil nanti
-                             updateDoc(ref, { 
-                                 in_main_queue: false,
-                                 last_drop_time: serverTimestamp() 
-                             }).catch(e => {});
+                             updateDoc(ref, updates).catch(e => {});
                          } else {
-                             // Rider sudah di antrean shift. Kita perlu memastikan last_drop_time mereka
-                             // di-update SATU KALI saat pertama kali masuk shift hari ini.
-                             // Kita ngecek dari last_updated atau last_drop_desc untuk tahu kapan mereka masuk
-                             const prevRiderState = allRiders.find(r => r.uid === uid);
-                             // Deteksi perpindahan dari tidak aktif ke aktif
-                             if (prevRiderState && !(prevRiderState.is_online === true && prevRiderState.is_available === true)) {
+                             // Rider ada di antrean shift. Kunci waktu masuk shiftnya!
+                             // Timpa waktu HANYA jika dia belum punya record waktu untuk hari ini
+                             if (!isDropTimeToday) {
                                  const ref = doc(db, 'status_rider_aktif', uid);
                                  updateDoc(ref, { 
                                      last_drop_time: serverTimestamp() 
@@ -3416,7 +3408,6 @@
                         if (!inMainQueue) {
                             inMainQueue = true;
                             data.in_main_queue = true;
-                            // Update ke server agar konsisten
                             const ref = doc(db, 'status_rider_aktif', uid);
                             updateDoc(ref, { in_main_queue: true }).catch(e => {});
                         }
@@ -3432,30 +3423,22 @@
                     }
                 });
 
+                // Urutkan dari Waktu Terlama (Atas) ke Terbaru (Bawah)
                 mainQueueRiders.sort((a, b) => {
-                    let timeA = getTimestampMs(a.last_drop_time) || 1;
-                    let timeB = getTimestampMs(b.last_drop_time) || 1;
+                    let timeA = getTimestampMs(a.last_drop_time) || 0;
+                    let timeB = getTimestampMs(b.last_drop_time) || 0;
                     return timeA - timeB; 
                 });
                 
-                // MENGGUNAKAN LAST DROP TIME AGAR WAKTU SINKRON SAAT DIPINDAHKAN
                 newShiftRiders.sort((a, b) => {
-                    let timeA = getTimestampMs(a.last_drop_time) || 1;
-                    let timeB = getTimestampMs(b.last_drop_time) || 1;
+                    let timeA = getTimestampMs(a.last_drop_time) || 0;
+                    let timeB = getTimestampMs(b.last_drop_time) || 0;
                     return timeA - timeB; 
                 });
 
                 updateNewShiftUI(); updateMainQueueUI(); checkAndEnforceRiderBalances();
                 if (typeof window.updateManualRiderSelect === 'function') window.updateManualRiderSelect();
-
-                // Matikan otomatis assign, ganti dengan update notifikasi prompt manual
                 if (typeof window.updatePendingPrompt === 'function') window.updatePendingPrompt();
-
-                // Cek apakah ada orderan pending yang bisa otomatis dibagikan
-                // const pendingOrders = allGlobalOrders.filter(o => o.status === 'unassigned').sort((a,b) => (a.created_at?.seconds || 0) - (b.created_at?.seconds || 0));
-                // if (pendingOrders.length > 0) {
-                //     window.autoAssignPendingOrder(pendingOrders[0].id);
-                // }
             }, (error) => {});
         }
 
