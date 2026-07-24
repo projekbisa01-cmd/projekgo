@@ -6299,8 +6299,28 @@
 
             try {
                 let totalFee = 0;
-                // LOGIKA BARU: Hanya menghitung "fee" (Ongkir murni) tanpa tambahan
-                window.currentHistoryData.forEach(o => { totalFee += parseInt(o.fee || 0); });
+                
+                // --- AWAL MODIFIKASI: Kalkulasi Rekap Rider ---
+                const riderOrderCounts = {}; 
+                
+                window.currentHistoryData.forEach(o => { 
+                    totalFee += parseInt(o.fee || 0); 
+                    
+                    // Hitung orderan per rider
+                    const uid = o.rider_uid;
+                    const name = o.rider_name || uid; 
+                    
+                    if (uid) {
+                        if (!riderOrderCounts[uid]) {
+                            riderOrderCounts[uid] = { uid: uid, nama: name, total_order: 0 };
+                        }
+                        riderOrderCounts[uid].total_order += 1;
+                    }
+                });
+                
+                // Ubah objek riderOrderCounts menjadi array
+                const rekapRiderArray = Object.values(riderOrderCounts);
+                // --- AKHIR MODIFIKASI: Kalkulasi Rekap Rider ---
 
                 // Merekam Pemasukan Saldo (Top-Up) yang diinput hari ini
                 let topUpHariIni = 0;
@@ -6313,13 +6333,22 @@
                     tanggal: dateVal, 
                     total_orders: window.currentHistoryData.length, 
                     total_omset: totalFee, 
-                    total_topup: topUpHariIni, // <- Menyimpan total top-up ke cloud rekap
+                    total_topup: topUpHariIni, 
+                    rekap_rider: rekapRiderArray, // Menambahkan array rekap rider ke data yang dikirim
                     updated_at: serverTimestamp() 
                 }, { merge: true });
 
                 // UPDATE MEMORI LOKAL KARENA LISTENER ONSNAPSHOT SUDAH DIMATIKAN
                 const existingIndex = allCloudRecaps.findIndex(r => r.id === dateVal);
-                const newData = { id: dateVal, tanggal: dateVal, total_orders: window.currentHistoryData.length, total_omset: totalFee, total_topup: topUpHariIni };
+                const newData = { 
+                    id: dateVal, 
+                    tanggal: dateVal, 
+                    total_orders: window.currentHistoryData.length, 
+                    total_omset: totalFee, 
+                    total_topup: topUpHariIni,
+                    rekap_rider: rekapRiderArray // Simpan juga di memori lokal
+                };
+                
                 if (existingIndex > -1) {
                     allCloudRecaps[existingIndex] = { ...allCloudRecaps[existingIndex], ...newData };
                 } else {
@@ -6333,7 +6362,10 @@
                 }
 
                 window.showAlert('Tersimpan', 'Rekap tanggal ' + dateVal + ' berhasil dicadangkan ke Database Cloud.', 'success');
-            } catch(e) { window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+            } catch(e) { 
+                console.error(e);
+                window.showAlert('Gagal', 'Sistem error saat menyimpan rekap ke cloud.', 'error'); 
+            } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
         };
 
         window.downloadCloudRecap = async (dateStr) => {
