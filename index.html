@@ -4858,8 +4858,8 @@
         };
 
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwMX_0oMNiabxeDHJfRHHYkuyQDxvNafLwDg6IPRFN3C8IHjAknXERfPG_UKCZU2ljG/exec";
-        const RATING_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwB0Z1bQ-HTrn8kP84wc2iOc3J9bJk1V2dtYqjfno4BgkncGdjCSyvZvOkNnyYtjq15/exec";
-        const PROFILE_DOCS_URL = "https://script.google.com/macros/s/AKfycbx-L15ePYQPSFaTY6wvn4wfC0DtwqJNVzEVTAFoq-bw8eFEr_HNYxLMJTPPC6aHv9paNA/exec";
+        const RATING_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwkJO8a7SuS24kkDsMFam_ey-T8pvYC8DKSzEiXLV2Yc6OUrClx7KD6M-Dbuo-s8CKa/exec";
+        const PROFILE_DOCS_URL = "https://script.google.com/macros/s/AKfycbwY9flT8AhsRGV1hzkp44WdTEyRD7jWkPaSRIewZtww6cA5XRed8mKyFN7__lxmc7_R5w/exec";
         
         const ADM_RATE_FIXED_PRO = 0.16;
         
@@ -7169,16 +7169,22 @@
                 if(!response.ok) return;
                 const allRatings = await response.json();
                 const namaLower = String(namaRider).trim().toLowerCase();
+                // Filter rating hanya untuk rider yang sedang login
                 const filtered = allRatings.filter(i => i.Nama_Rider && String(i.Nama_Rider).trim().toLowerCase() === namaLower);
-                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered)); renderRatingUI(filtered);
+                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered)); 
+                renderRatingUI(filtered);
             } catch(e) {}
         }
+        
         async function fetchVehicleAndDocsData(uid) {
              try {
                 const profileMotorEl = document.getElementById('profile-motor');
                 const hasData = profileMotorEl.innerText !== "Mengambil data..." && profileMotorEl.innerText !== "Memuat..." && profileMotorEl.innerText !== "-";
                 if (!hasData) { profileMotorEl.innerText = "Mengambil data..."; }
-                const response = await fetch(`${PROFILE_DOCS_URL}?t=${Date.now()}`);
+                
+                // PERBAIKAN: Menambahkan parameter action=get_profile agar Apps Script baru merespon dengan data JSON
+                const response = await fetch(`${PROFILE_DOCS_URL}?action=get_profile&t=${Date.now()}`);
+                
                 if (!response.ok) throw new Error("Gagal mengambil data profil");
                 const rawJson = await response.json();
                 const normalizedData = rawJson.map(item => {
@@ -7194,6 +7200,7 @@
                 } else if (!hasData) { document.getElementById('profile-motor').innerText = "-"; document.getElementById('profile-plat').innerText = "-"; }
             } catch (error) { if (!document.getElementById('profile-motor').innerText.includes("Mengambil")) document.getElementById('profile-motor').innerText = "Gagal memuat"; }
         }
+        
         function updateDocsUI(data) {
              if (data) {
                 const getVal = (keys) => { for (const key of keys) { if (data[key] !== undefined && data[key] !== "") return data[key]; } return null; };
@@ -7305,6 +7312,7 @@
             
             if (!list) return;
             
+            // Filter hanya ulasan yang memiliki rating valid (angka > 0)
             const validReviews = ratingData.filter(item => item.Rating && Number(item.Rating) > 0);
             
             if (validReviews.length === 0) { 
@@ -7315,6 +7323,7 @@
                 return; 
             }
             
+            // Kalkulasi Rata-rata Bintang
             const totalRating = validReviews.reduce((acc, curr) => acc + Number(curr.Rating), 0);
             const avgVal = (totalRating / validReviews.length).toFixed(1);
             
@@ -7323,6 +7332,7 @@
             if (homeRatingBadge) homeRatingBadge.innerText = avgVal;
             
             let html = '';
+            // Render ulasan dari yang terbaru (Descending berdasarkan Tanggal)
             validReviews.sort((a,b) => new Date(b.Tanggal) - new Date(a.Tanggal)).forEach(item => {
                 const rating = Number(item.Rating);
                 let stars = ''; 
@@ -7333,6 +7343,7 @@
                 let antsHtml = '';
                 let containerClass = "bg-white border-orange-100";
                 
+                // Efek hukuman visual jika dapat bintang 1
                 if (rating === 1) {
                     containerClass = "bg-red-50 border-red-200 relative overflow-hidden";
                     antsHtml = '<div class="absolute inset-0 pointer-events-none z-0 opacity-60">';
@@ -7346,6 +7357,7 @@
                     antsHtml += '</div>';
                 }
 
+                // Render Kartu Ulasan
                 html += `
                 <div class="${containerClass} p-4 rounded-2xl border shadow-sm space-y-2 relative">
                     ${antsHtml}
