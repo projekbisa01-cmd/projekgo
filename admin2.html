@@ -1558,7 +1558,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, limit, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -4244,7 +4244,11 @@
                 if (hasNewOrder && document.getElementById('page-active').classList.contains('hidden-page')) window.hideActiveBadge = false;
                 renderActiveOrders();
                 if (typeof window.renderPendingOrders === 'function') window.renderPendingOrders();
-                if (!document.getElementById('page-history').classList.contains('hidden-page')) window.renderHistoryOrders();
+                
+                // --- BAGIAN YANG DIHAPUS UNTUK MENGHEMAT READ ---
+                // if (!document.getElementById('page-history').classList.contains('hidden-page')) window.renderHistoryOrders();
+                // ---------------------------------------------------
+
                 updateNewShiftUI(); updateMainQueueUI();
                 if (typeof window.updatePendingPrompt === 'function') window.updatePendingPrompt();
             });
@@ -4538,6 +4542,8 @@
             }
         };
 
+        window._todayHistoryUnsubscribe = null;
+
         window.renderHistoryOrders = async () => {
             const container = document.getElementById('history-orders-list');
             const totalCountEl = document.getElementById('history-total-count');
@@ -4555,75 +4561,13 @@
             const loader = document.getElementById('loading-overlay');
             if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
-            try {
-                const masterRidersMap = new Map();
-                const memRiders = getMergedRidersForDropdown();
-                memRiders.forEach(r => masterRidersMap.set(r.uid, r));
+            // MENGHENTIKAN LISTENER SEBELUMNYA AGAR TIDAK BOCOR / DOBEL
+            if (window._todayHistoryUnsubscribe) {
+                window._todayHistoryUnsubscribe();
+                window._todayHistoryUnsubscribe = null;
+            }
 
-                // OPTIMASI 1: Ambil data saldo rider dari memori, tidak perlu fetch ulang dari Firebase
-                allRiderBalances.forEach(b => { 
-                    if (!masterRidersMap.has(b.id)) masterRidersMap.set(b.id, { uid: b.id, name: b.name || b.id }); 
-                });
-
-                let allFetchedOrders = [];
-
-                try {
-                    // --- OPTIMASI 2 & CACHE STEP 1: Range Query & Local Memory ---
-                    const selectedDate = new Date(dateVal);
-                    
-                    // Cek apakah tanggal yang dipilih adalah hari ini
-                    const today = new Date();
-                    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-                    const isToday = (dateVal === todayStr);
-
-                    // LOGIKA BRANKAS MEMORI: Jika bukan hari ini dan data sudah ada di cache, pakai data cache!
-                    if (!isToday && window._localHistoryCache[dateVal]) {
-                        allFetchedOrders = [...window._localHistoryCache[dateVal]];
-                    } else {
-                        // Jika belum ada di cache atau ini hari ini, baru tarik dari Firebase
-                        const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
-                        const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
-
-                        const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
-                        const qActive = query(
-                            activeOrdersCol, 
-                            where("status", "==", "completed"),
-                            where("created_at", ">=", startOfDay),
-                            where("created_at", "<=", endOfDay)
-                        );
-                        
-                        // UBAH: getDocsFromServer diganti jadi getDocs biasa
-                        const snapActive = await getDocs(qActive);
-                        
-                        snapActive.forEach(docSnap => {
-                            const data = docSnap.data();
-                            const ts = data.finished_at || data.created_at;
-                            
-                            // Data sudah 100% difilter oleh server Firebase, tidak perlu "if (orderDateStr === dateVal)" lagi
-                            let detailText = "Orderan Biasa";
-                            if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
-                            
-                            allFetchedOrders.push({
-                                id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
-                                rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
-                                Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
-                                Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                                created_at: ts, admin_created_at: data.created_at, is_from_active: true
-                            });
-                        });
-                        
-                        // Simpan hasil tarikan ke brankas memori agar besok/nanti tidak ditarik lagi jika dibuka
-                        if (!isToday) {
-                            window._localHistoryCache[dateVal] = [...allFetchedOrders];
-                        }
-                    }
-                } catch (errActive) {
-                    console.error("Fetch history error:", errActive);
-                    if (String(errActive).includes("index") || String(errActive).includes("failed-precondition")) {
-                        window.showAlert('Indeks Diperlukan', 'Firebase memerlukan Composite Index untuk fitur ini. Silakan buka Console (Inspect Element) Browser dan klik link pembuatan indeks yang berwarna merah dari Firebase.', 'error');
-                    }
-                }
-                
+            const processAndRenderUI = (allFetchedOrders) => {
                 allFetchedOrders.sort((a,b) => {
                     let timeA = 0;
                     if (a.admin_created_at && a.admin_created_at.seconds) timeA = a.admin_created_at.seconds;
@@ -4652,16 +4596,14 @@
                 });
 
                 // MENGGABUNGKAN POTENSI OMSET DARI ORDER AKTIF (PANTAUAN) & PENDING
-                // Hanya ditambahkan jika admin melihat histori hari ini
-                const today = new Date();
-                const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-                if (dateVal === todayStr && typeof allGlobalOrders !== 'undefined') {
+                const todayNow = new Date();
+                const todayStrUI = `${todayNow.getFullYear()}-${String(todayNow.getMonth() + 1).padStart(2, '0')}-${String(todayNow.getDate()).padStart(2, '0')}`;
+                if (dateVal === todayStrUI && typeof allGlobalOrders !== 'undefined') {
                     const activeOrders = allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing' || o.status === 'missed');
                     const pendingOrders = allGlobalOrders.filter(o => o.status === 'unassigned');
                     
                     finalOrderCount += (activeOrders.length + pendingOrders.length);
                     
-                    // Tambahkan ke Total Ongkir & Tambahan dari Order Aktif
                     activeOrders.forEach(o => {
                         const feeReal = parseFloat(o.fee) || 0;
                         const tamReal = parseFloat(o.tambahan) || 0;
@@ -4670,7 +4612,6 @@
                         totalAdminCut += feeReal * 0.16;
                     });
 
-                    // Tambahkan ke Total Ongkir & Tambahan dari Order Pending
                     pendingOrders.forEach(o => {
                         const feeReal = parseFloat(o.fee) || 0;
                         const tamReal = parseFloat(o.tambahan) || 0;
@@ -4696,18 +4637,18 @@
                 
                 if(totalAdminEl) totalAdminEl.innerText = window.userRole === 'admin' ? '****' : `Rp ${Math.round(totalAdminCut).toLocaleString('id-ID')}`;
 
-                // TRIGGER PERBANDINGAN DATA OMSET
                 if (typeof window.compareOmsetAdmin === 'function') {
                     window.compareOmsetAdmin(totalAdminCut);
                 }
 
                 if (allFetchedOrders.length === 0 && finalOrderCount === 0) {
                     container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
+                    if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
                     return;
                 }
 
                 let html = '';
-                let hiddenHtml = ''; // Untuk menyimpan orderan yang akan disembunyikan
+                let hiddenHtml = ''; 
 
                 allFetchedOrders.forEach((order, index) => {
                     const feeStr = ((parseFloat(order.Nominal_Kotor) || 0) * 1000).toLocaleString('id-ID');
@@ -4737,7 +4678,6 @@
                             </div>
                         </div>`;
 
-                    // LOGIKA MINIMIZE: Tampilkan maksimal 5 saja secara default, sisanya sembunyikan
                     if (index < 5) {
                         html += itemHtml;
                     } else {
@@ -4745,7 +4685,6 @@
                     }
                 });
                 
-                // Tambahkan elemen wrapper yang tersembunyi dan tombol toggle jika jumlah order > 5
                 if (allFetchedOrders.length > 5) {
                     html += `
                         <div id="history-hidden-items" class="hidden animate-in fade-in duration-300">
@@ -4757,7 +4696,6 @@
                     `;
                 }
                 
-                // Tambahkan info banner orderan belum selesai di bagian paling atas
                 const pendingOrActiveCount = finalOrderCount - allFetchedOrders.length;
                 if (pendingOrActiveCount > 0) {
                     html = `<div class="bg-indigo-50 border border-indigo-200 p-2 rounded-xl mb-3 flex items-center justify-between shadow-sm">
@@ -4769,12 +4707,89 @@
                 }
                 
                 container.innerHTML = html;
-                window._isHistoryUIExpanded = false; // Kembalikan ke state minimize (tutup) setiap kali me-render ulang tanggal
+                window._isHistoryUIExpanded = false; 
 
-            } catch(e) { 
-                if (typeof window.showAlert === 'function') window.showAlert('Gagal', 'Sistem error saat memuat histori.', 'error'); 
-            } finally { 
-                if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); } 
+                if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+            };
+
+            try {
+                const masterRidersMap = new Map();
+                const memRiders = getMergedRidersForDropdown();
+                memRiders.forEach(r => masterRidersMap.set(r.uid, r));
+
+                allRiderBalances.forEach(b => { 
+                    if (!masterRidersMap.has(b.id)) masterRidersMap.set(b.id, { uid: b.id, name: b.name || b.id }); 
+                });
+
+                const selectedDate = new Date(dateVal);
+                const today = new Date();
+                const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                const isToday = (dateVal === todayStr);
+
+                const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
+                const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
+
+                const activeOrdersCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders');
+                const qActive = query(
+                    activeOrdersCol, 
+                    where("status", "==", "completed"),
+                    where("created_at", ">=", startOfDay),
+                    where("created_at", "<=", endOfDay)
+                );
+
+                if (!isToday && window._localHistoryCache[dateVal]) {
+                    processAndRenderUI([...window._localHistoryCache[dateVal]]);
+                } else if (!isToday) {
+                    const snapActive = await getDocs(qActive);
+                    let allFetchedOrders = [];
+                    snapActive.forEach(docSnap => {
+                        const data = docSnap.data();
+                        const ts = data.finished_at || data.created_at;
+                        let detailText = "Orderan Biasa";
+                        if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
+                        
+                        allFetchedOrders.push({
+                            id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
+                            rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
+                            Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
+                            Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
+                            created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                        });
+                    });
+                    
+                    window._localHistoryCache[dateVal] = [...allFetchedOrders];
+                    processAndRenderUI(allFetchedOrders);
+                } else {
+                    // TANGGAL HARI INI: MENGGUNAKAN ONSNAPSHOT AGAR REAL-TIME & HEMAT READ
+                    window._todayHistoryUnsubscribe = onSnapshot(qActive, (snapActive) => {
+                        let liveOrders = [];
+                        snapActive.forEach(docSnap => {
+                            const data = docSnap.data();
+                            const ts = data.finished_at || data.created_at;
+                            let detailText = "Orderan Biasa";
+                            if (data.items && data.items.length > 0) detailText = data.items.map(i => i.name).join('\n');
+
+                            liveOrders.push({
+                                id: docSnap.id, active_order_id: docSnap.id, daily_order_id: data.daily_order_id,
+                                rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
+                                Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
+                                Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
+                                created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                            });
+                        });
+                        processAndRenderUI(liveOrders);
+                    }, (error) => {
+                        console.error("Fetch history error:", error);
+                        if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+                        if(String(error).includes("index") || String(error).includes("failed-precondition")) {
+                            window.showAlert('Indeks Diperlukan', 'Firebase memerlukan Composite Index untuk fitur ini. Silakan buka Console (Inspect Element).', 'error');
+                        }
+                    });
+                }
+
+            } catch (errActive) {
+                console.error("Fetch history error:", errActive);
+                if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             }
         };
 
@@ -5707,9 +5722,25 @@
             });
         };
 
+        // WADAH CACHE RIWAYAT SALDO (LANGKAH 1)
+        window._cacheRiwayatSaldo = window._cacheRiwayatSaldo || {};
+
         function startRiderBalancesListener() {
             const balancesCol = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances');
             onSnapshot(balancesCol, (snapshot) => {
+                
+                // LOGIKA PEMBERSIH CACHE OTOMATIS (LANGKAH 1)
+                // Mendeteksi jika ada saldo rider yang berubah (Top up, denda, order, dll) di server
+                snapshot.docChanges().forEach((change) => {
+                    if (change.type === 'modified' || change.type === 'removed') {
+                        const uid = change.doc.id;
+                        // Jika saldo rider ini berubah, buang data riwayat lamanya dari memori
+                        if (window._cacheRiwayatSaldo[uid]) {
+                            delete window._cacheRiwayatSaldo[uid];
+                        }
+                    }
+                });
+
                 isBalancesLoaded = true;
                 allRiderBalances = [];
                 snapshot.forEach(docSnap => { allRiderBalances.push({ id: docSnap.id, ...docSnap.data() }); });
@@ -7160,6 +7191,65 @@
             container.innerHTML = html;
         };
 
+        // =========================================================
+        // FUNGSI PEMBANTU: MELUKIS HTML (Agar kode tidak berantakan)
+        // =========================================================
+        window.renderRiwayatSaldoUI = (combinedLogs, listContainer) => {
+            if (combinedLogs.length === 0) {
+                listContainer.innerHTML = '<p class="text-[10px] text-slate-500 text-center py-5 bg-slate-50 rounded-xl border border-dashed border-gray-200">Belum ada riwayat transaksi saldo.</p>';
+                return;
+            }
+
+            let html = '';
+            combinedLogs.forEach(log => {
+                const date = new Date(log.time);
+                const timeStr = date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' }) + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+                
+                let icon = '', colorClass = '', sign = '', amountDisplay = 0;
+                let prevNowHtml = '';
+
+                // Format Teks Saldo Tersisa
+                let sisaText = `<p class="text-[9px] font-black text-sky-600 mt-1.5 bg-sky-50 px-1.5 py-0.5 rounded w-max border border-sky-100">Sisa: Rp ${(log.saldo_tersisa || 0).toLocaleString('id-ID')}</p>`;
+
+                if (log.type === 'manual_edit') {
+                    if (log.action === 'Top Up') { icon = '<i class="fa-solid fa-plus text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; } 
+                    else if (log.action === 'Kurangi') { icon = '<i class="fa-solid fa-minus text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; } 
+                    else { icon = '<i class="fa-solid fa-pen text-sky-500"></i>'; colorClass = 'text-sky-600'; sign = '='; }
+                    
+                    amountDisplay = log.amount;
+                    prevNowHtml = sisaText;
+                } else {
+                    // Untuk system_cut (ADM, Cicilan, Refund)
+                    if (log.amount > 0) {
+                        icon = '<i class="fa-solid fa-scissors text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; amountDisplay = log.amount;
+                    } else {
+                        icon = '<i class="fa-solid fa-arrow-rotate-left text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; amountDisplay = Math.abs(log.amount);
+                    }
+                    
+                    prevNowHtml = sisaText;
+                    if (log.desc) {
+                        prevNowHtml += `<p class="text-[8px] font-bold text-slate-400 mt-0.5 truncate max-w-[140px]" title="${log.desc}">${log.desc}</p>`;
+                    }
+                }
+
+                html += `
+                    <div class="bg-white p-2.5 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center gap-2">
+                        <div class="flex flex-col overflow-hidden w-2/3">
+                            <div class="flex items-center gap-1.5 mb-1">
+                                ${icon}
+                                <span class="text-[10px] font-black text-black uppercase tracking-wider truncate">${log.action}</span>
+                            </div>
+                            <span class="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">${timeStr}</span>
+                        </div>
+                        <div class="text-right shrink-0 w-1/3 flex flex-col items-end">
+                            <p class="text-[11px] font-black ${colorClass} mb-0.5">${sign} Rp ${amountDisplay.toLocaleString('id-ID')}</p>
+                            ${prevNowHtml}
+                        </div>
+                    </div>`;
+            });
+            listContainer.innerHTML = html;
+        };
+
         window.openRiwayatSaldo = async (rawUid) => {
             const uid = String(rawUid);
             const currentData = allRiderBalances.find(r => String(r.id) === uid) || {};
@@ -7172,18 +7262,30 @@
             if (subtitleEl) subtitleEl.innerText = 'Menampilkan riwayat transaksi (Top Up, ADM, Cicilan)';
 
             const listContainer = document.getElementById('riwayat-modal-list');
+            const modal = document.getElementById('riwayat-saldo-modal');
             
+            modal.classList.remove('hidden'); 
+            modal.classList.add('flex');
+
+            // ===============================================================
+            // LANGKAH 2: CEK DATA DI CACHE MEMORI TERLEBIH DAHULU (0 READ!)
+            // ===============================================================
+            if (window._cacheRiwayatSaldo && window._cacheRiwayatSaldo[uid]) {
+                // Jika data riwayat sudah ada di wadah, langsung lukis HTML tanpa nembak Firebase
+                window.renderRiwayatSaldoUI(window._cacheRiwayatSaldo[uid], listContainer);
+                return;
+            }
+
             // Tampilkan animasi loading saat menarik data potongan
             listContainer.innerHTML = '<div class="text-center py-6 flex flex-col items-center"><div class="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin mb-2"></div><p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Menarik Data Riwayat...</p></div>';
 
-            const modal = document.getElementById('riwayat-saldo-modal');
-            modal.classList.remove('hidden'); modal.classList.add('flex');
-
             try {
-                // Ambil data potongan (ADM, Cicilan, dll) dari Firestore tanpa orderBy agar aman dari error Index Firebase
+                // Ambil data potongan (ADM, Cicilan, dll) dari Firestore DENGAN limit agar hemat read
                 const q = query(
                     collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
-                    where("rider_uid", "==", uid)
+                    where("rider_uid", "==", uid),
+                    orderBy("created_at", "desc"),
+                    limit(70)
                 );
                 const snap = await getDocs(q);
 
@@ -7267,63 +7369,24 @@
                 // Batasi tampilan maksimal 50 riwayat terakhir agar modal tidak berat
                 combinedLogs = combinedLogs.slice(0, 50);
 
-                if (combinedLogs.length === 0) {
-                    listContainer.innerHTML = '<p class="text-[10px] text-slate-500 text-center py-5 bg-slate-50 rounded-xl border border-dashed border-gray-200">Belum ada riwayat transaksi saldo.</p>';
-                } else {
-                    let html = '';
-                    combinedLogs.forEach(log => {
-                        const date = new Date(log.time);
-                        const timeStr = date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' }) + ' ' + date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-                        
-                        let icon = '', colorClass = '', sign = '', amountDisplay = 0;
-                        let prevNowHtml = '';
+                // ==============================================================
+                // SIMPAN KE DALAM WADAH CACHE AGAR KLIK BERIKUTNYA = 0 READ
+                // ==============================================================
+                if (!window._cacheRiwayatSaldo) window._cacheRiwayatSaldo = {};
+                window._cacheRiwayatSaldo[uid] = combinedLogs;
 
-                        // Format Teks Saldo Tersisa
-                        let sisaText = `<p class="text-[9px] font-black text-sky-600 mt-1.5 bg-sky-50 px-1.5 py-0.5 rounded w-max border border-sky-100">Sisa: Rp ${(log.saldo_tersisa || 0).toLocaleString('id-ID')}</p>`;
+                // Lempar ke fungsi pelukis HTML
+                window.renderRiwayatSaldoUI(combinedLogs, listContainer);
 
-                        if (log.type === 'manual_edit') {
-                            if (log.action === 'Top Up') { icon = '<i class="fa-solid fa-plus text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; } 
-                            else if (log.action === 'Kurangi') { icon = '<i class="fa-solid fa-minus text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; } 
-                            else { icon = '<i class="fa-solid fa-pen text-sky-500"></i>'; colorClass = 'text-sky-600'; sign = '='; }
-                            
-                            amountDisplay = log.amount;
-                            prevNowHtml = sisaText;
-                        } else {
-                            // Untuk system_cut (ADM, Cicilan, Refund)
-                            if (log.amount > 0) {
-                                // Potongan (Pengurangan saldo)
-                                icon = '<i class="fa-solid fa-scissors text-rose-500"></i>'; colorClass = 'text-rose-600'; sign = '-'; amountDisplay = log.amount;
-                            } else {
-                                // Refund / Penambahan saldo
-                                icon = '<i class="fa-solid fa-arrow-rotate-left text-emerald-500"></i>'; colorClass = 'text-emerald-600'; sign = '+'; amountDisplay = Math.abs(log.amount);
-                            }
-                            
-                            prevNowHtml = sisaText;
-                            if (log.desc) {
-                                prevNowHtml += `<p class="text-[8px] font-bold text-slate-400 mt-0.5 truncate max-w-[140px]" title="${log.desc}">${log.desc}</p>`;
-                            }
-                        }
-
-                        html += `
-                            <div class="bg-white p-2.5 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center gap-2">
-                                <div class="flex flex-col overflow-hidden w-2/3">
-                                    <div class="flex items-center gap-1.5 mb-1">
-                                        ${icon}
-                                        <span class="text-[10px] font-black text-black uppercase tracking-wider truncate">${log.action}</span>
-                                    </div>
-                                    <span class="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">${timeStr}</span>
-                                </div>
-                                <div class="text-right shrink-0 w-1/3 flex flex-col items-end">
-                                    <p class="text-[11px] font-black ${colorClass} mb-0.5">${sign} Rp ${amountDisplay.toLocaleString('id-ID')}</p>
-                                    ${prevNowHtml}
-                                </div>
-                            </div>`;
-                    });
-                    listContainer.innerHTML = html;
-                }
             } catch (err) {
                 console.error("Gagal menarik riwayat gabungan:", err);
-                listContainer.innerHTML = '<p class="text-[10px] text-rose-500 text-center py-5 bg-rose-50 rounded-xl border border-dashed border-rose-200">Gagal memuat riwayat dari server.</p>';
+                
+                // --- PENANGANAN ERROR INDEX FIREBASE ---
+                if (String(err).includes("index") || String(err).includes("failed-precondition")) {
+                    listContainer.innerHTML = '<div class="text-center py-5 bg-rose-50 rounded-xl border border-dashed border-rose-200"><p class="text-[10px] text-rose-600 font-bold mb-2">Membutuhkan Composite Index Firebase!</p><p class="text-[9px] text-slate-500">Silakan buka Console Browser (Klik Kanan -> Inspect Element -> Pilih tab "Console"), lalu klik <b>link URL berwarna biru</b> yang berawalan "https://console.firebase..." untuk membuat index secara otomatis.</p></div>';
+                } else {
+                    listContainer.innerHTML = '<p class="text-[10px] text-rose-500 text-center py-5 bg-rose-50 rounded-xl border border-dashed border-rose-200">Gagal memuat riwayat dari server.</p>';
+                }
             }
         };
 
