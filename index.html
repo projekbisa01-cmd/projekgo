@@ -6184,108 +6184,19 @@
         }
 
         // --- FUNGSI BARU: LOAD RIWAYAT SALDO KREDIT (FINAL TAHAP 1-4) ---
+        window.cachedWalletHistory = null;
+        window.lastWalletFetchTime = 0;
+
         window.loadRiwayatSaldo = async function() {
             const uid = localStorage.getItem('rider_uid');
             if (!uid) return;
             const cleanUid = String(uid).trim().toUpperCase();
             
             const historyContainer = document.getElementById('rider-history-list');
-            if (historyContainer) {
-                historyContainer.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold animate-pulse">Menarik data riwayat...</p>';
-            }
 
-            try {
-                const { getFirestore, doc, getDoc, collection, query, where, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
-                const db = getFirestore();
-                const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
-                
-                // ==========================================
-                // LANGKAH 1: Ambil Data Manual (Top Up / Tarik) dari Array edit_logs
-                // ==========================================
-                const balanceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_balances', cleanUid);
-                const balanceSnap = await getDoc(balanceRef);
-                
-                let manualLogs = [];
-                if (balanceSnap.exists()) {
-                    const data = balanceSnap.data();
-                    const editLogs = data.edit_logs || [];
-                    
-                    manualLogs = editLogs.map(item => {
-                        let timeMs = 0;
-                        if (item.time) {
-                            timeMs = Number(item.time);
-                        } else if (item.timestamp && item.timestamp.seconds) {
-                            timeMs = item.timestamp.seconds * 1000;
-                        } else if (item.timestamp) {
-                            timeMs = new Date(item.timestamp).getTime();
-                        } else {
-                            timeMs = Date.now(); 
-                        }
-
-                        return {
-                            type: 'manual',
-                            action: item.action || 'Penyesuaian',
-                            amount: Number(item.amount || item.nominal || 0),
-                            desc: item.desc || item.action || '',
-                            time: timeMs
-                        };
-                    });
-                }
-                
-                // ==========================================
-                // LANGKAH 2: Ambil Data Otomatis (Potongan Sistem) dari Koleksi
-                // ==========================================
-                const potonganRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'riwayat_potongan');
-                const qPotongan = query(potonganRef, where('rider_uid', '==', cleanUid));
-                const potonganSnap = await getDocs(qPotongan);
-
-                let systemLogs = [];
-                potonganSnap.forEach(docSnap => {
-                    const data = docSnap.data();
-                    let timeMs = 0;
-                    
-                    if (data.created_at && typeof data.created_at.toMillis === 'function') {
-                        timeMs = data.created_at.toMillis();
-                    } else if (data.created_at && data.created_at.seconds) {
-                        timeMs = data.created_at.seconds * 1000;
-                    } else if (data.timestamp) {
-                        timeMs = new Date(data.timestamp).getTime();
-                    } else {
-                        timeMs = Date.now();
-                    }
-
-                    systemLogs.push({
-                        type: 'sistem',
-                        action: data.type || 'Potongan',
-                        desc: data.desc || data.keterangan || 'Potongan Otomatis Sistem',
-                        amount: Number(data.amount || data.nominal || 0),
-                        time: timeMs
-                    });
-                });
-
-                // ==========================================
-                // LANGKAH 3: Gabungkan, FILTER PAMUNGKAS, dan Urutkan (Z ke A)
-                // ==========================================
-                let combinedLogs = [...manualLogs, ...systemLogs];
-                
-                // FILTER PAMUNGKAS: Sapu bersih manual_add dan manual_deduct dari manapun asalnya
-                combinedLogs = combinedLogs.filter(log => {
-                    const act = String(log.action).toLowerCase().trim();
-                    const desc = String(log.desc || '').toLowerCase().trim();
-                    return !act.includes('manual_add') && !act.includes('manual_deduct') &&
-                           !desc.includes('manual_add') && !desc.includes('manual_deduct');
-                });
-                
-                // Urutkan berdasarkan waktu (timestamp) Descending
-                combinedLogs.sort((a, b) => b.time - a.time);
-                
-                // Batasi array hanya menampilkan 50 data terakhir agar HP tidak lag
-                combinedLogs = combinedLogs.slice(0, 50);
-
-                // ==========================================
-                // LANGKAH 4: Render ke UI dengan Tailwind CSS
-                // ==========================================
-                if (combinedLogs.length === 0) {
+            // Fungsi Helper untuk merender UI (Digunakan oleh Cache dan Data Baru)
+            const renderLogs = (logs) => {
+                if (logs.length === 0) {
                     if (historyContainer) {
                         historyContainer.innerHTML = `
                             <div class="text-center py-10 bg-white rounded-3xl border border-gray-100 shadow-sm flex flex-col items-center">
@@ -6297,7 +6208,7 @@
                 }
 
                 let html = '';
-                combinedLogs.forEach(log => {
+                logs.forEach(log => {
                     const d = new Date(log.time);
                     const day = String(d.getDate()).padStart(2, '0');
                     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -6347,6 +6258,126 @@
                 if (historyContainer) {
                     historyContainer.innerHTML = html;
                 }
+            };
+
+            // ==========================================
+            // LANGKAH 3: LOGIKA CACHING (MEMORI SEMENTARA)
+            // ==========================================
+            const now = Date.now();
+            // Cek apakah data cache ada dan umurnya kurang dari 5 menit (300.000 ms)
+            if (window.cachedWalletHistory && (now - window.lastWalletFetchTime < 300000)) {
+                console.log("Memuat riwayat saldo dari cache (Hemat Read Firebase)");
+                renderLogs(window.cachedWalletHistory);
+                return; // Hentikan fungsi di sini, JANGAN baca Firebase lagi
+            }
+
+            if (historyContainer) {
+                historyContainer.innerHTML = '<p class="text-xs text-center text-slate-400 py-6 font-bold animate-pulse">Menarik data riwayat...</p>';
+            }
+
+            try {
+                // LANGKAH 1: Menambahkan orderBy dan limit pada import Firebase
+                const { getFirestore, doc, getDoc, collection, query, where, getDocs, orderBy, limit } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                const db = getFirestore();
+                const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                
+                // ==========================================
+                // LANGKAH 1: Ambil Data Manual (Top Up / Tarik) dari Array edit_logs
+                // ==========================================
+                const balanceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_balances', cleanUid);
+                const balanceSnap = await getDoc(balanceRef);
+                
+                let manualLogs = [];
+                if (balanceSnap.exists()) {
+                    const data = balanceSnap.data();
+                    const editLogs = data.edit_logs || [];
+                    
+                    manualLogs = editLogs.map(item => {
+                        let timeMs = 0;
+                        if (item.time) {
+                            timeMs = Number(item.time);
+                        } else if (item.timestamp && item.timestamp.seconds) {
+                            timeMs = item.timestamp.seconds * 1000;
+                        } else if (item.timestamp) {
+                            timeMs = new Date(item.timestamp).getTime();
+                        } else {
+                            timeMs = Date.now(); 
+                        }
+
+                        return {
+                            type: 'manual',
+                            action: item.action || 'Penyesuaian',
+                            amount: Number(item.amount || item.nominal || 0),
+                            desc: item.desc || item.action || '',
+                            time: timeMs
+                        };
+                    });
+                }
+                
+                // ==========================================
+                // LANGKAH 2: Ambil Data Otomatis (Potongan Sistem) dari Koleksi
+                // ==========================================
+                const potonganRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'riwayat_potongan');
+                // LOGIKA LIMIT SERVER DITERAPKAN DI SINI:
+                const qPotongan = query(
+                    potonganRef, 
+                    where('rider_uid', '==', cleanUid),
+                    orderBy('created_at', 'desc'), 
+                    limit(15)
+                );
+                const potonganSnap = await getDocs(qPotongan);
+
+                let systemLogs = [];
+                potonganSnap.forEach(docSnap => {
+                    const data = docSnap.data();
+                    let timeMs = 0;
+                    
+                    if (data.created_at && typeof data.created_at.toMillis === 'function') {
+                        timeMs = data.created_at.toMillis();
+                    } else if (data.created_at && data.created_at.seconds) {
+                        timeMs = data.created_at.seconds * 1000;
+                    } else if (data.timestamp) {
+                        timeMs = new Date(data.timestamp).getTime();
+                    } else {
+                        timeMs = Date.now();
+                    }
+
+                    systemLogs.push({
+                        type: 'sistem',
+                        action: data.type || 'Potongan',
+                        desc: data.desc || data.keterangan || 'Potongan Otomatis Sistem',
+                        amount: Number(data.amount || data.nominal || 0),
+                        time: timeMs
+                    });
+                });
+
+                // ==========================================
+                // LANGKAH 3: Gabungkan, FILTER PAMUNGKAS, dan Urutkan (Z ke A)
+                // ==========================================
+                let combinedLogs = [...manualLogs, ...systemLogs];
+                
+                // FILTER PAMUNGKAS: Sapu bersih manual_add dan manual_deduct dari manapun asalnya
+                combinedLogs = combinedLogs.filter(log => {
+                    const act = String(log.action).toLowerCase().trim();
+                    const desc = String(log.desc || '').toLowerCase().trim();
+                    return !act.includes('manual_add') && !act.includes('manual_deduct') &&
+                           !desc.includes('manual_add') && !desc.includes('manual_deduct');
+                });
+                
+                // Urutkan berdasarkan waktu (timestamp) Descending
+                combinedLogs.sort((a, b) => b.time - a.time);
+                
+                // Batasi array hanya menampilkan 15 data terakhir agar HP tidak lag
+                combinedLogs = combinedLogs.slice(0, 15);
+
+                // SIMPAN KE CACHE MEMORI (LANGKAH 5)
+                window.cachedWalletHistory = combinedLogs;
+                window.lastWalletFetchTime = Date.now();
+
+                // ==========================================
+                // LANGKAH 4: Render ke UI dengan Tailwind CSS
+                // ==========================================
+                renderLogs(combinedLogs);
 
             } catch (error) {
                 console.error("Error loadRiwayatSaldo:", error);
