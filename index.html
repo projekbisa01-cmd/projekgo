@@ -6213,7 +6213,6 @@
                     manualLogs = editLogs.map(item => {
                         let timeMs = 0;
                         if (item.time) {
-                            // Deteksi field 'time' berbentuk angka milidetik (int64) dari database admin
                             timeMs = Number(item.time);
                         } else if (item.timestamp && item.timestamp.seconds) {
                             timeMs = item.timestamp.seconds * 1000;
@@ -6227,6 +6226,7 @@
                             type: 'manual',
                             action: item.action || 'Penyesuaian',
                             amount: Number(item.amount || item.nominal || 0),
+                            desc: item.desc || item.action || '',
                             time: timeMs
                         };
                     });
@@ -6264,9 +6264,17 @@
                 });
 
                 // ==========================================
-                // LANGKAH 3: Gabungkan dan Urutkan (Z ke A)
+                // LANGKAH 3: Gabungkan, FILTER PAMUNGKAS, dan Urutkan (Z ke A)
                 // ==========================================
                 let combinedLogs = [...manualLogs, ...systemLogs];
+                
+                // FILTER PAMUNGKAS: Sapu bersih manual_add dan manual_deduct dari manapun asalnya
+                combinedLogs = combinedLogs.filter(log => {
+                    const act = String(log.action).toLowerCase().trim();
+                    const desc = String(log.desc || '').toLowerCase().trim();
+                    return !act.includes('manual_add') && !act.includes('manual_deduct') &&
+                           !desc.includes('manual_add') && !desc.includes('manual_deduct');
+                });
                 
                 // Urutkan berdasarkan waktu (timestamp) Descending
                 combinedLogs.sort((a, b) => b.time - a.time);
@@ -6290,7 +6298,6 @@
 
                 let html = '';
                 combinedLogs.forEach(log => {
-                    // Format waktu: DD/MM/YYYY HH:mm
                     const d = new Date(log.time);
                     const day = String(d.getDate()).padStart(2, '0');
                     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -6299,7 +6306,6 @@
                     const mins = String(d.getMinutes()).padStart(2, '0');
                     const formattedTime = `${day}/${month}/${year} ${hours}:${mins}`;
 
-                    // Cek Tipe Aksi: Penambahan (+) atau Pengurangan (-)
                     const actionLower = String(log.action).toLowerCase();
                     let isAddition = false;
                     
@@ -6308,17 +6314,14 @@
                     } else if (actionLower.includes('tarik') || actionLower.includes('potong') || actionLower.includes('denda') || actionLower.includes('cicilan') || actionLower.includes('adm')) {
                         isAddition = false;
                     } else {
-                        // Secara default jika tidak diketahui, log manual dianggap penambahan (+)
                         isAddition = log.type === 'manual'; 
                     }
 
-                    // Tentukan Warna & Icon
                     const colorClass = isAddition ? 'text-emerald-500' : 'text-rose-500';
                     const sign = isAddition ? '+' : '-';
                     const icon = isAddition ? 'fa-arrow-down' : 'fa-arrow-up';
                     const bgIcon = isAddition ? 'bg-emerald-50 text-emerald-500 border-emerald-100' : 'bg-rose-50 text-rose-500 border-rose-100';
 
-                    // Deskripsi Detail
                     const displayDesc = log.desc ? log.desc : (log.type === 'manual' ? 'Penyesuaian Saldo Manual' : 'Sistem Otomatis');
 
                     html += `
