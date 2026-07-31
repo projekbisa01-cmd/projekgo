@@ -7022,7 +7022,7 @@
         window.actionRiwayatModal = (encodedUid) => { try { window.openRiwayatSaldo(decodeURIComponent(encodedUid)); } catch(e) { } };
         window.actionSaldoModal = (encodedUid) => { try { window.openSaldoModal(decodeURIComponent(encodedUid)); } catch(e) { } };
 
-        window.openRiwayatCicilanJaketModal = () => {
+        window.openRiwayatJaketModal = () => {
             const modal = document.getElementById('riwayat-jaket-modal');
             const listContainer = document.getElementById('riwayat-jaket-list');
             
@@ -7142,7 +7142,7 @@
             }
 
             let html = '';
-            const nowMs = Date.now(); // BARU: Mengambil waktu saat ini
+            const nowMs = Date.now(); // Mengambil waktu saat ini
 
             filtered.forEach(b => {
                 const saldo = parseInt(b.saldo || 0);
@@ -7151,17 +7151,23 @@
                 const cardClass = isLow ? 'bg-rose-50 border-rose-200 shadow-md ring-1 ring-rose-300' : 'bg-white border-gray-100 shadow-sm';
                 const safeEncodedUid = encodeURIComponent(String(b.id || ''));
 
-                // --- DETEKSI DOUBLE TOP UP UNTUK BADGE ---
+                // --- DETEKSI DOUBLE TOP UP UNTUK BADGE (DIPERKUAT) ---
                 let doubleTopUpWarning = '';
                 if (b.edit_logs && b.edit_logs.length >= 2) {
-                    const log1 = b.edit_logs[0];
-                    const log2 = b.edit_logs[1];
-                    if (log1 && log2 && log1.action.includes('Top Up') && log2.action.includes('Top Up') && log1.amount === log2.amount) {
-                        const timeDiff = Math.abs(log1.time - log2.time);
-                        const isRecent = (nowMs - Math.max(log1.time, log2.time)) <= 86400000; // BARU: Hanya berlaku jika terjadi dalam 24 jam terakhir
+                    // Saring hanya log yang merupakan "Top Up" agar tidak gagal deteksi jika ada log lain yang menyempil
+                    const topUpLogs = b.edit_logs.filter(log => log.action && log.action.includes('Top Up'));
+                    
+                    if (topUpLogs.length >= 2) {
+                        const log1 = topUpLogs[0];
+                        const log2 = topUpLogs[1];
+                        
+                        if (log1.amount === log2.amount) {
+                            const timeDiff = Math.abs(log1.time - log2.time);
+                            const isRecent = (nowMs - Math.max(log1.time, log2.time)) <= 86400000; // Hanya berlaku dalam 24 jam terakhir
 
-                        if (timeDiff < 300000 && isRecent) { // 5 menit (300.000 ms) DAN masih baru (hari ini)
-                            doubleTopUpWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Top-Up</span></div>';
+                            if (timeDiff < 300000 && isRecent) { // 5 menit (300.000 ms) DAN masih baru (hari ini)
+                                doubleTopUpWarning = '<div class="mt-1.5"><span class="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded font-black animate-pulse shadow-sm w-max uppercase tracking-wider"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Indikasi Double Top-Up</span></div>';
+                            }
                         }
                     }
                 }
@@ -7268,19 +7274,17 @@
             modal.classList.add('flex');
 
             // ===============================================================
-            // LANGKAH 2: CEK DATA DI CACHE MEMORI TERLEBIH DAHULU (0 READ!)
+            // CEK DATA DI CACHE MEMORI TERLEBIH DAHULU (0 READ!)
             // ===============================================================
             if (window._cacheRiwayatSaldo && window._cacheRiwayatSaldo[uid]) {
-                // Jika data riwayat sudah ada di wadah, langsung lukis HTML tanpa nembak Firebase
                 window.renderRiwayatSaldoUI(window._cacheRiwayatSaldo[uid], listContainer);
                 return;
             }
 
-            // Tampilkan animasi loading saat menarik data potongan
             listContainer.innerHTML = '<div class="text-center py-6 flex flex-col items-center"><div class="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin mb-2"></div><p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Menarik Data Riwayat...</p></div>';
 
             try {
-                // Ambil data potongan (ADM, Cicilan, dll) dari Firestore DENGAN limit agar hemat read
+                // Ambil data potongan (ADM, Cicilan, dll) dari Firestore
                 const q = query(
                     collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
                     where("rider_uid", "==", uid),
@@ -7289,11 +7293,12 @@
                 );
                 const snap = await getDocs(q);
 
-                let combinedLogs = [];
-
-                // 1. Masukkan log manual (Top Up / Set / Kurangi)
+                // --- IMPLEMENTASI LANGKAH 2: DEDUPLIKASI CERDAS & KALKULASI MUNDUR ---
+                let uniqueLogs = [];
+                
+                // 1. Masukkan semua dari memori (edit_logs) karena akurasinya 100% untuk aksi manual
                 editLogs.forEach(log => {
-                    combinedLogs.push({
+                    uniqueLogs.push({
                         type: 'manual_edit',
                         action: log.action,
                         amount: log.amount,
@@ -7304,84 +7309,79 @@
                     });
                 });
 
-                // 2. Masukkan log sistem (Potongan ADM, Cicilan, Refund)
+                // 2. Masukkan log sistem dari database dengan filter anti-tabrakan
                 snap.forEach(doc => {
                     const data = doc.data();
-                    let timeMs = 0;
-                    if (data.created_at && data.created_at.seconds) timeMs = data.created_at.seconds * 1000;
+                    let timeMs = data.created_at ? data.created_at.seconds * 1000 : 0;
                     
                     let actionText = 'Potongan ADM';
+                    let isManualAction = false;
+                    
                     if (data.type === 'auto_cicilan') actionText = 'Potongan Cicilan';
                     else if (data.type && data.type.includes('refund')) actionText = 'Refund Saldo';
-                    else if (data.type === 'manual_sub') actionText = 'Potong Manual';
                     else if (data.type === 'koreksi_order') actionText = 'Koreksi Saldo';
                     else if (data.type === 'manual_order') actionText = 'Potongan Susulan';
-                    else if (data.type === 'manual_add') actionText = 'Top Up Saldo';
-                    else if (data.type === 'manual_set') actionText = 'Set Manual Saldo';
+                    else if (data.type === 'manual_sub') { actionText = 'Potong Manual'; isManualAction = true; }
+                    else if (data.type === 'manual_add') { actionText = 'Top Up Saldo'; isManualAction = true; }
+                    else if (data.type === 'manual_set') { actionText = 'Set Manual Saldo'; isManualAction = true; }
                     
-                    combinedLogs.push({
-                        type: 'system_cut',
-                        action: actionText,
-                        amount: data.amount,
-                        desc: data.desc || '',
-                        time: timeMs
-                    });
-                });
-
-                // DEDUPLIKASI LOGS (Agar Top Up hari ini yang ada di edit_logs tidak double dengan riwayat_potongan)
-                let uniqueLogs = [];
-                combinedLogs.forEach(log => {
-                    const duplicateIndex = uniqueLogs.findIndex(u => Math.abs(u.time - log.time) < 60000 && Math.abs(u.amount) === Math.abs(log.amount));
-                    
-                    if (duplicateIndex === -1) {
-                        uniqueLogs.push(log);
-                    } else {
-                        // Jika duplikat, prioritaskan yang tipe 'manual_edit' karena punya info 'prev' dan 'now' akurat
-                        if (log.type === 'manual_edit') {
-                            uniqueLogs[duplicateIndex] = log;
+                    // Jika DB mencatat ini aksi manual, kita cek apakah memori (edit_logs) sudah menyediakannya.
+                    // Toleransi 5 detik. Jika ada, abaikan DB agar tidak dobel. Jika > 5 dtk, berarti top up yang berbeda!
+                    let isDuplicate = false;
+                    if (isManualAction) {
+                        const duplicateIndex = uniqueLogs.findIndex(u => 
+                            u.type === 'manual_edit' && 
+                            Math.abs(u.time - timeMs) < 5000 && 
+                            Math.abs(u.amount) === Math.abs(data.amount)
+                        );
+                        if (duplicateIndex !== -1) {
+                            isDuplicate = true;
                         }
                     }
+
+                    if (!isDuplicate) {
+                        uniqueLogs.push({
+                            type: 'system_cut',
+                            action: actionText,
+                            amount: data.amount,
+                            desc: data.desc || '',
+                            time: timeMs
+                        });
+                    }
                 });
-                
-                combinedLogs = uniqueLogs;
 
-                // Urutkan di memori berdasarkan waktu terbaru (Descending)
-                combinedLogs.sort((a, b) => b.time - a.time);
+                // Urutkan semua log berdasarkan waktu dari yang terbaru ke terlama
+                uniqueLogs.sort((a, b) => b.time - a.time);
 
-                // KALKULASI SALDO TERSISA (Retroactive Calculation)
+                // 3. KALKULASI SALDO TERSISA (Retroactive Calculation)
                 let tempBalance = parseInt(currentData.saldo || 0);
-                combinedLogs.forEach(log => {
+                uniqueLogs.forEach(log => {
                     if (log.type === 'manual_edit') {
-                        log.saldo_tersisa = log.now; // Pakai saldo 'now' yang pasti akurat
-                        tempBalance = log.prev; // Mundur ke saldo sebelum transaksi ini
+                        log.saldo_tersisa = log.now; 
+                        tempBalance = log.prev; // Jadikan saldo "prev" sebagai anchor patokan
                     } else {
-                        log.saldo_tersisa = tempBalance; // Saldo setelah potongan ini terjadi
-                        
+                        log.saldo_tersisa = tempBalance; 
                         // Mundur ke saldo sebelum potongan sistem ini terjadi
                         if (log.amount > 0) { 
-                            tempBalance += log.amount; // Jika potongan, berarti sebelumnya saldo lebih besar
+                            tempBalance += log.amount; // Jika ditarik/dipotong, berarti sebelumnya saldo lebih besar
                         } else { 
-                            tempBalance -= Math.abs(log.amount); // Jika refund, berarti sebelumnya saldo lebih kecil
+                            tempBalance -= Math.abs(log.amount); // Jika ditambah/refund, berarti sebelumnya saldo lebih kecil
                         }
                     }
                 });
 
-                // Batasi tampilan maksimal 50 riwayat terakhir agar modal tidak berat
-                combinedLogs = combinedLogs.slice(0, 50);
+                // Batasi tampilan maksimal 50 riwayat terakhir
+                uniqueLogs = uniqueLogs.slice(0, 50);
 
-                // ==============================================================
                 // SIMPAN KE DALAM WADAH CACHE AGAR KLIK BERIKUTNYA = 0 READ
-                // ==============================================================
                 if (!window._cacheRiwayatSaldo) window._cacheRiwayatSaldo = {};
-                window._cacheRiwayatSaldo[uid] = combinedLogs;
+                window._cacheRiwayatSaldo[uid] = uniqueLogs;
 
                 // Lempar ke fungsi pelukis HTML
-                window.renderRiwayatSaldoUI(combinedLogs, listContainer);
+                window.renderRiwayatSaldoUI(uniqueLogs, listContainer);
 
             } catch (err) {
                 console.error("Gagal menarik riwayat gabungan:", err);
-                
-                // --- PENANGANAN ERROR INDEX FIREBASE ---
                 if (String(err).includes("index") || String(err).includes("failed-precondition")) {
                     listContainer.innerHTML = '<div class="text-center py-5 bg-rose-50 rounded-xl border border-dashed border-rose-200"><p class="text-[10px] text-rose-600 font-bold mb-2">Membutuhkan Composite Index Firebase!</p><p class="text-[9px] text-slate-500">Silakan buka Console Browser (Klik Kanan -> Inspect Element -> Pilih tab "Console"), lalu klik <b>link URL berwarna biru</b> yang berawalan "https://console.firebase..." untuk membuat index secara otomatis.</p></div>';
                 } else {
