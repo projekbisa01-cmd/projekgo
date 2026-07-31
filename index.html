@@ -6969,9 +6969,14 @@
             const cacheKey = `rider_data_${currentUserUID}`;
             let hasLoadedFromCache = false;
 
-            if (forceRefresh) { localStorage.removeItem(`rider_docs_${currentUserUID}`); localStorage.removeItem(`rider_rating_${currentUserUID}`); }
+            if (forceRefresh) { 
+                localStorage.removeItem(`rider_docs_${currentUserUID}`); 
+                localStorage.removeItem(`rider_rating_${currentUserUID}`); 
+                // Hapus cache riwayat agar benar-benar ditarik ulang dari server
+                localStorage.removeItem(cacheKey); 
+            }
             
-            // Panggil fetch dokumen di awal (paralel) agar tidak menunggu data utama selesai, jadi 2x lipat lebih cepat
+            // Panggil fetch dokumen di awal (paralel) agar tidak menunggu data utama selesai
             fetchVehicleAndDocsData(currentUserUID);
             
             if (!forceRefresh) {
@@ -6981,9 +6986,10 @@
                         const parsedCache = JSON.parse(cached);
                         if (parsedCache.length > 0) {
                             rawData = parsedCache; 
-                            appsScriptData = parsedCache; // FIX: Mencegah history cache terhapus/blank saat loading data realtime
+                            appsScriptData = parsedCache; 
                             if (lastDataCount === -1) lastDataCount = rawData.length;
-                            document.getElementById('loading-overlay').style.display = 'none'; document.getElementById('main-app').classList.remove('hidden');
+                            document.getElementById('loading-overlay').style.display = 'none'; 
+                            document.getElementById('main-app').classList.remove('hidden');
                             updateUI(); setTimeout(showWelcomePopup, 500);
                             const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
                             if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
@@ -6994,57 +7000,115 @@
                     } catch (e) { }
                 }
             }
+            
             try {
                 // Tampilkan indikator refresh memutar jika masuk via cache tanpa loading layar penuh
                 const refreshIcon = document.getElementById('refresh-icon');
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.add('refreshing');
 
-                let items = [];
                 let newData = [];
 
-                // NEW: Gunakan data yang sudah di-fetch saat verifikasi login manual
-                if (window.prefetchedAllData && window.prefetchedRiderData && !forceRefresh) {
-                    items = window.prefetchedAllData;
-                    newData = window.prefetchedRiderData;
-                    window.prefetchedAllData = null;
-                    window.prefetchedRiderData = null;
-                } else if (!hasLoadedFromCache || forceRefresh) {
-                    // MENGAMBIL DATA DARI GAS UNTUK RIWAYAT
+                if (!hasLoadedFromCache || forceRefresh) {
+                    // MENGAMBIL DATA RIWAYAT DARI FIREBASE (MENGGANTIKAN GOOGLE SHEETS)
                     try {
-                        const response = await fetch(`${SCRIPT_URL}?t=${Date.now()}`, { method: 'GET', credentials: 'omit', redirect: 'follow' });
-                        if (response.ok) {
-                            const data = await response.json();
-                            items = Array.isArray(data) ? data : [];
-                        } else {
-                            console.warn("GAS Fetch tidak OK, mengabaikan data GAS.");
-                            items = []; // Jika GAS gagal, biarkan kosong agar tidak force logout
-                        }
+                        const { getFirestore, collection, query, orderBy, limit, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                        const db = getFirestore();
+                        const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                        const cleanUid = String(currentUserUID).trim().toUpperCase();
+
+                        // Asumsi: Admin menyimpan rekapan data orderan yang sudah lewat di koleksi 'history_orders'
+                        // (Jika Anda menggabungkannya di 'daily_orders', Anda bisa mengubah teks 'history_orders' di bawah menjadi 'daily_orders')
+                        const historyRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'history_orders');
+                        
+                        // Tarik maksimal 150 data riwayat terakhir agar sangat hemat kuota
+                        const qHistory = query(historyRef, orderBy('created_at', 'desc'), limit(150));
+                        
+                        const querySnapshot = await getDocs(qHistory);
+                        
+                        newData = [];
+                        querySnapshot.forEach(docSnap => {
+                            const data = docSnap.data();
+
+                            // Parser Tanggal & Waktu yang Aman (Support format Timestamp Firebase)
+                            let fDate = '';
+                            let fTime = String(data.Jam || data.jam || '').trim();
+                            let dObj = null;
+
+                            if (data.finished_at?.seconds || data.timestamp?.seconds || data.created_at?.seconds) {
+                                const ts = data.finished_at || data.timestamp || data.created_at;
+                                dObj = new Date(ts.seconds * 1000);
+                            } else if (data.Tanggal?.seconds || data.tanggal?.seconds) {
+                                const ts = data.Tanggal || data.tanggal;
+                                dObj = new Date(ts.seconds * 1000);
+                            }
+
+                            if (dObj) {
+                                const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+                                const parts = formatter.formatToParts(dObj);
+                                fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
+                                if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                            } else {
+                                const rawStr = String(data.Tanggal || data.tanggal || '').trim();
+                                if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
+                                    fDate = rawStr;
+                                } else if (/^\d{2}-\d{2}-\d{4}$/.test(rawStr)) {
+                                    const p = rawStr.split(/[-/]/);
+                                    fDate = `${p[2]}-${p[1]}-${p[0]}`;
+                                } else {
+                                    const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+                                    const parts = formatter.formatToParts(new Date());
+                                    fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
+                                }
+                            }
+
+                            // Normalisasi Nilai Ongkir (Ubah Ribuan ke Satuan Puluhan jika perlu)
+                            let nKotor = Number(data.fee || data.Fee || data.Nominal_Kotor || 0);
+                            let nExtra = Number(data.extra || data.Extra || data.Tambahan || 0);
+                            if (nKotor > 500) nKotor = nKotor / 1000;
+                            if (nExtra > 500) nExtra = nExtra / 1000;
+
+                            let fallbackName = document.getElementById('display-rider-name') ? document.getElementById('display-rider-name').innerText : 'Rider';
+                            if (fallbackName === 'Memuat...' || !fallbackName) fallbackName = 'Rider';
+
+                            let listPesananStr = data.items_string || data.List_Pesanan || data.Keterangan || data.proof_desc || 'Orderan Selesai';
+
+                            newData.push({
+                                id: docSnap.id,
+                                is_sheet: true, // Flag agar sistem menganggapnya statis seperti dari Sheet dulu
+                                is_realtime: false,
+                                Tanggal: fDate,
+                                Jam: fTime,
+                                Nama_Pelanggan: data.customer_name || data.Customer_Name || data.Nama_Pelanggan || 'Pelanggan',
+                                Nama_Rider: data.rider_name || data.Nama_Rider || fallbackName,
+                                UID: cleanUid,
+                                Nominal_Kotor: nKotor,
+                                Tambahan: nExtra,
+                                Status: 'Selesai',
+                                Keterangan: data.proof_desc || data.Keterangan || '',
+                                List_Pesanan: listPesananStr
+                            });
+                        });
+                        
+                        // Simpan ke HP untuk dipakai berikutnya (Caching) agar menghemat Read
+                        localStorage.setItem(cacheKey, JSON.stringify(newData));
+                        
                     } catch (fetchErr) {
-                        console.warn("Gagal terhubung ke GAS:", fetchErr);
-                        items = []; // Mencegah crash jika timeout
+                        console.warn("Gagal terhubung ke Firebase History:", fetchErr);
+                        // Biarkan kosong jika gagal (Aplikasi tidak akan crash)
+                        if (!hasLoadedFromCache) newData = []; 
                     }
-                    
-                    const uidLower = String(currentUserUID).trim().toLowerCase();
-                    newData = items.filter(item => item && item.UID !== undefined && String(item.UID).trim().toLowerCase() === uidLower);
                 } else {
-                    // MODE SANGAT CEPAT: Gunakan cache lokal, lewati proses fetch GAS
-                    items = []; 
+                    // MODE SANGAT CEPAT: Gunakan cache lokal (Data Riwayat Statis)
                     newData = rawData; 
                 }
                 
-                // NEW: SIMPAN DATA GLOBAL UNTUK LEADERBOARD SEBELUM FILTER
-                allRiderData = items;
+                // Variabel allRiderData sudah usang untuk Leaderboard baru, tetapi kita tetap inisialisasi agar fungsi lain tidak error
+                allRiderData = newData;
                 
-                // --- PERBAIKAN FATAL: JANGAN LOGOUT JIKA newData KOSONG ---
-                // Karena kita sudah pakai Firebase untuk verifikasi, jika newData (dari GAS) kosong, 
-                // itu berarti Rider belum punya orderan, BUKAN berarti UID-nya dihapus.
                 if (newData.length === 0 && !hasLoadedFromCache) {
-                    console.log("Rider belum memiliki riwayat pesanan di Spreadsheet.");
-                    // Jangan panggil handleLogout! Biarkan lanjut dengan array kosong.
+                    console.log("Rider belum memiliki riwayat pesanan.");
                 }
                 
-                // PASTIKAN UID SAMA PERSIS DENGAN DATABASE
-                // Jika newData kosong, gunakan currentUserUID yang sedang aktif
                 currentUserUID = newData.length > 0 ? String(newData[0].UID).trim() : currentUserUID;
                 
                 if (lastDataCount !== -1 && newData.length > lastDataCount) playNotificationVoice();
@@ -7055,8 +7119,10 @@
                     window.startDailyOrdersListener(currentUserUID);
                 }
                 
-                // 3. Gabungkan dan Render
-                combineAndRenderData();
+                // 3. Gabungkan dan Render (Menggabungkan Cache Riwayat + Realtime Hari Ini)
+                if (typeof window.combineAndRenderData === 'function') {
+                    window.combineAndRenderData();
+                }
                 
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
                 
@@ -7065,11 +7131,9 @@
                 const refreshIcon = document.getElementById('refresh-icon');
                 if (refreshIcon) refreshIcon.classList.remove('refreshing');
 
-                // Jika gagal fetch dan cache kosong sama sekali, pastikan loading hilang
                 if (rawData.length === 0) {
                     document.getElementById('loading-overlay').style.display = 'none'; 
                     document.getElementById('main-app').classList.remove('hidden');
-                    // Tampilkan UI meski kosong
                     updateUI();
                 }
             }
@@ -7080,37 +7144,82 @@
             const todayStr = getJakartaDateString();
             const finalData = [];
             
-            // FILTER TANGGAL: 21 April 2026
+            // FILTER TANGGAL: 21 April 2026 (Opsional, jika Anda ingin menyaring data lama)
             const filterDate = new Date(2026, 3, 21); 
 
-            window.firebaseData.forEach(fbItem => {
+            // Jika firebaseData dari daily_orders (Live) belum siap, inisialisasi sebagai array kosong
+            const liveData = window.firebaseData || [];
+
+            // 1. Masukkan Data Riwayat Statis (AppsScript/Firebase Cache) ke finalData
+            if (window.appsScriptData && window.appsScriptData.length > 0) {
+                window.appsScriptData.forEach(item => {
+                    const itemDateStr = parseSheetDate(item.Tanggal);
+                    
+                    let itemDate = new Date();
+                    if (itemDateStr) {
+                       const parts = itemDateStr.split('-');
+                       if (parts.length === 3) {
+                           itemDate = new Date(parts[2], parts[0]-1, parts[1]); 
+                       }
+                    }
+
+                    if (itemDate >= filterDate) {
+                        // Jika data riwayat itu adalah tanggal HARI INI, abaikan! 
+                        // Karena kita akan pakai data Live (daily_orders) untuk hari ini agar real-time.
+                        if (itemDateStr !== todayStr) {
+                            finalData.push({ 
+                                ...item, 
+                                is_sheet: false, // Flag is_sheet kita pertahankan false agar sesuai flow
+                                is_realtime: false 
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 2. Masukkan Data Live (Firebase daily_orders) HARI INI ke finalData
+            liveData.forEach(fbItem => {
                 const fbDateStr = parseSheetDate(fbItem.Tanggal);
                 
-                let itemDate = new Date();
-                if (fbDateStr) {
-                   const parts = fbDateStr.split('-');
-                   if (parts.length === 3) {
-                       itemDate = new Date(parts[2], parts[0]-1, parts[1]); // Format internal adalah MM-DD-YYYY
-                   }
-                }
-
-                if (itemDate >= filterDate) {
+                // Pastikan yang masuk liveData memang data hari ini
+                if (fbDateStr === todayStr) {
                     finalData.push({ 
                         ...fbItem, 
                         is_sheet: false, 
-                        is_realtime: fbDateStr === todayStr 
+                        is_realtime: true 
                     });
                 }
             });
 
+            // 3. Gabungkan dan Urutkan Descending (Terbaru di atas)
+            finalData.sort((a, b) => {
+                // Urutkan berdasarkan Tanggal dulu (Format MM-DD-YYYY dari parseSheetDate)
+                const dateA = new Date(parseSheetDate(a.Tanggal).split('-').reverse().join('-'));
+                const dateB = new Date(parseSheetDate(b.Tanggal).split('-').reverse().join('-'));
+                
+                if (dateB.getTime() !== dateA.getTime()) {
+                    return dateB.getTime() - dateA.getTime();
+                }
+
+                // Jika Tanggal sama, urutkan berdasarkan Jam
+                const timeA = parseSheetTime(a.Jam) || "00:00";
+                const timeB = parseSheetTime(b.Jam) || "00:00";
+                
+                const valA = parseInt(timeA.replace(/[^0-9]/g, '')) || 0;
+                const valB = parseInt(timeB.replace(/[^0-9]/g, '')) || 0;
+                
+                return valB - valA;
+            });
+
             rawData = finalData;
 
+            // Update Cache Lokal (Agar besok hari, data Live hari ini otomatis menjadi Riwayat Statis)
             localStorage.setItem('rider_uid', currentUserUID); 
             localStorage.setItem(`rider_data_${currentUserUID}`, JSON.stringify(rawData));
             
             requestAnimationFrame(() => {
                 updateUI(); 
-                // Pastikan yang dipanggil untuk rating adalah data yang memiliki Nama Rider
+                
                 const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
                 if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
                 
@@ -10471,113 +10580,131 @@
           // -------------------------------------------------------------
           let dailyOrdersUnsubscribe = null;
           
-          window.startDailyOrdersListener = (uid) => {
+          window.startDailyOrdersListener = async (uid) => {
               if (!uid || !isAuthReady) return;
-              if (dailyOrdersUnsubscribe) dailyOrdersUnsubscribe();
+              if (dailyOrdersUnsubscribe) {
+                  dailyOrdersUnsubscribe();
+                  dailyOrdersUnsubscribe = null;
+              }
 
               const cleanUid = String(uid).trim().toUpperCase();
               
               // AKAR MASALAH 1: PATH DATABASE HARUS MENGGUNAKAN targetProjectId (onbid-2f87a) AGAR SAMA DENGAN DOMPET
               const targetProjectId = firebaseConfig.projectId; 
-              const historyOrdersRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
               
-              // Tidak perlu query 'where' karena path sudah spesifik milik rider ini
-              dailyOrdersUnsubscribe = onSnapshot(historyOrdersRef, (snapshot) => {
-                  const newFirebaseData = [];
+              try {
+                  // Import modul Firebase tambahan secara dinamis agar 100% aman dan tidak merusak fungsi atas
+                  const { collection, query, orderBy, limit, onSnapshot } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
                   
-                  snapshot.forEach(docSnap => {
-                      const data = docSnap.data();
+                  const historyOrdersRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
+                  
+                  // LANGKAH 1: Terapkan Query Limit 50 dan Urutkan dari yang terbaru (Sangat Hemat Kuota)
+                  // Catatan: Pastikan field di database bernama 'created_at'. Jika nama field admin berbeda (misal: 'timestamp' atau 'finished_at'), silakan sesuaikan teks di bawah ini.
+                  const qDaily = query(
+                      historyOrdersRef, 
+                      orderBy('created_at', 'desc'), 
+                      limit(50)
+                  );
+                  
+                  dailyOrdersUnsubscribe = onSnapshot(qDaily, (snapshot) => {
+                      const newFirebaseData = [];
                       
-                      // FILTER: Dilonggarkan agar menerima 'completed', 'selesai', atau kosong (sama seperti Dompet)
-                      const status = String(data.status || data.Status || '').trim().toLowerCase();
-                      if (status !== 'completed' && status !== 'selesai' && status !== '') {
-                          return; 
-                      }
-                      
-                      // AKAR MASALAH 2: LOGIKA PARSING TANGGAL SUPER AMAN (Sama seperti Dompet)
-                      let fDate = '';
-                      let fTime = String(data.Jam || data.jam || '').trim();
-                      let dObj = null;
-
-                      // 1. Cek apakah field adalah Firebase Timestamp Object
-                      if (data.finished_at?.seconds || data.timestamp?.seconds || data.created_at?.seconds) {
-                          const ts = data.finished_at || data.timestamp || data.created_at;
-                          dObj = new Date(ts.seconds * 1000);
-                      } else if (data.Tanggal?.seconds || data.tanggal?.seconds) {
-                          const ts = data.Tanggal || data.tanggal;
-                          dObj = new Date(ts.seconds * 1000);
-                      }
-
-                      // 2. Eksekusi Format ke YYYY-MM-DD
-                      if (dObj) {
-                          const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-                          const parts = formatter.formatToParts(dObj);
-                          fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
-                          if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
-                      } else {
-                          const rawStr = String(data.Tanggal || data.tanggal || '').trim();
-                          if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
-                              fDate = rawStr; // Sudah YYYY-MM-DD
-                          } else if (/^\d{2}-\d{2}-\d{4}$/.test(rawStr)) {
-                              // Deteksi format DD-MM-YYYY dan balikkan agar aman diproses aplikasi
-                              const p = rawStr.split(/[-/]/);
-                              fDate = `${p[2]}-${p[1]}-${p[0]}`;
-                          } else {
-                              // Jika format hancur, gunakan tanggal hari ini
-                              const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
-                              const parts = formatter.formatToParts(new Date());
-                              fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
-                          }
-                      }
-                    
-                      // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
-                      let nKotor = Number(data.fee || data.Fee || data.Nominal_Kotor || 0);
-                      let nExtra = Number(data.extra || data.Extra || data.Tambahan || 0);
-                      if (nKotor > 500) nKotor = nKotor / 1000;
-                      if (nExtra > 500) nExtra = nExtra / 1000;
-
-                      // Proteksi agar "Memuat..." tidak tersimpan sebagai nama rider
-                      let fallbackName = document.getElementById('display-rider-name') ? document.getElementById('display-rider-name').innerText : 'Rider';
-                      if (fallbackName === 'Memuat...' || !fallbackName) {
-                          fallbackName = 'Rider';
-                      }
-
-                      // Konversi Array Items menjadi String untuk ditampilkan di List
-                      let listPesananStr = data.items_string || data.List_Pesanan || data.Keterangan || data.proof_desc || 'Orderan Selesai';
-                      if (data.items && Array.isArray(data.items)) {
-                          listPesananStr = data.items.map(item => {
-                              const rawName = typeof item === 'object' ? (item.name || '') : String(item);
-                              return String(rawName).trim();
-                          }).filter(name => name !== '').join(', ');
+                      snapshot.forEach(docSnap => {
+                          const data = docSnap.data();
                           
-                          if (!listPesananStr) listPesananStr = 'Orderan Selesai';
-                      }
+                          // FILTER: Dilonggarkan agar menerima 'completed', 'selesai', atau kosong (sama seperti Dompet)
+                          const status = String(data.status || data.Status || '').trim().toLowerCase();
+                          if (status !== 'completed' && status !== 'selesai' && status !== '') {
+                              return; 
+                          }
+                          
+                          // AKAR MASALAH 2: LOGIKA PARSING TANGGAL SUPER AMAN (Sama seperti Dompet)
+                          let fDate = '';
+                          let fTime = String(data.Jam || data.jam || '').trim();
+                          let dObj = null;
 
-                      // Mapping data Firestore agar formatnya sempurna saat di-render ke Riwayat Orderan
-                      newFirebaseData.push({
-                          id: docSnap.id,
-                          is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
-                          Tanggal: fDate,
-                          Jam: fTime,
-                          Nama_Pelanggan: data.customer_name || data.Customer_Name || data.Nama_Pelanggan || 'Pelanggan',
-                          Nama_Rider: data.rider_name || data.Nama_Rider || fallbackName,
-                          UID: cleanUid,
-                          Nominal_Kotor: nKotor,
-                          Tambahan: nExtra,
-                          Status: 'Selesai', // Paksa jadi Selesai karena sudah lolos filter completed
-                          Keterangan: data.proof_desc || data.Keterangan || '',
-                          List_Pesanan: listPesananStr
+                          // 1. Cek apakah field adalah Firebase Timestamp Object
+                          if (data.finished_at?.seconds || data.timestamp?.seconds || data.created_at?.seconds) {
+                              const ts = data.finished_at || data.timestamp || data.created_at;
+                              dObj = new Date(ts.seconds * 1000);
+                          } else if (data.Tanggal?.seconds || data.tanggal?.seconds) {
+                              const ts = data.Tanggal || data.tanggal;
+                              dObj = new Date(ts.seconds * 1000);
+                          }
+
+                          // 2. Eksekusi Format ke YYYY-MM-DD
+                          if (dObj) {
+                              const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+                              const parts = formatter.formatToParts(dObj);
+                              fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
+                              if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                          } else {
+                              const rawStr = String(data.Tanggal || data.tanggal || '').trim();
+                              if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
+                                  fDate = rawStr; // Sudah YYYY-MM-DD
+                              } else if (/^\d{2}-\d{2}-\d{4}$/.test(rawStr)) {
+                                  // Deteksi format DD-MM-YYYY dan balikkan agar aman diproses aplikasi
+                                  const p = rawStr.split(/[-/]/);
+                                  fDate = `${p[2]}-${p[1]}-${p[0]}`;
+                              } else {
+                                  // Jika format hancur, gunakan tanggal hari ini
+                                  const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+                                  const parts = formatter.formatToParts(new Date());
+                                  fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
+                              }
+                          }
+                        
+                          // KONVERSI ANGKA PENUH KE FORMAT SHEET (Cth: Firebase simpan 15000 -> Harus diubah jadi 15)
+                          let nKotor = Number(data.fee || data.Fee || data.Nominal_Kotor || 0);
+                          let nExtra = Number(data.extra || data.Extra || data.Tambahan || 0);
+                          if (nKotor > 500) nKotor = nKotor / 1000;
+                          if (nExtra > 500) nExtra = nExtra / 1000;
+
+                          // Proteksi agar "Memuat..." tidak tersimpan sebagai nama rider
+                          let fallbackName = document.getElementById('display-rider-name') ? document.getElementById('display-rider-name').innerText : 'Rider';
+                          if (fallbackName === 'Memuat...' || !fallbackName) {
+                              fallbackName = 'Rider';
+                          }
+
+                          // Konversi Array Items menjadi String untuk ditampilkan di List
+                          let listPesananStr = data.items_string || data.List_Pesanan || data.Keterangan || data.proof_desc || 'Orderan Selesai';
+                          if (data.items && Array.isArray(data.items)) {
+                              listPesananStr = data.items.map(item => {
+                                  const rawName = typeof item === 'object' ? (item.name || '') : String(item);
+                                  return String(rawName).trim();
+                              }).filter(name => name !== '').join(', ');
+                              
+                              if (!listPesananStr) listPesananStr = 'Orderan Selesai';
+                          }
+
+                          // Mapping data Firestore agar formatnya sempurna saat di-render ke Riwayat Orderan
+                          newFirebaseData.push({
+                              id: docSnap.id,
+                              is_realtime: true, // Flag untuk memunculkan badge "LIVE" merah
+                              Tanggal: fDate,
+                              Jam: fTime,
+                              Nama_Pelanggan: data.customer_name || data.Customer_Name || data.Nama_Pelanggan || 'Pelanggan',
+                              Nama_Rider: data.rider_name || data.Nama_Rider || fallbackName,
+                              UID: cleanUid,
+                              Nominal_Kotor: nKotor,
+                              Tambahan: nExtra,
+                              Status: 'Selesai', // Paksa jadi Selesai karena sudah lolos filter completed
+                              Keterangan: data.proof_desc || data.Keterangan || '',
+                              List_Pesanan: listPesananStr
+                          });
                       });
+                      
+                      // Perbarui variabel global dan jalankan ulang penggabung data
+                      window.firebaseData = newFirebaseData; 
+                      if (typeof window.combineAndRenderData === 'function') {
+                          window.combineAndRenderData();
+                      }
+                  }, (error) => {
+                      console.error("Error fetching completed active orders:", error);
                   });
-                  
-                  // Perbarui variabel global dan jalankan ulang penggabung data
-                  window.firebaseData = newFirebaseData; 
-                  if (typeof window.combineAndRenderData === 'function') {
-                      window.combineAndRenderData();
-                  }
-              }, (error) => {
-                  console.error("Error fetching completed active orders:", error);
-              });
+              } catch (err) {
+                  console.error("Error setting up daily orders listener:", err);
+              }
           };
 
           // -------------------------------------------------------------
@@ -12132,6 +12259,24 @@
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       
+                      // --- LOGIKA BARU: DETEKSI PERUBAHAN RIWAYAT OLEH ADMIN (LANGKAH 2) ---
+                      const adminUpdateTs = data.last_history_update_by_admin ? String(data.last_history_update_by_admin) : "0";
+                      const localUpdateTs = localStorage.getItem(`rider_history_trigger_${cleanUid}`) || "0";
+                      
+                      if (adminUpdateTs !== "0" && adminUpdateTs !== localUpdateTs) {
+                          console.log("Terdeteksi pembaruan data riwayat dari Admin. Membersihkan cache lokal...");
+                          // Update catatan waktu di HP rider agar sama dengan Admin
+                          localStorage.setItem(`rider_history_trigger_${cleanUid}`, adminUpdateTs);
+                          // Buang cache riwayat lama yang ada di memori HP
+                          localStorage.removeItem(`rider_data_${cleanUid}`); 
+                          
+                          // Perintahkan aplikasi untuk memuat ulang data (Nantinya akan pakai Firebase di Langkah 3)
+                          if (typeof window.fetchData === 'function') {
+                              setTimeout(() => { window.fetchData(true); }, 1500); // Tarik ulang data dengan aman
+                          }
+                      }
+                      // --------------------------------------------------------------------
+
                       // PENGHEMATAN PROSES UI & BATERAI: 
                       // Cek apakah ada perubahan status penting sebelum merender ulang.
                       // Mengabaikan pembaruan field yang tidak penting agar layar tidak berkedip/kerja berat.
@@ -12139,7 +12284,8 @@
                           ik: data.force_kill,
                           im: data.in_main_queue,
                           io: data.is_online,
-                          ia: data.is_available
+                          ia: data.is_available,
+                          hu: adminUpdateTs // Tambahkan field ini agar perubahan dari admin diakui sebagai perubahan penting
                       });
                       
                       if (lastMyStatusDataStr === currentDataStr) return; // Abaikan jika tidak ada perubahan penting
