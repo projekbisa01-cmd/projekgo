@@ -1851,7 +1851,39 @@
                 </div>
 
                 <!-- KARTU UPDATE LOKASI MANGKAL (DIPINDAH TEPAT DI ATAS TOGGLE ONBID) -->
-                <div class="absolute bottom-[calc(100%+1.5rem)] left-1/2 transform -translate-x-1/2 w-[calc(100%-2.5rem)] max-w-md z-30 transition-all duration-300">
+                <div class="absolute bottom-[calc(100%+1.5rem)] left-1/2 transform -translate-x-1/2 w-[calc(100%-2.5rem)] max-w-md z-30 transition-all duration-300 flex flex-col gap-3">
+                    
+                    <!-- INFO KARTU BERANDA (STEP 1.1) -->
+                    <div class="flex justify-between items-center w-full relative z-30 pointer-events-auto">
+                        <!-- Kiri: Antrian Orderan -->
+                        <div class="bg-white/90 backdrop-blur-md border border-gray-200 shadow-sm rounded-xl py-1.5 px-2 flex items-center gap-1.5 w-[38%]">
+                            <div class="text-yellow-500 text-xl shrink-0 drop-shadow-sm">
+                                <i class="fa-solid fa-users"></i>
+                            </div>
+                            <div class="flex flex-col overflow-hidden">
+                                <span class="text-[9px] font-bold text-gray-800 leading-tight truncate">Antrian orderan</span>
+                                <span id="info-pending-orders" class="text-[10px] font-bold text-emerald-600 italic truncate">0 orderan Antri</span>
+                            </div>
+                        </div>
+
+                        <!-- Tengah: Poin Mingguan -->
+                        <div class="absolute left-1/2 transform -translate-x-1/2 w-[72px] h-[72px] bg-white border border-gray-200 rounded-full flex flex-col items-center justify-center shadow-[0_4px_10px_rgba(0,0,0,0.1)] z-10">
+                            <span class="text-[9px] font-bold text-gray-800 leading-none text-center mt-1">Poin<br>Mingguan</span>
+                            <span id="info-weekly-points" class="text-xl font-black text-emerald-600 leading-tight mt-0.5">0</span>
+                        </div>
+
+                        <!-- Kanan: Ketersediaan Rider -->
+                        <div class="bg-white/90 backdrop-blur-md border border-gray-200 shadow-sm rounded-xl py-1.5 px-2 flex items-center gap-1.5 w-[38%]">
+                            <div class="text-red-500 text-xl shrink-0 drop-shadow-sm">
+                                <i class="fa-solid fa-motorcycle"></i>
+                            </div>
+                            <div class="flex flex-col overflow-hidden">
+                                <span class="text-[9px] font-bold text-gray-800 leading-tight truncate">Ketersediaan rider</span>
+                                <span id="info-available-riders" class="text-[10px] font-bold text-emerald-600 italic truncate">0 rider</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <button onclick="window.openUpdateLokasiPopup()" class="w-full py-3.5 bg-white/95 backdrop-blur-md border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-2xl shadow-[0_4px_15px_rgba(0,0,0,0.08)] active:scale-95 transition-all text-sm flex items-center justify-center gap-3 pointer-events-auto">
                         <div class="w-9 h-9 bg-orange-50 rounded-full flex items-center justify-center text-orange-500 border border-orange-100 shrink-0">
                             <i class="fa-solid fa-map-location-dot text-base"></i>
@@ -3058,6 +3090,13 @@
                             <p class="text-xs text-gray-500">Rincian penghasilan & riwayat</p>
                         </div>
                     </div>
+                    
+                    <!-- NEW: TOMBOL REFRESH MANUAL UNTUK HALAMAN PENDAPATAN -->
+                    <button onclick="manualRefresh()" class="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-orange-50 text-orange-600 rounded-lg shadow-sm hover:bg-orange-100 active:scale-95 transition-all border border-orange-100">
+                        <i class="fa-solid fa-rotate text-sm" id="refresh-icon"></i>
+                        <span class="text-[10px] font-bold uppercase tracking-wider">Refresh</span>
+                    </button>
+                    <!-- END NEW: TOMBOL REFRESH -->
                 </div>
                 
                 <!-- Navigasi Tab Pendapatan -->
@@ -7105,6 +7144,9 @@
                 // Variabel allRiderData sudah usang untuk Leaderboard baru, tetapi kita tetap inisialisasi agar fungsi lain tidak error
                 allRiderData = newData;
                 
+                // PERBAIKAN BUG: Jembatan Data ke wadah utama
+                window.appsScriptData = newData; 
+                
                 if (newData.length === 0 && !hasLoadedFromCache) {
                     console.log("Rider belum memiliki riwayat pesanan.");
                 }
@@ -7523,13 +7565,15 @@
         }
 
         function updateUI() {
-            if (rawData.length === 0) return;
-            // Cari data valid yang berasal dari Sheet (karena data firebase mungkin ditaruh di atas dan tidak ada nama ridernya)
-            const validEntry = rawData.find(item => item.Nama_Rider && item.UID) || rawData[0];
+            // PERBAIKAN KRUSIAL: Dihapusnya "if (rawData.length === 0) return;" agar
+            // proses render UI, Foto Profil, dan Rekening Bank tetap berjalan meskipun rider baru.
+            
+            // Ekstrak data dengan aman (Mencegah error jika rawData kosong)
+            const validEntry = rawData.length > 0 ? (rawData.find(item => item.Nama_Rider && item.UID) || rawData[0]) : null;
             
             // PRIORITASKAN NAMA DARI PROFIL FIREBASE (JIKA ADA), LALU DARI ORDER, LALU FALLBACK "RIDER"
-            const name = window.permanentRiderName || validEntry.Nama_Rider || "Rider";
-            const uid = validEntry.UID || currentUserUID;
+            const name = window.permanentRiderName || (validEntry ? validEntry.Nama_Rider : "Rider");
+            const uid = (validEntry ? validEntry.UID : currentUserUID) || currentUserUID;
             
             document.getElementById('display-rider-name').innerText = name;
             
@@ -7572,7 +7616,9 @@
                 }, 1000);
             }
 
-            processData();
+            // PROSES GRAFIK & PENDAPATAN
+            // (Akan otomatis menampilkan Rp 0 jika rawData kosong)
+            processData(); 
             checkAdmPaymentStatus();
         }
 
@@ -7635,10 +7681,17 @@
             window.currentTodayGrossTotal = Math.round(tGrossPure + tExtraOngkir);
             if (typeof window.updatePrivacyUI === 'function') window.updatePrivacyUI();
             
-            // --- UPDATE DATA DI TAB DAILY PENDAPATAN ---
-            if (!window.activeDailyDateKey) window.activeDailyDateKey = getJakartaDateString();
-            window.selectDailyDate(window.activeDailyDateKey);
-            // -------------------------------------------
+            // --- PERBAIKAN: RENDER ULANG RIWAYAT PENDAPATAN HARIAN ---
+            if (!window.activeDailyDateKey) {
+                window.activeDailyDateKey = getJakartaDateString();
+            }
+            if (typeof window.renderDailyDatePills === 'function') {
+                window.renderDailyDatePills(); // Paksa render pill tanggal agar tidak kosong
+            }
+            if (typeof window.selectDailyDate === 'function') {
+                window.selectDailyDate(window.activeDailyDateKey); // Paksa render list riwayat ke layar
+            }
+            // ---------------------------------------------------------
 
             const currentTripsEl = document.getElementById('current-trips');
             if (currentTripsEl) currentTripsEl.innerText = `${tTrips} Trip`;
@@ -7672,6 +7725,14 @@
                     if (parseSheetDate(item.Tanggal) === key && String(item.Status || '').trim().toLowerCase() === 'selesai') wTripsCount++; 
                 });
             });
+
+            // --- LANGKAH 2.1 EKSEKUSI DI SINI ---
+            // Menampilkan Poin Mingguan (wTripsCount) ke UI Beranda
+            const infoWeeklyPointsEl = document.getElementById('info-weekly-points');
+            if (infoWeeklyPointsEl) {
+                infoWeeklyPointsEl.innerText = wTripsCount;
+            }
+            // -------------------------------------
 
            // --- LOGIKA LEVEL RIDER (HALAMAN INSENTIF) ---
             const insentifLevelName = document.getElementById('insentif-level-name');
@@ -7802,11 +7863,6 @@
                 finalChartNetto.push(Math.round(dNet));
             });
 
-            if (weeklyInstallmentAmount > 0) {
-                // wNet -= weeklyInstallmentAmount; // DIHAPUS: Pendapatan bersih tidak lagi dipotong nominal cicilan
-                // wAdm += weeklyInstallmentAmount; // DIHAPUS: Cicilan tidak lagi ditambahkan ke tagihan manual karena sudah potong saldo
-            }
-
             // PENGAMAN (GUARDS): Mencegah error jika elemen HTML sedang dihapus/dikosongkan
             const elWeeklyGrossPureVal = document.getElementById('weekly-gross-pure-val');
             if (elWeeklyGrossPureVal) elWeeklyGrossPureVal.innerText = `Rp ${Math.round(wGrossPure).toLocaleString('id-ID')}`;
@@ -7883,7 +7939,6 @@
             const prevTitleEl = document.getElementById('prev-weekly-title');
 
             if (prevWeeklyInstallmentAmount > 0) {
-                // prevWAdm += prevWeeklyInstallmentAmount; // DIHAPUS: Cicilan tidak lagi ditambahkan ke ADM manual
                 prevInstallmentRow.classList.remove('hidden');
                 document.getElementById('prev-weekly-installment-val').innerText = prevWeeklyInstallmentAmount.toLocaleString('id-ID');
                 if (prevTitleEl) prevTitleEl.innerText = "Tagihan ADM Mgg Lalu (Cicilan Otomatis)";
@@ -9797,11 +9852,11 @@
                 if (isActive) {
                     radarOffline.classList.add('opacity-0', 'pointer-events-none');
                     radarOnline.classList.remove('opacity-0', 'pointer-events-none');
-                    if (typeof window.startQueueListener === 'function') window.startQueueListener();
+                    // startQueueListener() DIHAPUS DARI SINI: Radar sudah standby di background
                 } else {
                     radarOffline.classList.remove('opacity-0', 'pointer-events-none');
                     radarOnline.classList.add('opacity-0', 'pointer-events-none');
-                    if (typeof window.stopQueueListener === 'function') window.stopQueueListener();
+                    // MENGHAPUS stopQueueListener() agar radar standby dan Ketersediaan Rider tetap terdeteksi walau OFF-BID
                 }
             }
         }
@@ -10224,13 +10279,43 @@
           window.isFirebaseReady = false; // Flag global untuk menahan UI login
           window.isFinishingOrder = false; // Flag status rider menekan Selesai
 
+          // --- LANGKAH 4.1: FUNGSI LISTENER ANTREAN ORDERAN (PENDING) ---
+          window.startPendingOrderListener = async () => {
+              try {
+                  const { collection, query, where, onSnapshot } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                  const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                  const ordersRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'active_orders');
+                  
+                  // Hanya pantau yang statusnya unassigned (Sangat Hemat Kuota Read)
+                  const qPending = query(ordersRef, where('status', '==', 'unassigned'));
+                  
+                  onSnapshot(qPending, (snapshot) => {
+                      const pendingCount = snapshot.size; 
+                      const infoElement = document.getElementById('info-pending-orders');
+                      if (infoElement) {
+                          infoElement.innerText = pendingCount + " orderan Antri";
+                      }
+                  }, (error) => {
+                      console.error("Error mengambil data antrean orderan: ", error);
+                  });
+              } catch (err) {
+                  console.error("Error setup pending order listener: ", err);
+              }
+          };
+
           onAuthStateChanged(auth, (user) => {
               if (user) {
                   isAuthReady = true;
                   window.isFirebaseReady = true;
+                  
+                  // --- LANGKAH 4.2: JALANKAN LISTENER ORDERAN PENDING SAAT LOGIN ---
+                  if (typeof window.startPendingOrderListener === 'function') {
+                      window.startPendingOrderListener();
+                  }
+
                   // Cek notifikasi setelah login berhasil
                   if (typeof window.checkUnreadAdminInfo === 'function') window.checkUnreadAdminInfo();
-                  
+
                   // CEK DAN MINTA IZIN NOTIFIKASI DENGAN CUSTOM UI
                   setTimeout(() => {
                       if (typeof updateNotificationUI === 'function') updateNotificationUI();
@@ -10271,12 +10356,9 @@
                       if (typeof window.setupFCMToken === 'function') window.setupFCMToken(uidForFCM);
                   }
 
-                  // Menjalankan queue radar jika status ONBID = true
-                  const savedOnbid = localStorage.getItem('rider_onbid_status');
-                  if (savedOnbid === 'true' || queuePending) {
-                      window.startQueueListener();
-                      queuePending = false;
-                  }
+                  // PERBAIKAN: Menjalankan queue radar SECARA PERMANEN (Standby) agar ketersediaan rider terdeteksi walau OFF-BID
+                  window.startQueueListener();
+                  queuePending = false;
               }
           });
 
@@ -11762,6 +11844,13 @@
                   if(btnRunning) btnRunning.innerText = `Jalan (${processingOrdersCount})`;
                   if(btnInactive) btnInactive.innerText = `Off (${offlineRiders.length})`;
                   // -------------------------------------------
+
+                  // --- EKSEKUSI LANGKAH 3.1: UPDATE KARTU KETERSEDIAAN RIDER DI BERANDA ---
+                  const infoAvailableRidersEl = document.getElementById('info-available-riders');
+                  if (infoAvailableRidersEl) {
+                      infoAvailableRidersEl.innerText = `${visibleRiders.length} rider`;
+                  }
+                  // ------------------------------------------------------------------------
 
                   // 3. UPDATE POSISI SAYA (DI NAVBAR BAWAH)
                   const myPosEl = document.getElementById('my-queue-position');
