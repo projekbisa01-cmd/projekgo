@@ -1853,6 +1853,22 @@
                 <!-- KARTU UPDATE LOKASI MANGKAL (DIPINDAH TEPAT DI ATAS TOGGLE ONBID) -->
                 <div class="absolute bottom-[calc(100%+1.5rem)] left-1/2 transform -translate-x-1/2 w-[calc(100%-2.5rem)] max-w-md z-30 transition-all duration-300 flex flex-col gap-3">
                     
+                    <!-- BANNER PERINGATAN ORDERAN RAMAI SAAT OFF-BID (BARU) -->
+                    <div id="ramai-warning-banner" class="hidden bg-gradient-to-r from-orange-500 to-red-500 rounded-2xl p-3 shadow-[0_4px_15px_rgba(234,88,12,0.4)] flex items-center justify-between border border-orange-300/50 cursor-pointer pointer-events-auto" onclick="const t = document.getElementById('onbid-toggle'); if(t && !t.checked) { t.checked = true; window.toggleOnbid(); }">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center shrink-0">
+                                <i class="fa-solid fa-fire text-yellow-300 text-lg animate-pulse"></i>
+                            </div>
+                            <div class="text-white flex flex-col justify-center">
+                                <h4 class="text-[11px] font-black uppercase tracking-wider leading-none">Orderan Sedang Ramai!</h4>
+                                <p class="text-[9px] font-medium leading-none mt-1.5 opacity-90">Yuk On-Bid lagi, klik disini.</p>
+                            </div>
+                        </div>
+                        <div class="w-6 h-6 bg-white/20 rounded-full flex items-center justify-center shrink-0">
+                            <i class="fa-solid fa-chevron-right text-white text-[10px]"></i>
+                        </div>
+                    </div>
+
                     <!-- INFO KARTU BERANDA (STEP 1.1) -->
                     <div class="flex justify-between items-center w-full relative z-30 pointer-events-auto">
                         <!-- Kiri: Antrian Orderan -->
@@ -6686,6 +6702,28 @@
             }
         });
 
+        // --- FUNGSI CEK BANNER ORDERAN RAMAI ---
+        window.checkRamaiBanner = function() {
+            const toggle = document.getElementById('onbid-toggle');
+            const pendingInfo = document.getElementById('info-pending-orders');
+            const banner = document.getElementById('ramai-warning-banner');
+
+            if (!toggle || !pendingInfo || !banner) return;
+
+            const isOffBid = !toggle.checked;
+            
+            // Ekstrak angka dari teks (contoh: "4 orderan Antri" -> 4)
+            const pendingText = pendingInfo.innerText || "0";
+            const pendingCount = parseInt(pendingText.replace(/[^0-9]/g, '')) || 0;
+
+            // Jika posisi OFF-BID dan antrean lebih dari 3
+            if (isOffBid && pendingCount > 3) {
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+        };
+
         window.onload = function() {
             // LOGIKA BLOKIR WEB BROWSER: Wajib dari Aplikasi Android Native
             // Mengecek keberadaan 'AndroidInterface' yang disuntikkan oleh Android Studio
@@ -9864,9 +9902,13 @@
             
             try { const url = `${SCRIPT_URL}?action=updateOnbid&uid=${encodeURIComponent(currentUserUID)}&status=${check ? "on" : "off"}`; fetch(url, { method: 'GET', mode: 'no-cors' }); } catch (e) { }
 
+            // --- LANGKAH 1: PERBAIKAN LOGIKA PENGAMBILAN NAMA ---
             if (typeof window.updateFirebaseStatus === 'function') {
                 let rName = document.getElementById('display-rider-name').innerText;
-                if(rName === 'Memuat...' || !rName) rName = currentUserUID;
+                if(rName === 'Memuat...' || !rName) {
+                    // Gunakan nama permanen dari memori jika ada, jika tidak fallback ke 'Rider' (JANGAN gunakan UID)
+                    rName = window.permanentRiderName || 'Rider';
+                }
                 window.updateFirebaseStatus(currentUserUID, check, rName);
             }
 
@@ -9906,6 +9948,11 @@
                     radarOnline.classList.add('opacity-0', 'pointer-events-none');
                     // MENGHAPUS stopQueueListener() agar radar standby dan Ketersediaan Rider tetap terdeteksi walau OFF-BID
                 }
+            }
+
+            // TRIGGER CEK BANNER ORDERAN RAMAI
+            if (typeof window.checkRamaiBanner === 'function') {
+                window.checkRamaiBanner();
             }
         }
         function adjustTarget(amt) {
@@ -10342,6 +10389,11 @@
                       const infoElement = document.getElementById('info-pending-orders');
                       if (infoElement) {
                           infoElement.innerText = pendingCount + " orderan Antri";
+                      }
+
+                      // TRIGGER CEK BANNER ORDERAN RAMAI (NOTIFIKASI SAAT ADA PERUBAHAN ANTREAN)
+                      if (typeof window.checkRamaiBanner === 'function') {
+                          window.checkRamaiBanner();
                       }
                   }, (error) => {
                       console.error("Error mengambil data antrean orderan: ", error);
@@ -11944,6 +11996,28 @@
                   const container = document.getElementById('radar-queue-list');
                   if (!container) return;
 
+                  // --- LANGKAH 2: FUNGSI PENCARI NAMA ASLI (FALLBACK) ---
+                  const getRealName = (rawName, uid) => {
+                      let finalName = rawName || 'Rider';
+                      const nameUpper = String(finalName).toUpperCase().trim();
+                      // Jika nama berupa UID, 'Rider', atau 'Memuat...', cari di cache riwayat
+                      if (nameUpper === 'RIDER' || nameUpper === 'MEMUAT...' || nameUpper.startsWith('UID')) {
+                          if (uid === String(currentUserUID).trim().toUpperCase() && window.permanentRiderName) {
+                              return window.permanentRiderName;
+                          }
+                          if (window.rawData && window.rawData.length > 0) {
+                              const found = window.rawData.find(item => {
+                                  const itemUid = String(item.UID).trim().toUpperCase();
+                                  const itemRiderName = String(item.Nama_Rider || '').trim().toUpperCase();
+                                  return itemUid === uid && itemRiderName && itemRiderName !== 'RIDER' && !itemRiderName.startsWith('UID');
+                              });
+                              if (found && found.Nama_Rider) return found.Nama_Rider;
+                          }
+                      }
+                      return finalName;
+                  };
+                  // ------------------------------------------------------
+
                   if (ridersWithImages.length === 0) {
                       container.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-users-slash text-4xl text-gray-200 mb-3 block"></i>Belum ada data radar.<br><span class="text-[8px] text-gray-400 mt-2 block">*Admin belum memasukkan rider ke dalam antrean.</span></div>';
                       return;
@@ -11975,7 +12049,7 @@
                       const myUidClean = String(currentUserUID || '').trim().toUpperCase();
                       const isMe = uidClean === myUidClean;
 
-                      const name = rider.name || 'Rider';
+                      const name = getRealName(rider.name || rider.nama, uidClean);
                       const locationDesc = rider.last_drop_desc || 'Menunggu orderan pertama...';
                       const isReady = qNum > 0;
                       
@@ -12059,6 +12133,15 @@
                               descEl.innerText = `"${locationDesc}"`;
                           }
 
+                          // Update Nama jika terganti/berubah
+                          const nameEl = card.querySelector('span.text-xs.font-bold');
+                          if (nameEl) {
+                              const expectedNameText = isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name;
+                              if (nameEl.innerText !== expectedNameText) {
+                                  nameEl.innerText = expectedNameText;
+                              }
+                          }
+
                           // Update Icon jika status foto berubah
                           const iconWrap = card.querySelector('.icon-wrap');
                           if (iconWrap) {
@@ -12119,7 +12202,7 @@
                               const myUidClean = String(currentUserUID || '').trim().toUpperCase();
                               const isMe = uidClean === myUidClean;
 
-                              const name = orderData.rider_name || 'Rider';
+                              const name = getRealName(orderData.rider_name || orderData.rider_nama, uidClean);
                               
                               const fee = Number(orderData.fee || orderData.Fee || orderData.nominal_kotor || orderData.Nominal_Kotor || 0);
                               const extra = Number(orderData.extra || orderData.Extra || orderData.tambahan || orderData.Tambahan || 0);
@@ -12159,6 +12242,14 @@
                                   if (existingBadgeContainer && existingBadgeContainer.innerHTML !== ongkirBadge) {
                                       existingBadgeContainer.innerHTML = ongkirBadge;
                                   }
+
+                                  const nameEl = card.querySelector('span.text-sm.font-bold');
+                                  if (nameEl) {
+                                      const expectedNameText = isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name;
+                                      if (nameEl.innerText !== expectedNameText) {
+                                          nameEl.innerText = expectedNameText;
+                                      }
+                                  }
                               }
 
                               // Pastikan urutan DOM sesuai dengan urutan array yang sudah disortir
@@ -12196,7 +12287,7 @@
                               const myUidClean = String(currentUserUID || '').trim().toUpperCase();
                               const isMe = uidClean === myUidClean;
 
-                              const name = riderData.name || riderData.nama || 'Rider';
+                              const name = getRealName(riderData.name || riderData.nama, uidClean);
 
                               let card = document.getElementById('inactive-card-' + uidClean);
                               const cardClasses = isMe ? 'bg-gray-100 border-gray-300' : 'bg-gray-50 border-gray-200';
@@ -12221,6 +12312,14 @@
                                   `;
                               } else {
                                   card.className = `flex items-center gap-3 p-4 rounded-xl w-full transition-all duration-300 border shadow-sm relative overflow-hidden ${cardClasses}`;
+                                  
+                                  const nameEl = card.querySelector('span.text-sm.font-bold');
+                                  if (nameEl) {
+                                      const expectedNameText = isMe ? 'Kamu (' + name.split(' ')[0] + ')' : name;
+                                      if (nameEl.innerText !== expectedNameText) {
+                                          nameEl.innerText = expectedNameText;
+                                      }
+                                  }
                               }
 
                               if (inactiveContainer.children[index] !== card) {
