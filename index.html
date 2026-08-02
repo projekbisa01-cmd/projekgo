@@ -4596,7 +4596,8 @@
             if (!container) return;
 
             let html = '';
-            for (let i = 0; i < 10; i++) {
+            // UBAH DARI 10 MENJADI 30 UNTUK MENAMPILKAN 30 HARI KEBELAKANG
+            for (let i = 0; i < 30; i++) {
                 const dateKey = getJakartaDateString(-i);
                 const p = dateKey.split('-'); 
                 const d = new Date(p[2], p[0]-1, p[1]);
@@ -6500,10 +6501,12 @@
                     } else { 
                         let year = p2; if (year < 100) year += 2000; 
                         // FIX: Deteksi cerdas untuk mencegah format terbalik
-                        if (p1 > 12) { 
-                            d = new Date(year, p0 - 1, p1); // Format MM-DD-YYYY (Dari Firebase/Internal)
+                        if (p1 > 12 && p0 <= 12) { 
+                            d = new Date(year, p0 - 1, p1); // Format MM-DD-YYYY
+                        } else if (p0 > 12 && p1 <= 12) {
+                            d = new Date(year, p1 - 1, p0); // Format YYYY-DD-MM atau lain yang tidak umum
                         } else { 
-                            d = new Date(year, p1 - 1, p0); // Format DD-MM-YYYY (Dari Sheet)
+                            d = new Date(year, p1 - 1, p0); // Default Format Indonesia: DD-MM-YYYY
                         }
                     }
                     if (!isNaN(d.getTime())) return formatDateToInternal(d);
@@ -6511,6 +6514,7 @@
                 let d = new Date(str); if (!isNaN(d.getTime())) return formatDateToInternal(d);
             } catch (e) { } return "";
         }
+
         function formatDateToInternal(d) {
             try {
                 const parts = DATE_FORMATTER.formatToParts(d);
@@ -7055,18 +7059,23 @@
                         const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
                         const cleanUid = String(currentUserUID).trim().toUpperCase();
 
-                        // Asumsi: Admin menyimpan rekapan data orderan yang sudah lewat di koleksi 'history_orders'
-                        // (Jika Anda menggabungkannya di 'daily_orders', Anda bisa mengubah teks 'history_orders' di bawah menjadi 'daily_orders')
-                        const historyRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'history_orders');
+                        // PERBAIKAN: Gunakan koleksi daily_orders agar menarik semua history
+                        const historyRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
                         
-                        // Tarik maksimal 150 data riwayat terakhir agar sangat hemat kuota
-                        const qHistory = query(historyRef, orderBy('created_at', 'desc'), limit(150));
+                        // EKSEKUSI LANGKAH 1: Tarik semua data riwayat pesanan (tanpa limit) agar histori lengkap
+                        const qHistory = query(historyRef, orderBy('created_at', 'desc'));
                         
                         const querySnapshot = await getDocs(qHistory);
                         
                         newData = [];
                         querySnapshot.forEach(docSnap => {
                             const data = docSnap.data();
+
+                            // Filter hanya yang completed/selesai (sama seperti startDailyOrdersListener)
+                            const status = String(data.status || data.Status || '').trim().toLowerCase();
+                            if (status !== 'completed' && status !== 'selesai' && status !== '') {
+                                return;
+                            }
 
                             // Parser Tanggal & Waktu yang Aman (Support format Timestamp Firebase)
                             let fDate = '';
@@ -7088,11 +7097,8 @@
                                 if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                             } else {
                                 const rawStr = String(data.Tanggal || data.tanggal || '').trim();
-                                if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
-                                    fDate = rawStr;
-                                } else if (/^\d{2}-\d{2}-\d{4}$/.test(rawStr)) {
-                                    const p = rawStr.split(/[-/]/);
-                                    fDate = `${p[2]}-${p[1]}-${p[0]}`;
+                                if (rawStr) {
+                                    fDate = rawStr; // Jangan diubah, biarkan parseSheetDate yang memproses format aslinya
                                 } else {
                                     const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
                                     const parts = formatter.formatToParts(new Date());
@@ -7253,7 +7259,21 @@
                 return valB - valA;
             });
 
-            rawData = finalData;
+            // PERBAIKAN PENTING: Mencegah duplikasi data jika ada overlap antara history dan live data
+            // Gunakan Map untuk menyimpan data unik berdasarkan ID atau properti kombinasi
+            const uniqueDataMap = new Map();
+            finalData.forEach(item => {
+                // Buat unique key. Prioritaskan ID, jika tidak ada gunakan kombinasi Tanggal+Jam+Nominal
+                const uniqueKey = item.id || `${item.Tanggal}_${item.Jam}_${item.Nominal_Kotor}_${item.Nama_Pelanggan}`;
+                
+                // Jika data sudah ada, dan yang baru adalah data realtime (Live), timpah yang lama (Karena data Live lebih akurat)
+                if (!uniqueDataMap.has(uniqueKey) || item.is_realtime) {
+                    uniqueDataMap.set(uniqueKey, item);
+                }
+            });
+            
+            // Ubah kembali Map ke Array
+            rawData = Array.from(uniqueDataMap.values());
 
             // Update Cache Lokal (Agar besok hari, data Live hari ini otomatis menjadi Riwayat Statis)
             localStorage.setItem('rider_uid', currentUserUID); 
@@ -8583,7 +8603,32 @@
             const chartLabels = [];
             const chartData = [];
 
-            for(let i=1; i<5; i++) {
+            // --- NEW LOGIC: Cari order paling tua untuk menentukan seberapa jauh riwayat dirender ---
+            let oldestTime = now.getTime();
+            if (typeof rawData !== 'undefined' && rawData.length > 0) {
+                rawData.forEach(item => {
+                    const dateStr = parseSheetDate(item.Tanggal);
+                    if (dateStr) {
+                        const parts = dateStr.split('-');
+                        if (parts.length === 3) {
+                            const d = new Date(parts[2], parts[0]-1, parts[1]);
+                            if (!isNaN(d.getTime()) && d.getTime() < oldestTime) {
+                                oldestTime = d.getTime();
+                            }
+                        }
+                    }
+                });
+            }
+            
+            const startOfOldestWeek = getStartOfWeek(new Date(oldestTime));
+            const diffTime = startOfCurrentWeek.getTime() - startOfOldestWeek.getTime();
+            const diffWeeks = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 7));
+            
+            // Minimal tampilkan 4 minggu ke belakang, jika ada data lama akan otomatis menyesuaikan (bisa puluhan minggu)
+            const totalWeeksToRender = Math.max(4, diffWeeks);
+
+            // Loop diubah jadi dinamis (<= totalWeeksToRender)
+            for(let i=1; i<=totalWeeksToRender; i++) {
                 const start = new Date(startOfCurrentWeek); start.setDate(start.getDate() - (i * 7));
                 const end = new Date(start); end.setDate(end.getDate() + 6);
                 const weekKeys = [];
@@ -8627,11 +8672,14 @@
                     // wNet -= wInstallmentAmount; // DIHAPUS: Pendapatan bersih tidak lagi dipotong nominal cicilan
                 }
 
-                // Masukkan data ke array untuk grafik (Format label dibuat singkat)
-                const shortLabel = start.toLocaleDateString('id-ID', {day:'numeric', month:'short'});
-                chartLabels.push(shortLabel);
-                chartData.push(Math.max(0, Math.round(wNet)));
+                // Masukkan data ke array untuk grafik (Dibatasi 12 minggu/3 Bulan terakhir agar chart tidak gepeng)
+                if (i <= 12) {
+                    const shortLabel = start.toLocaleDateString('id-ID', {day:'numeric', month:'short'});
+                    chartLabels.push(shortLabel);
+                    chartData.push(Math.max(0, Math.round(wNet)));
+                }
 
+                // Render Kartu List History (Tetap tampil walau 0 trip jika itu masih di dalam 2 minggu terakhir, untuk estetika UI)
                 if (wTripsActual > 0 || i < 2) { 
                     html += `<div onclick="showMonthlyWeekDetail(${wGrossPure}, ${wExtra}, ${wNet}, ${wAdmAmount}, ${wTripsActual}, ${wInstallmentAmount})" class="bg-white p-4 rounded-2xl border border-gray-100 card-shadow flex items-center justify-between active:scale-95 transition-all cursor-pointer mb-3"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gray-50 text-gray-400 rounded-xl flex items-center justify-center border border-gray-100"><i class="fa-solid fa-calendar-check"></i></div><div><p class="text-[10px] text-gray-400 font-bold uppercase tracking-tight">${start.toLocaleDateString('id-ID', {day:'numeric', month:'short'})} - ${end.toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</p><h4 class="text-sm font-bold text-gray-800">Rp ${Math.round(wNet).toLocaleString('id-ID')}</h4></div></div><div class="text-right"><p class="text-[10px] text-gray-400 font-bold uppercase">Hasil</p><p class="text-xs font-extrabold text-orange-600">${wTripsActual} Trip</p></div></div>`;
                 }
@@ -10722,14 +10770,10 @@
                               if (!fTime) fTime = dObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
                           } else {
                               const rawStr = String(data.Tanggal || data.tanggal || '').trim();
-                              if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
-                                  fDate = rawStr; // Sudah YYYY-MM-DD
-                              } else if (/^\d{2}-\d{2}-\d{4}$/.test(rawStr)) {
-                                  // Deteksi format DD-MM-YYYY dan balikkan agar aman diproses aplikasi
-                                  const p = rawStr.split(/[-/]/);
-                                  fDate = `${p[2]}-${p[1]}-${p[0]}`;
+                              if (rawStr) {
+                                  fDate = rawStr; // Jangan diubah, biarkan parseSheetDate yang memproses format aslinya
                               } else {
-                                  // Jika format hancur, gunakan tanggal hari ini
+                                  // Jika format benar-benar kosong, gunakan tanggal hari ini
                                   const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
                                   const parts = formatter.formatToParts(new Date());
                                   fDate = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
