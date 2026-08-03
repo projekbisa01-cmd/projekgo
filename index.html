@@ -3754,6 +3754,125 @@
             }
         };
 
+        // --- FUNGSI CEK DATA LAYANAN KESEHATAN DARI FIRESTORE / CACHE ---
+        window.checkHealthService = async function(uid) {
+            if (!uid) return;
+            const cleanUid = String(uid).trim().toUpperCase();
+            const cacheKey = `rider_health_service_${cleanUid}`;
+            
+            const formEl = document.getElementById('health-service-form');
+            const displayEl = document.getElementById('health-service-display');
+            const valueEl = document.getElementById('health-service-value');
+            const safeMsgEl = document.getElementById('health-service-msg-safe');
+            const btnKisEl = document.getElementById('btn-buat-kis');
+
+            const updateHealthUI = (healthData) => {
+                if (healthData) {
+                    window.needsHealthService = false; // Buka kunci sistem
+                    if (formEl) formEl.classList.add('hidden');
+                    if (displayEl) displayEl.classList.remove('hidden');
+                    if (valueEl) valueEl.innerText = healthData;
+
+                    if (healthData === "Tidak Punya") {
+                        if (safeMsgEl) safeMsgEl.classList.add('hidden');
+                        if (btnKisEl) btnKisEl.classList.remove('hidden');
+                    } else {
+                        if (safeMsgEl) safeMsgEl.classList.remove('hidden');
+                        if (btnKisEl) btnKisEl.classList.add('hidden');
+                    }
+                } else {
+                    window.needsHealthService = true; // Kunci sistem, wajib isi
+                    if (formEl) formEl.classList.remove('hidden');
+                    if (displayEl) displayEl.classList.add('hidden');
+                }
+            };
+
+            // 1. CEK CACHE LOKAL: Jika sudah ada di HP, pakai data ini (Tidak memotong kuota read Firebase)
+            const cachedData = localStorage.getItem(cacheKey);
+            if (cachedData) {
+                updateHealthUI(cachedData);
+                return; // BERHENTI DI SINI
+            }
+
+            // 2. JIKA CACHE KOSONG: Tarik dari Firestore
+            try {
+                const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                const db = getFirestore();
+                const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', cleanUid);
+                
+                const docSnap = await getDoc(docRef);
+                
+                if (docSnap.exists() && docSnap.data().health_service) {
+                    const healthData = docSnap.data().health_service;
+                    localStorage.setItem(cacheKey, healthData); // Simpan hasil tarikan ke Cache HP
+                    updateHealthUI(healthData);
+                } else {
+                    updateHealthUI(null);
+                }
+            } catch (e) {
+                console.error("Gagal mengecek data Layanan Kesehatan dari Firestore:", e);
+                window.needsHealthService = false; // Jika error jaringan, jangan kunci ridernya
+            }
+        };
+
+        // --- FUNGSI SIMPAN LAYANAN KESEHATAN KE FIRESTORE ---
+        window.saveHealthService = async function() {
+            const uid = localStorage.getItem('rider_uid');
+            if (!uid) return;
+            const cleanUid = String(uid).trim().toUpperCase();
+            const cacheKey = `rider_health_service_${cleanUid}`;
+            
+            const selectEl = document.getElementById('health-service-select');
+            const selectedValue = selectEl ? selectEl.value : "";
+            
+            if (!selectedValue) {
+                alert("Silakan pilih layanan kesehatan terlebih dahulu!");
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-health');
+            const originalBtnHtml = btn ? btn.innerHTML : "Simpan Permanen";
+            
+            if (btn) {
+                btn.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Menyimpan...';
+                btn.disabled = true;
+            }
+
+            try {
+                const { getFirestore, doc, setDoc, serverTimestamp } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                const db = getFirestore();
+                const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                const docRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_profiles', cleanUid);
+                
+                await setDoc(docRef, { 
+                    health_service: selectedValue,
+                    updated_at: serverTimestamp() 
+                }, { merge: true });
+                
+                // Simpan juga ke Cache HP agar besok-besok tidak narik database lagi
+                localStorage.setItem(cacheKey, selectedValue);
+                
+                // Langsung perbarui UI
+                window.checkHealthService(cleanUid);
+                
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Layanan Kesehatan berhasil disimpan!");
+                } else {
+                    alert("Layanan Kesehatan berhasil disimpan!");
+                }
+                
+            } catch (error) {
+                console.error("Gagal menyimpan Layanan Kesehatan:", error);
+                alert("Gagal menyimpan data. Pastikan koneksi internet stabil.");
+            } finally {
+                if (btn) {
+                    btn.innerHTML = originalBtnHtml;
+                    btn.disabled = false;
+                }
+            }
+        };
+
         // --- FUNGSI LOAD FOTO PROFIL DARI FIRESTORE ---
         window.loadFotoProfilRider = async function(uid) {
             if (!uid) return;
@@ -5223,7 +5342,8 @@
             'UID191': 'https://bit.ly/riderandika',
             'UID323': 'https://bit.ly/riderparyanto',
             'UID357': 'https://bit.ly/riderekofathullah',
-            'UID559':'https://bit.ly/riderarisjanuarianto'
+            'UID370': 'https://bit.ly/riderperigunawan',
+            'UID559': 'https://bit.ly/riderarisjanuarianto'
         };
 
         // Wadah global untuk data cicilan dari Firebase
@@ -7924,6 +8044,7 @@
                 window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                 if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
                 if (typeof window.checkRiderBankInfo === 'function') window.checkRiderBankInfo(currentUserUID); // CEK BANK
+                if (typeof window.checkHealthService === 'function') window.checkHealthService(currentUserUID); // CEK KESEHATAN
             } else {
                 // Beri jeda kecil jika Firebase module masih memuat
                 setTimeout(() => {
@@ -7932,6 +8053,7 @@
                         window.startOrderListener(currentUserUID); // TAMBAHAN WAJIB
                         if (typeof window.loadFotoProfilRider === 'function') window.loadFotoProfilRider(currentUserUID); // LOAD FOTO PROFIL
                         if (typeof window.checkRiderBankInfo === 'function') window.checkRiderBankInfo(currentUserUID); // CEK BANK
+                        if (typeof window.checkHealthService === 'function') window.checkHealthService(currentUserUID); // CEK KESEHATAN
                     }
                 }, 1000);
             }
