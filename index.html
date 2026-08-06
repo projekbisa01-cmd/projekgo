@@ -10575,7 +10575,8 @@
             projectId: "onbid-2f87a",
             storageBucket: "onbid-2f87a.firebasestorage.app",
             messagingSenderId: "223888282484",
-            appId: "1:223888282484:web:2fc05ed67ca1fab39e1221"
+            appId: "1:223888282484:web:2fc05ed67ca1fab39e1221",
+            vapidKey: "BIMnIN64HcrqqLlg9a0kDPcao9fmhHlGx6zaghIQ-ebg_y-EyZpe9V8H9FnjvF86mjIhdZfPQmMp_OxSnioFFJ4"
         };
           
       try {
@@ -10754,6 +10755,65 @@
 
           // PERBAIKAN: Gunakan appId yang diberikan sistem agar sinkron dengan Admin App
           const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
+
+          // --- FUNGSI SETUP FCM TOKEN (LANGKAH 2) ---
+          window.setupFCMToken = async function(uid) {
+              if (!uid || !messaging) return;
+              
+              const cleanUid = String(uid).trim().toUpperCase();
+              
+              try {
+                  const currentToken = await getToken(messaging, { 
+                      vapidKey: firebaseConfig.vapidKey 
+                  });
+
+                  if (currentToken) {
+                      const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                      const deviceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_devices', cleanUid);
+                      
+                      await setDoc(deviceRef, {
+                          fcm_token: currentToken,
+                          updated_at: serverTimestamp(),
+                          platform: 'web'
+                      }, { merge: true });
+                      
+                  } else {
+                      console.warn("Tidak dapat token FCM. Izinkan notifikasi terlebih dahulu.");
+                  }
+              } catch (err) {
+                  console.error("Gagal mendapatkan/menyimpan FCM token:", err);
+              }
+          };
+
+          // --- FUNGSI LISTENER FOREGROUND & PENDETEKSI NOTIFIKASI (LANGKAH 3) ---
+          // Catatan: Pembaruan token otomatis teratasi karena getToken() dipanggil setiap login (di onAuthStateChanged).
+          // Langkah ini menambahkan onMessage agar jika notifikasi masuk saat aplikasi sedang terbuka di layar (Foreground), sistem tetap merespon.
+          if (messaging) {
+              onMessage(messaging, (payload) => {
+                  console.log('Notifikasi diterima saat aplikasi terbuka (Foreground):', payload);
+                  
+                  const title = payload.notification?.title || payload.data?.title || 'Notifikasi Baru';
+                  const body = payload.notification?.body || payload.data?.body || 'Anda mendapat pesan baru.';
+                  
+                  // Tampilkan Toast Kustom di dalam aplikasi tanpa mengganggu layar Rider
+                  if (typeof window.showCustomToast === 'function') {
+                      window.showCustomToast(`<b>${title}</b><br>${body}`);
+                  }
+                  
+                  // Bunyikan nada notifikasi (beep ganda)
+                  try { 
+                      if (typeof playBeep === 'function') {
+                          playBeep(880, 0.1); 
+                          setTimeout(() => playBeep(1200, 0.1), 150); 
+                      }
+                  } catch(e){}
+                  
+                  // Jika perangkat HP mendukung getar
+                  if ("vibrate" in navigator) {
+                      navigator.vibrate([200, 100, 200]);
+                  }
+              });
+          }
 
           // FLAG UNTUK MEMASTIKAN AUTH SELESAI DULU
           let isAuthReady = false;
