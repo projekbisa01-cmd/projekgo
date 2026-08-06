@@ -10756,32 +10756,59 @@
           // PERBAIKAN: Gunakan appId yang diberikan sistem agar sinkron dengan Admin App
           const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
 
-          // --- FUNGSI SETUP FCM TOKEN (LANGKAH 2) ---
-          window.setupFCMToken = async function(uid) {
-              if (!uid || !messaging) return;
-              
+          // --- FUNGSI SETUP FCM TOKEN (LANGKAH 2) - DENGAN DUKUNGAN KODULAR & OTOMATIS ---
+          window.setupFCMToken = async function(uid, nativeToken = null) {
+              if (!uid) return;
               const cleanUid = String(uid).trim().toUpperCase();
+              const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
               
               try {
-                  const currentToken = await getToken(messaging, { 
-                      vapidKey: firebaseConfig.vapidKey 
-                  });
+                  let finalToken = nativeToken;
 
-                  if (currentToken) {
-                      const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                  // 1. METODE WEB BROWSER (Otomatis minta izin jika belum ada)
+                  if (!finalToken && messaging && 'Notification' in window) {
+                      if (Notification.permission === 'default') {
+                          await Notification.requestPermission();
+                      }
+                      
+                      if (Notification.permission === 'granted') {
+                          finalToken = await getToken(messaging, { 
+                              vapidKey: firebaseConfig.vapidKey 
+                          });
+                      }
+                  }
+
+                  // 2. METODE KODULAR (Fallback jika WebView menolak service worker web push)
+                  if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
+                      window.AndroidInterface.getFCMToken(cleanUid);
+                      return; // Berhenti di sini, biarkan Kodular merespon lewat receiveFCMTokenFromKodular
+                  }
+
+                  // 3. SIMPAN TOKEN KE FIRESTORE
+                  if (finalToken) {
                       const deviceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_devices', cleanUid);
                       
                       await setDoc(deviceRef, {
-                          fcm_token: currentToken,
+                          fcm_token: finalToken,
                           updated_at: serverTimestamp(),
-                          platform: 'web'
+                          platform: window.AndroidInterface ? 'android_webview' : 'web'
                       }, { merge: true });
                       
+                      console.log("Token FCM berhasil disimpan!");
+                      if (typeof updateNotificationUI === 'function') updateNotificationUI();
                   } else {
-                      console.warn("Tidak dapat token FCM. Izinkan notifikasi terlebih dahulu.");
+                      console.warn("Gagal mendapatkan Token FCM. Pastikan izin diberikan atau Kodular terhubung.");
                   }
               } catch (err) {
-                  console.error("Gagal mendapatkan/menyimpan FCM token:", err);
+                  console.error("Gagal memproses FCM token:", err);
+              }
+          };
+
+          // Jembatan untuk menerima Token NATIVE dari Kodular
+          window.receiveFCMTokenFromKodular = function(token) {
+              const uid = localStorage.getItem('rider_uid');
+              if (uid && token) {
+                  window.setupFCMToken(uid, token);
               }
           };
 
