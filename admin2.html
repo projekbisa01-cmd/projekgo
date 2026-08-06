@@ -3569,19 +3569,10 @@
 
                             // Kasus 1: Sengaja kembali dari Istirahat (Tersedia OFF lalu ON)
                             if (!wasAvailable && isNowAvailable) {
-                                // --- PERBAIKAN UTAMA: OVERRIDE LOKAL ANTI-LATENCY ---
-                                // 1. Kirim perintah update ke server Firebase
-                                const ref = doc(db, 'status_rider_aktif', uid);
-                                updateDoc(ref, {
-                                    last_drop_time: serverTimestamp(),
-                                    last_updated: serverTimestamp()
-                                }).catch(e => {});
-
-                                // 2. SIMPAN WAKTU KOMPUTER LOKAL SEKARANG!
-                                // Ini yang akan dipakai langsung untuk mengurutkan ke bawah
-                                // tanpa menunggu loading dari Firebase.
-                                window._tempResetTime = window._tempResetTime || {};
-                                window._tempResetTime[uid] = new Date(); 
+                                // --- HAK ADMIN DICABUT ---
+                                // Admin web TIDAK BOLEH LAGI menembakkan serverTimestamp() untuk mereset antrean.
+                                // Tugas mereset waktu mutlak diserahkan ke sistem Firebase / Aplikasi Rider.
+                                // Ini untuk mencegah bug antrean lompat saat Admin buka-tutup aplikasi (minimize).
                             }
                             
                             // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
@@ -3607,14 +3598,6 @@
                     const data = docSnap.data();
                     const uid = docSnap.id; 
                     data.uid = uid;
-
-                    // --- TERAPKAN OVERWRITE LOKAL JIKA BARU SAJA RESET DARI ISTIRAHAT ---
-                    if (window._tempResetTime && window._tempResetTime[uid]) {
-                        // Paksa gunakan waktu lokal komputer (baru saja)
-                        data.last_drop_time = window._tempResetTime[uid];
-                        // Hapus flag setelah 3 detik agar kedepannya kembali normal pakai data server
-                        setTimeout(() => { delete window._tempResetTime[uid]; }, 3000); 
-                    }
                     
                     const isOnline = data.is_online === true || data.is_online === 'true';
                     const isAvailable = data.is_available === true || data.is_available === 'true';
@@ -3672,7 +3655,6 @@
                     }
                 });
 
-                // PENGURUTAN ANTREAN
                 mainQueueRiders.sort((a, b) => {
                     let timeA = getTimestampMs(a.last_drop_time) || 1;
                     let timeB = getTimestampMs(b.last_drop_time) || 1;
@@ -3685,6 +3667,12 @@
 
                 // Matikan otomatis assign, ganti dengan update notifikasi prompt manual
                 if (typeof window.updatePendingPrompt === 'function') window.updatePendingPrompt();
+
+                // Cek apakah ada orderan pending yang bisa otomatis dibagikan
+                // const pendingOrders = allGlobalOrders.filter(o => o.status === 'unassigned').sort((a,b) => (a.created_at?.seconds || 0) - (b.created_at?.seconds || 0));
+                // if (pendingOrders.length > 0) {
+                //     window.autoAssignPendingOrder(pendingOrders[0].id);
+                // }
             }, (error) => {});
         }
 
