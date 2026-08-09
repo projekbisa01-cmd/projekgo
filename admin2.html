@@ -1892,10 +1892,16 @@
                 
                 if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
                     const fcmToken = tokenSnap.data().fcm_token;
+                    
+                    // LOGIKA BARU: Console Log untuk melacak Token FCM secara real-time
+                    console.log(">> Mengirim Push Notif ke UID:", riderUid);
+                    console.log(">> Token FCM Ditemukan:", fcmToken);
+                    console.log(">> Action Payload: WAKE_UP_RIDER");
+
                     const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
                     
-                    // PERBAIKAN: Mengirim format Data-Only Payload agar Java Android bisa memicu WakeLock
-                    // Pastikan Google Apps Script (GAS) Anda juga hanya meneruskan 'data' ini ke FCM API
+                    // PERBAIKAN: Format Data-Only Payload murni (Tanpa object 'notification')
+                    // Ini memastikan OS Android tidak menelan notifikasi dan meneruskannya ke fungsi onMessageReceived di Java
                     fetch(GAS_URL, {
                         method: 'POST',
                         mode: 'no-cors',
@@ -1905,10 +1911,12 @@
                             data: {
                                 title: title, 
                                 body: body,
-                                action: "ping"
+                                action: "WAKE_UP_RIDER"
                             }
                         })
                     });
+                } else {
+                    console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", riderUid);
                 }
             } catch(err) { console.warn("Push Notif Error", err); }
         }
@@ -4158,7 +4166,11 @@
                         });
                     });
                     
-                    sendPushNotification(selectedUid, "🔥 ORDERAN MASUK 🔥", "Orderan pending telah dibagikan oleh Admin kepadamu!");
+                    // PERBAIKAN LANGKAH 2: Jeda 300ms memastikan Firestore komit selesai sebelum ditembak FCM
+                    setTimeout(() => {
+                        sendPushNotification(selectedUid, "🔥 ORDERAN MASUK 🔥", "Orderan pending telah dibagikan oleh Admin kepadamu!");
+                    }, 300);
+                    
                     window.showAlert('Berhasil', `Orderan berhasil dikirim manual ke ${nextRiderName}`, 'success');
                     window.switchPage('dispatch'); 
                     window.clearSelection(); 
@@ -4243,7 +4255,11 @@
                     });
                 });
                 
-                sendPushNotification(nextRider.uid, "🔥 ORDERAN MASUK 🔥", "Orderan otomatis dibagikan dari daftar tunggu!");
+                // PERBAIKAN LANGKAH 2: Jeda 300ms memastikan Firestore komit selesai sebelum ditembak FCM
+                setTimeout(() => {
+                    sendPushNotification(nextRider.uid, "🔥 ORDERAN MASUK 🔥", "Orderan otomatis dibagikan dari daftar tunggu!");
+                }, 300);
+                
             } catch(e) { console.warn("Auto assign pending error", e); } 
             finally { setTimeout(() => processingMissedOrders.delete(orderId), 2000); }
         };
@@ -4401,8 +4417,14 @@
                              in_main_queue: true
                         });
                     });
+                    
                     window.showAlert('Berhasil', `Orderan dialihkan ke ${nextRiderName}.`, 'success');
-                    sendPushNotification(nextRider.uid, "🔥 ORDERAN DIALIHKAN 🔥", "Kamu mendapat lemparan orderan baru!");
+                    
+                    // PERBAIKAN LANGKAH 2: Jeda 300ms memastikan Firestore komit selesai sebelum ditembak FCM
+                    setTimeout(() => {
+                        sendPushNotification(nextRider.uid, "🔥 ORDERAN DIALIHKAN 🔥", "Kamu mendapat lemparan orderan baru!");
+                    }, 300);
+                    
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat mengalihkan order.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             };
         };
@@ -5794,9 +5816,9 @@
                         amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
                         type: 'auto_order', desc: `Potongan Sistem - ${custName || phone}`, created_at: serverTimestamp()
                     });
+                    
+                    // PERBAIKAN LANGKAH 2: sendPushNotification dipindah ke bawah setelah batch.commit()
 
-                    sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
-                    window.showAlert('Berhasil!', `Dikirim ke HP ${riderName}. Data riwayat harian rider otomatis bertambah.`, 'success');
                 } else {
                     // LOGIKA UNTUK MENYIMPAN KE DAFTAR PENDING (UNASSIGNED)
                     batch.set(orderRef, {
@@ -5815,6 +5837,15 @@
                 }
 
                 await batch.commit();
+
+                // PERBAIKAN LANGKAH 2: Eksekusi FCM *setelah* Firestore benar-benar menyimpan data
+                if (riderUid) {
+                    // Jeda 300ms untuk memastikan sinkronisasi Firestore selesai sebelum FCM ditembak
+                    setTimeout(() => {
+                        sendPushNotification(riderUid, "🔥 ORDERAN MASUK 🔥", "Ada orderan baru, segera buka aplikasi sekarang!");
+                    }, 300);
+                    window.showAlert('Berhasil!', `Dikirim ke HP ${riderName}. Data riwayat harian rider otomatis bertambah.`, 'success');
+                }
 
                 document.getElementById('cust-phone').value = ''; document.getElementById('cust-name').value = '';
                 document.getElementById('order-details').value = ''; document.getElementById('order-fee').value = '';
