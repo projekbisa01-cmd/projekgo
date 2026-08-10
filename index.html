@@ -11557,6 +11557,9 @@
 
           // --- LOGIKA UI ORDERAN ---
         window.showIncomingOrderPopup = function(data, docId) {
+            // --- TAMBAHAN FLAG: Abaikan render ulang saat pesanan sedang diproses ---
+            if (window.isAcceptingOrder) return;
+
             const popup = document.getElementById('incoming-order-popup');
             const feeEl = document.getElementById('incoming-order-fee');
             const feeDetailEl = document.getElementById('incoming-order-fee-detail');
@@ -11706,20 +11709,18 @@
             if(btnAccept) {
                 // PERBAIKAN LANGKAH 1: Optimistic UI pada "Terima Orderan"
                 btnAccept.onclick = () => {
-                    // Matikan tombol sementara agar tidak double klik
+                    // Cegah double click
+                    if (window.isAcceptingOrder) return;
+                    window.isAcceptingOrder = true;
+
+                    // Matikan tombol sementara agar tidak double klik dan tampilkan loading
                     btnAccept.disabled = true;
+                    btnAccept.innerHTML = '<i class="fa-solid fa-spinner animate-spin text-6xl mb-4 drop-shadow-md"></i><span class="font-black text-3xl tracking-wide leading-tight drop-shadow-md">MEMPROSES...</span>';
                     
                     const currentUserUID = localStorage.getItem('rider_uid');
                     window.currentIncomingOrderId = null; 
                     localStorage.removeItem(`order_start_${docId}`); // Bersihkan memori
                     
-                    // 1. PINDAH LAYAR & TUTUP POPUP SECARA INSTAN (OPTIMISTIC UI)
-                    if (popup) {
-                        popup.classList.add('hidden');
-                        popup.classList.remove('flex');
-                        popup.style.display = 'none'; // Pengaman ekstra tutup
-                    }
-
                     // Hentikan nada dering dan getar seketika
                     if(window.incomingOrderAudio) {
                         window.incomingOrderAudio.pause();
@@ -11738,11 +11739,6 @@
                                 notifications.forEach(notification => notification.close());
                             });
                         });
-                    }
-
-                    // Tampilkan Halaman Tugas Berjalan saat itu juga
-                    if (typeof window.showActiveOrderOverlay === 'function') {
-                        window.showActiveOrderOverlay(data, docId);
                     }
 
                     // 2. UPDATE FIREBASE DI BACKGROUND
@@ -11765,15 +11761,36 @@
                                 const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
                                 await setDoc(statusRef, { is_available: false }, { merge: true });
                             }
+
+                            // 1. PINDAH LAYAR & TUTUP POPUP SETELAH PROSES BERHASIL
+                            if (popup) {
+                                popup.classList.add('hidden');
+                                popup.classList.remove('flex');
+                                popup.style.display = 'none'; // Pengaman ekstra tutup
+                            }
+
+                            // Tampilkan Halaman Tugas Berjalan saat itu juga
+                            if (typeof window.showActiveOrderOverlay === 'function') {
+                                window.showActiveOrderOverlay(data, docId);
+                            }
+
                         } catch (e) {
                             console.error("Error menerima order di background:", e);
                             // Beri tahu rider jika koneksi putus dan sinkronisasi tertunda
                             if (typeof window.showCustomToast === 'function') {
-                                window.showCustomToast("Koneksi tidak stabil. Sedang mensinkronkan order di latar belakang...");
+                                window.showCustomToast("Koneksi tidak stabil. Gagal menerima order, silakan coba lagi.");
                             }
+                            // Kembalikan UI tombol jika gagal
+                            btnAccept.innerHTML = '<i class="fa-solid fa-motorcycle text-6xl mb-4 drop-shadow-md"></i><span class="font-black text-3xl tracking-wide leading-tight drop-shadow-md">TERIMA<br>ORDERAN</span>';
                         } finally {
                             // Reset state tombol agar bisa dipakai kembali untuk pop-up berikutnya
                             btnAccept.disabled = false;
+                            window.isAcceptingOrder = false;
+
+                            // Pastikan HTML kembali ke awal untuk popup orderan baru nantinya
+                            if (popup && popup.classList.contains('hidden')) {
+                                btnAccept.innerHTML = '<i class="fa-solid fa-motorcycle text-6xl mb-4 drop-shadow-md"></i><span class="font-black text-3xl tracking-wide leading-tight drop-shadow-md">TERIMA<br>ORDERAN</span>';
+                            }
                         }
                     })();
                 };
