@@ -1885,7 +1885,7 @@
         };
         initAuth();
 
-        async function sendPushNotification(riderUid, title, body) {
+        async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
             try {
                 const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
                 const tokenSnap = await getDoc(tokenRef);
@@ -1895,13 +1895,10 @@
                     
                     console.log(">> Mengirim Push Notif ke UID:", riderUid);
                     console.log(">> Token FCM Ditemukan:", fcmToken);
-                    console.log(">> Action Payload: WAKE_UP_RIDER");
+                    console.log(">> Action Payload:", actionType);
 
                     const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
                     
-                    // PERBAIKAN FINAL: Kita HAPUS object 'notification' agar pesan murni menjadi "Data-Only".
-                    // Ini WAJIB dilakukan agar Android menyerahkan pesan ke MyFirebaseMessagingService
-                    // dan memunculkan Pop-Up Layar Kuning secara paksa dari background.
                     fetch(GAS_URL, {
                         method: 'POST',
                         mode: 'no-cors',
@@ -1912,7 +1909,7 @@
                             data: {
                                 title: title, 
                                 body: body,
-                                action: "WAKE_UP_RIDER"
+                                action: actionType
                             }
                         })
                     });
@@ -3447,7 +3444,7 @@
                                 window.autoPingTracker[order.id] = now;
                                 const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
                                 updateDoc(orderRef, { last_ping: serverTimestamp() }).catch(e => {});
-                                sendPushNotification(order.rider_uid, "🚨 WAKE UP! ORDERAN MASUK 🚨", "Buka aplikasi sekarang! Waktu konfirmasi sudah lebih dari 1 menit!");
+                                sendPushNotification(order.rider_uid, "🚨 WAKE UP! ORDERAN MASUK 🚨", "Buka aplikasi sekarang! Waktu konfirmasi sudah lebih dari 1 menit!", "ALARM_DARURAT");
                             }
                         }
                     }
@@ -5918,8 +5915,8 @@
             try {
                 await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id), { last_ping: serverTimestamp() });
                 const order = allGlobalOrders.find(o => o.id === id);
-                if (order && order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ PANGGILAN ADMIN ⚠️", "Segera cek aplikasi! Admin memanggilmu.");
-                window.showAlert('Up Berhasil', 'Sinyal pemanggilan ulang telah dikirim ke Rider.', 'success');
+                if (order && order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ PANGGILAN ADMIN ⚠️", "Segera cek aplikasi! Admin memanggilmu.", "ALARM_DARURAT");
+                window.showAlert('Up Berhasil', 'Sinyal pemanggilan ulang (Alarm) telah dikirim ke Rider.', 'success');
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
         };
 
@@ -6038,7 +6035,7 @@
                         [1000, 3000, 5000, 8000, 12000].forEach(delay => setTimeout(forcePriorityRank, delay));
                     }
                     
-                    if (order.rider_uid) sendPushNotification(order.rider_uid, "❌ ORDERAN DIBATALKAN ❌", "Orderan barusan telah dibatalkan admin. Kamu dikembalikan ke antrean prioritas atas! (Saldo dikembalikan)");
+                    if (order.rider_uid) sendPushNotification(order.rider_uid, "❌ ORDERAN DIBATALKAN ❌", "Orderan barusan telah dibatalkan admin. Kamu dikembalikan ke antrean prioritas atas! (Saldo dikembalikan)", "ORDER_BATAL");
                     
                     window.showAlert('Berhasil', 'Orderan dibatalkan. Rider dipaksa kembali ke antrean teratas dan potongan di-refund.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat membatalkan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
@@ -6081,7 +6078,7 @@
                     }
                     
                     await batch.commit();
-                    if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan yang sedang kamu proses telah ditarik oleh Admin karena suatu kendala. (Saldo dikembalikan)");
+                    if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan yang sedang kamu proses telah ditarik oleh Admin karena suatu kendala. (Saldo dikembalikan)", "ORDER_BATAL");
                     
                     window.showAlert('Berhasil', 'Orderan berhasil dipindahkan ke tab Pending. Saldo potongan rider telah dikembalikan otomatis.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat memindahkan ke pending.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
