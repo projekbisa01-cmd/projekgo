@@ -1146,8 +1146,8 @@
             </div>
             
             <h3 class="text-xl font-black text-gray-800 mb-2">Istirahat / Keluar?</h3>
-            <p class="text-[11px] text-gray-600 mb-6 font-medium leading-relaxed bg-red-50 p-3 rounded-xl border border-red-100 italic">
-                Saat ini kamu di-jeda, namun masih berada di antrean. Geser untuk benar-benar menghapus posisimu dari radar.
+            <p class="text-[11px] text-red-700 mb-6 font-bold leading-relaxed bg-red-50 p-3 rounded-xl border border-red-200">
+                Apakah kamu yakin mau istirahat? Jika kamu istirahat, antrean kamu akan direset dan ketika kamu ON lagi akan berada paling bawah.
             </p>
 
             <!-- SLIDER KONFIRMASI KELUAR -->
@@ -9325,6 +9325,11 @@
                 localStorage.setItem('rider_onbid_status', 'true');
             }
 
+            // --- TAMBAHAN LANGKAH 4: BERSIHKAN FLAG ISTIRAHAT ---
+            // Pastikan jika rider batal off-bid, flag ini dihapus agar tidak mereset last_drop_time
+            localStorage.removeItem('rider_was_resting');
+            // ----------------------------------------------------
+
             // Kembalikan ke Firestore is_online: true, is_available: true
             if (typeof window.revertOffbidStatus === 'function') {
                 window.revertOffbidStatus();
@@ -9403,6 +9408,11 @@
                 obSwipeBtn.style.left = `${maxDist}px`;
                 obSwipeBtn.classList.add('swipe-success');
                 obSwipeBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                
+                // --- KODE TAMBAHAN UNTUK LANGKAH 2 ---
+                // Set penanda bahwa rider benar-benar sengaja istirahat
+                localStorage.setItem('rider_was_resting', 'true');
+                // -------------------------------------
                 
                 // Trigger hapus antrean di Firebase
                 if (typeof window.confirmExitQueue === 'function') window.confirmExitQueue();
@@ -10610,13 +10620,27 @@
               const cleanUid = String(uid).trim();
               try {
                   const statusRef = doc(db, '/status_rider_aktif', cleanUid);
-                  const payload = {
+                  let payload = {
                       uid: cleanUid,
                       name: riderName,
                       is_online: isOnline,
                       is_available: isOnline,
                       updated_at: serverTimestamp()
                   };
+                  
+                  // --- LOKIGA BARU: RESET WAKTU JIKA SELESAI ISTIRAHAT ---
+                  if (isOnline) {
+                      const wasResting = localStorage.getItem('rider_was_resting');
+                      if (wasResting === 'true') {
+                          payload.last_drop_time = serverTimestamp();
+                          payload.last_drop_desc = "Selesai Istirahat";
+                          
+                          // Hapus flag agar waktu tidak kerestet lagi secara tidak sengaja
+                          // jika aplikasi ter-refresh saat posisi sedang On-Bid
+                          localStorage.removeItem('rider_was_resting');
+                      }
+                  }
+                  // -------------------------------------------------------
                   
                   await setDoc(statusRef, payload, { merge: true });
               } catch (error) {
