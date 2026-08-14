@@ -1082,6 +1082,26 @@
         </div>
     </div>
 
+    <!-- POPUP SUSPEND MANUAL (DARI ADMIN) -->
+    <div id="manual-suspend-overlay" class="fixed inset-0 z-[9999999] bg-gray-900/95 backdrop-blur-md hidden flex-col items-center justify-center p-6 text-center transition-opacity duration-300 opacity-0">
+        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 text-center shadow-2xl relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-3 bg-red-600 animate-pulse"></div>
+            <div class="w-24 h-24 bg-red-50 text-red-600 rounded-full flex items-center justify-center text-5xl mx-auto mb-6 shadow-inner border-4 border-white">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <h2 class="text-2xl font-black text-gray-800 mb-2 uppercase tracking-tight">Akun Dikunci Sementara</h2>
+            <div class="bg-red-50 rounded-xl p-4 mb-6 border border-red-100 text-left">
+                <p class="text-[10px] text-red-500 font-bold uppercase tracking-wider mb-1">Alasan Penangguhan:</p>
+                <p id="manual-suspend-reason" class="text-sm font-bold text-red-700 italic">Memeriksa data penangguhan...</p>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-6 font-medium leading-relaxed">Akses Anda sedang ditangguhkan secara manual oleh Admin. Anda tidak dapat menerima orderan atau mengakses fitur lainnya untuk sementara waktu.</p>
+            
+            <a href="https://api.whatsapp.com/send?phone=6285157467216&text=Halo%20Admin,%20saya%20mau%20konfirmasi%20terkait%20akun%20Rider%20saya%20yang%20dikunci%20sementara." target="_blank" class="w-full py-4 bg-gray-800 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                <i class="fa-brands fa-whatsapp text-xl text-green-400"></i> Hubungi Admin
+            </a>
+        </div>
+    </div>
+
     <!-- POPUP TATA TERTIB (RULES) -->
     <div id="rules-modal">
         <div id="rules-content-box" class="relative overflow-hidden flex flex-col">
@@ -10383,6 +10403,25 @@
 
         async function toggleOnbid(isForced) {
             const forceExit = (isForced === true);
+
+            // --- TAMBAHAN LANGKAH 3: CEK STATUS SUSPEND MANUAL ---
+            const manualSuspendOverlay = document.getElementById('manual-suspend-overlay');
+            const toggleElement = document.getElementById('onbid-toggle');
+            const isTryingToTurnOn = toggleElement && toggleElement.checked;
+            const isManualSuspended = manualSuspendOverlay && !manualSuspendOverlay.classList.contains('hidden');
+            
+            if (isManualSuspended && isTryingToTurnOn) {
+                // Jika pop-up suspend aktif dan rider mencoba klik On-Bid, batalkan
+                if (typeof window.showCustomToast === 'function') {
+                    window.showCustomToast("Akses Ditolak: Akun Anda sedang dikunci sementara oleh Admin.");
+                } else {
+                    alert("Akses Ditolak: Akun Anda sedang dikunci sementara oleh Admin.");
+                }
+                toggleElement.checked = false; // Kembalikan posisi sakelar ke OFF
+                return; // Hentikan eksekusi kode selanjutnya
+            }
+            // --- AKHIR TAMBAHAN LANGKAH 3 ---
+
             // Validasi lapis kedua jika rider memaksa klik saat tidak ada sinyal
             if (!navigator.onLine) {
                 alert("Sistem Menolak: Tidak ada koneksi internet! Gagal mengaktifkan On-Bid karena tidak ada sinyal dengan Admin.");
@@ -13192,11 +13231,46 @@
                           im: data.in_main_queue,
                           io: data.is_online,
                           ia: data.is_available,
-                          hu: adminUpdateTs // Tambahkan field ini agar perubahan dari admin diakui sebagai perubahan penting
+                          hu: adminUpdateTs,
+                          ims: data.is_manual_suspended // TAMBAHAN: Pantau status suspend manual
                       });
                       
                       if (lastMyStatusDataStr === currentDataStr) return; // Abaikan jika tidak ada perubahan penting
                       lastMyStatusDataStr = currentDataStr;
+
+                      // --- LOGIKA BARU: SUSPEND MANUAL DARI ADMIN ---
+                      const manualSuspendOverlay = document.getElementById('manual-suspend-overlay');
+                      const manualSuspendReason = document.getElementById('manual-suspend-reason');
+                      
+                      if (data.is_manual_suspended === true) {
+                          if (manualSuspendReason) {
+                              let reasonText = data.last_drop_desc || "Melanggar kode etik operasional.";
+                              // Bersihkan awalan text bawaan sistem agar terlihat rapi
+                              if(reasonText.startsWith("Suspend Manual: ")) {
+                                  reasonText = reasonText.substring(16);
+                              }
+                              manualSuspendReason.innerText = reasonText;
+                          }
+                          if (manualSuspendOverlay) {
+                              manualSuspendOverlay.classList.remove('hidden');
+                              manualSuspendOverlay.classList.add('flex');
+                              setTimeout(() => {
+                                  manualSuspendOverlay.classList.remove('opacity-0');
+                                  manualSuspendOverlay.classList.add('opacity-100');
+                              }, 10);
+                          }
+                      } else {
+                          // Jika suspend dicabut, sembunyikan pop-up
+                          if (manualSuspendOverlay && !manualSuspendOverlay.classList.contains('hidden')) {
+                              manualSuspendOverlay.classList.remove('opacity-100');
+                              manualSuspendOverlay.classList.add('opacity-0');
+                              setTimeout(() => {
+                                  manualSuspendOverlay.classList.add('hidden');
+                                  manualSuspendOverlay.classList.remove('flex');
+                              }, 300);
+                          }
+                      }
+                      // --- AKHIR LOGIKA SUSPEND MANUAL ---
 
                       const toggle = document.getElementById('onbid-toggle');
                       
@@ -13209,6 +13283,8 @@
                       if (myPosEl) {
                           if (data.force_kill === true) {
                               myPosEl.innerHTML = `<span class="text-[9px] font-bold text-red-200 text-center block leading-tight">DIBEKUKAN<br>(Cek Saldo)</span>`;
+                          } else if (data.is_manual_suspended === true) {
+                              myPosEl.innerHTML = `<span class="text-[9px] font-bold text-red-200 text-center block leading-tight">DIKUNCI<br>(Admin)</span>`;
                           } else if (!inMainQueue && isOnline && isAvailable) {
                               myPosEl.innerHTML = `<span class="text-[9px] font-bold text-sky-200 text-center block leading-tight">Menunggu<br>Verifikasi</span>`;
                           } else if (!isOnline || !isAvailable) {
@@ -13216,7 +13292,8 @@
                           }
                       }
 
-                      if (data.force_kill === true && toggle && toggle.checked === true) {
+                      // Matikan sakelar (toggle) secara visual jika DIBEKUKAN (Saldo) atau DIKUNCI (Manual)
+                      if ((data.force_kill === true || data.is_manual_suspended === true) && toggle && toggle.checked === true) {
                           // Paksa matikan toggle secara visual
                           toggle.checked = false;
                           if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
@@ -13249,7 +13326,10 @@
                           } catch (e) {}
                           
                           if (typeof window.showCustomToast === 'function') {
-                              window.showCustomToast(data.force_kill ? "Radar dimatikan paksa (Cek Saldo/Pelanggaran)." : "Status On-Bid dimatikan oleh Sistem.");
+                              let msg = "Status On-Bid dimatikan oleh Sistem.";
+                              if (data.force_kill) msg = "Radar dimatikan paksa (Cek Saldo/Pelanggaran).";
+                              if (data.is_manual_suspended) msg = "Akun dikunci sementara oleh Admin.";
+                              window.showCustomToast(msg);
                           } else {
                               alert("Sistem telah mematikan status On-Bid Anda.");
                           }
