@@ -7243,6 +7243,7 @@
         // Reset memori data detail rider agar bersih (Clear RAM / 0 Read)
         window._cacheRiderOmset = {};
         window._cacheRiderOmsetMingguan = {};
+        window._cacheRiderOmsetBulanan = {}; // TAMBAHAN LANGKAH 4: Hapus cache memori list rider bulanan
         
         if (typeof window.renderOmsetHarian === 'function') window.renderOmsetHarian();
         if (typeof window.renderOmsetMingguan === 'function') window.renderOmsetMingguan();
@@ -7746,20 +7747,31 @@
                 const omsetClass = adminCut > 0 ? 'text-indigo-600' : 'text-slate-400';
                 const iconClass = adminCut > 0 ? 'text-indigo-500 bg-indigo-50 border-indigo-100' : 'text-slate-400 bg-slate-50 border-slate-100';
 
+                // FORMAT ID BULAN UNTUK AKORDION
+                const monthId = `bulan-${t.y}-${mStr}`;
+
                 listHtml += `
-                    <div class="flex justify-between items-center p-3 border border-gray-100 rounded-xl bg-slate-50 shadow-sm gap-2">
-                        <div class="flex items-center gap-3">
-                            <div class="w-8 h-8 rounded-full ${iconClass} flex items-center justify-center border shrink-0 shadow-inner">
-                                <i class="fa-solid fa-calendar-days text-[10px]"></i>
+                    <div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-2 overflow-hidden transition-all">
+                        <div onclick="if(typeof window.toggleRiderOmsetBulanan === 'function') window.toggleRiderOmsetBulanan('${monthId}', '${t.y}', '${mStr}')" class="flex justify-between items-center p-3 bg-slate-50 hover:bg-slate-100 cursor-pointer gap-2 transition-colors">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full ${iconClass} flex items-center justify-center border shrink-0 shadow-inner">
+                                    <i class="fa-solid fa-calendar-days text-[10px]"></i>
+                                </div>
+                                <div>
+                                    <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${labelTitle}</p>
+                                    <p class="text-[9px] text-slate-500 font-bold mt-0.5">${labelSub} <span class="text-slate-300 mx-1">•</span> <i class="fa-solid fa-bag-shopping mx-0.5"></i>${monthlyOrders} Order</p>
+                                </div>
                             </div>
-                            <div>
-                                <p class="font-black text-[11px] text-slate-700 uppercase tracking-tight">${labelTitle}</p>
-                                <p class="text-[9px] text-slate-500 font-bold mt-0.5">${labelSub} <span class="text-slate-300 mx-1">•</span> <i class="fa-solid fa-bag-shopping mx-0.5"></i>${monthlyOrders} Order</p>
+                            <div class="text-right flex items-center gap-2 shrink-0">
+                                <div>
+                                    <p class="text-[13px] font-black ${omsetClass} leading-none mb-0.5">Rp ${adminCut.toLocaleString('id-ID')}</p>
+                                    <p class="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Omset (16%)</p>
+                                </div>
+                                <i id="icon-omset-${monthId}" class="fa-solid fa-chevron-down text-slate-400 text-xs transition-transform duration-300"></i>
                             </div>
                         </div>
-                        <div class="text-right shrink-0">
-                            <p class="text-[13px] font-black ${omsetClass} leading-none mb-0.5">Rp ${adminCut.toLocaleString('id-ID')}</p>
-                            <p class="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Omset (16%)</p>
+                        <div id="detail-omset-${monthId}" class="hidden p-3 border-t border-dashed border-gray-200 bg-white">
+                            <!-- Konten detail rider akan dirender di sini saat diklik -->
                         </div>
                     </div>
                 `;
@@ -7769,6 +7781,134 @@
             window._lastOmsetBulananCacheHash = currentDataHash;
 
             container.innerHTML = `<div class="space-y-2 mt-2 animate-in fade-in duration-300">${listHtml}</div>`;
+        };
+
+        // ======================================================================
+        // FUNGSI BARU (LANGKAH 2): Aksi Klik Akordion Omset Bulanan
+        // ======================================================================
+        window._cacheRiderOmsetBulanan = window._cacheRiderOmsetBulanan || {};
+
+        window.toggleRiderOmsetBulanan = async (monthId, yearStr, monthStr) => {
+            const detailContainer = document.getElementById(`detail-omset-${monthId}`);
+            const icon = document.getElementById(`icon-omset-${monthId}`);
+            if (!detailContainer) return;
+
+            // Jika sedang terbuka, maka tutup (Toggle)
+            if (!detailContainer.classList.contains('hidden')) {
+                detailContainer.classList.add('hidden');
+                if (icon) icon.classList.remove('rotate-180');
+                return;
+            }
+
+            // Buka akordion
+            detailContainer.classList.remove('hidden');
+            if (icon) icon.classList.add('rotate-180');
+
+            // JIKA SUDAH ADA DI CACHE MEMORI: Langsung tampilkan (0 Read, Sangat hemat pemrosesan)
+            if (window._cacheRiderOmsetBulanan[monthId]) {
+                if (typeof window.renderRiderOmsetBulananDetail === 'function') {
+                    window.renderRiderOmsetBulananDetail(monthId, window._cacheRiderOmsetBulanan[monthId]);
+                }
+                return;
+            }
+
+            // Jika belum ada, tampilkan loading animasi lalu panggil fungsi Langkah 3
+            detailContainer.innerHTML = '<div class="p-4 text-center flex flex-col items-center justify-center"><div class="w-5 h-5 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin mb-2"></div><p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest animate-pulse">Menghitung Data Rider...</p></div>';
+
+            // Beri jeda 100ms agar UI sempat merender animasi loading sebelum proses data (Looping RAM)
+            setTimeout(() => {
+                if (typeof window.calculateRiderOmsetBulanan === 'function') {
+                    window.calculateRiderOmsetBulanan(monthId, yearStr, monthStr);
+                } else {
+                    detailContainer.innerHTML = '<p class="text-[9px] text-rose-500 font-bold text-center py-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Fungsi kalkulasi (Langkah 3) belum dipasang.</p>';
+                }
+            }, 100);
+        };
+
+        // ======================================================================
+        // FUNGSI BARU (LANGKAH 3): Kalkulasi 0 Read & Render Detail Bulanan
+        // ======================================================================
+        window.calculateRiderOmsetBulanan = (monthId, yearStr, monthStr) => {
+            const detailContainer = document.getElementById(`detail-omset-${monthId}`);
+            if (!detailContainer) return;
+
+            try {
+                // Prefix pencarian data berdasarkan YYYY-MM
+                const prefix = `${yearStr}-${monthStr}`;
+                const riderStats = {};
+
+                // 1. Tarik data dari RAM (allCloudRecaps) -> 0 Read Firestore!
+                allCloudRecaps.forEach(rekap => {
+                    // Cari semua rekap harian yang berawalan tahun-bulan yang dipilih
+                    if (rekap.tanggal && rekap.tanggal.startsWith(prefix)) {
+                        if (rekap.rekap_rider && Array.isArray(rekap.rekap_rider)) {
+                            rekap.rekap_rider.forEach(r => {
+                                const uid = r.uid;
+                                if (!uid) return;
+
+                                if (!riderStats[uid]) {
+                                    riderStats[uid] = { 
+                                        name: r.nama || uid, 
+                                        trip: 0, 
+                                        bersih: 0, 
+                                        tambahan: 0 
+                                    };
+                                }
+                                riderStats[uid].trip += parseInt(r.total_order || 0);
+                                riderStats[uid].bersih += parseFloat(r.ongkir_bersih || 0);
+                                riderStats[uid].tambahan += parseFloat(r.tambahan_ongkir || 0);
+                            });
+                        }
+                    }
+                });
+
+                // 2. Konversi object ke array dan urutkan berdasarkan Trip Terbanyak
+                const sortedStats = Object.values(riderStats).sort((a, b) => {
+                    if (b.trip !== a.trip) return b.trip - a.trip;
+                    return b.bersih - a.bersih; // Tie-breaker jika jumlah trip sama
+                });
+
+                // 3. Simpan ke Cache agar klik berikutnya kilat (0 proses)
+                window._cacheRiderOmsetBulanan[monthId] = sortedStats;
+
+                // 4. Lempar data ke fungsi pelukis HTML UI
+                window.renderRiderOmsetBulananDetail(monthId, sortedStats);
+
+            } catch (e) {
+                console.error("Gagal kalkulasi data bulanan rider:", e);
+                detailContainer.innerHTML = '<p class="text-[9px] text-rose-500 font-bold text-center py-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Gagal menghitung data. Cek log sistem.</p>';
+            }
+        };
+
+        window.renderRiderOmsetBulananDetail = (monthId, stats) => {
+            const container = document.getElementById(`detail-omset-${monthId}`);
+            if (!container) return;
+
+            if (stats.length === 0) {
+                container.innerHTML = '<p class="text-[9px] text-slate-500 font-bold text-center py-3 bg-slate-50 rounded-lg border border-dashed border-slate-200">Tidak ada rider yang beroperasi pada bulan ini.</p>';
+                return;
+            }
+
+            let html = '<div class="space-y-1.5">';
+            stats.forEach((r, idx) => {
+                html += `
+                    <div class="flex justify-between items-center p-2.5 bg-white rounded-lg border border-slate-100 hover:border-indigo-200 transition-colors shadow-sm">
+                        <div class="flex items-center gap-2.5 overflow-hidden w-full pr-2">
+                            <div class="w-6 h-6 rounded bg-indigo-50 text-indigo-500 flex items-center justify-center text-[10px] font-black shrink-0">${idx+1}</div>
+                            <div class="flex flex-col overflow-hidden w-full">
+                                <span class="text-[10px] font-black text-slate-700 uppercase truncate leading-tight">${r.name}</span>
+                                <span class="text-[8px] font-bold text-slate-500 mt-0.5 whitespace-nowrap w-full truncate"><i class="fa-solid fa-motorcycle text-indigo-400 mr-1"></i>${r.trip} Trip Selesai ${r.tambahan > 0 ? '| <span class="text-emerald-500 font-black">+Rp '+r.tambahan.toLocaleString('id-ID')+'</span>' : ''}</span>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <p class="text-[12px] font-black text-emerald-600 leading-none mb-0.5">Rp ${r.bersih.toLocaleString('id-ID')}</p>
+                            <p class="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Pdt. Bersih</p>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            container.innerHTML = html;
         };
 
         // ======================================================================
