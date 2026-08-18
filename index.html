@@ -3781,6 +3781,35 @@
         </div>
     </div>
 
+    <!-- POPUP AKSES LOKASI DITOLAK -->
+    <div id="location-denied-popup" class="fixed inset-0 z-[99999999] flex-col items-center justify-center px-4 bg-gray-900/95 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div class="relative bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl transform scale-90 transition-transform duration-300 flex flex-col overflow-hidden text-center">
+            <div class="absolute top-0 left-0 w-full h-2 bg-red-600"></div>
+
+            <div class="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center text-3xl mx-auto mb-4 border border-red-100 shadow-sm relative">
+                <i class="fa-solid fa-location-crosshairs"></i>
+                <div class="absolute bottom-1 right-1 bg-white rounded-full p-0.5 shadow-sm">
+                    <i class="fa-solid fa-lock text-[10px] text-red-800"></i>
+                </div>
+            </div>
+            
+            <h3 class="font-black text-gray-800 text-lg leading-tight mb-2">Akses GPS Ditolak!</h3>
+            
+            <div class="bg-red-50 p-4 rounded-xl border border-red-100 mb-6 text-left shadow-inner">
+                <p class="text-xs text-red-800 leading-relaxed font-medium">Fitur ini membutuhkan izin lokasi. Silakan buka pengaturan dan izinkan akses lokasi untuk aplikasi ini.</p>
+            </div>
+
+            <div class="flex gap-2">
+                <button onclick="window.closeLocationDeniedPopup()" class="w-1/3 py-3.5 bg-gray-100 text-gray-600 font-bold rounded-xl active:scale-95 transition-all text-sm border border-gray-200">
+                    Batal
+                </button>
+                <button onclick="window.openLocationSettings()" class="w-2/3 py-3.5 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl shadow-lg active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-gear"></i> Pengaturan
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // --- FUNGSI TAMPILKAN FOTO RIDER (BARU) ---
         window.showRiderImagePreview = function(uid) {
@@ -14107,7 +14136,7 @@
     window.getCurrentGPSLocation = function() {
         return new Promise((resolve, reject) => {
             if (!navigator.geolocation) {
-                reject("Browser atau HP Anda tidak mendukung fitur GPS.");
+                reject({ message: "Browser atau HP Anda tidak mendukung fitur GPS.", code: 0 });
                 return;
             }
             navigator.geolocation.getCurrentPosition(
@@ -14122,7 +14151,7 @@
                     if (error.code === 1) errMsg = "Akses GPS ditolak. Izinkan akses lokasi di pengaturan browser/HP Anda.";
                     if (error.code === 2) errMsg = "Sinyal GPS tidak ditemukan atau lemah.";
                     if (error.code === 3) errMsg = "Waktu pencarian GPS habis (Timeout).";
-                    reject(errMsg);
+                    reject({ message: errMsg, code: error.code });
                 },
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
             );
@@ -14440,15 +14469,35 @@
             setTimeout(() => { document.getElementById('save-location-label').focus(); }, 300);
             try { playBeep(880, 0.1); } catch(e){} // Suara sukses
 
-        } catch (error) {
-            // Jika error, tampilkan pesan error merah di modal tanpa menutup modal
-            if (gpsStatus) {
-                gpsStatus.innerHTML = `
-                    <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-red-500 mb-1 border border-red-200">
-                        <i class="fa-solid fa-location-crosshairs"></i>
-                    </div>
-                    <p class="text-[11px] font-bold text-red-600 px-2">${error}</p>
-                `;
+        } catch (errorObj) {
+            const errMsg = errorObj.message || errorObj;
+            const errCode = errorObj.code || 0;
+
+            if (errCode === 1) {
+                // Permission Denied: Sembunyikan tulisan "Mencari koordinat..." dan munculkan pop-up izin
+                if (gpsStatus) gpsStatus.classList.add('hidden');
+                
+                const deniedPopup = document.getElementById('location-denied-popup');
+                const deniedContent = deniedPopup ? deniedPopup.querySelector('.transform') : null;
+                if(deniedPopup && deniedContent) {
+                    deniedPopup.classList.remove('hidden');
+                    deniedPopup.classList.add('flex');
+                    setTimeout(() => {
+                        deniedPopup.classList.remove('opacity-0');
+                        deniedContent.classList.remove('scale-90');
+                        deniedContent.classList.add('scale-100');
+                    }, 10);
+                }
+            } else {
+                // Error lainnya (sinyal lemah, dll), tampilkan pesan error merah di modal tanpa menutup modal
+                if (gpsStatus) {
+                    gpsStatus.innerHTML = `
+                        <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-red-500 mb-1 border border-red-200">
+                            <i class="fa-solid fa-location-crosshairs"></i>
+                        </div>
+                        <p class="text-[11px] font-bold text-red-600 px-2">${errMsg}</p>
+                    `;
+                }
             }
             // Tombol submit tetap terkunci
         }
@@ -14718,6 +14767,43 @@
         }
     };
 
+    window.closeLocationDeniedPopup = function() {
+        const popup = document.getElementById('location-denied-popup');
+        const content = popup.querySelector('.transform');
+        if(popup && content) {
+            popup.classList.add('opacity-0');
+            content.classList.remove('scale-100');
+            content.classList.add('scale-90');
+            setTimeout(() => {
+                popup.classList.add('hidden');
+                popup.classList.remove('flex');
+            }, 300);
+        }
+    };
+
+    window.openLocationSettings = function() {
+        if (window.AndroidInterface && window.AndroidInterface.openLocationSettings) {
+            // Panggil fungsi Native Android (Kodular)
+            window.AndroidInterface.openLocationSettings();
+        } else {
+            // Fallback instruksi untuk browser web biasa
+            if(typeof window.showCustomToast === 'function') {
+                window.showCustomToast("Klik ikon gembok di sebelah kiri atas bilah alamat URL, lalu ubah izin Lokasi menjadi 'Izinkan'.");
+            } else {
+                alert("Klik ikon gembok di sebelah kiri atas bilah alamat URL, lalu ubah izin Lokasi menjadi 'Izinkan'.");
+            }
+        }
+        
+        // Tutup popup setelah tombol diklik
+        window.closeLocationDeniedPopup();
+    };
+
+    // =========================================================================
+    // --- AKHIR L A N G K A H 4 ---
+    // =========================================================================
+
+</script>
+<script type="module">
     // =========================================================================
     // --- AKHIR L A N G K A H 4 ---
     // =========================================================================
