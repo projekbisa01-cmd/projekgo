@@ -3222,61 +3222,77 @@
                 return;
             }
 
-            // Kelompokkan berdasarkan Jam (00-23)
-            const hourCounts = {};
-            for(let i=0; i<24; i++) hourCounts[i] = 0;
+            // Definisikan rentang waktu custom dalam format menit sejak 00:00 (H * 60 + M)
+            const timeRanges = [
+                { label: '06:30 - 10:00', count: 0, startMins: 6 * 60 + 30, endMins: 10 * 60 + 0 },
+                { label: '10:01 - 11:00', count: 0, startMins: 10 * 60 + 1, endMins: 11 * 60 + 0 },
+                { label: '11:01 - 13:00', count: 0, startMins: 11 * 60 + 1, endMins: 13 * 60 + 0 },
+                { label: '13:01 - 16:00', count: 0, startMins: 13 * 60 + 1, endMins: 16 * 60 + 0 },
+                { label: '16:01 - 20:00', count: 0, startMins: 16 * 60 + 1, endMins: 20 * 60 + 0 },
+                { label: '20:01 - 21:00', count: 0, startMins: 20 * 60 + 1, endMins: 21 * 60 + 0 }
+            ];
 
+            // Hitung berdasarkan jam order dibagikan (admin_created_at)
             dataOrder.forEach(o => {
-                if (o.Jam && o.Jam !== '--:--') {
-                    const h = parseInt(o.Jam.split(':')[0]);
-                    if (!isNaN(h) && h >= 0 && h <= 23) {
-                        hourCounts[h]++;
+                let ts = 0;
+                if (o.admin_created_at && o.admin_created_at.seconds) {
+                    ts = o.admin_created_at.seconds * 1000;
+                } else if (o.created_at && o.created_at.seconds) {
+                    ts = o.created_at.seconds * 1000;
+                }
+
+                if (ts > 0) {
+                    const d = new Date(ts);
+                    const minsSinceMidnight = d.getHours() * 60 + d.getMinutes();
+
+                    for (let i = 0; i < timeRanges.length; i++) {
+                        if (minsSinceMidnight >= timeRanges[i].startMins && minsSinceMidnight <= timeRanges[i].endMins) {
+                            timeRanges[i].count++;
+                            break;
+                        }
                     }
                 }
             });
 
-            // Cari jam dengan orderan terbanyak
+            // Cari rentang jam dengan orderan terbanyak
             let maxOrders = 0;
-            let peakHour = 0;
-            for(let i=0; i<24; i++) {
-                if(hourCounts[i] > maxOrders) {
-                    maxOrders = hourCounts[i];
-                    peakHour = i;
+            let peakIndex = -1;
+            
+            for (let i = 0; i < timeRanges.length; i++) {
+                if (timeRanges[i].count > maxOrders) {
+                    maxOrders = timeRanges[i].count;
+                    peakIndex = i;
                 }
             }
 
-            const peakStart = String(peakHour).padStart(2,'0') + ':00';
-            const peakEnd = String(peakHour).padStart(2,'0') + ':59';
+            const peakLabel = peakIndex !== -1 ? timeRanges[peakIndex].label : 'Tidak Terdeteksi';
 
             let listHtml = '';
-            for(let i=0; i<24; i++) {
-                if (hourCounts[i] > 0) {
-                    const isPeak = (i === peakHour);
-                    const labelJam = `${String(i).padStart(2,'0')}:00 - ${String(i).padStart(2,'0')}:59`;
-                    const barWidth = Math.max(5, Math.round((hourCounts[i] / maxOrders) * 100));
-                    
-                    const bgBar = isPeak ? 'bg-indigo-500' : 'bg-slate-300';
-                    const textLabel = isPeak ? 'text-indigo-700 font-black' : 'text-slate-600 font-bold';
-                    
-                    listHtml += `
-                        <div class="flex items-center gap-2 mb-1.5">
-                            <span class="text-[9px] w-20 shrink-0 ${textLabel}">${labelJam}</span>
-                            <div class="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
-                                <div class="${bgBar} h-3 rounded-full" style="width: ${barWidth}%"></div>
-                            </div>
-                            <span class="text-[9px] w-10 text-right ${textLabel}">${hourCounts[i]} <i class="fa-solid fa-box text-[8px]"></i></span>
+            timeRanges.forEach((range, i) => {
+                const isPeak = (i === peakIndex && maxOrders > 0);
+                const barWidth = maxOrders > 0 ? Math.max(5, Math.round((range.count / maxOrders) * 100)) : 0;
+                
+                const bgBar = isPeak ? 'bg-indigo-500' : 'bg-slate-300';
+                const textLabel = isPeak ? 'text-indigo-700 font-black' : 'text-slate-600 font-bold';
+                
+                listHtml += `
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <span class="text-[9px] w-[75px] shrink-0 ${textLabel}">${range.label}</span>
+                        <div class="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
+                            <div class="${bgBar} h-3 rounded-full" style="width: ${barWidth}%"></div>
                         </div>
-                    `;
-                }
-            }
+                        <span class="text-[9px] w-10 text-right ${textLabel}">${range.count} <i class="fa-solid fa-box text-[8px]"></i></span>
+                    </div>
+                `;
+            });
 
             let infoLimit = tfSelect.value === 'today' ? '' : '<p class="text-[8px] text-rose-500 text-center mt-2 italic">*Menggunakan maksimal 150 sampel data terbaru untuk menghemat kuota sistem.</p>';
 
             container.innerHTML = `
                 <div class="bg-indigo-50 rounded-xl p-3 border border-indigo-100 shadow-sm mb-3">
                     <p class="text-[9px] font-black text-indigo-800 uppercase tracking-widest mb-0.5">Puncak Jam Sibuk</p>
-                    <p class="text-xl font-black text-indigo-600">${peakStart} - ${peakEnd}</p>
-                    <p class="text-[9px] font-bold text-indigo-500 mt-0.5">Terdapat ${maxOrders} orderan diselesaikan pada rentang waktu ini.</p>
+                    <p class="text-xl font-black text-indigo-600">${peakLabel}</p>
+                    <p class="text-[9px] font-bold text-indigo-500 mt-0.5">Terdapat ${maxOrders} orderan dibagikan pada rentang waktu ini.</p>
                 </div>
                 <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
                     <p class="text-[10px] font-black text-slate-700 uppercase mb-3 border-b border-slate-100 pb-1.5">Distribusi Order: ${displayDate}</p>
