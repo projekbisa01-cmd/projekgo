@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Komparasi Skema Ongkir Rider</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Animasi Toast Notification */
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translateY(-20px); }
+            10% { opacity: 1; transform: translateY(0); }
+            90% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(-20px); }
+        }
+        .toast-anim {
+            animation: fadeInOut 3s ease-in-out forwards;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans p-4 md:p-8 relative min-h-screen">
+
+    <!-- Toast Notification (Pengganti Alert) -->
+    <div id="toast-container" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 hidden">
+        <div id="toast-message" class="bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg font-medium text-sm">
+            Notifikasi
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 text-center md:text-left">
+            <h1 class="text-3xl font-bold text-blue-900">Dashboard Komparasi Skema Ongkir</h1>
+            <p class="text-gray-500 mt-2">Simulasi pendapatan Bersih Admin dan Rider berdasarkan 3 skema berbeda.</p>
+        </header>
+
+        <!-- Data Input Section -->
+        <div id="data-section" class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
+            <div id="loading-state" class="hidden text-center py-8">
+                <div class="inline-block animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+                <p class="text-blue-600 font-medium">Sedang mengambil data...</p>
+            </div>
+            
+            <div id="manual-input-state">
+                <h2 class="text-lg font-semibold mb-2">Input Data Baru</h2>
+                <p class="text-sm text-gray-500 mb-4">Paste data dari Spreadsheet Anda (termasuk Header) di kotak bawah ini.</p>
+                <textarea id="rawDataInput" rows="4" class="w-full border-gray-300 border rounded-lg p-3 text-sm font-mono focus:ring-blue-500 focus:border-blue-500 mb-4" placeholder="UID&#9;Nama_Rider&#9;tanggal&#9;Jam&#9;Nominal_Kotor&#9;Tambahan&#10;RDR01&#9;Budi&#9;25/10/2026&#9;14:00&#9;9&#9;2"></textarea>
+                <button onclick="window.processManualData()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition-colors shadow-sm">
+                    Proses Data Kalkulasi
+                </button>
+            </div>
+
+            <!-- Bagian Riwayat Tersimpan -->
+            <div class="mt-10 border-t border-gray-200 pt-6">
+                <h2 class="text-lg font-semibold mb-4 text-gray-800 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Riwayat Kalkulasi Tersimpan
+                </h2>
+                
+                <div id="history-loading" class="text-sm text-gray-500 mb-4 hidden">Memuat riwayat...</div>
+                <div class="text-sm text-gray-500 italic mb-4" id="empty-history-msg">Belum ada data riwayat tersimpan.</div>
+                
+                <div id="history-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Item riwayat akan di-inject ke sini oleh JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Result Section -->
+        <div id="dashboard-section" class="hidden">
+            
+            <!-- Tombol Navigasi Atas -->
+            <div class="mb-6 flex flex-wrap justify-between items-center gap-4">
+                <h2 id="dashboard-title" class="text-xl font-bold text-gray-800">Hasil Kalkulasi Data Baru</h2>
+                
+                <div class="flex space-x-3">
+                    <!-- Tombol Simpan (hanya muncul jika bukan mode riwayat) -->
+                    <button id="btn-save" onclick="window.saveCurrentData()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center shadow-sm">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                        Simpan ke Riwayat
+                    </button>
+                    <!-- Tombol Kembali -->
+                    <button onclick="window.goBack()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 rounded-lg transition-colors flex items-center shadow-sm">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                        Kembali
+                    </button>
+                </div>
+            </div>
+
+            <!-- Summary Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <!-- Total Order -->
+                <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-center">
+                    <h3 class="text-gray-500 text-sm font-medium">Total Order</h3>
+                    <p id="sum-orders" class="text-4xl font-bold text-gray-800 mt-2">0</p>
+                </div>
+
+                <!-- Skema Saat Ini -->
+                <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onclick="window.openModal('lama')">
+                    <div class="absolute right-0 top-0 h-full w-2 bg-gray-300"></div>
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Saat Ini)</h3>
+                        <div class="text-gray-400 group-hover:text-blue-500">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                    </div>
+                    <p id="sum-admin-lama" class="text-2xl font-bold text-gray-700 mt-1">Rp 0</p>
+                    <p id="detail-admin-lama" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
+                    <div class="border-t border-gray-100 pt-2">
+                        <p id="sum-rider-lama" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                    </div>
+                </div>
+
+                <!-- Skema 1 -->
+                <div class="bg-white p-5 rounded-xl border border-blue-200 shadow-sm relative overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onclick="window.openModal('skema1')">
+                    <div class="absolute right-0 top-0 h-full w-2 bg-blue-400"></div>
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Skema 1)</h3>
+                        <div class="text-gray-400 group-hover:text-blue-500">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                    </div>
+                    <p id="sum-admin-s1" class="text-2xl font-bold text-blue-700 mt-1">Rp 0</p>
+                    <p id="detail-admin-s1" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
+                    <div class="border-t border-blue-50 pt-2">
+                        <p id="sum-rider-s1" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                    </div>
+                </div>
+
+                <!-- Skema 2 -->
+                <div class="bg-white p-5 rounded-xl border border-purple-200 shadow-sm relative overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onclick="window.openModal('skema2')">
+                    <div class="absolute right-0 top-0 h-full w-2 bg-purple-500"></div>
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Skema 2)</h3>
+                        <div class="text-gray-400 group-hover:text-purple-500">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                    </div>
+                    <p id="sum-admin-s2" class="text-2xl font-bold text-purple-700 mt-1">Rp 0</p>
+                    <p id="detail-admin-s2" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
+                    <div class="border-t border-purple-50 pt-2">
+                        <p id="sum-rider-s2" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rider Breakdown -->
+            <div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-8 overflow-hidden">
+                <div class="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                    <h3 class="text-lg font-semibold text-gray-800">Detail Pendapatan Per Rider</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                            <tr>
+                                <th class="px-6 py-3">UID / Nama</th>
+                                <th class="px-6 py-3 text-center">Jml Order</th>
+                                <th class="px-6 py-3 text-right">Rider Skema Lama</th>
+                                <th class="px-6 py-3 text-right text-blue-700">Rider Skema 1</th>
+                                <th class="px-6 py-3 text-right text-purple-700">Rider Skema 2</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rider-table-body">
+                            <!-- Injected via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Modal Penjelasan Logika -->
+    <div id="logic-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden" onclick="event.stopPropagation()">
+            <!-- Header Modal -->
+            <div class="bg-gray-50 p-4 border-b flex justify-between items-center">
+                <h3 id="modal-title" class="text-lg font-bold text-gray-800">Logika Skema</h3>
+                <button onclick="window.closeModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <!-- Body Modal -->
+            <div class="p-6">
+                <div id="modal-content" class="text-sm text-gray-600 space-y-4">
+                    <!-- Content di-inject JS -->
+                </div>
+            </div>
+            <!-- Footer Modal -->
+            <div class="bg-gray-50 p-4 border-t text-right">
+                <button onclick="window.closeModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Konfirmasi Hapus -->
+    <div id="delete-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl max-w-sm w-full overflow-hidden" onclick="event.stopPropagation()">
+            <div class="p-6 text-center">
+                <svg class="w-12 h-12 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                <h3 class="text-lg font-bold text-gray-800 mb-2">Hapus Riwayat?</h3>
+                <p class="text-sm text-gray-600">Data riwayat ini akan dihapus permanen dan tidak dapat dikembalikan.</p>
+            </div>
+            <div class="bg-gray-50 p-4 border-t flex justify-end space-x-3">
+                <button onclick="window.closeDeleteModal()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 rounded-lg transition">Batal</button>
+                <button onclick="window.executeDelete()" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition">Ya, Hapus</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Konfigurasi Database Guardrails
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-komparasi-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "mock", authDomain: "mock", projectId: "mock", storageBucket: "mock", messagingSenderId: "mock", appId: "mock"
+        };
+
+        let app, auth, db, userId;
+        let globalRawData = "";
+        let globalSummaryData = null;
+        let isViewHistoryMode = false;
+        let cachedHistories = []; // Simpan history lokal
+        let docIdToDelete = null; // Menyimpan ID dokumen yang akan dihapus
+
+        // Format Uang Rupiah
+        const formatRp = (angka) => {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+        };
+
+        // Custom Toast (Pengganti Alert)
+        window.showToast = function(message, isError = false) {
+            const container = document.getElementById('toast-container');
+            const msgBox = document.getElementById('toast-message');
+            msgBox.innerText = message;
+            
+            if(isError) {
+                msgBox.classList.remove('bg-blue-600');
+                msgBox.classList.add('bg-red-600');
+            } else {
+                msgBox.classList.add('bg-blue-600');
+                msgBox.classList.remove('bg-red-600');
+            }
+
+            container.classList.remove('hidden');
+            container.classList.remove('toast-anim');
+            void container.offsetWidth; // Trigger reflow
+            container.classList.add('toast-anim');
+            
+            setTimeout(() => {
+                container.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Inisialisasi Firebase & Autentikasi
+        async function initApp() {
+            try {
+                if (typeof __firebase_config !== 'undefined') {
+                    app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+
+                    if (typeof __initial_auth_token !== 'undefined') {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    userId = auth.currentUser.uid;
+                    loadHistory();
+                } else {
+                    console.log("Menjalankan mode tanpa database");
+                }
+            } catch (err) {
+                console.error("Firebase init error:", err);
+            }
+        }
+
+        // Fungsi Muat Riwayat (Hanya gunakan Collection murni tanpa orderBy)
+        function loadHistory() {
+            if (!userId) return;
+            const historyRef = collection(db, 'artifacts', appId, 'users', userId, 'komparasi_history');
+            
+            document.getElementById('history-loading').classList.remove('hidden');
+
+            onSnapshot(historyRef, (snapshot) => {
+                document.getElementById('history-loading').classList.add('hidden');
+                cachedHistories = [];
+                snapshot.forEach(doc => {
+                    cachedHistories.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Sort by newest in Javascript (Guardrail)
+                cachedHistories.sort((a, b) => b.timestamp - a.timestamp);
+                renderHistoryList();
+
+            }, (error) => {
+                console.error("Gagal memuat riwayat", error);
+                window.showToast("Gagal memuat riwayat tersimpan", true);
+            });
+        }
+
+        function renderHistoryList() {
+            const listContainer = document.getElementById('history-list');
+            const msgContainer = document.getElementById('empty-history-msg');
+            
+            listContainer.innerHTML = '';
+            
+            if (cachedHistories.length === 0) {
+                msgContainer.classList.remove('hidden');
+            } else {
+                msgContainer.classList.add('hidden');
+                
+                cachedHistories.forEach(item => {
+                    // Buat elemen card riwayat
+                    const sum = item.summary;
+                    
+                    // Hitung selisih/kenaikan dibanding ADM Lama
+                    const diffS1 = sum.adminS1 - sum.adminLama;
+                    const diffS2 = sum.adminS2 - sum.adminLama;
+                    
+                    const diffStrS1 = diffS1 >= 0 ? `(+${formatRp(diffS1)})` : `(${formatRp(diffS1).replace('-', '- ')})`;
+                    const diffColorS1 = diffS1 >= 0 ? 'text-green-500' : 'text-red-500';
+                    
+                    const diffStrS2 = diffS2 >= 0 ? `(+${formatRp(diffS2)})` : `(${formatRp(diffS2).replace('-', '- ')})`;
+                    const diffColorS2 = diffS2 >= 0 ? 'text-green-500' : 'text-red-500';
+
+                    const card = document.createElement('div');
+                    card.className = "bg-white border border-gray-200 p-4 rounded-xl shadow-sm cursor-pointer hover:bg-blue-50 transition-colors group relative";
+                    card.onclick = () => window.viewHistory(item.id);
+                    
+                    card.innerHTML = `
+                        <button onclick="window.confirmDelete('${item.id}', event)" class="absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-white rounded-md shadow-sm border border-gray-200 z-10" title="Hapus Riwayat">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                        <div class="flex justify-between items-center mb-2 pb-2 border-b border-gray-100 pr-8">
+                            <span class="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded">${item.dateStr}</span>
+                            <span class="text-xs text-gray-500 font-medium">Order: ${sum.orders}</span>
+                        </div>
+                        <div class="space-y-2 text-sm mt-3">
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">ADM Lama:</span>
+                                <span class="font-medium text-gray-700">${formatRp(sum.adminLama)}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">ADM S1:</span>
+                                <div class="text-right flex flex-col items-end sm:block">
+                                    <span class="font-medium text-blue-600">${formatRp(sum.adminS1)}</span>
+                                    <span class="text-[11px] ${diffColorS1} font-bold sm:ml-1">${diffStrS1}</span>
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">ADM S2:</span>
+                                <div class="text-right flex flex-col items-end sm:block">
+                                    <span class="font-medium text-purple-600">${formatRp(sum.adminS2)}</span>
+                                    <span class="text-[11px] ${diffColorS2} font-bold sm:ml-1">${diffStrS2}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    listContainer.appendChild(card);
+                });
+            }
+        }
+
+        // Fungsi Proses Manual
+        window.processManualData = function() {
+            const rawText = document.getElementById('rawDataInput').value;
+            if (!rawText.trim()) return window.showToast("Silakan paste data terlebih dahulu!", true);
+            
+            isViewHistoryMode = false;
+            globalRawData = rawText.trim();
+            const dataArray = globalRawData.split('\n').map(row => row.split('\t'));
+            processSpreadsheetData(dataArray);
+            window.showToast("Kalkulasi berhasil diproses!");
+        }
+
+        // Fungsi Buka Riwayat
+        window.viewHistory = function(docId) {
+            const historyItem = cachedHistories.find(h => h.id === docId);
+            if(historyItem) {
+                isViewHistoryMode = true;
+                const dataArray = historyItem.rawData.split('\n').map(row => row.split('\t'));
+                processSpreadsheetData(dataArray, historyItem.dateStr);
+            }
+        }
+
+        // Helper untuk ekstrak dan format tanggal dari data mentah
+        function extractAndFormatDate(rawData) {
+            if (!rawData) return "Tanggal Tidak Diketahui";
+            const dataArray = rawData.split('\n').map(row => row.split('\t'));
+            let startIdx = 0;
+            if (dataArray[0][0] && (dataArray[0][0].toString().toLowerCase().includes('uid') || dataArray[0][1].toString().toLowerCase().includes('nama'))) {
+                startIdx = 1; 
+            }
+            
+            for (let i = startIdx; i < dataArray.length; i++) {
+                if (dataArray[i].length >= 3 && dataArray[i][0].trim() !== '') {
+                    let rawDate = dataArray[i][2].trim(); // Ambil kolom tanggal
+                    
+                    // Cek format YYYY-MM-DD (contoh: 2026-08-27)
+                    let parts = rawDate.split('-');
+                    if (parts.length === 3) {
+                        let year = parts[0];
+                        let month = parts[1];
+                        let day = parts[2];
+                        let dateObj = new Date(year, parseInt(month) - 1, day);
+                        let days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                        return `${days[dateObj.getDay()]}, ${day}-${month}-${year}`;
+                    }
+                    
+                    // Fallback jika formatnya ternyata DD/MM/YYYY
+                    let partsSlash = rawDate.split('/');
+                    if (partsSlash.length === 3) {
+                        let day = partsSlash[0];
+                        let month = partsSlash[1];
+                        let year = partsSlash[2];
+                        let dateObj = new Date(year, parseInt(month) - 1, day);
+                        let days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+                        return `${days[dateObj.getDay()]}, ${day}-${month}-${year}`;
+                    }
+                    
+                    return rawDate; // Fallback jika format teks tidak dikenali
+                }
+            }
+            return "Tanggal Tidak Diketahui";
+        }
+
+        // Fungsi Simpan ke Cloud
+        window.saveCurrentData = async function() {
+            if (!userId) return window.showToast("Koneksi database belum siap.", true);
+            if (isViewHistoryMode) return window.showToast("Ini adalah data riwayat.", true);
+            if (!globalSummaryData || !globalRawData) return window.showToast("Belum ada data untuk disimpan.", true);
+
+            const btn = document.getElementById('btn-save');
+            btn.innerHTML = "Menyimpan...";
+            btn.disabled = true;
+
+            try {
+                const historyRef = collection(db, 'artifacts', appId, 'users', userId, 'komparasi_history');
+                const now = new Date();
+                
+                // Ambil tanggal dari data yang di-paste
+                const dateString = extractAndFormatDate(globalRawData);
+
+                // Cek apakah data dengan tanggal yang sama sudah ada di riwayat
+                const isDuplicate = cachedHistories.some(h => h.dateStr === dateString);
+                if (isDuplicate) {
+                    window.showToast(`Gagal: Data untuk tanggal ${dateString} sudah tersimpan!`, true);
+                    btn.innerHTML = `<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg> Simpan ke Riwayat`;
+                    btn.disabled = false;
+                    return;
+                }
+
+                await addDoc(historyRef, {
+                    timestamp: now.getTime(), // Tetap simpan timestamp asli untuk urutan sorting
+                    dateStr: dateString,
+                    rawData: globalRawData,
+                    summary: globalSummaryData
+                });
+                
+                window.showToast("Berhasil disimpan ke Riwayat!");
+                isViewHistoryMode = true; // Set history mode agar tdk disave 2x
+                updateUIMode(dateString); // Update judul dashboard
+            } catch (err) {
+                console.error("Save error", err);
+                window.showToast("Gagal menyimpan data", true);
+            } finally {
+                btn.innerHTML = `<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg> Simpan ke Riwayat`;
+                btn.disabled = false;
+            }
+        }
+
+        // Core Logic Kalkulasi Data 
+        function processSpreadsheetData(dataArray, historyDate = null) {
+            if (!dataArray || dataArray.length === 0) return window.showToast("Data kosong.", true);
+
+            let startIdx = 0;
+            if (dataArray[0][0] && (dataArray[0][0].toString().toLowerCase().includes('uid') || dataArray[0][1].toString().toLowerCase().includes('nama'))) {
+                startIdx = 1; 
+            }
+
+            let summary = {
+                orders: 0,
+                adminLama: 0, adminLamaOngkir: 0, adminLamaCust: 0, riderLama: 0,
+                adminS1: 0, adminS1Ongkir: 0, adminS1Cust: 0, riderS1: 0,
+                adminS2: 0, adminS2Ongkir: 0, adminS2Cust: 0, riderS2: 0
+            };
+
+            let riderMap = {};
+
+            for (let i = startIdx; i < dataArray.length; i++) {
+                let row = dataArray[i];
+                if (row.length < 5 || !row[0]) continue; // Skip baris kosong
+
+                let uid = row[0];
+                let nama = row[1];
+                
+                let kotorSatuan = parseFloat(row[4].toString().replace(',', '.')) || 0;
+                let tambahanSatuan = parseFloat((row[5] || '0').toString().replace(',', '.')) || 0;
+                
+                let nominalKotor = kotorSatuan * 1000;
+                let tambahan = tambahanSatuan * 1000;
+
+                summary.orders++;
+
+                // ----------------------------------------------------
+                // 0. SKEMA LAMA (Bagi hasil 16:84)
+                // ----------------------------------------------------
+                let ptgAdminLamaOngkir = nominalKotor * 0.16;
+                let ptgAdminLamaCust = 0; // Skema lama tidak ada biaya pelanggan 1k
+                
+                let adminLamaTotal = ptgAdminLamaOngkir + ptgAdminLamaCust;
+                let riderLamaTotal = (nominalKotor * 0.84) + tambahan;
+
+                // ----------------------------------------------------
+                // 1. SKEMA 1 (Bagi hasil (ongkir+tambahan) 8:92 + Biaya Pelanggan 1k)
+                // ----------------------------------------------------
+                let totalOngkirDanTambahan = nominalKotor + tambahan;
+                let ptgAdminS1Ongkir = totalOngkirDanTambahan * 0.08;
+                let ptgAdminS1Cust = 1000; 
+
+                let adminS1Total = ptgAdminS1Ongkir + ptgAdminS1Cust;
+                let riderS1Total = totalOngkirDanTambahan * 0.92;
+
+                // ----------------------------------------------------
+                // 2. SKEMA 2 (ADM Tiered + Biaya Pelanggan 1k)
+                // ----------------------------------------------------
+                let ptgAdminS2Ongkir = 1000 + Math.floor(nominalKotor / 10000) * 500;
+                let ptgAdminS2Cust = 1000; 
+
+                let adminS2Total = ptgAdminS2Ongkir + ptgAdminS2Cust;
+                let riderS2Total = nominalKotor - ptgAdminS2Ongkir + tambahan;
+
+                // -- Update Global Summary --
+                summary.adminLama += adminLamaTotal; 
+                summary.adminLamaOngkir += ptgAdminLamaOngkir; 
+                summary.adminLamaCust += ptgAdminLamaCust; 
+                summary.riderLama += riderLamaTotal;
+                
+                summary.adminS1 += adminS1Total; 
+                summary.adminS1Ongkir += ptgAdminS1Ongkir; 
+                summary.adminS1Cust += ptgAdminS1Cust; 
+                summary.riderS1 += riderS1Total;
+                
+                summary.adminS2 += adminS2Total; 
+                summary.adminS2Ongkir += ptgAdminS2Ongkir; 
+                summary.adminS2Cust += ptgAdminS2Cust; 
+                summary.riderS2 += riderS2Total;
+
+                // -- Update Rider Summary --
+                if (!riderMap[uid]) {
+                    riderMap[uid] = { 
+                        nama: nama, orders: 0, 
+                        rLama: 0, admLama: 0,
+                        rS1: 0, admS1: 0,
+                        rS2: 0, admS2: 0
+                    };
+                }
+                riderMap[uid].orders++;
+                riderMap[uid].rLama += riderLamaTotal; riderMap[uid].admLama += ptgAdminLamaOngkir;
+                riderMap[uid].rS1 += riderS1Total;     riderMap[uid].admS1 += ptgAdminS1Ongkir;
+                riderMap[uid].rS2 += riderS2Total;     riderMap[uid].admS2 += ptgAdminS2Ongkir;
+            }
+
+            globalSummaryData = summary;
+            renderDashboard(summary, riderMap, historyDate);
+        }
+
+        // Render Antarmuka Dashboard
+        function renderDashboard(summary, riderMap, historyDate = null) {
+            document.getElementById('data-section').classList.add('hidden');
+            document.getElementById('dashboard-section').classList.remove('hidden');
+
+            updateUIMode(historyDate);
+
+            // Update Cards Summary
+            document.getElementById('sum-orders').innerText = summary.orders;
+            
+            // SKEMA LAMA
+            document.getElementById('sum-admin-lama').innerText = formatRp(summary.adminLama);
+            document.getElementById('detail-admin-lama').innerText = `( ADM Ongkir: ${formatRp(summary.adminLamaOngkir)} | Cust: ${formatRp(summary.adminLamaCust)} )`;
+            document.getElementById('sum-rider-lama').innerText = "Total Semua Rider: " + formatRp(summary.riderLama);
+            
+            // SKEMA 1
+            document.getElementById('sum-admin-s1').innerText = formatRp(summary.adminS1);
+            document.getElementById('detail-admin-s1').innerText = `( ADM Ongkir: ${formatRp(summary.adminS1Ongkir)} | Cust: ${formatRp(summary.adminS1Cust)} )`;
+            document.getElementById('sum-rider-s1').innerText = "Total Semua Rider: " + formatRp(summary.riderS1);
+            
+            // SKEMA 2
+            document.getElementById('sum-admin-s2').innerText = formatRp(summary.adminS2);
+            document.getElementById('detail-admin-s2').innerText = `( ADM Ongkir: ${formatRp(summary.adminS2Ongkir)} | Cust: ${formatRp(summary.adminS2Cust)} )`;
+            document.getElementById('sum-rider-s2').innerText = "Total Semua Rider: " + formatRp(summary.riderS2);
+
+            // Update Tabel Rider
+            let tbody = document.getElementById('rider-table-body');
+            tbody.innerHTML = '';
+            for (let uid in riderMap) {
+                let r = riderMap[uid];
+                
+                // Hitung selisih pendapatan rider dibanding skema lama
+                let diffS1 = r.rS1 - r.rLama;
+                let diffS2 = r.rS2 - r.rLama;
+                
+                // Format teks pengurangan/penambahan
+                let labelDiffS1 = diffS1 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS1).replace('-', '- ')} )</span>` : (diffS1 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS1)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
+                let labelDiffS2 = diffS2 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS2).replace('-', '- ')} )</span>` : (diffS2 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS2)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
+
+                tbody.innerHTML += `
+                    <tr class="bg-white border-b hover:bg-gray-50">
+                        <td class="px-6 py-4 font-medium text-gray-900">${uid} - ${r.nama}</td>
+                        <td class="px-6 py-4 text-center">${r.orders}</td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="font-medium text-gray-800">${formatRp(r.rLama)}</div>
+                            <div class="text-[11px] text-gray-400 mt-1">( ADM: ${formatRp(r.admLama)} )</div>
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="font-medium text-blue-600">${formatRp(r.rS1)}</div>
+                            <div class="text-[11px] text-blue-400 mt-1">( ADM: ${formatRp(r.admS1)} )</div>
+                            <div class="text-[11px] mt-1">${labelDiffS1}</div>
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="font-medium text-purple-600">${formatRp(r.rS2)}</div>
+                            <div class="text-[11px] text-purple-400 mt-1">( ADM: ${formatRp(r.admS2)} )</div>
+                            <div class="text-[11px] mt-1">${labelDiffS2}</div>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        // Update mode tampilan (Tombol simpan & Judul)
+        function updateUIMode(historyDate = null) {
+            const btnSave = document.getElementById('btn-save');
+            const title = document.getElementById('dashboard-title');
+            
+            if (isViewHistoryMode) {
+                btnSave.classList.add('hidden');
+                title.innerText = historyDate ? `Detail Data: ${historyDate}` : `Detail Data Riwayat`;
+            } else {
+                btnSave.classList.remove('hidden');
+                title.innerText = `Hasil Kalkulasi Data Baru`;
+            }
+        }
+
+        // Fungsi Tombol Kembali
+        window.goBack = function() {
+            document.getElementById('dashboard-section').classList.add('hidden');
+            document.getElementById('data-section').classList.remove('hidden');
+        }
+
+        // Fungsi Buka Tutup Modal
+        window.openModal = function(tipe) {
+            const modal = document.getElementById('logic-modal');
+            const title = document.getElementById('modal-title');
+            const content = document.getElementById('modal-content');
+            
+            if (tipe === 'lama') {
+                title.innerText = "Logika Skema Saat Ini";
+                content.innerHTML = `
+                    <p><b>Perhitungan Pendapatan Admin:</b><br/>Admin mengambil <b>16%</b> dari nominal kotor ongkir. Tidak ada biaya tambahan dari pelanggan.</p>
+                    <hr class="my-2"/>
+                    <p><b>Perhitungan Pendapatan Rider:</b><br/>Rider mendapatkan <b>84%</b> dari nominal kotor ongkir, ditambah dengan uang tambahan secara utuh (100%).</p>
+                `;
+            } else if (tipe === 'skema1') {
+                title.innerText = "Logika Skema 1";
+                content.innerHTML = `
+                    <p><b>Perhitungan Pendapatan Admin:</b><br/>Admin mengambil <b>8%</b> dari total gabungan (<b>nominal kotor ongkir + uang tambahan</b>). Selain itu admin mendapatkan <b>Rp 1.000</b> biaya admin pelanggan per order.</p>
+                    <hr class="my-2"/>
+                    <p><b>Perhitungan Pendapatan Rider:</b><br/>Rider mendapatkan sisa <b>92%</b> dari total gabungan (<b>nominal kotor ongkir + uang tambahan</b>).</p>
+                `;
+            } else if (tipe === 'skema2') {
+                title.innerText = "Logika Skema 2";
+                content.innerHTML = `
+                    <p><b>Perhitungan Pendapatan Admin:</b><br/>
+                    Admin mengambil biaya bertingkat berdasarkan nominal ongkir kotor (ADM Ongkir):<br/>
+                    • Dibawah 10k = Rp 1.000<br/>
+                    • 10k - 19.9k = Rp 1.500<br/>
+                    • 20k - 29.9k = Rp 2.000<br/>
+                    • (naik 500 rupiah setiap kelipatan 10k).<br/><br/>
+                    Admin juga mendapat <b>Rp 1.000</b> biaya tambahan dari pelanggan.</p>
+                    <hr class="my-2"/>
+                    <p><b>Perhitungan Pendapatan Rider:</b><br/>Rider mendapatkan sisa nominal kotor ongkir (setelah dikurangi ADM Ongkir bertingkat di atas), ditambah uang tambahan secara utuh (100%).</p>
+                `;
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        window.closeModal = function() {
+            document.getElementById('logic-modal').classList.add('hidden');
+        }
+
+        // Tutup modal otomatis saat klik latar gelap
+        document.getElementById('logic-modal').addEventListener('click', function(e) {
+            if (e.target === this) { window.closeModal(); }
+        });
+
+        // Fungsi Hapus Riwayat
+        window.confirmDelete = function(id, event) {
+            event.stopPropagation(); // Mencegah klik kartu terbuka
+            docIdToDelete = id;
+            document.getElementById('delete-modal').classList.remove('hidden');
+        }
+
+        window.closeDeleteModal = function() {
+            docIdToDelete = null;
+            document.getElementById('delete-modal').classList.add('hidden');
+        }
+
+        window.executeDelete = async function() {
+            if (!docIdToDelete || !userId) return;
+            
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'users', userId, 'komparasi_history', docIdToDelete);
+                await deleteDoc(docRef);
+                window.showToast("Riwayat berhasil dihapus!");
+                window.closeDeleteModal();
+            } catch (error) {
+                console.error("Error menghapus dokumen: ", error);
+                window.showToast("Gagal menghapus riwayat.", true);
+            }
+        }
+
+        // Tutup modal hapus saat klik latar gelap
+        document.getElementById('delete-modal').addEventListener('click', function(e) {
+            if (e.target === this) { window.closeDeleteModal(); }
+        });
+
+        // Jalankan Inisialisasi Firebase Saat Script Load
+        initApp();
+    </script>
+</body>
+</html>
