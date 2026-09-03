@@ -495,8 +495,13 @@
         #home-onbid-sheet {
             max-height: calc(100vh - 6.5rem);
             max-height: calc(100dvh - 6.5rem);
-            overflow-y: auto;
-            overscroll-behavior: contain;
+            overflow: hidden; /* Tidak discroll: konten di-"fit"-kan (diskalakan) lewat JS */
+            transition: height 0.25s ease-out;
+        }
+        #home-onbid-sheet-inner {
+            transform-origin: top center;
+            transition: transform 0.25s ease-out;
+            will-change: transform;
         }
 
         /* Specific Elements */
@@ -2108,6 +2113,9 @@
                     </div>
                 </div>
 
+                <!-- WRAPPER KONTEN YANG DI-"FIT"-KAN (DISKALAKAN) AGAR TIDAK PERNAH SCROLL & TIDAK MELEWATI BADGE ATAS -->
+                <div id="home-onbid-sheet-inner">
+
                 <!-- HANDLE BAR SHEET (GAYA APLIKASI OJEK ONLINE) -->
                 <div class="flex justify-center pt-3 pb-1">
                     <div class="w-10 h-1.5 bg-gray-200 rounded-full"></div>
@@ -2235,7 +2243,7 @@
                             </div>
                         </div>
                         <div class="flex flex-col min-w-0">
-                            <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wide">Target Harian</span>
+                            <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wide">Harian</span>
                             <span id="daily-achievement-text" class="text-xs font-black text-gray-800 leading-tight">0 / 15 Orderan</span>
                         </div>
                     </div>
@@ -2252,7 +2260,7 @@
                             </div>
                         </div>
                         <div class="flex flex-col min-w-0">
-                            <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wide">Target Mingguan</span>
+                            <span class="text-[8px] font-bold text-gray-400 uppercase tracking-wide">Mingguan</span>
                             <span id="weekly-achievement-text" class="text-xs font-black text-gray-800 leading-tight">0 / 90 Orderan</span>
                         </div>
                     </div>
@@ -2275,6 +2283,9 @@
                         <span class="text-[11px] font-bold text-red-800 leading-tight text-center">Lapor Resto Tutup</span>
                     </button>
                 </div>
+
+                </div>
+                <!-- END WRAPPER KONTEN YANG DI-"FIT"-KAN -->
             </div>
         </div>
 
@@ -6318,7 +6329,7 @@
             },
             target: {
                 icon: 'fa-bullseye',
-                title: 'Target Harian & Mingguan',
+                title: 'orderan ideal Harian & Mingguan',
                 body: 'Menginformasikan jumlah orderan ideal yang seharusnya kamu capai, baik harian maupun mingguan.<br><br>Kenapa ada target ini? Karena PROJEKGO berkomitmen menjaga agar rider di lapangan bisa mendapatkan pendapatan yang lebih baik, dengan cara tidak merekrut rider melebihi kapasitas.<br><br>Jika indikator pencapaian ini kurang, artinya tim membutuhkan 1 rider baru untuk setiap kalkulasi kekurangan senilai 15, dihitung dari total kekurangan seluruh rider.'
             }
         };
@@ -10878,17 +10889,42 @@
                 window.checkRamaiBanner();
             }
 
-            // PASTIKAN BADGE/TOMBOL DI ATAS SHEET SELALU BERI RUANG (TIDAK BERTABRAKAN)
-            if (typeof window.syncFloatingBadgesPosition === 'function') {
-                // Beri jeda sedikit agar transisi tinggi sheet (commitment card & radar) selesai dulu
-                setTimeout(window.syncFloatingBadgesPosition, 60);
-                setTimeout(window.syncFloatingBadgesPosition, 350);
-            }
+            // PASTIKAN KONTEN SHEET SELALU PAS (FIT) & BADGE/TOMBOL DI ATAS SHEET SELALU BERI RUANG (TIDAK BERTABRAKAN)
+            const refitAfterToggle = () => {
+                if (typeof window.fitOnbidSheetContent === 'function') window.fitOnbidSheetContent();
+                if (typeof window.syncFloatingBadgesPosition === 'function') window.syncFloatingBadgesPosition();
+            };
+            // Beri jeda sedikit agar transisi tampil/sembunyi elemen (commitment card & radar) selesai dulu
+            setTimeout(refitAfterToggle, 60);
+            setTimeout(refitAfterToggle, 350);
         }
 
         // --- SINKRONISASI POSISI BADGE/TOMBOL FLOATING AGAR TIDAK BERTABRAKAN DENGAN SHEET ON-BID ---
         // Selalu jaga jarak (spacing) antara elemen floating (tombol GPS & badge transfer admin)
         // dengan bagian atas kontainer bottom-sheet yang bisa mengembang (misal saat ON-BID aktif).
+        // --- FIT KONTEN SHEET ON-BID (TANPA SCROLL, TIDAK PERNAH MELEWATI BADGE/HEADER ATAS) ---
+        // Alih-alih di-scroll, seluruh konten sheet diskalakan (scale) agar selalu pas (fit)
+        // ke ruang yang tersisa di bawah header & badge floating.
+        window.fitOnbidSheetContent = function() {
+            const sheet = document.getElementById('home-onbid-sheet');
+            const inner = document.getElementById('home-onbid-sheet-inner');
+            if (!sheet || !inner) return;
+            const HEADER_SAFE_ZONE = 96; // px ruang aman untuk header & badge di atas layar
+
+            // Reset sementara untuk mengukur tinggi asli konten (natural height)
+            inner.style.transform = 'scale(1)';
+            sheet.style.height = 'auto';
+            const naturalHeight = inner.getBoundingClientRect().height;
+            const maxAllowed = window.innerHeight - HEADER_SAFE_ZONE;
+
+            let scale = 1;
+            if (naturalHeight > maxAllowed && naturalHeight > 0) {
+                scale = maxAllowed / naturalHeight;
+            }
+            inner.style.transform = `scale(${scale})`;
+            sheet.style.height = `${Math.min(naturalHeight, maxAllowed)}px`;
+        };
+
         window.syncFloatingBadgesPosition = function() {
             const sheet = document.getElementById('home-onbid-sheet');
             if (!sheet) return;
@@ -10915,15 +10951,19 @@
         (function initFloatingBadgeObserver() {
             const setup = () => {
                 const sheet = document.getElementById('home-onbid-sheet');
-                if (!sheet) { setTimeout(setup, 300); return; }
+                const inner = document.getElementById('home-onbid-sheet-inner');
+                if (!sheet || !inner) { setTimeout(setup, 300); return; }
+                const refit = () => { window.fitOnbidSheetContent(); window.syncFloatingBadgesPosition(); };
                 if (window.ResizeObserver) {
-                    const ro = new ResizeObserver(() => window.syncFloatingBadgesPosition());
-                    ro.observe(sheet);
+                    // Amati wrapper INNER (bukan sheet luar), karena sheet luar sengaja kita batasi tingginya via JS
+                    const ro = new ResizeObserver(() => refit());
+                    ro.observe(inner);
                 } else {
-                    setInterval(() => window.syncFloatingBadgesPosition(), 500);
+                    setInterval(refit, 500);
                 }
-                window.syncFloatingBadgesPosition();
-                window.addEventListener('resize', window.syncFloatingBadgesPosition);
+                refit();
+                window.addEventListener('resize', refit);
+                window.addEventListener('orientationchange', refit);
             };
             setup();
         })();
