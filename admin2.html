@@ -3511,8 +3511,6 @@
             }
         };
 
-        window.autoPingTracker = {};
-
         function startLiveTimers() {
             setInterval(() => {
                 const now = Date.now();
@@ -3538,16 +3536,9 @@
                                 cardEl.classList.add('border-slate-200', 'shadow-sm');
                             }
                         }
-
-                        if (elapsed >= 60) {
-                            const lastAutoPing = window.autoPingTracker[order.id] || 0;
-                            if (now - lastAutoPing >= 15000) {
-                                window.autoPingTracker[order.id] = now;
-                                const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
-                                updateDoc(orderRef, { last_ping: serverTimestamp() }).catch(e => {});
-                                sendPushNotification(order.rider_uid, "🚨 WAKE UP! ORDERAN MASUK 🚨", "Buka aplikasi sekarang! Waktu konfirmasi sudah lebih dari 1 menit!", "ALARM_DARURAT");
-                            }
-                        }
+                        // CATATAN: Auto-ping otomatis (tiap 15 detik) dihapus untuk hemat read/write Firebase.
+                        // Highlight visual (>2 menit) tetap jalan sebagai penanda di admin.
+                        // Ping ke rider sekarang murni manual lewat tombol "Up" (window.pingOrder).
                     }
                 });
             }, 1000);
@@ -5101,6 +5092,8 @@
         };
 
         window._todayHistoryUnsubscribe = null;
+        window._todayHistoryDateKey = null; // tanggal yang sedang dipegang oleh listener 'hari ini' yang aktif
+        window._todayHistoryLiveOrders = null; // cache di memori dari data terakhir yang diterima listener
 
         window.renderHistoryOrders = async () => {
             const container = document.getElementById('history-orders-list');
@@ -5119,10 +5112,20 @@
             const loader = document.getElementById('loading-overlay');
             if(loader) { loader.classList.remove('hidden'); loader.classList.add('flex'); }
 
-            // MENGHENTIKAN LISTENER SEBELUMNYA AGAR TIDAK BOCOR / DOBEL
-            if (window._todayHistoryUnsubscribe) {
+            // HEMAT READ: cek dulu apakah tanggal yang dipilih adalah "hari ini"
+            const _checkNow = new Date();
+            const _checkTodayStr = `${_checkNow.getFullYear()}-${String(_checkNow.getMonth() + 1).padStart(2, '0')}-${String(_checkNow.getDate()).padStart(2, '0')}`;
+            const _isTodaySelected = (dateVal === _checkTodayStr);
+
+            // MENGHENTIKAN LISTENER 'HARI INI' HANYA JIKA ADMIN PINDAH KE TANGGAL LAIN.
+            // Kalau masih di tanggal hari ini, listener yang sudah jalan TIDAK di-restart
+            // (mencegah baca ulang seluruh order hari ini setiap fungsi ini dipanggil ulang,
+            // misalnya oleh trigger perubahan saldo).
+            if (!_isTodaySelected && window._todayHistoryUnsubscribe) {
                 window._todayHistoryUnsubscribe();
                 window._todayHistoryUnsubscribe = null;
+                window._todayHistoryDateKey = null;
+                window._todayHistoryLiveOrders = null;
             }
 
             const processAndRenderUI = (allFetchedOrders) => {
@@ -5317,8 +5320,17 @@
                     
                     window._localHistoryCache[dateVal] = [...allFetchedOrders];
                     processAndRenderUI(allFetchedOrders);
+                } else if (window._todayHistoryUnsubscribe && window._todayHistoryDateKey === dateVal) {
+                    // HEMAT READ: listener 'hari ini' SUDAH AKTIF untuk tanggal yang sama.
+                    // Langsung pakai data terakhir dari cache memori (0 read Firestore),
+                    // tetap realtime karena listener di bawah terus jalan di background
+                    // dan akan memanggil processAndRenderUI sendiri setiap ada perubahan.
+                    processAndRenderUI([...(window._todayHistoryLiveOrders || [])]);
+                    if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
                 } else {
-                    // TANGGAL HARI INI: MENGGUNAKAN ONSNAPSHOT AGAR REAL-TIME & HEMAT READ
+                    // TANGGAL HARI INI & LISTENER BELUM ADA: pasang SEKALI, lalu tetap hidup
+                    // selama tanggal ini masih dipilih (realtime, tanpa restart berulang).
+                    window._todayHistoryDateKey = dateVal;
                     window._todayHistoryUnsubscribe = onSnapshot(qActive, (snapActive) => {
                         let liveOrders = [];
                         snapActive.forEach(docSnap => {
@@ -5335,6 +5347,7 @@
                                 created_at: ts, admin_created_at: data.created_at, is_from_active: true
                             });
                         });
+                        window._todayHistoryLiveOrders = liveOrders; // simpan ke cache memori untuk dipakai ulang
                         processAndRenderUI(liveOrders);
                     }, (error) => {
                         console.error("Fetch history error:", error);
