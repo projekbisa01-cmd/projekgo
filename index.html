@@ -19,7 +19,9 @@
     <!-- Tambahkan library untuk download gambar -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     
-    <!-- TAMBAHAN LIBRARY LEAFLET JS UNTUK PETA DIHAPUS, DIGANTI GAMBAR STATIS -->
+    <!-- LEAFLET JS UNTUK PETA GOMBONG DI BACKGROUND SAAT ON-BID AKTIF -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <!-- Meta untuk PWA Icon & Color -->
     <meta name="theme-color" content="#ff8c00">
@@ -502,14 +504,16 @@
             /* JEDA AMAN DI BAWAH: agar kartu paling bawah tidak mepet/terpotong tombol navigasi & gesture bar HP */
             padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
             scrollbar-width: none; /* Firefox: sembunyikan scrollbar visual, tetap bisa discroll */
-            /* BACKGROUND KHUSUS SHEET ON-BID */
-            background-image: url('https://i.ibb.co.com/27yGnGcm/e25a01a5535c801940e7d5d134049d93.jpg') !important;
-            background-size: cover;
-            background-position: center top;
-            background-repeat: no-repeat;
-            background-attachment: fixed; /* agar foto menyatu mulus dengan #map-background di baliknya */
         }
         #home-onbid-sheet::-webkit-scrollbar { display: none; } /* Chrome/Safari: sembunyikan scrollbar visual */
+
+        /* PASTIKAN SEMUA TEKS GELAP (HITAM/ABU TUA) DI DALAM SHEET ON-BID BERUBAH PUTIH SAAT MODE GELAP */
+        body.dark-mode #home-onbid-sheet .text-black,
+        body.dark-mode #home-onbid-sheet .text-gray-900,
+        body.dark-mode #home-onbid-sheet .text-gray-800,
+        body.dark-mode #home-onbid-sheet .text-gray-700 {
+            color: #f8fafc !important;
+        }
         #home-onbid-sheet-inner {
             transform-origin: top center;
             transition: transform 0.25s ease-out;
@@ -578,6 +582,14 @@
         #home-onbid-sheet-inner.onbid-live #radar-status-text {
             font-size: clamp(0.62rem, 1.3dvh, 0.68rem) !important;
         }
+
+        /* ===== BULATAN ANTREAN SAAT OFF-BID: RING DIREDUPKAN & DITANDAI "OFF" ===== */
+        #radar-online.radar-off-state .radar-spin-ring,
+        #radar-online.radar-off-state .radar-pulse-ring { animation: none !important; opacity: 0.12 !important; }
+        #radar-online.radar-off-state .onbid-radar-circle-wrap > div.bg-orange-200 { opacity: 0.12 !important; }
+        #radar-online.radar-off-state .onbid-radar-circle-inner { border-color: #e2e8f0 !important; }
+        #radar-online.radar-off-state #radar-status-text { color: #94a3b8 !important; }
+        body.dark-mode #radar-online.radar-off-state #queue-off-label { background-color: #1e293b !important; }
         #home-onbid-sheet-inner.onbid-live #onbid-toggle-row {
             padding-top: clamp(2px, 0.6dvh, 6px) !important;
             padding-bottom: clamp(2px, 0.6dvh, 6px) !important;
@@ -734,31 +746,124 @@
             .veh-cloud, .veh-zzz { animation: none !important; opacity: 1 !important; transform: none !important; }
         }
 
-        /* Transisi halus SVG animasi saat ON-BID/OFF-BID berganti */
-        #map-background svg { transition: opacity 0.5s ease; }
+        /* Transisi halus gambar & efek Zzz saat ON-BID/OFF-BID berganti */
+        #map-bg-off-image,
+        #map-bg-zzz,
+        #map-bg-on-image { transition: opacity 0.5s ease; }
 
-        /* SAAT ON-BID AKTIF: mode terang memakai foto yang sama dengan sheet (menyatu via background-attachment: fixed),
-           diberi lapisan gradient putih tipis di atas agar ikon/tombol header tetap kontras & terbaca,
-           dan memudar ke putih di bagian bawah supaya menyambung mulus ke #home-onbid-sheet. */
-        #map-background.onbid-active-bg {
-            background-image:
-                linear-gradient(to bottom, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.25) 30%, rgba(255,255,255,0.65) 75%, rgba(255,255,255,0.95) 100%),
-                url('https://i.ibb.co.com/27yGnGcm/e25a01a5535c801940e7d5d134049d93.jpg') !important;
-            background-size: cover !important;
-            background-position: center top !important;
-            background-repeat: no-repeat !important;
-            background-attachment: fixed !important;
-            background-color: #ffffff !important;
+        /* GAMBAR STATIS SAAT OFF-BID (ISTIRAHAT) - tampil default, diposisikan mengisi area
+           di atas kontainer bottom-sheet yang bisa mengembang (#home-onbid-sheet) */
+        #map-bg-off-image {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 1;
+            z-index: 1;
         }
-        #map-background.onbid-active-bg svg { opacity: 0; pointer-events: none; }
+        /* EFEK "Zzz" MELAYANG DI ATAS GAMBAR OFF-BID */
+        #map-bg-zzz {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 1;
+            pointer-events: none;
+            z-index: 2;
+        }
 
-        /* MODE GELAP: background beranda (baik animasi aktif maupun ON-BID) tetap ikut gelap */
-        body.dark-mode #map-background { background-image: linear-gradient(to bottom, #1e293b, #0f172a 55%, #1e293b) !important; background-color: #0f172a !important; }
-        body.dark-mode #map-background.onbid-active-bg { background-image: none !important; background-color: #0f172a !important; }
-        body.dark-mode #map-background .veh-cloud { fill: #334155 !important; }
-        body.dark-mode #map-background .veh-shadow { fill: #020617 !important; opacity: 0.6 !important; }
-        body.dark-mode #map-background .veh-engine,
-        body.dark-mode #map-background .veh-seat { fill: #64748b !important; }
+        /* GAMBAR STATIS SAAT ON-BID AKTIF (PETA) - tersembunyi secara default */
+        #map-bg-on-image {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 3;
+        }
+
+        /* SAAT ON-BID AKTIF: sembunyikan gambar OFF & efek Zzz, tampilkan gambar peta statis */
+        #map-background.onbid-active-bg #map-bg-off-image,
+        #map-background.onbid-active-bg #map-bg-zzz { opacity: 0; pointer-events: none; }
+        #map-background.onbid-active-bg #map-bg-on-image { opacity: 1; }
+
+        #onbid-map-view {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.6s ease;
+            z-index: 0;
+        }
+        #onbid-map-view .leaflet-control-attribution {
+            font-size: 8px !important;
+            background: rgba(255,255,255,0.6) !important;
+            padding: 0 4px !important;
+        }
+        /* PIN LOKASI GOMBONG (KUSTOM, SENADA WARNA BRAND) */
+        .onbid-map-pin {
+            width: 34px; height: 34px;
+            display: flex; align-items: center; justify-content: center;
+            position: relative;
+        }
+        .onbid-map-pin .pin-pulse {
+            position: absolute; inset: 0; border-radius: 9999px;
+            background: rgba(255,140,0,0.35);
+            animation: onbidPinPulse 2s ease-out infinite;
+        }
+        .onbid-map-pin .pin-dot {
+            position: relative; z-index: 1;
+            width: 34px; height: 34px; border-radius: 9999px;
+            background: linear-gradient(135deg, #ff8c00, #ff5e00);
+            border: 3px solid #ffffff;
+            box-shadow: 0 3px 10px rgba(234,88,12,0.4);
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-size: 14px;
+        }
+        @keyframes onbidPinPulse {
+            0% { transform: scale(0.6); opacity: 0.8; }
+            100% { transform: scale(2.2); opacity: 0; }
+        }
+
+        /* MODE GELAP: gambar background beranda (foto status OFF & gambar peta status ON) TETAP
+           DITAMPILKAN UTUH, hanya digelapkan sedikit lewat overlay kaca (#map-overlay) seperti
+           tampilan lain di aplikasi saat mode gelap aktif. */
+
+        /* WARNA TEKS EFEK "Zzz": hitam saat mode terang, putih saat mode gelap */
+        #map-bg-zzz text { fill: #000000; }
+        body.dark-mode #map-bg-zzz text { fill: #ffffff; }
+
+        /* KONTAINER YANG MENGEMBANG (BOTTOM SHEET BERANDA): dipastikan latar polos, TIDAK ADA
+           gambar/foto sama sekali di dalamnya - putih polos saat mode terang, hitam pekat polos
+           saat mode gelap. */
+        #home-onbid-sheet {
+            background-color: #ffffff !important;
+            background-image: none !important;
+        }
+        body.dark-mode #home-onbid-sheet {
+            background-color: #000000 !important;
+            background-image: none !important;
+        }
+
+        /* ========================================================= */
+        /* PENEGASAN KARTU DI BERANDA & DAFTAR ANTREAN: outline tipis  */
+        /* agak tebal agar kartu lebih tegas; putih saat mode gelap.  */
+        /* ========================================================= */
+        #page-home [class*="bg-white"][class*="border-gray"],
+        #page-home [class*="bg-gray-100"][class*="border-gray"],
+        #page-home [class*="bg-red-50"][class*="border-red"],
+        #page-queue-list [class*="bg-white"][class*="border-gray"] {
+            border-width: 1.5px !important;
+        }
+        body.dark-mode #page-home [class*="bg-white"][class*="border-gray"],
+        body.dark-mode #page-home [class*="bg-gray-100"][class*="border-gray"],
+        body.dark-mode #page-home [class*="bg-red-50"][class*="border-red"],
+        body.dark-mode #page-queue-list [class*="bg-white"][class*="border-gray"] {
+            border-color: #ffffff !important;
+        }
     </style>
 </head>
 <body class="pb-24"> 
@@ -766,69 +871,23 @@
     <!-- BACKGROUND UMUM UNTUK HALAMAN SELAIN BERANDA -->
     <div id="general-bg" class="fixed inset-0 z-[0] bg-cover bg-center bg-no-repeat transition-opacity duration-300 opacity-0 pointer-events-none" style="background-image: url('https://i.ibb.co.com/BKfzrDpr/5e893afb7790c0f5c0f18ee6d7d39460.jpg');"></div>
     
-    <!-- MAP BACKGROUND (VEKTOR ANIMASI - MEREPRESENTASIKAN STATUS SEDANG OFF/ISTIRAHAT) -->
-    <div id="map-background" class="fixed inset-0 z-[1] transition-all duration-500 opacity-100 flex items-center justify-center bg-gradient-to-b from-slate-100 via-slate-50 to-slate-200 overflow-hidden">
-        <svg viewBox="0 0 400 400" preserveAspectRatio="xMidYMid slice" class="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-            <!-- Awan mengambang pelan -->
-            <ellipse class="veh-cloud veh-cloud-1" cx="75" cy="85" rx="42" ry="16" fill="#e2e8f0"/>
-            <ellipse class="veh-cloud veh-cloud-1" cx="105" cy="78" rx="28" ry="14" fill="#e2e8f0"/>
-            <ellipse class="veh-cloud veh-cloud-2" cx="315" cy="130" rx="50" ry="18" fill="#e6ebf1"/>
-            <ellipse class="veh-cloud veh-cloud-2" cx="345" cy="122" rx="30" ry="14" fill="#e6ebf1"/>
+    <!-- MAP BACKGROUND (GAMBAR STATIS - MEREPRESENTASIKAN STATUS OFF/ISTIRAHAT & ON-BID) -->
+    <div id="map-background" class="fixed inset-0 z-[1] transition-all duration-500 opacity-100 flex items-center justify-center overflow-hidden">
+        <!-- PETA ASLI (LEAFLET) TETAP DIMUAT DI BELAKANG UNTUK KOMPATIBILITAS, TAPI DITUTUPI GAMBAR STATIS DI ATASNYA -->
+        <div id="onbid-map-view"></div>
 
-            <!-- Bayangan tanah -->
-            <ellipse class="veh-shadow" cx="191" cy="305" rx="115" ry="13" fill="#cbd5e1" opacity="0.55"/>
+        <!-- GAMBAR SAAT STATUS OFF (ISTIRAHAT) - diposisikan mengisi area di atas kontainer bottom-sheet -->
+        <img id="map-bg-off-image" src="https://i.ibb.co.com/Fqccy17Z/Automated-Dispatch-Management-Software.jpg" alt="Status Off">
 
-            <!-- Motor terparkir (diam / istirahat) - didesain jelas sbg SEPEDA MOTOR: ada blok mesin, knalpot, tangki bensin, roda tebal -->
-            <g transform="translate(100,160)">
-                <!-- standar samping -->
-                <line x1="82" y1="112" x2="98" y2="134" stroke="#94a3b8" stroke-width="5" stroke-linecap="round" class="veh-part"/>
-
-                <!-- roda belakang (tebal, khas motor) -->
-                <circle cx="16" cy="110" r="27" fill="#334155" class="veh-tire"/>
-                <circle cx="16" cy="110" r="27" fill="none" stroke="#1e293b" stroke-width="4" class="veh-tire-tread"/>
-                <circle cx="16" cy="110" r="9" fill="#cbd5e1" class="veh-hub"/>
-
-                <!-- roda depan -->
-                <circle cx="166" cy="110" r="27" fill="#334155" class="veh-tire"/>
-                <circle cx="166" cy="110" r="27" fill="none" stroke="#1e293b" stroke-width="4" class="veh-tire-tread"/>
-                <circle cx="166" cy="110" r="9" fill="#cbd5e1" class="veh-hub"/>
-
-                <!-- knalpot (exhaust) - penanda khas motor -->
-                <path d="M62,100 C44,104 26,106 17,104" stroke="#94a3b8" stroke-width="7" fill="none" stroke-linecap="round" class="veh-part"/>
-                <ellipse cx="16" cy="104" rx="10" ry="6" fill="#64748b" class="veh-part"/>
-
-                <!-- blok mesin -->
-                <rect x="62" y="80" width="46" height="32" rx="7" fill="#334155" class="veh-engine"/>
-                <circle cx="85" cy="96" r="8" fill="#475569" class="veh-engine"/>
-
-                <!-- garpu depan (suspensi tebal) -->
-                <line x1="140" y1="42" x2="166" y2="88" stroke="#334155" stroke-width="8" stroke-linecap="round" class="veh-part"/>
-
-                <!-- lengan ayun roda belakang -->
-                <path d="M60,88 L16,110" stroke="#ff8c00" stroke-width="7" stroke-linecap="round" class="veh-frame"/>
-                <!-- rangka utama -->
-                <path d="M16,110 C18,84 38,68 62,68 L86,68 C100,68 110,56 128,48 L140,42" stroke="#ff8c00" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round" class="veh-frame"/>
-
-                <!-- tangki bensin (khas motor, bukan sepeda) -->
-                <path d="M60,60 C60,48 76,42 94,44 C108,46 110,56 102,62 C90,68 66,68 60,60 Z" fill="#f97316" class="veh-tank"/>
-
-                <!-- jok -->
-                <rect x="38" y="60" width="34" height="10" rx="5" fill="#1e293b" class="veh-seat"/>
-
-                <!-- stang & spion -->
-                <line x1="140" y1="42" x2="140" y2="18" stroke="#334155" stroke-width="6" stroke-linecap="round" class="veh-part"/>
-                <line x1="126" y1="20" x2="154" y2="20" stroke="#334155" stroke-width="6" stroke-linecap="round" class="veh-part"/>
-                <circle cx="126" cy="17" r="4" fill="#475569" class="veh-part"/>
-
-                <!-- lampu depan (mati / tidak menyala saat istirahat) -->
-                <circle cx="166" cy="78" r="7" fill="#94a3b8" class="veh-part"/>
-            </g>
-
-            <!-- Ikon "Zzz" melayang, menandakan status sedang istirahat / off -->
-            <text class="veh-zzz veh-zzz-1" x="222" y="150" font-size="18" fill="#94a3b8" font-family="Arial, sans-serif" font-weight="800">z</text>
-            <text class="veh-zzz veh-zzz-2" x="238" y="128" font-size="24" fill="#94a3b8" font-family="Arial, sans-serif" font-weight="800">Z</text>
-            <text class="veh-zzz veh-zzz-3" x="258" y="100" font-size="30" fill="#94a3b8" font-family="Arial, sans-serif" font-weight="800">Z</text>
+        <!-- EFEK "TIDUR" (z.. zz.. zzz..) MELAYANG DI ATAS GAMBAR OFF-BID -->
+        <svg id="map-bg-zzz" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+            <text class="veh-zzz veh-zzz-1" x="222" y="150" font-size="18" font-family="Arial, sans-serif" font-weight="800">z</text>
+            <text class="veh-zzz veh-zzz-2" x="238" y="128" font-size="24" font-family="Arial, sans-serif" font-weight="800">Z</text>
+            <text class="veh-zzz veh-zzz-3" x="258" y="100" font-size="30" font-family="Arial, sans-serif" font-weight="800">Z</text>
         </svg>
+
+        <!-- GAMBAR SAAT STATUS ON (AKTIF/ON-BID) -->
+        <img id="map-bg-on-image" src="https://i.ibb.co.com/Rpqws8hr/peta-maps.png" alt="Status On">
     </div>
     
     <!-- OVERLAY KACA AGAR UI TETAP TERBACA -->
@@ -2377,7 +2436,7 @@
                             <!-- State Online (Compact) -->
                             <div id="radar-online" class="flex flex-col items-center w-full opacity-0 pointer-events-none transition-all duration-500 relative z-0 gap-2">
 
-                                <p class="text-[9px] text-green-600 font-bold uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
+                                <p id="radar-online-label" class="text-[9px] text-green-600 font-bold uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
                                     <span class="w-1.5 h-1.5 bg-green-500 rounded-full shadow-sm shadow-green-300 animate-pulse"></span> Online & Siap
                                 </p>
 
@@ -2390,6 +2449,11 @@
                                         <span class="text-[7px] text-gray-400 font-bold uppercase tracking-widest mb-0.5">Antrean</span>
                                         <div id="my-queue-position" class="text-2xl font-black text-gray-800 leading-none">
                                             #--
+                                        </div>
+                                        <!-- LABEL INI MENUTUPI NOMOR ANTREAN SAAT OFF-BID (BULATAN TETAP TAMPIL, ISINYA GANTI JADI "OFF") -->
+                                        <div id="queue-off-label" class="hidden absolute inset-0 flex-col items-center justify-center bg-white rounded-full z-20">
+                                            <i class="fa-solid fa-power-off text-gray-300 text-base mb-0.5"></i>
+                                            <span class="text-[9px] font-black text-gray-400 uppercase tracking-widest">OFF</span>
                                         </div>
                                     </div>
                                 </div>
@@ -5653,8 +5717,8 @@
                     btn.classList.remove('bg-gray-50', 'text-gray-400', 'border-gray-100');
                 }
                 if (mapOverlay) {
-                    // Mode Gelap: Peta digelapkan 70% dengan Z-Index positif
-                    mapOverlay.className = "fixed inset-0 z-[2] bg-slate-900/40 pointer-events-none transition-colors duration-300";
+                    // Mode Gelap: gambar beranda (OFF/ON) digelapkan lebih tegas agar terlihat jelas bedanya
+                    mapOverlay.className = "fixed inset-0 z-[2] bg-black/70 pointer-events-none transition-colors duration-300";
                 }
                 // Ubah Tema Peta Leaflet ke Dark
                 if (window.mapTileLayer && window.darkTileUrl) {
@@ -7594,14 +7658,50 @@
             });
         }
 
-        // --- INISIALISASI PETA BACKGROUND (LEAFLET STATIS) ---
-        window.initialMapCenter = [-7.605625, 109.5155]; // Koordinat Pusat Baru Rider
-        window.initialMapZoom = 14;
-        window.lightTileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+        // --- INISIALISASI PETA BACKGROUND (LEAFLET, PETA ASLI GOMBONG) ---
+        window.initialMapCenter = [-7.605625, 109.5155]; // Koordinat Pusat Gombong, Kebumen
+        window.initialMapZoom = 15;
+        window.lightTileUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'; // gaya peta berwarna & menarik
         window.darkTileUrl = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 
         function initBackgroundMap() {
-            // Leaflet telah dihapus, diganti dengan gambar statis.
+            const mapViewEl = document.getElementById('onbid-map-view');
+            if (!mapViewEl || typeof L === 'undefined' || window.onbidMapView) return;
+
+            window.onbidMapView = L.map('onbid-map-view', {
+                center: window.initialMapCenter,
+                zoom: window.initialMapZoom,
+                zoomControl: false,
+                dragging: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+                boxZoom: false,
+                keyboard: false,
+                touchZoom: false,
+                tap: false,
+                fadeAnimation: true,
+                attributionControl: true
+            });
+
+            const isDark = document.body.classList.contains('dark-mode');
+            window.mapTileLayer = L.tileLayer(isDark ? window.darkTileUrl : window.lightTileUrl, {
+                maxZoom: 19,
+                subdomains: 'abcd',
+                crossOrigin: true,
+                attribution: '&copy; OpenStreetMap &copy; CARTO'
+            }).addTo(window.onbidMapView);
+
+            // PIN PENANDA LOKASI (GOMBONG), BERGAYA SENADA BRAND ORANGE
+            const onbidPinIcon = L.divIcon({
+                className: '',
+                html: '<div class="onbid-map-pin"><div class="pin-pulse"></div><div class="pin-dot"><i class="fa-solid fa-motorcycle"></i></div></div>',
+                iconSize: [34, 34],
+                iconAnchor: [17, 17]
+            });
+            L.marker(window.initialMapCenter, { icon: onbidPinIcon, interactive: false, keyboard: false }).addTo(window.onbidMapView);
+
+            // Pastikan ukuran peta terhitung benar begitu kontainer benar-benar terlihat (opacity transition)
+            setTimeout(() => { if (window.onbidMapView) window.onbidMapView.invalidateSize(); }, 400);
         }
 
         // FUNGSI KEMBALI KE TITIK AWAL RIDER
@@ -11015,10 +11115,14 @@
                 else { sheetInnerEl.classList.remove('onbid-live'); }
             }
 
-            // BACKGROUND ANIMASI VEKTOR BERANDA: tampil saat OFF-BID (istirahat), jadi putih polos & animasi hilang saat ON-BID aktif
+            // BACKGROUND ANIMASI VEKTOR BERANDA: tampil saat OFF-BID (istirahat), jadi peta Gombong saat ON-BID aktif
             const mapBgVector = document.getElementById('map-background');
             if (mapBgVector) {
-                if (isActive) { mapBgVector.classList.add('onbid-active-bg'); }
+                if (isActive) {
+                    mapBgVector.classList.add('onbid-active-bg');
+                    if (typeof window.initBackgroundMap === 'function') window.initBackgroundMap();
+                    if (window.onbidMapView) setTimeout(() => window.onbidMapView.invalidateSize(), 50);
+                }
                 else { mapBgVector.classList.remove('onbid-active-bg'); }
             }
 
@@ -11046,22 +11150,30 @@
             const radarOffline = document.getElementById('radar-offline');
             const radarOnline = document.getElementById('radar-online');
             const radarContainer = document.getElementById('order-radar-container');
+            const queueOffLabel = document.getElementById('queue-off-label');
+            const radarOnlineLabel = document.getElementById('radar-online-label');
+            const radarStatusTextEl = document.getElementById('radar-status-text');
             if (radarOffline && radarOnline) {
+                // BULATAN ANTREAN SELALU TAMPIL (BAIK ON-BID MAUPUN OFF-BID), HANYA ISI TEKSNYA YANG BERBEDA
+                radarOffline.classList.add('hidden');
+                radarOffline.classList.remove('flex');
+                radarOnline.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+                radarOnline.classList.add('flex');
+                if (radarContainer) radarContainer.classList.add('min-h-[92px]');
+
                 if (isActive) {
-                    // ON-BID: tampilkan radar berjalan, container melebar normal
-                    radarOffline.classList.add('hidden');
-                    radarOffline.classList.remove('flex');
-                    radarOnline.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
-                    radarOnline.classList.add('flex');
-                    if (radarContainer) radarContainer.classList.add('min-h-[92px]');
+                    // ON-BID: tampilkan radar berjalan normal (nomor antrean & status real-time)
+                    radarOnline.classList.remove('radar-off-state');
+                    if (queueOffLabel) { queueOffLabel.classList.add('hidden'); queueOffLabel.classList.remove('flex'); }
+                    if (radarOnlineLabel) radarOnlineLabel.classList.remove('hidden');
+                    if (radarStatusTextEl) radarStatusTextEl.innerText = 'Menunggu orderan dari Admin...';
                     // startQueueListener() DIHAPUS DARI SINI: Radar sudah standby di background
                 } else {
-                    // OFF-BID: sembunyikan total tampilan "radar mati" & kartu radar, container ikut mengecil (minimize)
-                    radarOffline.classList.add('hidden');
-                    radarOffline.classList.remove('flex');
-                    radarOnline.classList.add('hidden', 'opacity-0', 'pointer-events-none');
-                    radarOnline.classList.remove('flex');
-                    if (radarContainer) radarContainer.classList.remove('min-h-[92px]');
+                    // OFF-BID: bulatan antrean TETAP ditampilkan (tidak disembunyikan), tapi ditandai "OFF"
+                    radarOnline.classList.add('radar-off-state');
+                    if (queueOffLabel) { queueOffLabel.classList.remove('hidden'); queueOffLabel.classList.add('flex'); }
+                    if (radarOnlineLabel) radarOnlineLabel.classList.add('hidden');
+                    if (radarStatusTextEl) radarStatusTextEl.innerText = 'Anda sedang OFF';
                     // MENGHAPUS stopQueueListener() agar radar standby dan Ketersediaan Rider tetap terdeteksi walau OFF-BID
                 }
             }
