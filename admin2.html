@@ -107,6 +107,14 @@
             <h2 class="font-black text-black text-xl mb-1">Login Sistem</h2>
             <p class="text-[10px] text-slate-500 mb-6 text-center">Masukkan password untuk mengakses Admin Dispatch.</p>
 
+            <div class="w-full mb-3">
+                <label class="text-[9px] font-black text-black uppercase tracking-widest ml-1 mb-1.5 block">Email</label>
+                <div class="relative">
+                    <i class="fa-solid fa-user absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="email" id="login-email" autocomplete="username" placeholder="admin@projekgo.id" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 pl-10 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-sky-500">
+                </div>
+            </div>
+
             <div class="w-full mb-4">
                 <label class="text-[9px] font-black text-black uppercase tracking-widest ml-1 mb-1.5 block">Password</label>
                 <div class="relative">
@@ -1727,7 +1735,7 @@
 
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, limit, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
@@ -1786,60 +1794,81 @@
         window.userRole = null; // 'admin' atau 'owner'
         window.analyticsTargets = { omset: 5000000, order: 1000 };
 
+        // Menentukan role dari email akun Firebase (bukan dari input pengguna)
+        window.roleFromEmail = (email) => {
+            const e = String(email || '').toLowerCase().trim();
+            if (e === 'projekbisa01@gmail.com') return 'owner';
+            if (e === 'admin@projekgo.id') return 'admin';
+            return null;
+        };
+
+        window.applyRoleVisibility = (role) => {
+            const sembunyikan = (role !== 'owner');
+            ['btn-menu-customers', 'btn-menu-omset', 'btn-menu-analisis'].forEach(id => {
+                const b = document.getElementById(id);
+                if (!b) return;
+                if (sembunyikan) b.classList.add('hidden');
+                else b.classList.remove('hidden');
+            });
+        };
+
         window.handleLogin = async () => {
-            const pass = document.getElementById('login-password').value;
-            const err = document.getElementById('login-error');
-            const overlay = document.getElementById('login-overlay');
-            const btnCustomers = document.getElementById('btn-menu-customers');
-            const btnOmset = document.getElementById('btn-menu-omset');
-            const btnAnalisis = document.getElementById('btn-menu-analisis');
+            const emailEl = document.getElementById('login-email');
+            const passEl  = document.getElementById('login-password');
+            const err     = document.getElementById('login-error');
+            const btnEl   = document.querySelector('#login-overlay button[onclick*="handleLogin"]');
 
-            let role = null;
-            if (pass === 'Admin_projekgo') role = 'admin';
-            else if (pass === 'Admin_projekgo123') role = 'owner';
+            const email = (emailEl ? emailEl.value : '').trim();
+            const pass  = passEl ? passEl.value : '';
 
-            if (role) {
-                window.userRole = role;
-                err.classList.add('hidden');
-                
-                // Simpan sesi login ke Firestore agar tidak perlu login terus
-                const user = auth.currentUser;
-                if (user) {
-                    try {
-                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
-                        await setDoc(sessionRef, { role: role, timestamp: serverTimestamp() });
-                    } catch (e) { console.warn("Gagal menyimpan sesi login", e); }
-                }
-
-                overlay.classList.add('hidden');
-                if (role === 'admin') {
-                    if (btnCustomers) btnCustomers.classList.add('hidden');
-                    if (btnOmset) btnOmset.classList.add('hidden');
-                    if (btnAnalisis) btnAnalisis.classList.add('hidden');
-                } else {
-                    if (btnCustomers) btnCustomers.classList.remove('hidden');
-                    if (btnOmset) btnOmset.classList.remove('hidden');
-                    if (btnAnalisis) btnAnalisis.classList.remove('hidden');
-                }
-                if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders(); 
-            } else {
+            const tampilkanError = (pesan) => {
+                err.innerHTML = '<i class="fa-solid fa-circle-exclamation mr-1"></i>' + pesan;
                 err.classList.remove('hidden');
+            };
+
+            if (!email || !pass) {
+                tampilkanError('Email dan password harus diisi.');
+                return;
+            }
+
+            if (btnEl) { btnEl.disabled = true; btnEl.style.opacity = '0.6'; }
+            err.classList.add('hidden');
+
+            try {
+                const cred = await signInWithEmailAndPassword(auth, email, pass);
+                const role = window.roleFromEmail(cred.user.email);
+
+                if (!role) {
+                    await signOut(auth);
+                    tampilkanError('Akun ini tidak punya akses admin.');
+                    return;
+                }
+
+                window.userRole = role;
+                window.applyRoleVisibility(role);
+                passEl.value = '';
+                document.getElementById('login-overlay').classList.add('hidden');
+                if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders();
+
+            } catch (e) {
+                console.warn('Login gagal:', e.code);
+                if (e.code === 'auth/too-many-requests') {
+                    tampilkanError('Terlalu banyak percobaan. Tunggu beberapa menit.');
+                } else if (e.code === 'auth/network-request-failed') {
+                    tampilkanError('Koneksi bermasalah. Cek internet Anda.');
+                } else {
+                    tampilkanError('Email atau password salah.');
+                }
+            } finally {
+                if (btnEl) { btnEl.disabled = false; btnEl.style.opacity = '1'; }
             }
         };
 
         window.handleLogout = async () => {
-            window.showConfirm('Logout', 'Yakin ingin keluar? Anda harus memasukkan sandi lagi nanti.', async () => {
-                const user = auth.currentUser;
-                if (user) {
-                    try {
-                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
-                        await deleteDoc(sessionRef);
-                    } catch(e) {}
-                }
+            window.showConfirm('Logout', 'Yakin ingin keluar? Anda harus login lagi nanti.', async () => {
+                try { await signOut(auth); } catch (e) { console.warn('Logout error', e); }
                 window.userRole = null;
-                document.getElementById('login-password').value = '';
-                document.getElementById('login-overlay').classList.remove('hidden');
-                window.switchPage('dispatch');
+                location.reload();
             });
         };
 
@@ -1889,29 +1918,15 @@
         };
 
         onAuthStateChanged(auth, (user) => {
-            if (user) {
+            if (user && window.roleFromEmail(user.email)) {
                 // Cek sesi login yang tersimpan
                 const checkSession = async () => {
                     try {
-                        const sessionRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', user.uid, 'session', 'login_state');
-                        const snap = await getDoc(sessionRef);
-                        if (snap.exists() && snap.data().role) {
-                            window.userRole = snap.data().role;
+                        const role = window.roleFromEmail(user.email);
+                        if (role) {
+                            window.userRole = role;
+                            window.applyRoleVisibility(role);
                             document.getElementById('login-overlay').classList.add('hidden');
-                            
-                            const btnCustomers = document.getElementById('btn-menu-customers');
-                            const btnOmset = document.getElementById('btn-menu-omset');
-                            const btnAnalisis = document.getElementById('btn-menu-analisis');
-                            
-                            if (window.userRole === 'admin') {
-                                if (btnCustomers) btnCustomers.classList.add('hidden');
-                                if (btnOmset) btnOmset.classList.add('hidden');
-                                if (btnAnalisis) btnAnalisis.classList.add('hidden');
-                            } else {
-                                if (btnCustomers) btnCustomers.classList.remove('hidden');
-                                if (btnOmset) btnOmset.classList.remove('hidden');
-                                if (btnAnalisis) btnAnalisis.classList.remove('hidden');
-                            }
                             if (typeof window.renderHistoryOrders === 'function') window.renderHistoryOrders();
                         }
                     } catch (e) { console.warn("Error load session", e); }
@@ -1954,7 +1969,7 @@
                 console.error("Firebase Auth Error:", error);
             }
         };
-        initAuth();
+        // initAuth();  <-- login anonim DIMATIKAN. Admin wajib login email/password.
 
         async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
             try {
