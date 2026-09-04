@@ -2520,7 +2520,7 @@
                     </div>
                 </div>
                 <!-- TAMBAHAN TOMBOL REFRESH MANUAL -->
-                <button onclick="if(window.queueUnsubscribe){window.queueUnsubscribe(); window.queueUnsubscribe=null;} window.startQueueListener();" class="w-8 h-8 flex items-center justify-center bg-orange-50 text-orange-600 rounded-full shadow-sm hover:bg-orange-100 active:scale-90 transition-all">
+                <button onclick="if (typeof window.refreshQueueNow === 'function') { window.refreshQueueNow(); } else { window.startQueueListener(); }" class="w-8 h-8 flex items-center justify-center bg-orange-50 text-orange-600 rounded-full shadow-sm hover:bg-orange-100 active:scale-90 transition-all">
                     <i class="fa-solid fa-rotate"></i>
                 </button>
             </header>
@@ -11178,6 +11178,13 @@
                 }
             }
 
+            // OPSI 2 (HEMAT KUOTA): sesuaikan mode radar mengikuti status ON-BID/OFF-BID.
+            // ON-BID -> realtime (tidak berubah). OFF-BID -> polling berkala (hemat read Firestore).
+            // Ketersediaan rider tetap terdeteksi walau OFF-BID, sama seperti sebelumnya.
+            if (typeof window.setQueueListenerMode === 'function') {
+                window.setQueueListenerMode(isActive);
+            }
+
             // TRIGGER CEK BANNER ORDERAN RAMAI
             if (typeof window.checkRamaiBanner === 'function') {
                 window.checkRamaiBanner();
@@ -11852,7 +11859,15 @@
                   }
 
                   // PERBAIKAN: Menjalankan queue radar SECARA PERMANEN (Standby) agar ketersediaan rider terdeteksi walau OFF-BID
-                  window.startQueueListener();
+                  // OPSI 2: mode mengikuti status ON-BID/OFF-BID SAAT INI — ON-BID tetap realtime (tidak berubah),
+                  // OFF-BID langsung pakai polling berkala sejak awal, bukan realtime permanen.
+                  const onbidToggleAtLogin = document.getElementById('onbid-toggle');
+                  const isActiveAtLogin = onbidToggleAtLogin ? onbidToggleAtLogin.checked : (localStorage.getItem('rider_onbid_status') === 'true');
+                  if (typeof window.setQueueListenerMode === 'function') {
+                      window.setQueueListenerMode(isActiveAtLogin);
+                  } else {
+                      window.startQueueListener();
+                  }
                   queuePending = false;
               }
           });
@@ -12122,38 +12137,44 @@
           // -------------------------------------------------------------
           // NEW: SISTEM LISTENER INFO ANTREAN AKTIF
           // -------------------------------------------------------------
-          let activeQueueCountUnsubscribe = null;
+          // PENGHEMATAN KUOTA: dulu fungsi ini membuka listener onSnapshot KEDUA
+          // ke collection '/status_rider_aktif' yang PERSIS SAMA dengan yang sudah
+          // didengarkan permanen oleh startQueueListener() (lihat latestStatusSnapshot
+          // di bawah). Sekarang fungsi ini TIDAK membuka listener baru sama sekali —
+          // ia hanya menghitung ulang dari snapshot yang sudah ada (latestStatusSnapshot)
+          // setiap kali snapshot itu diperbarui. Perilaku/output di layar (#active-queue-count)
+          // tetap identik seperti sebelumnya, hanya sumber datanya yang di-dedupe.
+          let activeQueueCountVisible = false;
+
+          function renderActiveQueueCountFromSnapshot(snapshot) {
+              if (!activeQueueCountVisible) return;
+              if (!snapshot) return;
+              let count = 0;
+              snapshot.forEach(doc => {
+                  const data = doc.data();
+                  const qNum = Number(data.queue_number) || 0;
+                  // HANYA hitung rider yang diberi nomor urut oleh admin
+                  if (qNum > 0) {
+                      count++;
+                  }
+              });
+              const countEl = document.getElementById('active-queue-count');
+              if (countEl) {
+                  countEl.innerText = `${count} Rider`;
+              }
+          }
 
           window.startActiveQueueCountListener = () => {
-              if (activeQueueCountUnsubscribe) return;
-              
-              const statusRef = collection(db, '/status_rider_aktif');
-              
-              // UBAH: Sangat Hemat Kuota! Hanya menghitung yang diberi nomor oleh Admin
-              activeQueueCountUnsubscribe = onSnapshot(statusRef, (snapshot) => {
-                  let count = 0;
-                  snapshot.forEach(doc => {
-                      const data = doc.data();
-                      const qNum = Number(data.queue_number) || 0;
-                      // HANYA hitung rider yang diberi nomor urut oleh admin
-                      if (qNum > 0) {
-                          count++;
-                      }
-                  });
-                  const countEl = document.getElementById('active-queue-count');
-                  if (countEl) {
-                      countEl.innerText = `${count} Rider`;
-                  }
-              }, (error) => {
-                  console.error("Error fetching active queue count:", error);
-              });
+              activeQueueCountVisible = true;
+              // Radar (startQueueListener) sudah standby permanen, jadi biasanya
+              // latestStatusSnapshot sudah tersedia — langsung render tanpa read baru.
+              if (typeof latestStatusSnapshot !== 'undefined' && latestStatusSnapshot) {
+                  renderActiveQueueCountFromSnapshot(latestStatusSnapshot);
+              }
           };
 
           window.stopActiveQueueCountListener = () => {
-              if (activeQueueCountUnsubscribe) {
-                  activeQueueCountUnsubscribe();
-                  activeQueueCountUnsubscribe = null;
-              }
+              activeQueueCountVisible = false;
           };
 
           // -------------------------------------------------------------
@@ -13784,6 +13805,10 @@
               
               if (queueUnsubscribe) return; // Mencegah multiple listeners
 
+              // OPSI 2 (ON-BID): pastikan mode polling (dipakai saat OFF-BID) dimatikan dulu,
+              // supaya tidak ada 2 mekanisme jalan bersamaan ke collection yang sama.
+              if (typeof window.stopQueueListenerPolling === 'function') window.stopQueueListenerPolling();
+
               const container = document.getElementById('radar-queue-list');
               if (container) {
                   container.innerHTML = `<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-6"><i class="fa-solid fa-spinner animate-spin text-orange-500 text-3xl mb-3 block"></i> Menghubungkan ke Radar...</div>`;
@@ -13819,6 +13844,9 @@
               queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
                   latestStatusSnapshot = snapshot;
                   if (typeof window.processAndRenderQueue === 'function') window.processAndRenderQueue(); 
+                  // Render juga info "Antrean Aktif" (overlay Order Aktif) dari snapshot yang sama,
+                  // menggantikan listener kedua yang dulu dibuka terpisah ke collection ini.
+                  renderActiveQueueCountFromSnapshot(snapshot);
               }, (error) => {
                   console.error("Error fetching queue:", error);
                   const container = document.getElementById('radar-queue-list');
@@ -13838,12 +13866,129 @@
                   globalActiveOrdersUnsubscribe();
                   globalActiveOrdersUnsubscribe = null;
               }
+              // Matikan juga mode polling OFF-BID (jika sedang jalan) agar benar-benar berhenti total.
+              if (typeof window.stopQueueListenerPolling === 'function') window.stopQueueListenerPolling();
               window.globalActiveOrdersMap = {};
               latestStatusSnapshot = null;
               
               const container = document.getElementById('radar-queue-list');
               if (container) {
                   container.innerHTML = '<div class="text-[10px] text-gray-400 italic px-1 w-full text-center py-8"><i class="fa-solid fa-satellite-dish text-4xl text-gray-200 mb-3 block"></i>Radar dimatikan.</div>';
+              }
+          };
+
+          // -------------------------------------------------------------
+          // OPSI 2 — HEMAT KUOTA SAAT OFF-BID: mode polling berkala
+          // -------------------------------------------------------------
+          // Saat ON-BID: TIDAK BERUBAH SAMA SEKALI — tetap pakai window.startQueueListener()
+          // di atas (onSnapshot realtime), persis seperti sebelumnya.
+          // Saat OFF-BID: alih-alih onSnapshot permanen yang mem-broadcast ke semua rider
+          // online setiap ada 1 perubahan status siapa pun, kita ganti jadi getDocs
+          // (tarik data sekali) yang diulang tiap QUEUE_POLL_INTERVAL_MS. Data & fungsi yang
+          // ditampilkan (radar, tab Antrean/Jalan/Off, ketersediaan rider) sama persis —
+          // hanya frekuensi tariknya yang lebih jarang saat OFF-BID.
+          let queuePollingIntervalId = null;
+          let queuePollingPending = false;
+          let queueDataGeneration = 0; // dinaikkan tiap kali polling dihentikan, agar fetch getDocs yang masih
+                                        // berjalan (in-flight) saat itu tidak menimpa balik UI setelah dihentikan
+          const QUEUE_POLL_INTERVAL_MS = 90000; // 90 detik (di tengah rentang 1-2 menit)
+
+          function unsubscribeQueueRealtimeOnly() {
+              // Sama seperti stopQueueListener(), TAPI tidak menghapus data/UI yang sudah tampil —
+              // dipakai saat pindah ke mode polling supaya radar tidak sempat menampilkan "Radar dimatikan".
+              if (queueUnsubscribe) {
+                  queueUnsubscribe();
+                  queueUnsubscribe = null;
+              }
+              if (globalActiveOrdersUnsubscribe) {
+                  globalActiveOrdersUnsubscribe();
+                  globalActiveOrdersUnsubscribe = null;
+              }
+          }
+
+          async function runQueueSnapshotOnce() {
+              const myGeneration = queueDataGeneration; // tandai "ronde" fetch ini
+              try {
+                  const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+                  const activeOrdersRef = collection(db, 'artifacts', targetProjectId, 'public', 'data', 'active_orders');
+                  const activeOrdersProcessingQuery = query(activeOrdersRef, where('status', '==', 'processing'));
+                  const activeOrdersSnap = await getDocs(activeOrdersProcessingQuery);
+                  // Kalau polling sudah dihentikan/diganti mode SELAMA fetch di atas berjalan
+                  // (misal: force-kill / ganti ke ON-BID), buang hasilnya — jangan timpa UI yang sudah dihentikan.
+                  if (myGeneration !== queueDataGeneration) return;
+
+                  window.globalActiveOrdersMap = {};
+                  window.globalActiveOrdersList = [];
+                  activeOrdersSnap.forEach(docSnap => {
+                      const data = docSnap.data();
+                      if (data.rider_uid) {
+                          window.globalActiveOrdersMap[String(data.rider_uid).trim().toUpperCase()] = {
+                              fee: data.fee || data.Fee || data.nominal_kotor || data.Nominal_Kotor || 0,
+                              extra: data.extra || data.Extra || data.tambahan || data.Tambahan || 0
+                          };
+                          window.globalActiveOrdersList.push(data);
+                      }
+                  });
+
+                  const statusRef = collection(db, '/status_rider_aktif');
+                  const statusSnap = await getDocs(statusRef);
+                  if (myGeneration !== queueDataGeneration) return; // sama, cek ulang setelah await kedua
+
+                  latestStatusSnapshot = statusSnap;
+
+                  if (typeof window.processAndRenderQueue === 'function') window.processAndRenderQueue();
+                  renderActiveQueueCountFromSnapshot(statusSnap);
+              } catch (error) {
+                  console.error("Error fetching queue (polling OFF-BID):", error);
+              }
+          }
+
+          window.startQueueListenerPolling = () => {
+              if (!isAuthReady) {
+                  queuePollingPending = true;
+                  return;
+              }
+              if (queuePollingIntervalId) return; // Sudah polling, jangan dobel
+
+              // Pastikan listener realtime tidak jalan bersamaan (hindari 2 mekanisme sekaligus).
+              unsubscribeQueueRealtimeOnly();
+
+              // Tarik data pertama kali segera, supaya radar tidak kosong menunggu interval pertama.
+              runQueueSnapshotOnce();
+              queuePollingIntervalId = setInterval(runQueueSnapshotOnce, QUEUE_POLL_INTERVAL_MS);
+          };
+
+          window.stopQueueListenerPolling = () => {
+              queuePollingPending = false;
+              queueDataGeneration++; // batalkan hasil fetch getDocs yang mungkin masih in-flight
+              if (queuePollingIntervalId) {
+                  clearInterval(queuePollingIntervalId);
+                  queuePollingIntervalId = null;
+              }
+          };
+
+          // Saklar mode: dipanggil dari updateOnbidUI() setiap status ON-BID/OFF-BID berubah.
+          // isActive true -> realtime (seperti sekarang, tanpa perubahan). isActive false -> polling hemat kuota.
+          window.setQueueListenerMode = (isActive) => {
+              if (isActive) {
+                  window.startQueueListener();
+              } else {
+                  window.startQueueListenerPolling();
+              }
+          };
+
+          // Dipakai tombol refresh manual radar (ikon reload di halaman Daftar Antrean).
+          // ON-BID: perilaku SAMA seperti sebelumnya (paksa reconnect realtime).
+          // OFF-BID: TIDAK menyalakan realtime permanen (supaya penghematan Opsi 2 tidak hilang) —
+          // cukup tarik data sekali saat ini juga, mode tetap polling berkala seperti sebelum ditekan.
+          window.refreshQueueNow = () => {
+              const toggle = document.getElementById('onbid-toggle');
+              const isActive = toggle ? toggle.checked : (localStorage.getItem('rider_onbid_status') === 'true');
+              if (isActive) {
+                  if (queueUnsubscribe) { queueUnsubscribe(); queueUnsubscribe = null; }
+                  window.startQueueListener();
+              } else {
+                  runQueueSnapshotOnce();
               }
           };
 
