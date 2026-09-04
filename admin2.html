@@ -3522,18 +3522,16 @@
                         const cardEl = document.getElementById(`card-order-${order.id}`);
                         
                         if (elapsed >= 120) {
-                            if (statusWaitEl && !statusWaitEl.classList.contains('bg-rose-50')) {
-                                statusWaitEl.className = 'flex items-center gap-1 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200 transition-colors';
+                            if (statusWaitEl && statusWaitEl.innerText.indexOf('> 2 Menit') === -1) {
+                                statusWaitEl.className = 'flex items-center gap-1 bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded border border-rose-300 transition-colors';
                                 statusWaitEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-[8px] animate-pulse"></i><span class="text-[9px] font-black">> 2 Menit</span>';
                             }
                             if (cardEl && !cardEl.classList.contains('ring-rose-500')) {
-                                cardEl.classList.add('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
-                                cardEl.classList.remove('border-slate-200', 'shadow-sm');
+                                cardEl.classList.add('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]');
                             }
                         } else {
                             if (cardEl && cardEl.classList.contains('ring-rose-500')) {
-                                cardEl.classList.remove('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]', 'border-rose-400');
-                                cardEl.classList.add('border-slate-200', 'shadow-sm');
+                                cardEl.classList.remove('ring-2', 'ring-rose-500', 'shadow-[0_0_20px_rgba(225,29,72,0.4)]');
                             }
                         }
                         // CATATAN: Auto-ping otomatis (tiap 15 detik) dihapus untuk hemat read/write Firebase.
@@ -4893,15 +4891,23 @@
             }
 
             let html = '';
-            activeOrders.sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0));
+            // Order yang "belum di-ACC" rider (status assigned) selalu ditaruh paling atas
+            activeOrders.sort((a, b) => {
+                const aPriority = a.status === 'assigned' ? 0 : 1;
+                const bPriority = b.status === 'assigned' ? 0 : 1;
+                if (aPriority !== bPriority) return aPriority - bPriority;
+                return (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0);
+            });
             activeOrders.forEach(order => {
                 const isProcessing = order.status === 'processing';
                 const isMissed = order.status === 'missed' || order.status === 'unassigned';
                 
                 let statusColor, statusText, borderLeft;
+                const isWaitingAcc = !isProcessing && !isMissed;
                 if (isProcessing) { statusColor = 'text-emerald-600 bg-emerald-50 border-emerald-200'; statusText = 'Sedang Diproses Rider'; borderLeft = 'bg-emerald-500'; } 
                 else if (isMissed) { statusColor = 'text-rose-600 bg-rose-50 border-rose-200'; statusText = order.status === 'unassigned' ? 'TIDAK ADA RIDER TERSEDIA' : 'DILEWATKAN (MENCARI RIDER...)'; borderLeft = 'bg-rose-500'; } 
-                else { statusColor = 'text-amber-600 bg-amber-50 border-amber-200'; statusText = 'Menunggu Konfirmasi Rider'; borderLeft = 'bg-amber-400'; }
+                else { statusColor = 'text-rose-600 bg-rose-50 border-rose-200'; statusText = 'BELUM DI-ACC RIDER'; borderLeft = 'bg-rose-500'; }
+                const cardBaseClass = isWaitingAcc ? 'bg-rose-50 border-rose-300 shadow-sm' : 'bg-white border-slate-200 shadow-sm';
 
                 const itemsText = order.items ? order.items.map(i => i.name).join('\n') : 'Order Biasa';
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
@@ -4913,14 +4919,14 @@
                 if (order.created_at && order.created_at.seconds) timeAssignedStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
                 html += `
-                    <div id="card-order-${order.id}" class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-3 relative overflow-hidden transition-all duration-500">
+                    <div id="card-order-${order.id}" class="rounded-2xl p-4 border ${cardBaseClass} flex flex-col gap-3 relative overflow-hidden transition-all duration-500">
                         <div class="absolute left-0 top-0 bottom-0 w-1 ${borderLeft}"></div>
                         <div class="flex justify-between items-start pl-1">
                             <div class="flex flex-col gap-1.5 overflow-hidden">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
                                     <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100" title="Waktu Order Diberikan"><i class="fa-regular fa-clock text-[8px]"></i><span class="text-[9px] font-black text-black">${timeAssignedStr}</span></div>
-                                    ${!isProcessing && !isMissed ? `<div id="status-wait-${order.id}" class="flex items-center gap-1 bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-200 transition-colors" title="Waktu Menunggu Konfirmasi"><i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i><span class="text-[9px] font-black">Menunggu...</span></div>` : ''}
+                                    ${isWaitingAcc ? `<div id="status-wait-${order.id}" class="flex items-center gap-1 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200 transition-colors" title="Waktu Menunggu Konfirmasi"><i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i><span class="text-[9px] font-black">Menunggu...</span></div>` : ''}
                                 </div>
                                 <p class="text-xs font-black text-black leading-none mt-0.5">WA: ${order.customer_phone}${custNameStr}</p>
                             </div>
