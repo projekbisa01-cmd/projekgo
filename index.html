@@ -11485,7 +11485,7 @@
               // WebView Android sering memblokir koneksi streaming Firestore,
               // sehingga notifikasi realtime tertunda belasan detik.
               // Opsi ini membuat Firebase otomatis pindah ke mode long-polling.
-              experimentalAutoDetectLongPolling: true
+              experimentalForceLongPolling: true
           });
           
           const storage = getStorage(app); // INISIALISASI STORAGE
@@ -12401,7 +12401,13 @@
                       
                       // PENEGASAN: Kembalikan Rider ke Antrean Secara Otomatis (Reset Database Firestore)
                       const toggleEl = document.getElementById('onbid-toggle');
-                      if (toggleEl && toggleEl.checked && currentUserUID) {
+                      const s = window.statusDariServer || {};
+                      // Jika admin baru saja mematikan / membekukan / mengunci rider,
+                      // JANGAN mendaftarkan diri kembali ke antrean. Toggle di layar
+                      // bisa saja masih menyala karena perintah admin belum sampai.
+                      const dimatikanAdmin = (s.is_online === false) || s.force_kill === true || s.is_manual_suspended === true;
+
+                      if (toggleEl && toggleEl.checked && currentUserUID && !dimatikanAdmin) {
                           localStorage.setItem('rider_onbid_status', 'true');
                           if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
                           
@@ -14167,7 +14173,15 @@
                       const inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
                       const isOnline = data.is_online === true || data.is_online === 'true';
                       const isAvailable = data.is_available === true || data.is_available === 'true';
-                      
+
+                      // Rekam keputusan server. Dipakai agar pemulihan otomatis
+                      // tidak melawan perintah admin yang baru saja masuk.
+                      window.statusDariServer = {
+                          is_online: isOnline,
+                          force_kill: data.force_kill === true,
+                          is_manual_suspended: data.is_manual_suspended === true
+                      };
+
                       if (myPosEl) {
                           if (data.force_kill === true) {
                               myPosEl.innerHTML = `<span class="text-[9px] font-bold text-red-200 text-center block leading-tight">DIBEKUKAN<br>(Cek Saldo)</span>`;
