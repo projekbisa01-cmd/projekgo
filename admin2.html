@@ -4092,6 +4092,40 @@
                 if (hasQueueUpdates) {
                     batch.commit().catch(e => {});
                 }
+
+                // === PAPAN ANTREAN TUNGGAL ===
+                // Seluruh isi radar ditulis ke SATU dokumen. Aplikasi rider cukup
+                // memantau dokumen ini, bukan 40 dokumen status satu per satu.
+                // Menghemat read secara drastis tanpa mengurangi keterbukaan:
+                // semua rider melihat daftar yang sama persis, pada saat yang sama.
+                try {
+                    const isiPapan = allRiders.map(r => ({
+                        uid: r.uid,
+                        name: r.name || r.nama || r.uid,
+                        queue_number: newQueueNumbers.has(r.uid) ? newQueueNumbers.get(r.uid) : 0,
+                        is_online: r.is_online === true || r.is_online === 'true',
+                        is_available: r.is_available === true || r.is_available === 'true',
+                        in_main_queue: r.in_main_queue === true || r.in_main_queue === 'true',
+                        force_kill: r.force_kill === true,
+                        is_manual_suspended: r.is_manual_suspended === true,
+                        last_drop_desc: r.last_drop_desc || '',
+                        last_drop_image: r.last_drop_image || '',
+                        last_drop_time: r.last_drop_time || null
+                    }));
+
+                    const sidikJari = JSON.stringify(isiPapan);
+                    if (window._sidikPapanAntrean !== sidikJari) {
+                        window._sidikPapanAntrean = sidikJari;
+                        const papanRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'papan_antrean', 'current');
+                        setDoc(papanRef, {
+                            riders: isiPapan,
+                            jumlah_antre: availableMainQueue.length,
+                            updated_at: serverTimestamp()
+                        }).catch(e => console.warn('Gagal menulis papan antrean:', e));
+                    }
+                } catch (e) {
+                    console.warn('Papan antrean error:', e);
+                }
             } catch (e) {
                 console.warn("Queue update error:", e);
             }
