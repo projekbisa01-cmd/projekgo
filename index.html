@@ -8463,17 +8463,81 @@
             }
         };
 
+        // Menyamakan nama orang: huruf kecil semua, spasi ganda dirapikan,
+        // gelar/tanda baca diabaikan. "Agus  Setiono " == "agus setiono".
+        function samakanNama(x) {
+            return String(x || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        // Google Form mengirim nama kolom berupa kalimat pertanyaan yang panjang,
+        // sedangkan tampilan ulasan membutuhkan Nama_Rider, Rating, Komentar, Tanggal.
+        // Fungsi ini menerjemahkannya berdasarkan kata kunci, sehingga pertanyaan di
+        // Form boleh diubah kapan saja tanpa merusak aplikasi.
+        function terjemahkanBarisRating(baris) {
+            const hasil = { Nama_Rider: '', Rating: '', Komentar: '', Tanggal: '' };
+            if (!baris || typeof baris !== 'object') return hasil;
+
+            // Kalau Apps Script sudah mengirim nama baku, pakai itu lebih dulu.
+            if (baris.Nama_Rider) hasil.Nama_Rider = baris.Nama_Rider;
+            if (baris.Rating)     hasil.Rating     = baris.Rating;
+            if (baris.Komentar)   hasil.Komentar   = baris.Komentar;
+            if (baris.Tanggal)    hasil.Tanggal    = baris.Tanggal;
+
+            Object.keys(baris).forEach(kunci => {
+                const k = String(kunci).toLowerCase();
+                const nilai = baris[kunci];
+                if (nilai === undefined || nilai === null || nilai === '') return;
+
+                if (!hasil.Tanggal && (k.includes('timestamp') || k.includes('tanggal') || k.includes('waktu'))) {
+                    hasil.Tanggal = nilai;
+                } else if (!hasil.Nama_Rider && k.includes('nama')) {
+                    hasil.Nama_Rider = nilai;
+                } else if (!hasil.Rating && (k.includes('nilai') || k.includes('rating') || k.includes('bintang') || k.includes('sampai 5'))) {
+                    hasil.Rating = nilai;
+                } else if (!hasil.Komentar && (k.includes('masukan') || k.includes('komentar') || k.includes('saran') || k.includes('ulasan') || k.includes('memperbaiki'))) {
+                    hasil.Komentar = nilai;
+                }
+            });
+
+            // Cadangan terakhir: kalau angka penilaian belum ketemu, cari kolom
+            // mana pun yang isinya angka 1 sampai 5.
+            if (!hasil.Rating) {
+                for (const kunci of Object.keys(baris)) {
+                    const angka = Number(baris[kunci]);
+                    if (!isNaN(angka) && angka >= 1 && angka <= 5 && String(baris[kunci]).length <= 3) {
+                        hasil.Rating = angka;
+                        break;
+                    }
+                }
+            }
+            return hasil;
+        }
+
         async function muatRatingRider(namaRider) {
             try {
                 const response = await fetch(`${RATING_SCRIPT_URL}?t=${Date.now()}`);
                 if(!response.ok) return;
-                const allRatings = await response.json();
-                const namaLower = String(namaRider).trim().toLowerCase();
-                // Filter rating hanya untuk rider yang sedang login
-                const filtered = allRatings.filter(i => i.Nama_Rider && String(i.Nama_Rider).trim().toLowerCase() === namaLower);
-                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered)); 
+                const mentah = await response.json();
+                if (!Array.isArray(mentah)) return;
+
+                const semua = mentah.map(terjemahkanBarisRating);
+                const namaCari = samakanNama(namaRider);
+
+                // Filter ulasan milik rider yang sedang login
+                const filtered = semua.filter(i => i.Nama_Rider && samakanNama(i.Nama_Rider) === namaCari);
+
+                if (filtered.length === 0 && semua.length > 0) {
+                    console.warn('Ulasan ditemukan', semua.length, 'baris, tapi tidak ada yang cocok dengan nama:', namaCari);
+                    console.warn('Contoh nama di Sheet:', semua.slice(0, 5).map(i => samakanNama(i.Nama_Rider)));
+                }
+
+                localStorage.setItem(`rider_rating_${currentUserUID}`, JSON.stringify(filtered));
                 renderRatingUI(filtered);
-            } catch(e) {}
+            } catch(e) { console.warn('Gagal memuat ulasan:', e); }
         }
         
         async function fetchVehicleAndDocsData(uid) {
@@ -13980,9 +14044,19 @@
                       }
                   });
 
-                  const statusRef = collection(db, '/status_rider_aktif');
-                  const statusSnap = await getDocs(statusRef);
+                  // Mode cadangan (OFF-BID) kini juga membaca PAPAN ANTREAN:
+                  // satu dokumen, bukan 40 dokumen status setiap 90 detik.
+                  const papanRefPoll = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'papan_antrean', 'current');
+                  const papanSnap = await getDoc(papanRefPoll);
                   if (myGeneration !== queueDataGeneration) return; // sama, cek ulang setelah await kedua
+
+                  const isiPoll = papanSnap.exists() ? (papanSnap.data().riders || []) : [];
+                  const statusSnap = {
+                      size: isiPoll.length,
+                      empty: isiPoll.length === 0,
+                      docs: isiPoll.map(r => ({ id: r.uid, data: () => r })),
+                      forEach: (fn) => isiPoll.forEach(r => fn({ id: r.uid, data: () => r }))
+                  };
 
                   latestStatusSnapshot = statusSnap;
 
@@ -14986,4 +15060,4 @@
   };
 </script>
 </body>
-</html> 
+</html>
