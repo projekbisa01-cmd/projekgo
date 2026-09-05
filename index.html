@@ -13875,8 +13875,23 @@
                   console.error("Error fetching active orders globally:", error);
               });
 
-              const statusRef = collection(db, '/status_rider_aktif');
-              queueUnsubscribe = onSnapshot(statusRef, (snapshot) => {
+              // === MEMBACA PAPAN ANTREAN TUNGGAL ===
+              // Dulu: memantau seluruh koleksi status_rider_aktif (40 dokumen per rider).
+              // Sekarang: satu dokumen papan yang ditulis admin. Isinya sama persis,
+              // tapi biaya bacanya sekitar 40x lebih ringan.
+              const papanRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'papan_antrean', 'current');
+
+              // Pembungkus agar seluruh kode tampilan lama tetap berjalan tanpa diubah.
+              const bungkusJadiSnapshot = (daftar) => ({
+                  size: daftar.length,
+                  empty: daftar.length === 0,
+                  docs: daftar.map(r => ({ id: r.uid, data: () => r })),
+                  forEach: (fn) => daftar.forEach(r => fn({ id: r.uid, data: () => r }))
+              });
+
+              queueUnsubscribe = onSnapshot(papanRef, (docSnap) => {
+                  const isi = docSnap.exists() ? (docSnap.data().riders || []) : [];
+                  const snapshot = bungkusJadiSnapshot(isi);
                   latestStatusSnapshot = snapshot;
                   if (typeof window.processAndRenderQueue === 'function') window.processAndRenderQueue(); 
                   // Render juga info "Antrean Aktif" (overlay Order Aktif) dari snapshot yang sama,
@@ -14971,4 +14986,4 @@
   };
 </script>
 </body>
-</html>
+</html> 
