@@ -8090,7 +8090,14 @@
 
         window.handleLogout = async function (reason = null) {
             try { if (window.riderSignOut) await window.riderSignOut(); } catch (e) {}
+            try { if (window.riderBersihkanCache) await window.riderBersihkanCache(); } catch (e) {}
             localStorage.removeItem('rider_uid');
+            Object.keys(localStorage).forEach(k => {
+                if (k.indexOf('rider_data_') === 0 || k.indexOf('rider_history_trigger_') === 0
+                    || k.indexOf('rider_docs_') === 0 || k.indexOf('rider_rating_') === 0) {
+                    localStorage.removeItem(k);
+                }
+            });
             if (reason && typeof reason === 'string') alert(reason);
             location.reload();
         }
@@ -11454,7 +11461,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
       import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
@@ -11504,6 +11511,18 @@
           };
 
           window.riderSignOut = async () => { try { await signOut(auth); } catch (e) {} };
+
+          // Membersihkan simpanan lokal Firestore saat ganti akun.
+          // Tanpa ini, data rider sebelumnya masih tersaji di HP yang sama.
+          window.riderBersihkanCache = async () => {
+              try {
+                  await terminate(db);
+                  await clearIndexedDbPersistence(db);
+                  console.log("Simpanan lokal Firestore dibersihkan.");
+              } catch (e) {
+                  console.warn("Simpanan lokal tidak bisa dibersihkan:", e && e.code);
+              }
+          };
 
           window.riderGantiPin = async (pinLama, pinBaru) => {
               const user = auth.currentUser;
@@ -12445,9 +12464,12 @@
                   window._hasActiveDocOrder = hasValidActiveOrder;
                   if (hasValidActiveOrder) {
                       if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
-                  } else {
-                      checkNoOrderLogic(); // Memicu pengecekan fallback
                   }
+                  // Pemantau dokumen ini TIDAK lagi memicu proses pembatalan.
+                  // Admin selalu membuat orderan dengan ID acak, sehingga dokumen
+                  // active_orders/{UID} memang tidak pernah ada. Membiarkannya memicu
+                  // pembatalan membuat halaman berjalan berkedip kembali ke beranda.
+                  // Pembatalan kini ditentukan sepenuhnya oleh pemantau pencarian.
               }, (error) => { console.error("Error listening doc order:", error); });
 
               // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Jika Admin pakai Document ID acak)
@@ -12697,7 +12719,14 @@
                             // Set Rider jadi TIDAK TERSEDIA di antrean
                             if (currentUserUID) {
                                 const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
-                                await setDoc(statusRef, { is_available: false }, { merge: true });
+                                // is_online ikut ditulis true: rider yang menerima orderan jelas aktif.
+                                // Tanpa ini, kartu pantauan admin tetap merah walau rider sedang mengantar.
+                                // is_available tetap false, sehingga urutan antrean tidak dihitung ulang.
+                                await setDoc(statusRef, {
+                                    is_available: false,
+                                    is_online: true,
+                                    last_updated: serverTimestamp()
+                                }, { merge: true });
                             }
                         } catch (e) {
                             console.error("Error menerima order di background:", e);
