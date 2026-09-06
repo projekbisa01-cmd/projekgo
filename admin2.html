@@ -438,6 +438,19 @@
                 <button onclick="submitManualOrder()" class="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-black rounded-xl text-[10px] uppercase transition-colors shadow-md flex items-center justify-center gap-1.5 mt-1">
                     <i class="fa-solid fa-save"></i> Tambahkan ke Histori
                 </button>
+
+                <div class="pt-3 mt-1 border-t border-dashed border-gray-200">
+                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 text-center">Input Banyak Sekaligus</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="window.unduhTemplateImpor()" class="py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-xl text-[9px] uppercase transition-colors flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-download"></i> Template
+                        </button>
+                        <button onclick="document.getElementById('impor-file').click()" class="py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[9px] uppercase transition-colors shadow-md flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-file-excel"></i> Impor Excel
+                        </button>
+                    </div>
+                    <input type="file" id="impor-file" accept=".xlsx,.xls,.csv" class="hidden" onchange="window.bacaFileImpor(event)">
+                </div>
             </div>
         </section>
 
@@ -5509,6 +5522,251 @@
                 window.showAlert('Berhasil', 'Orderan susulan dan data pelanggan berhasil ditambahkan.', 'success');
                 if (!document.getElementById('page-history').classList.contains('hidden-page')) await window.renderHistoryOrders();
             } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat input.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
+        };
+
+        // ==========================================================
+        // ===============  IMPOR ORDERAN DARI EXCEL  ===============
+        // Memakai logika yang sama persis dengan "Order Susulan":
+        // tulis daily_orders + active_orders + potong saldo 16% + buku kas.
+        // ==========================================================
+
+        window._imporBaris = [];
+
+        const imporParseNominal = (rawStr) => {
+            let str = String(rawStr == null ? '' : rawStr).toLowerCase().replace(',', '.');
+            let isK = str.includes('k');
+            let val = parseFloat(str.replace(/[^0-9.]/g, '')) || 0;
+            if (isK || (val > 0 && val < 1000)) return { real: val * 1000, saved: val };
+            return { real: val, saved: val / 1000 };
+        };
+
+        // Mengenali kolom dari kata kunci, supaya judul di Excel boleh bervariasi
+        const imporAmbilKolom = (baris, kunciList) => {
+            for (const k of Object.keys(baris)) {
+                const nk = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+                for (const cari of kunciList) {
+                    if (nk.includes(cari)) {
+                        const v = baris[k];
+                        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+                    }
+                }
+            }
+            return '';
+        };
+
+        const imporNormalJam = (v) => {
+            if (!v) return '';
+            let s = String(v).trim();
+            // Excel kadang menyimpan jam sebagai pecahan hari (0.5 = 12:00)
+            const angka = parseFloat(s);
+            if (!isNaN(angka) && angka > 0 && angka < 1 && !s.includes(':')) {
+                const totalMenit = Math.round(angka * 24 * 60);
+                const jj = String(Math.floor(totalMenit / 60)).padStart(2, '0');
+                const mm = String(totalMenit % 60).padStart(2, '0');
+                return jj + ':' + mm;
+            }
+            s = s.replace('.', ':');
+            const m = s.match(/^(\d{1,2}):(\d{1,2})/);
+            if (!m) return '';
+            return String(m[1]).padStart(2, '0') + ':' + String(m[2]).padStart(2, '0');
+        };
+
+        window.unduhTemplateImpor = () => {
+            const isi = [
+                ['UID Rider', 'Jam', 'Nama Pelanggan', 'No HP', 'Ongkir', 'Tambahan', 'Keterangan', 'Tanggal'],
+                ['UID113', '09:15', 'Budi', '08123456789', 15, 0, 'Nasi goreng 2 porsi', ''],
+                ['UID114', '10:30', 'Sari', '', 12, 5, 'Ayam geprek', '']
+            ];
+            const ws = XLSX.utils.aoa_to_sheet(isi);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Orderan');
+            XLSX.writeFile(wb, 'template-impor-orderan.xlsx');
+        };
+
+        window.bacaFileImpor = (ev) => {
+            const file = ev.target.files && ev.target.files[0];
+            ev.target.value = '';
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const mentah = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+                    if (!mentah.length) {
+                        window.showAlert('Kosong', 'File tidak berisi baris data.', 'warning');
+                        return;
+                    }
+
+                    const riders = (typeof getMergedRidersForDropdown === 'function') ? getMergedRidersForDropdown() : [];
+                    const petaRider = {};
+                    riders.forEach(r => {
+                        petaRider[String(r.uid).trim().toUpperCase()] = (r.nama || r.name || r.displayName || r.uid);
+                    });
+
+                    window._imporBaris = mentah.map((b, i) => {
+                        const uid = imporAmbilKolom(b, ['uid', 'rider', 'kodrider']).toUpperCase();
+                        const jam = imporNormalJam(imporAmbilKolom(b, ['jam', 'waktu', 'time']));
+                        const nama = imporAmbilKolom(b, ['namapelanggan', 'pelanggan', 'customer']) || 'Pelanggan';
+                        const hp = imporAmbilKolom(b, ['hp', 'wa', 'telp', 'phone']) || '-';
+                        const ongkirRaw = imporAmbilKolom(b, ['ongkir', 'fee', 'tarif']);
+                        const tambahanRaw = imporAmbilKolom(b, ['tambahan', 'extra', 'bonus']);
+                        const ket = imporAmbilKolom(b, ['keterangan', 'rincian', 'menu', 'detail']) || 'Orderan Susulan';
+                        const tgl = imporAmbilKolom(b, ['tanggal', 'date']);
+
+                        const fee = imporParseNominal(ongkirRaw);
+                        const tam = tambahanRaw ? imporParseNominal(tambahanRaw) : { real: 0, saved: 0 };
+
+                        let masalah = [];
+                        if (!uid) masalah.push('UID kosong');
+                        else if (!petaRider[uid]) masalah.push('UID tidak terdaftar');
+                        if (!jam) masalah.push('Jam tidak terbaca');
+                        if (!fee.real) masalah.push('Ongkir kosong');
+
+                        return {
+                            no: i + 2, uid: uid, namaRider: petaRider[uid] || uid,
+                            jam: jam, pelanggan: nama, hp: hp, ket: ket, tanggal: tgl,
+                            fee: fee, tam: tam, masalah: masalah
+                        };
+                    });
+
+                    const kemarin = new Date();
+                    kemarin.setDate(kemarin.getDate() - 1);
+                    document.getElementById('impor-tanggal').value =
+                        kemarin.getFullYear() + '-' + String(kemarin.getMonth() + 1).padStart(2, '0') + '-' + String(kemarin.getDate()).padStart(2, '0');
+
+                    window.hitungUlangImpor();
+                    document.getElementById('modal-impor').classList.remove('hidden');
+
+                } catch (err) {
+                    console.error(err);
+                    window.showAlert('Gagal Membaca', 'File tidak bisa dibaca. Pastikan formatnya .xlsx atau .csv.', 'error');
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
+        window.hitungUlangImpor = () => {
+            const baris = window._imporBaris || [];
+            const sah = baris.filter(b => b.masalah.length === 0);
+            const totalOmset = sah.reduce((a, b) => a + b.fee.real + b.tam.real, 0);
+            const totalPotong = sah.reduce((a, b) => a + Math.round(b.fee.real * 0.16), 0);
+            const rupiah = (n) => 'Rp ' + Number(n).toLocaleString('id-ID');
+
+            const kotak = (label, isi, warna) =>
+                '<div class="bg-' + warna + '-50 rounded-xl p-2.5 text-center">' +
+                '<p class="text-[8px] font-black text-' + warna + '-500 uppercase tracking-wider">' + label + '</p>' +
+                '<p class="text-xs font-black text-' + warna + '-700 mt-0.5">' + isi + '</p></div>';
+
+            document.getElementById('impor-ringkasan').innerHTML =
+                kotak('Siap Simpan', sah.length + ' order', 'emerald') +
+                kotak('Bermasalah', (baris.length - sah.length) + ' baris', 'red') +
+                kotak('Total Omset', rupiah(totalOmset), 'sky') +
+                kotak('Potongan 16%', rupiah(totalPotong), 'amber');
+
+            let html = '<table class="w-full"><thead><tr class="text-left text-[9px] uppercase text-slate-400 border-b">' +
+                '<th class="py-1.5">Brs</th><th>Rider</th><th>Jam</th><th>Pelanggan</th><th class="text-right">Ongkir</th><th>Status</th></tr></thead><tbody>';
+            baris.forEach(b => {
+                const ok = b.masalah.length === 0;
+                html += '<tr class="border-b border-gray-50 ' + (ok ? '' : 'bg-red-50') + '">' +
+                    '<td class="py-1.5 text-slate-400">' + b.no + '</td>' +
+                    '<td class="font-bold">' + b.uid + '</td>' +
+                    '<td>' + (b.jam || '-') + '</td>' +
+                    '<td class="truncate max-w-[120px]">' + b.pelanggan + '</td>' +
+                    '<td class="text-right font-bold">' + rupiah(b.fee.real) + '</td>' +
+                    '<td class="' + (ok ? 'text-emerald-600' : 'text-red-600 font-bold') + '">' +
+                    (ok ? 'OK' : b.masalah.join(', ')) + '</td></tr>';
+            });
+            document.getElementById('impor-tabel').innerHTML = html + '</tbody></table>';
+
+            const btn = document.getElementById('impor-simpan');
+            btn.disabled = sah.length === 0;
+            btn.style.opacity = sah.length === 0 ? '0.5' : '1';
+            btn.innerText = 'Simpan ' + sah.length + ' Orderan';
+        };
+
+        window.tutupImpor = () => {
+            document.getElementById('modal-impor').classList.add('hidden');
+            window._imporBaris = [];
+        };
+
+        window.jalankanImpor = async () => {
+            const semua = (window._imporBaris || []).filter(b => b.masalah.length === 0);
+            if (!semua.length) return;
+
+            const tglUmum = document.getElementById('impor-tanggal').value;
+            if (!tglUmum) { window.showAlert('Tanggal Kosong', 'Pilih tanggal orderan dulu.', 'warning'); return; }
+
+            const btn = document.getElementById('impor-simpan');
+            btn.disabled = true;
+
+            const idImpor = 'imp_' + Date.now();
+            const proyek = firebaseConfig.projectId;
+            const PER_BATCH = 100; // 100 order x 4 tulisan = 400, di bawah batas 500
+            let tersimpan = 0;
+
+            try {
+                for (let mulai = 0; mulai < semua.length; mulai += PER_BATCH) {
+                    const potongan = semua.slice(mulai, mulai + PER_BATCH);
+                    const batch = writeBatch(db);
+
+                    potongan.forEach(b => {
+                        const Tanggal = b.tanggal || tglUmum;
+                        const bagian = Tanggal.split('-');
+                        const jamParts = b.jam.split(':');
+                        const pseudoDate = new Date();
+                        pseudoDate.setFullYear(parseInt(bagian[0]), parseInt(bagian[1]) - 1, parseInt(bagian[2]));
+                        pseudoDate.setHours(parseInt(jamParts[0]), parseInt(jamParts[1]), 0, 0);
+
+                        const dailyRef = doc(collection(db, 'artifacts', proyek, 'users', b.uid, 'daily_orders'));
+                        const orderRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'active_orders'));
+
+                        batch.set(dailyRef, {
+                            UID: b.uid, Nama_Rider: b.namaRider, Tanggal: Tanggal, Jam: b.jam,
+                            Nama_Pelanggan: b.pelanggan, Nominal_Kotor: b.fee.saved, Tambahan: b.tam.saved,
+                            Status: "Selesai", Keterangan: b.ket, created_at: pseudoDate, import_id: idImpor
+                        });
+
+                        batch.set(orderRef, {
+                            rider_uid: b.uid, rider_name: b.namaRider, customer_phone: b.hp,
+                            customer_name: b.pelanggan, fee: b.fee.real, tambahan: b.tam.real,
+                            items: [{ name: b.ket, qty: 1 }], status: 'completed', is_manual: true,
+                            created_at: pseudoDate, finished_at: pseudoDate,
+                            daily_order_id: dailyRef.id, import_id: idImpor
+                        });
+
+                        const potong = Math.round(b.fee.real * 0.16);
+                        const saldoRef = doc(db, 'artifacts', proyek, 'public', 'data', 'rider_balances', b.uid);
+                        batch.set(saldoRef, {
+                            uid: b.uid, name: b.namaRider, saldo: increment(-potong), updated_at: serverTimestamp()
+                        }, { merge: true });
+
+                        const kasRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'riwayat_potongan'));
+                        batch.set(kasRef, {
+                            rider_uid: b.uid, rider_name: b.namaRider, amount: potong,
+                            omset_order: b.fee.real + b.tam.real, type: 'manual_order',
+                            desc: 'Impor Susulan - ' + b.pelanggan, created_at: pseudoDate, import_id: idImpor
+                        });
+                    });
+
+                    await batch.commit();
+                    tersimpan += potongan.length;
+                    btn.innerText = 'Menyimpan... ' + tersimpan + '/' + semua.length;
+                }
+
+                window.tutupImpor();
+                window.showAlert('Berhasil', tersimpan + ' orderan tersimpan. Kode impor: ' + idImpor, 'success');
+                console.log('IMPOR SELESAI. Kode:', idImpor, '| Jumlah:', tersimpan);
+                if (!document.getElementById('page-history').classList.contains('hidden-page')) await window.renderHistoryOrders();
+
+            } catch (e) {
+                console.error('Impor gagal:', e);
+                window.showAlert('Gagal Sebagian', tersimpan + ' orderan sudah tersimpan sebelum error. Kode: ' + idImpor, 'error');
+            } finally {
+                btn.disabled = false;
+            }
         };
 
         window.toggleManualForm = () => {
@@ -10749,5 +11007,27 @@
         };
 
     </script>
+<!-- === MODAL PRATINJAU IMPOR ORDERAN === -->
+<div id="modal-impor" class="hidden fixed inset-0 z-[12000] bg-black/60 flex items-center justify-center p-3">
+  <div class="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
+    <div class="p-5 border-b border-gray-100">
+      <h3 class="font-black text-gray-800 text-base">Pratinjau Impor Orderan</h3>
+      <p class="text-[11px] text-gray-500 mt-1">Periksa dulu sebelum disimpan. Belum ada data yang ditulis.</p>
+    </div>
+    <div class="px-5 py-3 bg-slate-50 border-b border-gray-100">
+      <label class="text-[9px] font-black text-black uppercase tracking-widest block mb-1.5">Tanggal Orderan</label>
+      <input type="date" id="impor-tanggal" onchange="window.hitungUlangImpor()" class="w-full bg-white border border-gray-200 rounded-xl p-2.5 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <p class="text-[10px] text-gray-500 mt-1.5">Dipakai untuk baris yang tidak punya kolom Tanggal sendiri.</p>
+    </div>
+    <div id="impor-ringkasan" class="px-5 py-3 grid grid-cols-4 gap-2 border-b border-gray-100"></div>
+    <div class="flex-1 overflow-auto px-5 py-3">
+      <div id="impor-tabel" class="text-[11px]"></div>
+    </div>
+    <div class="p-4 border-t border-gray-100 flex gap-2">
+      <button onclick="window.tutupImpor()" class="w-1/3 py-3 bg-gray-100 text-gray-600 font-black rounded-xl text-[10px] uppercase">Batal</button>
+      <button onclick="window.jalankanImpor()" id="impor-simpan" class="w-2/3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[10px] uppercase shadow-md">Simpan Semua</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
