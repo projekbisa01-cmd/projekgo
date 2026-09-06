@@ -5532,6 +5532,13 @@
 
         window._imporBaris = [];
 
+        // Menjinakkan isi sel Excel sebelum ditampilkan.
+        // Tanpa ini, sel yang berisi kode akan dijalankan browser
+        // dengan hak akses admin yang sedang login.
+        const imporAman = (s) => String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/\'/g, '&#39;');
+
         const imporParseNominal = (rawStr) => {
             let str = String(rawStr == null ? '' : rawStr).toLowerCase().replace(',', '.');
             let isK = str.includes('k');
@@ -5595,6 +5602,10 @@
                     const ws = wb.Sheets[wb.SheetNames[0]];
                     const mentah = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
+                    if (mentah.length > 1000) {
+                        window.showAlert('Terlalu Banyak', 'File berisi ' + mentah.length + ' baris. Batas aman 1000 baris sekali impor.', 'warning');
+                        return;
+                    }
                     if (!mentah.length) {
                         window.showAlert('Kosong', 'File tidak berisi baris data.', 'warning');
                         return;
@@ -5609,11 +5620,11 @@
                     window._imporBaris = mentah.map((b, i) => {
                         const uid = imporAmbilKolom(b, ['uid', 'rider', 'kodrider']).toUpperCase();
                         const jam = imporNormalJam(imporAmbilKolom(b, ['jam', 'waktu', 'time']));
-                        const nama = imporAmbilKolom(b, ['namapelanggan', 'pelanggan', 'customer']) || 'Pelanggan';
+                        const nama = (imporAmbilKolom(b, ['namapelanggan', 'pelanggan', 'customer']) || 'Pelanggan').slice(0, 100);
                         const hp = imporAmbilKolom(b, ['hp', 'wa', 'telp', 'phone']) || '-';
                         const ongkirRaw = imporAmbilKolom(b, ['ongkir', 'fee', 'tarif']);
                         const tambahanRaw = imporAmbilKolom(b, ['tambahan', 'extra', 'bonus']);
-                        const ket = imporAmbilKolom(b, ['keterangan', 'rincian', 'menu', 'detail']) || 'Orderan Susulan';
+                        const ket = (imporAmbilKolom(b, ['keterangan', 'rincian', 'menu', 'detail']) || 'Orderan Susulan').slice(0, 300);
                         const tgl = imporAmbilKolom(b, ['tanggal', 'date']);
 
                         const fee = imporParseNominal(ongkirRaw);
@@ -5672,12 +5683,12 @@
                 const ok = b.masalah.length === 0;
                 html += '<tr class="border-b border-gray-50 ' + (ok ? '' : 'bg-red-50') + '">' +
                     '<td class="py-1.5 text-slate-400">' + b.no + '</td>' +
-                    '<td class="font-bold">' + b.uid + '</td>' +
-                    '<td>' + (b.jam || '-') + '</td>' +
-                    '<td class="truncate max-w-[120px]">' + b.pelanggan + '</td>' +
+                    '<td class="font-bold">' + imporAman(b.uid) + '</td>' +
+                    '<td>' + imporAman(b.jam || '-') + '</td>' +
+                    '<td class="truncate max-w-[120px]">' + imporAman(b.pelanggan) + '</td>' +
                     '<td class="text-right font-bold">' + rupiah(b.fee.real) + '</td>' +
                     '<td class="' + (ok ? 'text-emerald-600' : 'text-red-600 font-bold') + '">' +
-                    (ok ? 'OK' : b.masalah.join(', ')) + '</td></tr>';
+                    (ok ? 'OK' : imporAman(b.masalah.join(', '))) + '</td></tr>';
             });
             document.getElementById('impor-tabel').innerHTML = html + '</tbody></table>';
 
