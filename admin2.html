@@ -5561,6 +5561,28 @@
             return '';
         };
 
+        // Excel bisa mengirim tanggal sebagai angka seri, "9/5/2026", atau "2026-09-05".
+        // Semuanya diseragamkan jadi YYYY-MM-DD. Kalau tidak terbaca -> kosong.
+        const imporNormalTanggal = (v) => {
+            if (v === undefined || v === null || String(v).trim() === '') return '';
+            const s = String(v).trim();
+
+            const angka = parseFloat(s);
+            if (!isNaN(angka) && angka > 20000 && angka < 80000 && !s.includes('-') && !s.includes('/')) {
+                const d = new Date(Math.round((angka - 25569) * 86400 * 1000));
+                if (isNaN(d.getTime())) return '';
+                return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+            }
+
+            let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+            if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+
+            m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+            if (m) return m[3] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+
+            return '';
+        };
+
         const imporNormalJam = (v) => {
             if (!v) return '';
             let s = String(v).trim();
@@ -5625,7 +5647,7 @@
                         const ongkirRaw = imporAmbilKolom(b, ['ongkir', 'fee', 'tarif']);
                         const tambahanRaw = imporAmbilKolom(b, ['tambahan', 'extra', 'bonus']);
                         const ket = (imporAmbilKolom(b, ['keterangan', 'rincian', 'menu', 'detail']) || 'Orderan Susulan').slice(0, 300);
-                        const tgl = imporAmbilKolom(b, ['tanggal', 'date']);
+                        const tgl = imporNormalTanggal(imporAmbilKolom(b, ['tanggal', 'date']));
 
                         const fee = imporParseNominal(ongkirRaw);
                         const tam = tambahanRaw ? imporParseNominal(tambahanRaw) : { real: 0, saved: 0 };
@@ -5731,6 +5753,13 @@
                         pseudoDate.setFullYear(parseInt(bagian[0]), parseInt(bagian[1]) - 1, parseInt(bagian[2]));
                         pseudoDate.setHours(parseInt(jamParts[0]), parseInt(jamParts[1]), 0, 0);
 
+                        if (isNaN(pseudoDate.getTime())) {
+                            throw new Error('Tanggal/jam tidak sah pada baris ' + b.no + ' (tanggal: "' + Tanggal + '", jam: "' + b.jam + '")');
+                        }
+                        if (!b.uid) {
+                            throw new Error('UID kosong pada baris ' + b.no);
+                        }
+
                         const dailyRef = doc(collection(db, 'artifacts', proyek, 'users', b.uid, 'daily_orders'));
                         const orderRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'active_orders'));
 
@@ -5774,7 +5803,10 @@
 
             } catch (e) {
                 console.error('Impor gagal:', e);
-                window.showAlert('Gagal Sebagian', tersimpan + ' orderan sudah tersimpan sebelum error. Kode: ' + idImpor, 'error');
+                const sebab = (e && (e.message || e.code)) ? (e.message || e.code) : 'penyebab tidak diketahui';
+                window.showAlert('Impor Gagal',
+                    tersimpan + ' orderan tersimpan sebelum berhenti.\n\nPenyebab: ' + sebab + '\n\nKode: ' + idImpor,
+                    'error');
             } finally {
                 btn.disabled = false;
             }
