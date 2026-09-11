@@ -485,6 +485,19 @@
                     <i class="fa-solid fa-scale-balanced"></i>
                 </div>
             </div>
+
+            <!-- KARTU PENGECEKAN POTONGAN ADM 16% (order yang sudah selesai) -->
+            <div id="card-adm-ok" class="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                <p class="text-[9px] font-bold text-emerald-800 uppercase tracking-widest mb-1">Berhasil terpotong ADM</p>
+                <p id="history-adm-ok" class="text-xl font-black text-emerald-700">0</p>
+                <p class="text-[8px] font-bold text-emerald-600 mt-1 uppercase">Order</p>
+            </div>
+            <div id="card-adm-gagal" onclick="document.getElementById('history-orders-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })" class="bg-slate-50 border border-slate-200 p-4 rounded-2xl cursor-pointer">
+                <p id="title-adm-gagal" class="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Gagal terpotong ADM</p>
+                <p id="history-adm-gagal" class="text-xl font-black text-slate-600">0</p>
+                <p id="sub-adm-gagal" class="text-[8px] font-bold text-slate-400 mt-1 uppercase">Order</p>
+            </div>
+            <p id="history-adm-catatan" class="col-span-2 hidden text-[10px] font-semibold text-slate-500 px-1"></p>
         </div>
 
         <section class="bg-white rounded-3xl p-4 shadow-sm border border-gray-100 mt-4">
@@ -4998,13 +5011,15 @@
                         if (!orderDoc.exists()) throw "Order tidak ditemukan";
                         if (orderDoc.data().status !== 'unassigned') throw "Sudah dialihkan";
 
+                        let penandaAdm = null; // tanda "sudah dipotong ADM" untuk kartu histori
                         if (orderDoc.data().fee) {
                             const cutAmount = Math.round(orderDoc.data().fee * 0.16);
                             const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', selectedUid);
                             transaction.set(newBalanceRef, { uid: selectedUid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
 
                             const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                            transaction.set(ledgerRefCut, { rider_uid: selectedUid, rider_name: nextRiderName, amount: cutAmount, omset_order: (orderDoc.data().fee + (orderDoc.data().tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending Manual)', created_at: serverTimestamp() });
+                            transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: selectedUid, rider_name: nextRiderName, amount: cutAmount, omset_order: (orderDoc.data().fee + (orderDoc.data().tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending Manual)', created_at: serverTimestamp() });
+                            penandaAdm = { jumlah: cutAmount, rider_uid: selectedUid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                         }
 
                         transaction.set(newDailyOrderRef, {
@@ -5018,7 +5033,8 @@
 
                         transaction.update(orderRef, {
                             rider_uid: selectedUid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
-                            status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                            status: 'assigned', created_at: serverTimestamp(), missed_by: null,
+                            adm_potong: penandaAdm
                         });
                         
                         transaction.update(riderStatusRef, {
@@ -5087,13 +5103,15 @@
                     if (currentData.status !== 'unassigned') throw "Sudah dialihkan";
 
                     // Note: Tidak perlu refund karena belum assigned ke siapapun
+                    let penandaAdm = null; // tanda "sudah dipotong ADM" untuk kartu histori
                     if (currentData.fee) {
                         const cutAmount = Math.round(currentData.fee * 0.16);
                         const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
                         transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
 
                         const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                        transaction.set(ledgerRefCut, { rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending)', created_at: serverTimestamp() });
+                        transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending)', created_at: serverTimestamp() });
+                        penandaAdm = { jumlah: cutAmount, rider_uid: nextRider.uid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                     }
 
                     transaction.set(newDailyOrderRef, {
@@ -5107,7 +5125,8 @@
 
                     transaction.update(orderRef, {
                         rider_uid: nextRider.uid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
-                        status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                        status: 'assigned', created_at: serverTimestamp(), missed_by: null,
+                        adm_potong: penandaAdm
                     });
                     
                     transaction.update(riderStatusRef, {
@@ -5151,7 +5170,7 @@
                         transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
 
                         const ledgerRefRefund = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                        transaction.set(ledgerRefRefund, { rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Order Dilewatkan', created_at: serverTimestamp() });
+                        transaction.set(ledgerRefRefund, { order_id: orderRef.id, rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Order Dilewatkan', created_at: serverTimestamp() });
                     }
                     
                     // Kembalikan ke Pending (unassigned) untuk manual assign oleh Admin
@@ -5160,7 +5179,8 @@
                         rider_name: null, 
                         daily_order_id: null,
                         status: 'unassigned', 
-                        missed_by: null
+                        missed_by: null,
+                        adm_potong: null
                     });
                 });
                 
@@ -5241,13 +5261,14 @@
                             transaction.delete(oldDailyRef);
                         }
 
+                        let penandaAdm = null; // tanda "sudah dipotong ADM" untuk kartu histori
                         if (currentData.rider_uid && currentData.fee) {
                             const refundAmount = Math.round(currentData.fee * 0.16);
                             const oldBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', currentData.rider_uid);
                             transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
 
                             const ledgerRefRefund = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                            transaction.set(ledgerRefRefund, { rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Alih Order', created_at: serverTimestamp() });
+                            transaction.set(ledgerRefRefund, { order_id: orderRef.id, rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Alih Order', created_at: serverTimestamp() });
                         }
                         
                         if (currentData.fee) {
@@ -5256,7 +5277,8 @@
                             transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
 
                             const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
-                            transaction.set(ledgerRefCut, { rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Lemparan Order', created_at: serverTimestamp() });
+                            transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Lemparan Order', created_at: serverTimestamp() });
+                            penandaAdm = { jumlah: cutAmount, rider_uid: nextRider.uid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                         }
 
                         transaction.set(newDailyOrderRef, {
@@ -5270,7 +5292,8 @@
 
                         transaction.update(orderRef, {
                             rider_uid: nextRider.uid, rider_name: nextRiderName, daily_order_id: newDailyOrderRef.id,
-                            status: 'assigned', created_at: serverTimestamp(), missed_by: null
+                            status: 'assigned', created_at: serverTimestamp(), missed_by: null,
+                            adm_potong: penandaAdm
                         });
                         
                         transaction.update(riderStatusRef, {
@@ -5528,6 +5551,67 @@
             return String(uid).trim().toUpperCase();
         }
 
+        // =====================================================================
+        // PENGECEKAN POTONGAN ADM 16% PER ORDER
+        // Sumber: tanda adm_potong yang ditulis DI BATCH/TRANSAKSI YANG SAMA dengan
+        // potongan saldo rider. Jadi kalau tandanya ada, potongannya pasti ikut tersimpan.
+        // 0 read tambahan: tanda ikut terbawa di dokumen order yang memang sudah dibaca.
+        // =====================================================================
+        const idAmanDx = (v) => /^[A-Za-z0-9_.\-]{1,128}$/.test(String(v || '')) ? String(v) : '';
+
+        window.statusPotonganAdm = (o) => {
+            const fee = Number.isFinite(o.fee_real) ? o.fee_real : (parseFloat(o.Nominal_Kotor) || 0) * 1000;
+            if (!(fee > 0)) return { k: 'nol', teks: 'Ongkir Rp0, tidak ada potongan' };
+            const harus = Math.round(fee * 0.16);
+            const m = o.adm_potong;
+            if (m && typeof m === 'object') {
+                const jml = Number(m.jumlah);
+                if (String(m.rider_uid || '').trim().toUpperCase() !== String(o.rider_uid || '').trim().toUpperCase()) {
+                    return { k: 'gagal', teks: `Potongan ADM tercatat untuk rider lain (${m.rider_uid || '-'})` };
+                }
+                // Toleransi Rp2 untuk pembulatan setelah order diedit
+                if (!Number.isFinite(jml) || Math.abs(jml - harus) > 2) {
+                    return { k: 'gagal', teks: `Potongan ADM tidak sesuai: tercatat Rp${(Number.isFinite(jml) ? jml : 0).toLocaleString('id-ID')}, seharusnya Rp${harus.toLocaleString('id-ID')}` };
+                }
+                return { k: 'ok', teks: `Berhasil dipotong ADM 16% · Rp${harus.toLocaleString('id-ID')}` };
+            }
+            if (o.adm_v) return { k: 'gagal', teks: 'Belum terpotong ADM 16%' };
+            return { k: 'lama', teks: 'Order lama, belum bisa dicek otomatis' };
+        };
+
+        window.renderCekPotonganAdm = (hit) => {
+            const okEl = document.getElementById('history-adm-ok');
+            const gagalEl = document.getElementById('history-adm-gagal');
+            const card = document.getElementById('card-adm-gagal');
+            const title = document.getElementById('title-adm-gagal');
+            const sub = document.getElementById('sub-adm-gagal');
+            const catatan = document.getElementById('history-adm-catatan');
+            if (!okEl || !gagalEl) return;
+
+            okEl.innerText = window.userRole === 'admin' ? '****' : String(hit.ok);
+            gagalEl.innerText = String(hit.gagal);
+            if (hit.gagal > 0) {
+                card.className = 'bg-rose-50 border border-rose-300 p-4 rounded-2xl cursor-pointer';
+                title.className = 'text-[9px] font-bold text-rose-800 uppercase tracking-widest mb-1';
+                gagalEl.className = 'text-xl font-black text-rose-700';
+                sub.className = 'text-[8px] font-bold text-rose-600 mt-1 uppercase';
+                sub.innerText = 'Order · lihat kartu merah';
+            } else {
+                card.className = 'bg-slate-50 border border-slate-200 p-4 rounded-2xl cursor-pointer';
+                title.className = 'text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1';
+                gagalEl.className = 'text-xl font-black text-slate-600';
+                sub.className = 'text-[8px] font-bold text-slate-400 mt-1 uppercase';
+                sub.innerText = 'Order';
+            }
+            const bagian = [];
+            if (hit.lama > 0) bagian.push(`${hit.lama} order lama belum bisa dicek otomatis`);
+            if (hit.nol > 0) bagian.push(`${hit.nol} order tanpa ongkir tidak dihitung`);
+            if (catatan) {
+                catatan.innerText = bagian.join(' · ');
+                catatan.classList.toggle('hidden', bagian.length === 0);
+            }
+        };
+
         window.compareOmsetAdmin = (actualOmsetAdmin) => {
             const card = document.getElementById('card-pembanding-admin');
             const title = document.getElementById('title-pembanding-admin');
@@ -5720,6 +5804,17 @@
                     return (b.Jam || "00:00").localeCompare((a.Jam || "00:00"));
                 });
 
+                // Cek potongan ADM tiap order; yang gagal diletakkan paling atas
+                const hitungAdm = { ok: 0, gagal: 0, lama: 0, nol: 0 };
+                allFetchedOrders.forEach(o => { o._admSt = window.statusPotonganAdm(o); hitungAdm[o._admSt.k]++; });
+                if (hitungAdm.gagal > 0) {
+                    const gagalDulu = allFetchedOrders.filter(o => o._admSt.k === 'gagal');
+                    const sisanya = allFetchedOrders.filter(o => o._admSt.k !== 'gagal');
+                    allFetchedOrders.length = 0;
+                    allFetchedOrders.push(...gagalDulu, ...sisanya);
+                }
+                if (typeof window.renderCekPotonganAdm === 'function') window.renderCekPotonganAdm(hitungAdm);
+
                 allDailyOrders = allFetchedOrders; 
                 window.currentHistoryData = allFetchedOrders.map(o => ({ id: o.id, fee: (parseFloat(o.Nominal_Kotor) || 0) * 1000, tambahan: (parseFloat(o.Tambahan) || 0) * 1000, ...o }));
 
@@ -5781,6 +5876,7 @@
                 }
 
                 if (allFetchedOrders.length === 0 && finalOrderCount === 0) {
+                    if (typeof window.renderCekPotonganAdm === 'function') window.renderCekPotonganAdm({ ok: 0, gagal: 0, lama: 0, nol: 0 });
                     container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada order selesai pada tanggal ini.</p>`;
                     if(loader) { loader.classList.add('hidden'); loader.classList.remove('flex'); }
                     return;
@@ -5797,23 +5893,32 @@
                     if (order.admin_created_at && order.admin_created_at.seconds) timeStr = new Date(order.admin_created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
                     else if (order.created_at && order.created_at.seconds && timeStr === '--:--') timeStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
+                    // Status potongan ADM + kartu merah bila gagal. Semua teks dari database di-escape,
+                    // dan ID yang dipakai di tombol hanya boleh berisi karakter aman.
+                    const st = order._admSt || window.statusPotonganAdm(order);
+                    const gagal = st.k === 'gagal';
+                    const stWarna = { ok: 'text-emerald-700', gagal: 'text-rose-700', lama: 'text-slate-500', nol: 'text-slate-500' }[st.k];
+                    const stIkon = { ok: 'fa-circle-check', gagal: 'fa-triangle-exclamation', lama: 'fa-circle-question', nol: 'fa-circle-minus' }[st.k];
+                    const idA = idAmanDx(order.id), uidA = idAmanDx(order.rider_uid);
+
                     let itemHtml = `
-                        <div class="bg-white rounded-xl p-2 border border-slate-200 shadow-sm flex flex-col gap-1.5 relative overflow-hidden transition-all duration-500 mb-1.5">
-                            <div class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500"></div>
+                        <div class="${gagal ? 'bg-rose-50 border-rose-300' : 'bg-white border-slate-200'} rounded-xl p-2 border shadow-sm flex flex-col gap-1.5 relative overflow-hidden transition-all duration-500 mb-1.5">
+                            <div class="absolute left-0 top-0 bottom-0 w-1 ${gagal ? 'bg-rose-500' : 'bg-sky-500'}"></div>
                             <div class="pl-1.5 flex flex-col gap-1">
                                 <div class="flex justify-between items-center w-full">
-                                    <p class="text-[11px] font-black text-black leading-tight truncate pr-2">${order.Nama_Pelanggan || '-'}</p>
+                                    <p class="text-[11px] font-black text-black leading-tight truncate pr-2">${escDx(order.Nama_Pelanggan || '-')}</p>
                                     <p class="text-[11px] font-black text-black leading-none shrink-0 whitespace-nowrap">Rp ${feeStr}${tamStr}</p>
                                 </div>
-                                <div class="flex items-center gap-1.5"><div class="flex items-center gap-1 text-slate-500"><i class="fa-regular fa-clock text-[7px]"></i><span class="text-[8px] font-black text-black leading-none">${timeStr}</span></div></div>
+                                <div class="flex items-center gap-1.5"><div class="flex items-center gap-1 text-slate-500"><i class="fa-regular fa-clock text-[7px]"></i><span class="text-[8px] font-black text-black leading-none">${escDx(timeStr)}</span></div></div>
+                                <div class="flex items-center gap-1 ${stWarna}"><i class="fa-solid ${stIkon} text-[9px]"></i><span class="text-[9px] font-black leading-tight">${escDx(st.teks)}</span></div>
                             </div>
-                            <div class="px-1.5 py-1 bg-slate-50 rounded-lg border border-slate-100 ml-1 flex flex-col gap-0.5">
-                                <div class="flex items-center gap-1"><i class="fa-solid fa-motorcycle text-[8px] text-slate-400 shrink-0"></i><span class="text-[9px] font-bold text-black truncate w-full">${order.rider_name}</span></div>
-                                <p class="text-[8px] text-slate-600 italic whitespace-pre-wrap w-full">"${order.Keterangan || ''}"</p>
+                            <div class="px-1.5 py-1 ${gagal ? 'bg-white' : 'bg-slate-50'} rounded-lg border border-slate-100 ml-1 flex flex-col gap-0.5">
+                                <div class="flex items-center gap-1"><i class="fa-solid fa-motorcycle text-[8px] text-slate-400 shrink-0"></i><span class="text-[9px] font-bold text-black truncate w-full">${escDx(order.rider_name)}</span></div>
+                                <p class="text-[8px] text-slate-600 italic whitespace-pre-wrap w-full">"${escDx(order.Keterangan || '')}"</p>
                             </div>
                             <div class="grid grid-cols-2 gap-1 ml-1">
-                                <button onclick="window.openEditOrder('${order.id}', true)" class="py-1 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] font-black rounded border border-amber-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-pen text-[7px]"></i> Edit</button>
-                                <button onclick="window.deleteHistoryOrder('${order.id}', '${order.rider_uid}', true)" class="py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] font-black rounded border border-rose-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-trash text-[7px]"></i> Hapus</button>
+                                ${idA ? `<button onclick="window.openEditOrder('${idA}', true)" class="py-1 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] font-black rounded border border-amber-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-pen text-[7px]"></i> Edit</button>` : '<span></span>'}
+                                ${idA && uidA ? `<button onclick="window.deleteHistoryOrder('${idA}', '${uidA}', true)" class="py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] font-black rounded border border-rose-200 flex justify-center items-center gap-1 uppercase"><i class="fa-solid fa-trash text-[7px]"></i> Hapus</button>` : '<span></span>'}
                             </div>
                         </div>`;
 
@@ -5892,7 +5997,8 @@
                             rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
                             Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
                             Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                            created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                            created_at: ts, admin_created_at: data.created_at, is_from_active: true,
+                            fee_real: parseFloat(data.fee) || 0, adm_potong: data.adm_potong || null, adm_v: data.adm_v || 0
                         });
                     });
                     
@@ -5922,7 +6028,8 @@
                                 rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
                                 Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
                                 Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                                created_at: ts, admin_created_at: data.created_at, is_from_active: true
+                                created_at: ts, admin_created_at: data.created_at, is_from_active: true,
+                                fee_real: parseFloat(data.fee) || 0, adm_potong: data.adm_potong || null, adm_v: data.adm_v || 0
                             });
                         });
                         window._todayHistoryLiveOrders = liveOrders; // simpan ke cache memori untuk dipakai ulang
@@ -6013,10 +6120,12 @@
                 // TULIS KE BUKU KAS LEDGER
                 const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                 batch.set(ledgerRef, {
-                    rider_uid: riderUid, rider_name: rName,
+                    order_id: activeOrderRef.id, rider_uid: riderUid, rider_name: rName,
                     amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
                     type: 'manual_order', desc: `Order Susulan - ${custName}`, created_at: pseudoDate
                 });
+                // Tanda "sudah dipotong ADM" untuk kartu histori (satu batch dengan potongan saldo)
+                batch.set(activeOrderRef, { adm_v: 1, adm_potong: { jumlah: adminCut, rider_uid: riderUid, ledger_id: ledgerRef.id, at: serverTimestamp() } }, { merge: true });
 
                 let cleanPhone = phone.replace(/[^0-9+]/g, '');
                 if (cleanPhone.length > 5 && typeof GAS_CUSTOMER_URL !== 'undefined' && GAS_CUSTOMER_URL.startsWith("http")) {
@@ -6277,6 +6386,8 @@
 
                         const dailyRef = doc(collection(db, 'artifacts', proyek, 'users', b.uid, 'daily_orders'));
                         const orderRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'active_orders'));
+                        const kasRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'riwayat_potongan'));
+                        const potong = Math.round(b.fee.real * 0.16);
 
                         batch.set(dailyRef, {
                             UID: b.uid, Nama_Rider: b.namaRider, Tanggal: Tanggal, Jam: b.jam,
@@ -6289,18 +6400,17 @@
                             customer_name: b.pelanggan, fee: b.fee.real, tambahan: b.tam.real,
                             items: [{ name: b.ket, qty: 1 }], status: 'completed', is_manual: true,
                             created_at: pseudoDate, finished_at: pseudoDate,
-                            daily_order_id: dailyRef.id, import_id: idImpor
+                            daily_order_id: dailyRef.id, import_id: idImpor,
+                            adm_v: 1, adm_potong: { jumlah: potong, rider_uid: b.uid, ledger_id: kasRef.id, at: serverTimestamp() }
                         });
 
-                        const potong = Math.round(b.fee.real * 0.16);
                         const saldoRef = doc(db, 'artifacts', proyek, 'public', 'data', 'rider_balances', b.uid);
                         batch.set(saldoRef, {
                             uid: b.uid, name: b.namaRider, saldo: increment(-potong), updated_at: serverTimestamp()
                         }, { merge: true });
 
-                        const kasRef = doc(collection(db, 'artifacts', proyek, 'public', 'data', 'riwayat_potongan'));
                         batch.set(kasRef, {
-                            rider_uid: b.uid, rider_name: b.namaRider, amount: potong,
+                            order_id: orderRef.id, rider_uid: b.uid, rider_name: b.namaRider, amount: potong,
                             omset_order: b.fee.real + b.tam.real, type: 'manual_order',
                             desc: 'Impor Susulan - ' + b.pelanggan, created_at: pseudoDate, import_id: idImpor
                         });
@@ -6978,7 +7088,7 @@
 
                     batch.set(orderRef, {
                         rider_uid: riderUid, rider_name: riderName, customer_phone: phone, customer_name: custName,
-                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'assigned', is_nyambi: false,
+                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'assigned', is_nyambi: false, adm_v: 1,
                         created_at: serverTimestamp(), daily_order_id: dailyOrdersRef.id, missed_by: null, last_ping: serverTimestamp(),
                         pesanan_text: pesanan_text
                     });
@@ -7003,8 +7113,11 @@
                     batch.set(ledgerRef, {
                         rider_uid: riderUid, rider_name: riderName,
                         amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
-                        type: 'auto_order', desc: `Potongan Sistem - ${custName || phone}`, created_at: serverTimestamp()
+                        type: 'auto_order', desc: `Potongan Sistem - ${custName || phone}`, created_at: serverTimestamp(),
+                        order_id: orderRef.id
                     });
+                    // Tanda "sudah dipotong ADM" untuk kartu histori (satu batch dengan potongan saldo)
+                    batch.set(orderRef, { adm_potong: { jumlah: adminCut, rider_uid: riderUid, ledger_id: ledgerRef.id, at: serverTimestamp() } }, { merge: true });
                     
                     // PERBAIKAN LANGKAH 2: sendPushNotification dipindah ke bawah setelah batch.commit()
 
@@ -7012,7 +7125,7 @@
                     // LOGIKA UNTUK MENYIMPAN KE DAFTAR PENDING (UNASSIGNED)
                     batch.set(orderRef, {
                         rider_uid: null, rider_name: null, customer_phone: phone, customer_name: custName,
-                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false,
+                        fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false, adm_v: 1,
                         created_at: serverTimestamp(), missed_by: null,
                         pesanan_text: pesanan_text
                     });
@@ -7084,7 +7197,7 @@
                 // LOGIKA UNTUK MENYIMPAN KE DAFTAR PENDING (UNASSIGNED)
                 batch.set(orderRef, {
                     rider_uid: null, rider_name: null, customer_phone: phone, customer_name: custName,
-                    fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false,
+                    fee: feeParsed.real, tambahan: tamParsed.real, items: items, status: 'unassigned', is_nyambi: false, adm_v: 1,
                     created_at: serverTimestamp(), missed_by: null,
                     pesanan_text: pesanan_text
                 });
@@ -7189,7 +7302,7 @@
                         const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                         batch.set(ledgerRef, {
                             rider_uid: order.rider_uid, amount: -refundAmount, omset_order: -(order.fee + (order.tambahan || 0)), 
-                            type: 'refund_cancel', desc: `Refund Batal Order`, created_at: serverTimestamp()
+                            type: 'refund_cancel', desc: `Refund Batal Order`, created_at: serverTimestamp(), order_id: id
                         });
                     }
 
@@ -7266,7 +7379,7 @@
                         const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                         batch.set(ledgerRef, {
                             rider_uid: order.rider_uid, amount: -refundAmount, omset_order: -(order.fee + (order.tambahan || 0)), 
-                            type: 'refund_pending', desc: `Refund Tarik ke Pending`, created_at: serverTimestamp()
+                            type: 'refund_pending', desc: `Refund Tarik ke Pending`, created_at: serverTimestamp(), order_id: id
                         });
                     }
 
@@ -7275,7 +7388,8 @@
                         rider_uid: null,
                         rider_name: null,
                         daily_order_id: null,
-                        missed_by: null
+                        missed_by: null,
+                        adm_potong: null // potongan sudah dikembalikan
                     });
 
                     if (order.daily_order_id && order.rider_uid) {
@@ -9530,13 +9644,16 @@
                             const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                             batch.set(ledgerRef, {
                                 rider_uid: riderUid, amount: diffAdminCut, omset_order: diffFee, 
-                                type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp()
+                                type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp(), order_id: id
                             });
                         }
 
                         if (oldData.is_from_active) {
                             const activeRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', id);
-                            batch.update(activeRef, { customer_name: name, items: details.split('\n').map(l => ({ name: l, qty: 1 })), pesanan_text: details, fee: feeParsed.real, tambahan: tamParsed.real });
+                            const updAktif = { customer_name: name, items: details.split('\n').map(l => ({ name: l, qty: 1 })), pesanan_text: details, fee: feeParsed.real, tambahan: tamParsed.real };
+                            // Selisih potongan ikut dicatat pada tanda ADM (hanya jika order sudah punya tanda)
+                            if (diffFee !== 0 && oldData.adm_potong && typeof oldData.adm_potong === 'object') updAktif['adm_potong.jumlah'] = increment(Math.round(diffFee * 0.16));
+                            batch.update(activeRef, updAktif);
                             
                             if (oldData.daily_order_id && riderUid) {
                                 const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', riderUid, 'daily_orders', oldData.daily_order_id);
@@ -9565,11 +9682,14 @@
                             const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                             batch.set(ledgerRef, {
                                 rider_uid: oldData.rider_uid, amount: diffAdminCut, omset_order: diffFee, 
-                                type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp()
+                                type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp(), order_id: id
                             });
                         }
                         
-                        batch.update(ref, { customer_phone: phone, customer_name: name, fee: feeParsed.real, tambahan: tamParsed.real, items: details.split('\n').map(l => ({ name: l, qty: 1 })), pesanan_text: details });
+                        const updOrder = { customer_phone: phone, customer_name: name, fee: feeParsed.real, tambahan: tamParsed.real, items: details.split('\n').map(l => ({ name: l, qty: 1 })), pesanan_text: details };
+                        // Selisih potongan ikut dicatat pada tanda ADM (hanya jika order sudah punya tanda & sudah ada rider)
+                        if (diffFee !== 0 && oldData.rider_uid && oldData.adm_potong && typeof oldData.adm_potong === 'object') updOrder['adm_potong.jumlah'] = increment(Math.round(diffFee * 0.16));
+                        batch.update(ref, updOrder);
                         if (oldData.daily_order_id && oldData.rider_uid) {
                             const dailyRef = doc(db, 'artifacts', firebaseConfig.projectId, 'users', oldData.rider_uid, 'daily_orders', oldData.daily_order_id);
                             batch.update(dailyRef, { Nama_Pelanggan: name, Keterangan: details, pesanan_text: details, Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved });
