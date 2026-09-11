@@ -195,6 +195,9 @@
         /* Tombol aksi menempel */
         .dx-actionbar { position: fixed; left: 0; right: 0; bottom: calc(64px + env(safe-area-inset-bottom)); z-index: 45; background: var(--dx-surface); border-top: 1px solid var(--dx-line); }
         .dx-actionbar-inner { max-width: 28rem; margin: 0 auto; padding: 10px 14px; display: flex; gap: 8px; }
+        /* Saat keyboard HP terbuka: tombol aksi naik tepat di atas keyboard, menu bawah disembunyikan */
+        body.dx-keyboard-buka #page-dispatch .dx-actionbar { bottom: 0; box-shadow: 0 -6px 16px rgba(0,0,0,.08); }
+        body.dx-keyboard-buka nav.fixed.bottom-0 { display: none !important; }
         .dx-btn-ghost { width: 96px; height: 54px; flex: none; border-radius: 14px; border: 1.5px solid var(--dx-line); background: var(--dx-surface); color: var(--dx-ink); font-size: 14px; font-weight: 600; font-family: inherit; }
         .dx-btn-send { flex: 1; min-width: 0; height: 54px; border-radius: 14px; border: none; background: var(--dx-brand); color: var(--dx-brand-ink); display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 16px; font-family: inherit; }
         .dx-btn-send:active, .dx-btn-ghost:active { transform: scale(.98); }
@@ -4869,6 +4872,9 @@
 
         // Dipanggil setelah form dikosongkan
         window.dxResetFormUI = () => {
+            // Tutup keyboard setelah order terkirim, supaya tombol kembali ke posisi normal
+            const aktif = document.activeElement;
+            if (aktif && document.getElementById('page-dispatch')?.contains(aktif) && typeof aktif.blur === 'function') aktif.blur();
             clearTimeout(_histOngkirTimer);
             _histOngkirNomorAktif = '';
             const box = document.getElementById('dx-ongkir-histori');
@@ -4922,6 +4928,62 @@
 
             window.dxAutoGrowPesanan();
             window.dxUpdateTombolKirim();
+        })();
+
+        // ---------- Tombol Pending & Kirim menempel di atas keyboard HP ----------
+        // Memakai visualViewport: tinggi keyboard = tinggi layar - area yang masih terlihat.
+        // Berlaku di Android (Chrome) dan iPhone (Safari). Di komputer tidak ada perubahan.
+        (function stickyAtasKeyboardDx() {
+            const vv = window.visualViewport;
+            const page = document.getElementById('page-dispatch');
+            const bar = page ? page.querySelector('.dx-actionbar') : null;
+            if (!vv || !page || !bar) return;
+
+            let tinggiAwal = window.innerHeight;
+            let raf = 0, bukaSebelumnya = false;
+
+            const inputAktifDiDispatch = () => {
+                const el = document.activeElement;
+                if (!el || !page.contains(el)) return false;
+                return el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['button', 'submit', 'checkbox', 'radio', 'hidden'].includes(el.type));
+            };
+
+            // Pastikan kolom yang sedang diketik tidak tertutup tombol aksi
+            const jagaKolomTerlihat = () => {
+                if (!document.body.classList.contains('dx-keyboard-buka')) return;
+                const el = document.activeElement;
+                if (!el || !page.contains(el)) return;
+                // Untuk kotak pesanan: hanya ikut turun jika kursor ada di akhir teks
+                if (el.tagName === 'TEXTAREA' && el.selectionEnd !== el.value.length) return;
+                const r = el.getBoundingClientRect();
+                const batasBawah = vv.offsetTop + vv.height - bar.offsetHeight - 10;
+                if (r.bottom > batasBawah) window.scrollBy(0, Math.ceil(r.bottom - batasBawah));
+            };
+
+            const hitung = () => {
+                raf = 0;
+                if (!inputAktifDiDispatch()) tinggiAwal = Math.max(tinggiAwal, window.innerHeight);
+                const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+                const layarMengecil = (tinggiAwal - window.innerHeight) > 150; // HP yang mengecilkan halaman saat keyboard muncul
+                const buka = inputAktifDiDispatch() && !page.classList.contains('hidden-page') && (kb > 120 || layarMengecil);
+
+                document.body.classList.toggle('dx-keyboard-buka', buka);
+                bar.style.bottom = buka ? kb + 'px' : '';
+                if (buka && !bukaSebelumnya) setTimeout(jagaKolomTerlihat, 60);
+                bukaSebelumnya = buka;
+            };
+            const jadwal = () => { if (!raf) raf = requestAnimationFrame(hitung); };
+
+            vv.addEventListener('resize', jadwal);
+            vv.addEventListener('scroll', jadwal);
+            window.addEventListener('orientationchange', () => { tinggiAwal = 0; setTimeout(jadwal, 400); });
+            document.addEventListener('focusin', () => { jadwal(); setTimeout(jadwal, 350); });
+            document.addEventListener('focusout', () => setTimeout(jadwal, 80));
+            document.getElementById('order-details')?.addEventListener('input', () => requestAnimationFrame(jagaKolomTerlihat));
+
+            // Menekan tombol tidak memindahkan fokus -> keyboard tidak menutup di tengah ketukan,
+            // jadi tombol tidak "lari" dan ketukan tidak meleset.
+            bar.addEventListener('mousedown', (e) => e.preventDefault());
         })();
 
         window.selectRider = (uid, name, autoSwitch = true) => {
