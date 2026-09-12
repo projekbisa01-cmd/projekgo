@@ -18,6 +18,20 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- Chart.js sebelumnya dimuat 2x (jsdelivr + cdnjs). Yang benar-benar dipakai adalah versi terakhir (4.4.1), jadi cukup satu. -->
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/chart.js/4.4.1/chart.umd.js"></script>
+    <!-- CADANGAN (BARU): kalau CDN utama di atas gagal total diunduh (mis. koneksi rider
+         memblokir cdnjs.cloudflare.com), skrip kecil ini akan mengambil Chart.js dari
+         CDN lain (jsdelivr) sebagai cadangan, supaya grafik tetap bisa muncul. -->
+    <script>
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                if (typeof Chart === 'undefined') {
+                    var fallback = document.createElement('script');
+                    fallback.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+                    document.head.appendChild(fallback);
+                }
+            }, 1500); // beri jeda agar skrip utama sempat dicoba dulu
+        });
+    </script>
     <!-- Tambahkan library untuk download gambar -->
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     
@@ -9547,10 +9561,35 @@
             // Chart.js dimuat dengan "defer", jadi bisa saja belum siap saat fungsi ini
             // dipanggil pertama kali. Dulu tidak dicek, dan grafik gagal dibuat diam-diam.
             if (typeof Chart === 'undefined') {
+                window._retryCountWeeklyChart = (window._retryCountWeeklyChart || 0) + 1;
+                // Setelah dicoba ±10 detik (20x setiap 500ms) dan tetap gagal, kemungkinan
+                // besar Chart.js benar-benar tidak berhasil diunduh (internet/koneksi
+                // bermasalah). Daripada diam-diam kosong terus, tampilkan pesan + tombol coba lagi.
+                if (window._retryCountWeeklyChart > 20) {
+                    const parent = canvasEl.parentElement;
+                    if (parent && !document.getElementById('weekly-chart-error-msg')) {
+                        const errDiv = document.createElement('div');
+                        errDiv.id = 'weekly-chart-error-msg';
+                        errDiv.className = 'absolute inset-0 flex flex-col items-center justify-center text-center text-[11px] text-gray-400 italic px-4';
+                        errDiv.innerHTML = 'Grafik gagal dimuat.<br>Periksa koneksi internet Anda.<br><button type="button" class="mt-2 text-orange-600 font-bold not-italic underline">Coba Lagi</button>';
+                        errDiv.querySelector('button').onclick = function () {
+                            window._retryCountWeeklyChart = 0;
+                            errDiv.remove();
+                            updateWeeklyChart(labels, data);
+                        };
+                        parent.appendChild(errDiv);
+                    }
+                    return;
+                }
                 clearTimeout(window._timerGrafikMingguan);
                 window._timerGrafikMingguan = setTimeout(() => updateWeeklyChart(labels, data), 500);
                 return;
             }
+
+            // Chart.js berhasil siap (mungkin lewat CDN cadangan) -> bersihkan pesan error jika ada
+            window._retryCountWeeklyChart = 0;
+            const oldErrMsg = document.getElementById('weekly-chart-error-msg');
+            if (oldErrMsg) oldErrMsg.remove();
 
             // Simpan data terbaru ke memori
             window.lastChartDataCache = newDataString;
@@ -9590,10 +9629,31 @@
             // daftar "Riwayat Mingguan" ke halaman -- jadi grafik & daftar riwayat
             // sama-sama tampak kosong walau data sebenarnya ada.
             if (typeof Chart === 'undefined') {
+                window._retryCountMonthlyWeeklyChart = (window._retryCountMonthlyWeeklyChart || 0) + 1;
+                if (window._retryCountMonthlyWeeklyChart > 20) {
+                    const parent = canvasEl.parentElement;
+                    if (parent && !document.getElementById('monthly-weekly-chart-error-msg')) {
+                        const errDiv = document.createElement('div');
+                        errDiv.id = 'monthly-weekly-chart-error-msg';
+                        errDiv.className = 'absolute inset-0 flex flex-col items-center justify-center text-center text-[11px] text-gray-400 italic px-4';
+                        errDiv.innerHTML = 'Grafik gagal dimuat.<br>Periksa koneksi internet Anda.<br><button type="button" class="mt-2 text-orange-600 font-bold not-italic underline">Coba Lagi</button>';
+                        errDiv.querySelector('button').onclick = function () {
+                            window._retryCountMonthlyWeeklyChart = 0;
+                            errDiv.remove();
+                            updateMonthlyWeeklyChart(labels, data);
+                        };
+                        parent.appendChild(errDiv);
+                    }
+                    return;
+                }
                 clearTimeout(window._timerGrafikTrenMingguan);
                 window._timerGrafikTrenMingguan = setTimeout(() => updateMonthlyWeeklyChart(labels, data), 500);
                 return;
             }
+
+            window._retryCountMonthlyWeeklyChart = 0;
+            const oldErrMsg2 = document.getElementById('monthly-weekly-chart-error-msg');
+            if (oldErrMsg2) oldErrMsg2.remove();
             
             const newDataString = JSON.stringify(data);
             if (window.lastMonthlyWeeklyChartCache === newDataString && window.monthlyWeeklyChartInstance) return;
