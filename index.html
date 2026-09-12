@@ -7936,10 +7936,29 @@
             location.reload();
         }
 
+        // Membuka layar beranda. Aman dipanggil berkali-kali.
+        window.tampilkanBeranda = function () {
+            const overlay = document.getElementById('loading-overlay');
+            const app = document.getElementById('main-app');
+            if (overlay) overlay.style.display = 'none';
+            if (app) app.classList.remove('hidden');
+        };
+
         async function fetchData(forceRefresh = false) {
             const errorMsg = document.getElementById('login-error-msg');
             const cacheKey = `rider_data_${currentUserUID}`;
             let hasLoadedFromCache = false;
+
+            // JARING PENGAMAN: dulu rider bisa tertahan di layar loading sampai
+            // penarikan riwayat selesai. Kalau lewat 5 detik, beranda dibuka saja
+            // dan riwayat menyusul mengisi sendiri di latar belakang.
+            const timerBukaBeranda = setTimeout(() => {
+                const teks = document.getElementById('loading-text');
+                if (teks) teks.innerText = 'Menyiapkan riwayat di latar belakang...';
+                window.tampilkanBeranda();
+                const ikon = document.getElementById('refresh-icon');
+                if (ikon) ikon.classList.add('refreshing');
+            }, 5000);
 
             if (forceRefresh) { 
                 localStorage.removeItem(`rider_docs_${currentUserUID}`); 
@@ -7960,8 +7979,8 @@
                             rawData = parsedCache; 
                             appsScriptData = parsedCache; 
                             if (lastDataCount === -1) lastDataCount = rawData.length;
-                            document.getElementById('loading-overlay').style.display = 'none'; 
-                            document.getElementById('main-app').classList.remove('hidden');
+                            clearTimeout(timerBukaBeranda);
+                            window.tampilkanBeranda();
                             updateUI(); setTimeout(showWelcomePopup, 500);
                             const cachedRating = localStorage.getItem(`rider_rating_${currentUserUID}`);
                             if (cachedRating) renderRatingUI(JSON.parse(cachedRating));
@@ -7988,11 +8007,15 @@
                         const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
                         const cleanUid = String(currentUserUID).trim().toUpperCase();
 
-                        // PERBAIKAN: Gunakan koleksi daily_orders agar menarik semua history
                         const historyRef = collection(db, 'artifacts', targetProjectId, 'users', cleanUid, 'daily_orders');
                         
-                        // EKSEKUSI LANGKAH 1: Tarik semua data riwayat pesanan (tanpa limit) agar histori lengkap
-                        const qHistory = query(historyRef, orderBy('created_at', 'desc'));
+                        // PENTING: dulu di sini ditarik SELURUH riwayat tanpa batas. Untuk rider lama
+                        // yang sudah ribuan order, itu berarti mengunduh ribuan dokumen sekali jalan —
+                        // inilah yang membuat layar loading macet lama sekali setelah login.
+                        // Sekarang dibatasi 800 order terbaru. Itu sudah lebih dari cukup untuk
+                        // semua tampilan yang ada (harian 30 hari, mingguan, bulan ini & bulan lalu),
+                        // dan sekaligus jauh menghemat read Firebase.
+                        const qHistory = query(historyRef, orderBy('created_at', 'desc'), limit(800));
                         
                         const querySnapshot = await getDocs(qHistory);
                         
@@ -8101,18 +8124,18 @@
                     window.combineAndRenderData();
                 }
                 
+                clearTimeout(timerBukaBeranda);
                 if (hasLoadedFromCache && refreshIcon) refreshIcon.classList.remove('refreshing');
                 
             } catch (error) {
                 console.error("Error pada fetchData Utama:", error);
+                clearTimeout(timerBukaBeranda);
                 const refreshIcon = document.getElementById('refresh-icon');
                 if (refreshIcon) refreshIcon.classList.remove('refreshing');
 
-                if (rawData.length === 0) {
-                    document.getElementById('loading-overlay').style.display = 'none'; 
-                    document.getElementById('main-app').classList.remove('hidden');
-                    updateUI();
-                }
+                // Jangan tinggalkan rider di layar loading kalau penarikan data gagal
+                window.tampilkanBeranda();
+                updateUI();
             }
         }
 
@@ -8214,8 +8237,9 @@
                 const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
                 if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
                 
-                document.getElementById('loading-overlay').style.display = 'none'; 
-                document.getElementById('main-app').classList.remove('hidden');
+                window.tampilkanBeranda();
+                const ikon = document.getElementById('refresh-icon');
+                if (ikon) ikon.classList.remove('refreshing');
                 setTimeout(showWelcomePopup, 500);
             });
         }
