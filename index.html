@@ -12339,39 +12339,20 @@
               window._hasActiveDocOrder = false;
               window._hasActiveQueryOrder = false;
 
-              // PERBAIKAN KUOTA 1: Dengar langsung ke Document ID (Paling Hemat Kuota - 1 Read/Perubahan)
-              const orderDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', cleanUid);
-              activeOrderUnsubscribeDoc = onSnapshot(orderDocRef, (docSnap) => {
-                  let hasValidActiveOrder = false;
-                  
-                  if (docSnap.exists()) {
-                      const data = docSnap.data();
-                      const status = String(data.status || '').trim().toLowerCase();
-                      if (status === 'assigned' || status === 'processing') {
-                          hasValidActiveOrder = true;
-                      }
-                      handleOrderData(data, docSnap.id);
-                  } else {
-                      // DOKUMEN DIHAPUS SECARA FISIK OLEH ADMIN (Aksi: deleteDoc)
-                      if (window.currentActiveOrderId === docSnap.id || window.currentIncomingOrderId === docSnap.id) {
-                          console.log("Detect deleteDoc pada DocRef:", docSnap.id);
-                          handleCanceledOrderProcess();
-                      }
-                  }
-                  
-                  window._hasActiveDocOrder = hasValidActiveOrder;
-                  if (hasValidActiveOrder) {
-                      if (cancelProcessTimeout) clearTimeout(cancelProcessTimeout);
-                  }
-                  // Pemantau dokumen ini TIDAK lagi memicu proses pembatalan.
-                  // Admin selalu membuat orderan dengan ID acak, sehingga dokumen
-                  // active_orders/{UID} memang tidak pernah ada. Membiarkannya memicu
-                  // pembatalan membuat halaman berjalan berkedip kembali ke beranda.
-                  // Pembatalan kini ditentukan sepenuhnya oleh pemantau pencarian.
-              }, (error) => { console.error("Error listening doc order:", error); });
+              // CATATAN: pemantau ke dokumen active_orders/{UID} sudah DIHAPUS.
+              // Admin selalu membuat order dengan ID acak, jadi dokumen itu tidak pernah ada —
+              // pemantau tersebut hanya menambah beban koneksi tanpa pernah berguna.
+              window._hasActiveDocOrder = false;
 
-              // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Jika Admin pakai Document ID acak)
-              const q = query(ordersRef, where('rider_uid', '==', cleanUid));
+              // PERBAIKAN KUOTA 2: Dengar via query field rider_uid (Admin memakai Document ID acak)
+              //
+              // PENTING: dulu di sini hanya dicocokkan dengan UID huruf besar semua.
+              // Kalau ID rider di database tersimpan huruf kecil (mis. "r05"), order dari
+              // admin TIDAK PERNAH ketemu: rider tidak dapat popup/notifikasi, padahal
+              // riwayat & potongan di admin sudah terlanjur tercatat.
+              // Sekarang dicocokkan ke beberapa bentuk penulisan sekaligus (satu query).
+              const variasiUid = [...new Set([cleanUid, cleanUid.toLowerCase(), String(uid).trim()])].slice(0, 10);
+              const q = query(ordersRef, where('rider_uid', 'in', variasiUid));
               activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
                   let hasValidActiveOrder = false;
                   
