@@ -7534,6 +7534,9 @@
                     
                     await batch.commit();
 
+                    // Hitung ulang nomor antrean & tulis papan saat itu juga
+                    if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
+
                     // --- ANTI-OVERWRITE EXTREME (MENCEGAH APLIKASI RIDER MERESET WAKTU) ---
                     if (order.rider_uid) {
                         const forcePriorityRank = () => {
@@ -7543,6 +7546,8 @@
                                 is_available: true,
                                 last_drop_time: fakeTime,
                                 last_drop_desc: "Prioritas: Dibatalkan Admin"
+                            }).then(() => {
+                                if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
                             }).catch(e => {});
                         };
                         // Tembak berulang hingga 12 detik untuk menang atas segala delay aplikasi rider / sinyal!
@@ -7591,11 +7596,60 @@
                     if (order.daily_order_id && order.rider_uid) {
                         batch.delete(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id));
                     }
-                    
+
+                    // PENTING (perbaikan): dulu fungsi ini TIDAK PERNAH mengembalikan status rider.
+                    // Rider tetap tertulis "sedang bawa order" (is_available: false), sehingga nomor
+                    // antreannya tidak dihitung ulang dan di HP rider angkanya tertinggal lama.
+                    //
+                    // Rider juga diberi PRIORITAS TERATAS, sama seperti pembatalan order: waktunya
+                    // dikunci ke 00:00:01 hari ini supaya dia jadi yang paling lama menunggu.
+                    // Ordernya ditarik bukan karena salahnya, jadi tidak boleh dirugikan.
+                    const waktuPrioritas = new Date();
+                    waktuPrioritas.setHours(0, 0, 1, 0);
+
+                    if (order.rider_uid) {
+                        const rdrP = allRiders.find(r => r.uid === order.rider_uid);
+                        // Memori lokal ikut diubah agar listener admin tidak menimpa balik posisinya
+                        if (rdrP) {
+                            rdrP.is_available = true;
+                            rdrP.in_main_queue = true;
+                            rdrP.last_drop_time = waktuPrioritas;
+                        }
+                        batch.update(doc(db, 'status_rider_aktif', order.rider_uid), {
+                            is_available: true,
+                            in_main_queue: true,
+                            is_online: true,
+                            last_drop_time: waktuPrioritas,
+                            last_drop_desc: "Prioritas: Order Ditarik Admin",
+                            last_updated: serverTimestamp()
+                        });
+                    }
+
                     await batch.commit();
-                    if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan yang sedang kamu proses telah ditarik oleh Admin karena suatu kendala. (Saldo dikembalikan)", "ORDER_BATAL");
+
+                    // Sama seperti pembatalan: tembak ulang beberapa kali supaya tidak kalah
+                    // oleh aplikasi rider yang mungkin menulis ulang waktunya saat koneksi pulih.
+                    if (order.rider_uid) {
+                        const kunciPrioritasPending = () => {
+                            updateDoc(doc(db, 'status_rider_aktif', order.rider_uid), {
+                                in_main_queue: true,
+                                is_available: true,
+                                last_drop_time: waktuPrioritas,
+                                last_drop_desc: "Prioritas: Order Ditarik Admin"
+                            }).then(() => {
+                                if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
+                            }).catch(e => {});
+                        };
+                        [1000, 3000, 5000, 8000, 12000].forEach(jeda => setTimeout(kunciPrioritasPending, jeda));
+                    }
+
+                    // Hitung ulang nomor antrean & tulis papan saat itu juga, tanpa menunggu
+                    // putaran listener. Ini yang membuat angka di HP rider langsung berubah.
+                    if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
+
+                    if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan ditarik Admin. Kamu dikembalikan ke antrean paling atas karena suatu kendala. (Saldo dikembalikan)", "ORDER_BATAL");
                     
-                    window.showAlert('Berhasil', 'Orderan berhasil dipindahkan ke tab Pending. Saldo potongan rider telah dikembalikan otomatis.', 'success');
+                    window.showAlert('Berhasil', 'Orderan dipindahkan ke Pending. Rider dikembalikan ke antrean paling atas dan potongan di-refund.', 'success');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat memindahkan ke pending.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
