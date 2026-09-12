@@ -449,6 +449,8 @@
         body.dark-mode .day-card.bg-orange-50 { background-color: rgba(249, 115, 22, 0.15) !important; border-color: rgba(249, 115, 22, 0.5) !important; }
         body.dark-mode #daily-date-pills button { background-color: #1e293b !important; color: #cbd5e1 !important; border-color: #334155 !important; }
         body.dark-mode #daily-date-pills button.bg-orange-600 { background-color: #ea580c !important; color: #ffffff !important; border-color: #ea580c !important; }
+        body.dark-mode #weekly-date-pills button { background-color: #1e293b !important; color: #cbd5e1 !important; border-color: #334155 !important; }
+        body.dark-mode #weekly-date-pills button.bg-orange-600 { background-color: #ea580c !important; color: #ffffff !important; border-color: #ea580c !important; }
 
         /* Fix Badge Pembayaran & Kotak Metode Pembayaran (Point 3) */
         body.dark-mode .bg-gray-50\/80 { background-color: rgba(30, 41, 59, 0.8) !important; border-color: #334155 !important; }
@@ -3761,6 +3763,12 @@
                         <h2 class="font-bold text-lg text-gray-800">Laporan Mingguan</h2>
                         <p id="weekly-period-label" class="text-xs text-gray-500">Periode Senin - Minggu</p>
                     </div>
+
+                    <!-- Pilihan Minggu (Pill-shaped, minggu ini di kanan, minggu lama di kiri) -->
+                    <div id="weekly-date-pills" class="flex overflow-x-auto no-scrollbar space-x-2 pb-3 mb-3 px-1">
+                        <!-- Diisi oleh JS -->
+                    </div>
+
                     <div class="space-y-4">
                         <!-- KARTU 1: PENDAPATAN BERSIH (Bisa di-minimize) -->
                         <div class="orange-gradient rounded-3xl p-6 text-white shadow-lg relative overflow-hidden cursor-pointer active:scale-[0.98] transition-transform" onclick="window.toggleWeeklyCard('weekly-income-content', 'weekly-income-icon')">
@@ -5778,7 +5786,10 @@
 
             let html = '';
             // UBAH DARI 10 MENJADI 30 UNTUK MENAMPILKAN 30 HARI KEBELAKANG
-            for (let i = 0; i < 30; i++) {
+            // Loop dibalik (dari paling lama ke paling baru) supaya "Hari Ini" muncul
+            // di ujung KANAN, "Kemarin" di sebelah kirinya, dan seterusnya ke kiri
+            // untuk tanggal yang lebih lama.
+            for (let i = 29; i >= 0; i--) {
                 const dateKey = getJakartaDateString(-i);
                 const p = dateKey.split('-'); 
                 const d = new Date(p[2], p[0]-1, p[1]);
@@ -5798,6 +5809,16 @@
                 html += `<button onclick="window.selectDailyDate('${dateKey}')" id="pill-date-${dateKey}" class="flex-shrink-0 px-4 py-2 rounded-full border text-[11px] font-bold transition-all active:scale-95 ${activeClass}">${displayString}</button>`;
             }
             container.innerHTML = html;
+
+            // Karena "Hari Ini" sekarang ada di ujung kanan (bukan di awal seperti sebelumnya),
+            // pastikan pill yang aktif otomatis terlihat (scroll ke posisinya) tanpa
+            // pengguna harus geser manual dulu.
+            const activePill = window.activeDailyDateKey ? document.getElementById(`pill-date-${window.activeDailyDateKey}`) : null;
+            if (activePill) {
+                activePill.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'end' });
+            } else {
+                container.scrollLeft = container.scrollWidth;
+            }
         };
 
         window.selectDailyDate = function(dateKey) {
@@ -5841,6 +5862,103 @@
             
             const tripsEl = document.getElementById('daily-selected-trips');
             if (tripsEl) tripsEl.innerText = totalTrips + ' Trip';
+        };
+
+        // --- FUNGSI TANGGAL MINGGUAN (BARU): pill navigasi minggu di tab Mingguan ---
+        // Sama pola-nya dengan daily-date-pills: minggu ini di ujung KANAN, minggu
+        // sebelumnya di kirinya, dan seterusnya ke kiri untuk minggu yang lebih lama.
+        window.activeWeeklyStartKey = null; // format kunci: MM-DD-YYYY (Senin awal minggu)
+
+        window.renderWeeklyDatePills = function() {
+            const container = document.getElementById('weekly-date-pills');
+            if (!container) return;
+
+            const startOfCurrentWeek = getStartOfWeek(new Date());
+            const totalWeeks = 12; // Tampilkan 12 minggu (~3 bulan) ke belakang
+
+            let html = '';
+            // Loop dari minggu paling lama ke minggu ini, supaya minggu ini ada di ujung kanan
+            for (let i = totalWeeks - 1; i >= 0; i--) {
+                const start = new Date(startOfCurrentWeek); start.setDate(start.getDate() - (i * 7));
+                const end = new Date(start); end.setDate(end.getDate() + 6);
+                const parts = DATE_FORMATTER.formatToParts(start);
+                const startKey = `${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`;
+
+                let label;
+                if (start.getMonth() === end.getMonth()) {
+                    label = `${start.getDate()}-${end.getDate()} ${end.toLocaleDateString('id-ID', { month: 'short' })}`;
+                } else {
+                    label = `${start.getDate()} ${start.toLocaleDateString('id-ID', { month: 'short' })} - ${end.getDate()} ${end.toLocaleDateString('id-ID', { month: 'short' })}`;
+                }
+
+                const isActive = (startKey === window.activeWeeklyStartKey);
+                const activeClass = isActive ? 'bg-orange-600 text-white shadow-md border-orange-600' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50';
+
+                html += `<button onclick="window.selectWeeklyDate('${startKey}')" id="pill-week-${startKey}" class="flex-shrink-0 px-4 py-2 rounded-full border text-[11px] font-bold transition-all active:scale-95 ${activeClass}">${label}</button>`;
+            }
+            container.innerHTML = html;
+
+            // Pastikan pill yang aktif otomatis terlihat (minggu ini ada di ujung kanan)
+            const activePill = window.activeWeeklyStartKey ? document.getElementById(`pill-week-${window.activeWeeklyStartKey}`) : null;
+            if (activePill) {
+                activePill.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'end' });
+            } else {
+                container.scrollLeft = container.scrollWidth;
+            }
+        };
+
+        window.selectWeeklyDate = function(startKey) {
+            window.activeWeeklyStartKey = startKey;
+            window.renderWeeklyDatePills(); // Re-render agar warna tombol aktif berubah
+
+            // Bangun 7 kunci tanggal (Senin - Minggu) untuk minggu yang dipilih
+            const p = startKey.split('-'); // MM-DD-YYYY
+            const startDate = new Date(p[2], p[0] - 1, p[1]);
+            const weekKeys = [];
+            for (let j = 0; j < 7; j++) {
+                const d = new Date(startDate); d.setDate(d.getDate() + j);
+                const parts = DATE_FORMATTER.formatToParts(d);
+                weekKeys.push(`${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}-${parts.find(p => p.type === 'year').value}`);
+            }
+
+            // Hitung total untuk minggu yang dipilih (pola sama seperti riwayat mingguan di tab Bulanan)
+            let wNet = 0, wAdm = 0, wTrips = 0, wGrossPure = 0, wExtraTotal = 0;
+            if (typeof rawData !== 'undefined') {
+                weekKeys.forEach(key => {
+                    const dRate = window.getAdmRate(key);
+                    rawData.forEach(item => {
+                        if (parseSheetDate(item.Tanggal) === key && String(item.Status || '').trim().toLowerCase() === 'selesai') {
+                            const k = (Number(item.Nominal_Kotor) || 0) * 1000;
+                            const t = (Number(item.Tambahan) || 0) * 1000;
+                            wNet += (k * (1 - dRate)) + t;
+                            wAdm += (k * dRate);
+                            wGrossPure += k; wExtraTotal += t; wTrips++;
+                        }
+                    });
+                });
+            }
+
+            const elWeeklyNetTotal = document.getElementById('weekly-net-total');
+            if (elWeeklyNetTotal) elWeeklyNetTotal.innerText = `Rp ${Math.round(wNet).toLocaleString('id-ID')}`;
+
+            const elWeeklyAdmTotal = document.getElementById('weekly-adm-total');
+            if (elWeeklyAdmTotal) elWeeklyAdmTotal.innerText = `Rp ${Math.round(wAdm).toLocaleString('id-ID')}`;
+
+            const elWeeklyGrossPureTotal = document.getElementById('weekly-gross-pure-total');
+            if (elWeeklyGrossPureTotal) elWeeklyGrossPureTotal.innerText = `Rp ${Math.round(wGrossPure).toLocaleString('id-ID')}`;
+
+            const elWeeklyGrossPureVal = document.getElementById('weekly-gross-pure-val');
+            if (elWeeklyGrossPureVal) elWeeklyGrossPureVal.innerText = `Rp ${Math.round(wGrossPure).toLocaleString('id-ID')}`;
+
+            const elWeeklyExtraVal = document.getElementById('weekly-extra-val');
+            if (elWeeklyExtraVal) elWeeklyExtraVal.innerText = `Rp ${Math.round(wExtraTotal).toLocaleString('id-ID')}`;
+
+            const elWeeklyOrderTotal = document.getElementById('weekly-order-total');
+            if (elWeeklyOrderTotal) elWeeklyOrderTotal.innerText = `${wTrips} Selesai`;
+
+            const formatDateShort = (key) => { const pp = key.split('-'); const d = new Date(pp[2], pp[0] - 1, pp[1]); return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }); };
+            const elWeeklyRangeText = document.getElementById('weekly-range-text');
+            if (elWeeklyRangeText) elWeeklyRangeText.innerText = `${formatDateShort(weekKeys[0])} - ${formatDateShort(weekKeys[6])}`;
         };
 
         // --- FUNGSI CUSTOM TOAST NON-BLOCKING ---
@@ -9122,6 +9240,18 @@
             
             updateWeeklyChart(chartLabels, finalChartNetto);
 
+            // --- NAVIGASI MINGGU (BARU): render pill minggu & terapkan minggu yang sedang dipilih ---
+            // Catatan: ini hanya memperbarui kartu ringkasan "Pendapatan Bersih" di tab Mingguan.
+            // Diagram batang di atas tetap menampilkan Minggu Ini (sesuai judulnya), tidak ikut berubah
+            // saat pengguna menjelajah minggu lama, supaya tidak membingungkan.
+            if (!window.activeWeeklyStartKey) {
+                const partsNow = DATE_FORMATTER.formatToParts(startOfCurrentWeek);
+                window.activeWeeklyStartKey = `${partsNow.find(p => p.type === 'month').value}-${partsNow.find(p => p.type === 'day').value}-${partsNow.find(p => p.type === 'year').value}`;
+            }
+            if (typeof window.renderWeeklyDatePills === 'function') window.renderWeeklyDatePills();
+            if (typeof window.selectWeeklyDate === 'function') window.selectWeeklyDate(window.activeWeeklyStartKey);
+            // ---------------------------------------------------------
+
             const lastWeekKeys = [];
             for(let i=0; i<7; i++) {
                 const d = new Date(startOfLastWeek); d.setDate(d.getDate() + i);
@@ -9451,12 +9581,26 @@
         function updateMonthlyWeeklyChart(labels, data) {
             const canvasEl = document.getElementById('monthly-weekly-bar-chart');
             if (!canvasEl) return;
+
+            // PENGAMAN (sama seperti updateWeeklyChart): Chart.js dimuat dengan "defer",
+            // jadi bisa saja belum siap saat fungsi ini dipanggil pertama kali.
+            // Dulu tidak dicek, sehingga "new Chart(...)" di bawah bisa lempar error
+            // "Chart is not defined" yang TIDAK tertangkap. Akibatnya, fungsi pemanggil
+            // (renderMonthlyWeeklyList) berhenti di tengah jalan SEBELUM sempat mengisi
+            // daftar "Riwayat Mingguan" ke halaman -- jadi grafik & daftar riwayat
+            // sama-sama tampak kosong walau data sebenarnya ada.
+            if (typeof Chart === 'undefined') {
+                clearTimeout(window._timerGrafikTrenMingguan);
+                window._timerGrafikTrenMingguan = setTimeout(() => updateMonthlyWeeklyChart(labels, data), 500);
+                return;
+            }
             
             const newDataString = JSON.stringify(data);
             if (window.lastMonthlyWeeklyChartCache === newDataString && window.monthlyWeeklyChartInstance) return;
             window.lastMonthlyWeeklyChartCache = newDataString;
 
             const ctx = canvasEl.getContext('2d');
+            try {
             if (window.monthlyWeeklyChartInstance) {
                 window.monthlyWeeklyChartInstance.data.labels = labels; 
                 window.monthlyWeeklyChartInstance.data.datasets[0].data = data; 
@@ -9508,6 +9652,10 @@
                     }
                 }
             });
+            } catch (e) {
+                // Jangan biarkan error grafik menghentikan proses render riwayat mingguan
+                console.error('Gagal membuat grafik tren mingguan:', e);
+            }
         }
 
         function renderHistory(data, containerId, rateToUse) {
@@ -9938,14 +10086,17 @@
                 }
             }
             
+            // PENTING: Isi daftar "Riwayat Mingguan" DULU sebelum membuat grafik.
+            // Dengan urutan ini, walau proses grafik di bawah gagal karena sebab apapun,
+            // daftar riwayat sudah pasti tampil dan tidak ikut kosong.
+            container.innerHTML = html || `<div class="p-8 text-center text-gray-400 text-xs italic">Belum ada riwayat mingguan sebelumnya</div>`;
+
             // Balik urutan data grafik agar berjalan dari yang terlama (kiri) ke terbaru (kanan)
             chartLabels.reverse();
             chartData.reverse();
             if (typeof updateMonthlyWeeklyChart === 'function') {
                 updateMonthlyWeeklyChart(chartLabels, chartData);
             }
-
-            container.innerHTML = html || `<div class="p-8 text-center text-gray-400 text-xs italic">Belum ada riwayat mingguan sebelumnya</div>`;
         }
         function showMonthlyWeekDetail(gross, extra, net, admAmount, trips, installmentAmount = 0) {
             const overlay = document.getElementById('monthly-weekly-detail-overlay');
