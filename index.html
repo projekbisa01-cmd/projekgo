@@ -5,10 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">  
 
     
-    <!-- TAG ANTI-CACHE AGAR UPDATE KODE LANGSUNG MUNCUL DI WEBVIEW -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <!-- CACHE: "no-cache" = tetap selalu dicek ke server, jadi update kode langsung muncul.
+         "no-store" SENGAJA DIBUANG: dulu ia melarang HP menyimpan file sama sekali, sehingga
+         tiap kali aplikasi dimuat ulang (mis. habis buka WhatsApp) file ~1 MB ini diunduh
+         penuh dari nol. Tanpa no-store, kalau isinya tidak berubah server cukup menjawab
+         "belum berubah" dan halaman terbuka jauh lebih cepat. -->
+    <meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
     
     <title>Pendapatan Rider</title>  
     <!-- Tailwind CDN (compiler 400KB yang berjalan di HP) diganti CSS jadi: lihat <style id="tailwind-build"> di akhir <head> -->
@@ -7747,11 +7750,20 @@
                     handleLogin(); 
                 }
             } else {
-                // TAMPILKAN LAYAR LOGIN JIKA TIDAK ADA AUTOLOGIN & TIDAK ADA CACHE
-                setTimeout(() => {
+                // PENTING: saat halaman baru dimuat, Firebase BELUM selesai memulihkan sesi,
+                // sehingga getRiderUid() masih kosong walau rider sebenarnya masih login.
+                // Dulu layar login langsung ditampilkan di sini -> rider mengira disuruh
+                // login ulang setiap kali kembali dari WhatsApp. Sekarang ditunggu dulu;
+                // layar login hanya muncul kalau sesinya memang benar-benar sudah habis.
+                (async () => {
+                    for (let i = 0; i < 100 && !window.riderAuthSiap; i++) await new Promise(r => setTimeout(r, 100));
+                    if (window.riderAuthSiap) {
+                        try { await Promise.race([window.riderAuthSiap, new Promise(r => setTimeout(r, 8000))]); } catch (e) {}
+                    }
+                    if (window.getRiderUid()) return; // sesi pulih -> dilanjutkan oleh onAuthStateChanged
                     document.getElementById('loading-overlay').style.display = 'none';
                     document.getElementById('login-page').style.display = 'flex';
-                }, 500); // Sedikit jeda agar transisi halus
+                })();
             }
             initSwipe();
             initStep1Swipe();
@@ -11349,7 +11361,7 @@
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
       import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy, limit as fsLimit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
-      import { getStorage, ref, uploadString, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
+      import { getStorage, ref, uploadString, uploadBytes, uploadBytesResumable, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
       const firebaseConfig = {
           apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -13017,6 +13029,59 @@
               });
           }
 
+
+          // =====================================================================
+          // UNGGAH FOTO BUKTI: lebih cepat & ada progres
+          // Dulu foto dikirim sebagai TEKS base64 (uploadString). Teks base64 ukurannya
+          // ~33% lebih besar daripada file aslinya, prosesnya diam tanpa progres, dan
+          // kalau gagal semuanya diulang dari nol. Sekarang:
+          //  1) foto diperkecil lagi secukupnya (cukup untuk bukti antar),
+          //  2) dikirim sebagai FILE biasa (blob), bukan teks -> data yang dikirim lebih sedikit,
+          //  3) rider melihat progres dalam persen, jadi tidak merasa aplikasi menggantung,
+          //  4) kalau gagal karena sinyal, dicoba ulang otomatis sekali.
+          // =====================================================================
+          const _base64KeBlob = (dataUrl) => {
+              const [kepala, isi] = String(dataUrl).split(',');
+              const tipe = (/data:([^;]+)/.exec(kepala) || [])[1] || 'image/jpeg';
+              const biner = atob(isi);
+              const buf = new Uint8Array(biner.length);
+              for (let i = 0; i < biner.length; i++) buf[i] = biner.charCodeAt(i);
+              return new Blob([buf], { type: tipe });
+          };
+
+          // Perkecil ulang foto bukti. Berlaku untuk foto dari kamera Android maupun galeri.
+          const _kecilkanFotoBukti = (dataUrl, lebarMaks = 720, mutu = 0.6) => new Promise((selesai) => {
+              try {
+                  const img = new Image();
+                  img.onload = () => {
+                      try {
+                          let w = img.width, h = img.height;
+                          if (w > lebarMaks) { h = Math.round(h * (lebarMaks / w)); w = lebarMaks; }
+                          const c = document.createElement('canvas');
+                          c.width = w; c.height = h;
+                          c.getContext('2d').drawImage(img, 0, 0, w, h);
+                          selesai(c.toDataURL('image/jpeg', mutu));
+                      } catch (e) { selesai(dataUrl); }
+                  };
+                  img.onerror = () => selesai(dataUrl); // gagal memperkecil -> pakai foto asli
+                  img.src = dataUrl;
+              } catch (e) { selesai(dataUrl); }
+          });
+
+          // Mengunggah satu blob dengan progres. Timeout 90 detik agar tidak menggantung selamanya.
+          const _unggahBlob = (imageRef, blob, tampilkanProgres) => new Promise((selesai, gagal) => {
+              const tugas = uploadBytesResumable(imageRef, blob, { contentType: 'image/jpeg', cacheControl: 'public,max-age=31536000' });
+              let pengawas = setTimeout(() => { try { tugas.cancel(); } catch (e) {} gagal(new Error('Unggahan terlalu lama')); }, 90000);
+              tugas.on('state_changed', (snap) => {
+                  clearTimeout(pengawas); // selama masih ada kemajuan, jangan dihentikan
+                  pengawas = setTimeout(() => { try { tugas.cancel(); } catch (e) {} gagal(new Error('Unggahan terlalu lama')); }, 90000);
+                  if (typeof tampilkanProgres === 'function' && snap.totalBytes > 0) {
+                      tampilkanProgres(Math.round((snap.bytesTransferred / snap.totalBytes) * 100));
+                  }
+              }, (err) => { clearTimeout(pengawas); gagal(err); },
+                 () => { clearTimeout(pengawas); selesai(); });
+          });
+
           // --- FUNGSI ASLI UNTUK MENYELESAIKAN ORDER & KIRIM KE FIREBASE ---
           async function executeFinishOrder() {
               const currentUserUID = window.getRiderUid();
@@ -13050,24 +13115,38 @@
                   let proofImageUrl = ""; 
                   
                   try {
-                      // Buang bagian depan (header) dari Base64
-                      const pureBase64 = window.finishPhotoBase64.split(',')[1];
-                      
-                      // Tentukan lokasi penyimpanan di Firebase Storage
+                      // Tampilkan progres di kedua tombol agar rider tahu prosesnya berjalan
+                      const tampilkanProgres = (persen) => {
+                          const teks = `<i class="fa-solid fa-spinner animate-spin"></i> Mengunggah Foto ${persen}%`;
+                          if (btnMain) btnMain.innerHTML = teks;
+                          if (isResting && btnRest) btnRest.innerHTML = teks;
+                      };
+
+                      // 1) Perkecil dulu (bukti antar tidak perlu resolusi besar)
+                      const fotoSiap = await _kecilkanFotoBukti(window.finishPhotoBase64, 720, 0.6);
+                      // 2) Ubah jadi file biasa, bukan teks base64
+                      const blobFoto = _base64KeBlob(fotoSiap);
+
                       const storagePath = `artifacts/${appId}/public/data/order_proofs/${window.currentActiveOrderId}_${Date.now()}.jpg`;
                       const imageRef = ref(storage, storagePath);
-                      
-                      // Unggah string base64 ke Storage
-                      await uploadString(imageRef, pureBase64, 'base64', {
-                          contentType: 'image/jpeg',
-                      });
-                      
-                      // Ambil URL publik gambar tersebut
-                      proofImageUrl = await getDownloadURL(imageRef);
+
+                      // 3) Unggah; kalau gagal karena sinyal, dicoba ulang sekali
+                      try {
+                          await _unggahBlob(imageRef, blobFoto, tampilkanProgres);
+                      } catch (e1) {
+                          console.warn("Unggahan pertama gagal, mencoba ulang:", e1);
+                          if (btnMain) btnMain.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Sinyal lemah, mencoba lagi...';
+                          if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Sinyal lemah, mencoba lagi...';
+                          await new Promise(r => setTimeout(r, 1500));
+                          await _unggahBlob(ref(storage, storagePath.replace('.jpg', '_r.jpg')), blobFoto, tampilkanProgres);
+                          proofImageUrl = await getDownloadURL(ref(storage, storagePath.replace('.jpg', '_r.jpg')));
+                      }
+
+                      if (!proofImageUrl) proofImageUrl = await getDownloadURL(imageRef);
 
                   } catch (uploadErr) {
                       console.error("Gagal mengunggah ke Firebase Storage:", uploadErr);
-                      alert("Gagal mengunggah foto! Pastikan koneksi internet stabil.");
+                      alert("Gagal mengunggah foto! Pastikan koneksi internet stabil, lalu coba lagi.");
                       if (btnMain) {
                           btnMain.disabled = false;
                           btnMain.innerHTML = originalHtmlMain;
