@@ -1026,7 +1026,8 @@
             <div id="view-rider-rekomendasi" class="hidden animate-in fade-in duration-300 mt-3">
                 <div class="bg-amber-50 p-3 rounded-xl border border-amber-100 shadow-inner mb-3">
                     <h3 class="font-black text-[10px] text-amber-800 uppercase tracking-widest mb-1"><i class="fa-solid fa-calendar-week mr-1"></i> Rekomendasi Jadwal Off</h3>
-                    <p class="text-[9px] text-amber-700 font-bold leading-relaxed">Data dirender langsung dari sistem Google Sheet. Diperbarui secara real-time berdasarkan input admin.</p>
+                    <p class="text-[9px] text-amber-700 font-bold leading-relaxed">Libur seluruh rider, Senin sampai Minggu, dipisah shift pagi dan siang. Ketuk nama rider untuk mengatur tanggal liburnya.</p>
+                    <button type="button" onclick="window.loadRekomendasiOff(true)" class="mt-2 px-3 py-1.5 bg-white text-amber-700 text-[9px] font-black rounded-lg border border-amber-200 uppercase tracking-wide"><i class="fa-solid fa-rotate mr-1"></i> Muat ulang</button>
                 </div>
                 <div id="rekomendasi-off-list" class="space-y-2 max-h-[50vh] overflow-y-auto custom-scrollbar pr-1">
                     <p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Menunggu tindakan...</p>
@@ -3246,102 +3247,220 @@
             container.innerHTML = html;
         };
 
-        // FUNGSI BARU: Untuk meload data Rekomendasi Off dari GAS (Google Sheet) dengan Pengelompokan Hari
-        window._cacheRekomendasiOff = null;
-        window.loadRekomendasiOff = async () => {
-            const container = document.getElementById('rekomendasi-off-list');
-            if (!container) return;
+        // =====================================================================
+        // JADWAL LIBUR RIDER (SUMBER: FIREBASE, BUKAN LAGI GOOGLE SHEETS)
+        //
+        // Yang disimpan HANYA satu tanggal patokan per rider, dalam SATU dokumen
+        // berisi semua rider. Hari liburnya dihitung sendiri oleh aplikasi dengan
+        // aturan MUNDUR SATU HARI setiap pergantian minggu kalender.
+        // Biayanya 1 read untuk seluruh rider, bukan 1 read per rider.
+        //
+        // Shift pagi/siang TIDAK disimpan di sini — diambil dari rider_shifts
+        // yang memang sudah dimuat aplikasi ini.
+        // =====================================================================
+        const HARI_LIBUR_NAMA = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']; // index 0..6
+        const BULAN_LIBUR_NAMA = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'];
 
-            // 1. FITUR CACHING (Hemat Kuota API)
-            // Jika data sudah pernah ditarik, gunakan cache HTML yang tersimpan
-            if (window._cacheRekomendasiOff) {
-                container.innerHTML = window._cacheRekomendasiOff;
-                return;
-            }
+        window._jadwalLibur = null;      // { riders: [{uid, patokan}] }
+        window._jadwalLiburVersi = 0;    // penanda agar render tidak tumpang tindih
 
-            // Tampilkan animasi loading
-            container.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">Menarik data dari Sheet...</p></div>';
+        const seninDariTanggal = (d) => {
+            const x = new Date(d); x.setHours(0, 0, 0, 0);
+            const g = x.getDay();                       // 0=Minggu
+            x.setDate(x.getDate() - g + (g === 0 ? -6 : 1));
+            x.setHours(0, 0, 0, 0);
+            return x;
+        };
+        const tglKeTeksLibur = (d) => `${d.getDate()} ${BULAN_LIBUR_NAMA[d.getMonth()]} ${d.getFullYear()}`;
+        const tglKeIsoLibur = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+        // Inti rumusnya. Mengembalikan indeks hari 0..6 (Senin..Minggu) untuk minggu yang diminta.
+        window.hitungLiburMingguIni = (patokanIso, acuan) => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(String(patokanIso || ''))) return null;
+            const p = patokanIso.split('-').map(Number);
+            const patokan = new Date(p[0], p[1] - 1, p[2]);
+            if (isNaN(patokan.getTime())) return null;
+
+            const seninPatokan = seninDariTanggal(patokan);
+            const seninAcuan = seninDariTanggal(acuan || new Date());
+            const mingguBerlalu = Math.round((seninAcuan - seninPatokan) / (86400000 * 7));
+            if (mingguBerlalu < 0) return null; // patokan masih di masa depan
+
+            const posPatokan = (patokan.getDay() === 0) ? 6 : patokan.getDay() - 1; // Senin=0..Minggu=6
+            const pos = ((posPatokan - mingguBerlalu) % 7 + 7) % 7;                 // MUNDUR satu hari per minggu
+            const tanggal = new Date(seninAcuan);
+            tanggal.setDate(seninAcuan.getDate() + pos);
+            return { pos, tanggal, hari: HARI_LIBUR_NAMA[pos] };
+        };
+
+        window.muatJadwalLibur = async (paksa = false) => {
+            if (window._jadwalLibur && !paksa) return window._jadwalLibur;
             try {
-                // 2. FETCH DATA DARI GOOGLE APPS SCRIPT (GAS)
-                const url = "https://script.google.com/macros/s/AKfycby5fdgopf9gCle1qUVZpfTObuICIMZ1DZWBvuYJAct4C1yj-S52gWNaOffYCJtDq2k/exec?action=getAllSchedules";
-                const response = await fetch(url);
-                if (!response.ok) throw new Error("Gagal mengambil data");
-                
-                const jsonResponse = await response.json();
-                
-                // 3. VALIDASI DATA
-                if (!jsonResponse.success || !jsonResponse.data || jsonResponse.data.length === 0) {
-                    container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Data rekomendasi off masih kosong.</p>';
-                    return;
-                }
-
-                const dataArray = jsonResponse.data;
-                const mergedRiders = typeof getMergedRidersForDropdown === 'function' ? getMergedRidersForDropdown() : [];
-
-                // 4. LOGIKA PENGELOMPOKAN BERDASARKAN HARI
-                const groupedData = {};
-                dataArray.forEach(item => {
-                    const hari = item.rekomendasi_hari || "Belum Diatur";
-                    if (!groupedData[hari]) {
-                        groupedData[hari] = [];
-                    }
-                    groupedData[hari].push(item); // Memasukkan rider ke dalam array harinya masing-masing
-                });
-
-                // 5. SORTING URUTAN HARI (Senin -> Minggu)
-                const dayOrder = { 'Senin': 1, 'Selasa': 2, 'Rabu': 3, 'Kamis': 4, 'Jumat': 5, 'Sabtu': 6, 'Minggu': 7, '-': 8, 'Belum Diatur': 9 };
-                const sortedDays = Object.keys(groupedData).sort((a, b) => (dayOrder[a] || 99) - (dayOrder[b] || 99));
-
-                let html = '';
-                sortedDays.forEach(hari => {
-                    // Kode styling untuk header hari
-                    html += `<div class="bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-wider mb-2 mt-3 flex items-center shadow-sm"><i class="fa-regular fa-calendar-check mr-1.5"></i> ${hari}</div>`;
-                    
-                    // 6. RENDER HTML PER RIDER DALAM KELOMPOK HARI TERSEBUT
-                    groupedData[hari].forEach(item => {
-                        let name = "Rider " + (item.uid || "");
-                        
-                        // Mencocokkan UID dari Sheet dengan Nama Rider yang ada di database lokal Firebase
-                        if (item.uid) {
-                            const matchedRider = mergedRiders.find(r => String(r.uid).trim() === String(item.uid).trim());
-                            if (matchedRider) {
-                                name = matchedRider.name;
-                            }
-                        }
-
-                        let dateOff = item.rekomendasi_tanggal || '-';
-
-                        // Penyusunan string HTML untuk kartu rider
-                        html += `
-                            <div class="bg-white rounded-xl p-3 border border-slate-100 shadow-sm mb-1.5 flex items-center justify-between hover:border-amber-200 transition-colors">
-                                <div class="flex items-center gap-2.5 overflow-hidden w-full pr-2">
-                                    <div class="w-8 h-8 rounded-full bg-slate-50 text-slate-400 border border-slate-200 flex items-center justify-center shrink-0">
-                                        <i class="fa-solid fa-motorcycle text-[10px]"></i>
-                                    </div>
-                                    <div class="flex flex-col overflow-hidden">
-                                        <span class="font-black text-slate-700 text-[11px] uppercase truncate">${name}</span>
-                                        <span class="text-[9px] font-bold text-slate-500 mt-0.5 truncate"><i class="fa-regular fa-calendar-xmark text-amber-500 mr-1"></i>Tgl: ${dateOff}</span>
-                                    </div>
-                                </div>
-                                <div class="shrink-0 text-right">
-                                    <span class="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 shadow-sm">REKOMENDASI</span>
-                                </div>
-                            </div>
-                        `;
-                    });
-                });
-
-                // 7. SIMPAN KE CACHE DAN TAMPILKAN
-                window._cacheRekomendasiOff = html;
-                container.innerHTML = html;
-
+                const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'jadwal_libur', 'current');
+                const snap = await getDoc(ref);
+                const isi = snap.exists() ? snap.data() : null;
+                window._jadwalLibur = { riders: (isi && Array.isArray(isi.riders)) ? isi.riders : [] };
             } catch (e) {
-                // Penanganan jika error koneksi / fetch gagal
-                console.error("Error Load GAS Rekomendasi:", e);
-                container.innerHTML = '<div class="text-center py-4 bg-rose-50 rounded-xl border border-rose-100 p-3 mt-2"><i class="fa-solid fa-triangle-exclamation text-rose-500 text-xl mb-2"></i><p class="text-[10px] text-rose-600 font-bold mb-1">Gagal load data Google Sheet. Periksa koneksi.</p></div>';
+                console.warn('[Libur] Gagal memuat jadwal:', e);
+                if (!window._jadwalLibur) window._jadwalLibur = { riders: [] };
+            }
+            return window._jadwalLibur;
+        };
+
+        window.simpanJadwalLibur = async (uid, patokanIso) => {
+            const uidBersih = String(uid || '').trim().toUpperCase();
+            if (!uidBersih) return false;
+            await window.muatJadwalLibur();
+            const daftar = window._jadwalLibur.riders.filter(r => String(r.uid).trim().toUpperCase() !== uidBersih);
+            if (patokanIso) daftar.push({ uid: uidBersih, patokan: patokanIso }); // tanpa tanggal = hapus dari jadwal
+            daftar.sort((a, b) => String(a.uid).localeCompare(String(b.uid)));
+            try {
+                const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'jadwal_libur', 'current');
+                await setDoc(ref, { riders: daftar, updated_at: serverTimestamp() }, { merge: true });
+                window._jadwalLibur = { riders: daftar };
+                return true;
+            } catch (e) {
+                console.error('[Libur] Gagal menyimpan:', e);
+                return false;
             }
         };
+
+        // Menyusun data siap tampil: per hari Senin..Minggu, dipisah shift
+        window.susunJadwalLibur = () => {
+            const kosong = () => ({ pagi: [], siang: [], lain: [] });
+            const perHari = HARI_LIBUR_NAMA.map(kosong);
+            const belum = [];
+            const daftarRider = typeof getMergedRidersForDropdown === 'function' ? getMergedRidersForDropdown() : [];
+            const jadwal = (window._jadwalLibur && window._jadwalLibur.riders) ? window._jadwalLibur.riders : [];
+            const petaJadwal = new Map(jadwal.map(r => [String(r.uid).trim().toUpperCase(), r.patokan]));
+
+            daftarRider.forEach(rider => {
+                const uidU = String(rider.uid).trim().toUpperCase();
+                const shift = (allShiftSchedules.find(s => String(s.uid).trim().toUpperCase() === uidU) || {}).shift_type || '';
+                const kolom = shift === 'pagi' ? 'pagi' : (shift === 'siang' ? 'siang' : 'lain');
+                const patokan = petaJadwal.get(uidU);
+                const hasil = patokan ? window.hitungLiburMingguIni(patokan) : null;
+                const baris = { uid: rider.uid, nama: rider.name || rider.uid, shift, kolom, patokan: patokan || '' };
+                if (hasil) perHari[hasil.pos][kolom].push(baris);
+                else belum.push(baris);
+            });
+
+            const urutNama = (a, b) => String(a.nama).localeCompare(String(b.nama));
+            perHari.forEach(h => { h.pagi.sort(urutNama); h.siang.sort(urutNama); h.lain.sort(urutNama); });
+            belum.sort(urutNama);
+            return { perHari, belum };
+        };
+
+        window.loadRekomendasiOff = async (paksa = false) => {
+            const container = document.getElementById('rekomendasi-off-list');
+            if (!container) return;
+            const versi = ++window._jadwalLiburVersi;
+            container.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-amber-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[10px] text-slate-400 font-bold">Memuat jadwal libur...</p></div>';
+
+            await window.muatJadwalLibur(paksa);
+            if (versi !== window._jadwalLiburVersi) return; // sudah ada permintaan yang lebih baru
+
+            const { perHari, belum } = window.susunJadwalLibur();
+            const senin = seninDariTanggal(new Date());
+            const hariIniPos = (() => { const g = new Date().getDay(); return g === 0 ? 6 : g - 1; })();
+
+            const kartuRider = (r, warna) => `
+                <button type="button" onclick="window.bukaEditorLibur('${escDx(r.uid)}')" class="w-full text-left bg-white rounded-lg px-2.5 py-1.5 border ${warna} shadow-sm flex items-center justify-between gap-2 hover:bg-slate-50 active:scale-[0.99] transition-all">
+                    <span class="text-[10px] font-bold text-slate-700 truncate">${escDx(r.nama)}</span>
+                    <i class="fa-solid fa-pen text-[8px] text-slate-300 shrink-0"></i>
+                </button>`;
+
+            const kolomShift = (judul, ikon, warnaJudul, warnaKartu, daftar) => `
+                <div class="flex-1 min-w-0">
+                    <p class="text-[8px] font-black uppercase tracking-widest ${warnaJudul} mb-1.5 flex items-center gap-1"><i class="fa-solid ${ikon}"></i> ${judul} (${daftar.length})</p>
+                    <div class="space-y-1">${daftar.length ? daftar.map(r => kartuRider(r, warnaKartu)).join('') : '<p class="text-[9px] text-slate-300 italic px-1">—</p>'}</div>
+                </div>`;
+
+            let html = '';
+            HARI_LIBUR_NAMA.forEach((nama, i) => {
+                const tgl = new Date(senin); tgl.setDate(senin.getDate() + i);
+                const iniHariIni = i === hariIniPos;
+                const total = perHari[i].pagi.length + perHari[i].siang.length + perHari[i].lain.length;
+                html += `
+                    <div class="rounded-2xl border ${iniHariIni ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'} p-3 mb-2.5 shadow-sm">
+                        <div class="flex items-center justify-between mb-2.5 pb-2 border-b ${iniHariIni ? 'border-amber-200' : 'border-slate-100'}">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[11px] font-black ${iniHariIni ? 'text-amber-700' : 'text-slate-700'} uppercase tracking-wide">${nama}</span>
+                                <span class="text-[9px] font-bold text-slate-400">${escDx(tglKeTeksLibur(tgl))}</span>
+                                ${iniHariIni ? '<span class="text-[8px] font-black text-white bg-amber-500 px-1.5 py-0.5 rounded uppercase">Hari ini</span>' : ''}
+                            </div>
+                            <span class="text-[9px] font-black ${total > 0 ? 'text-amber-600 bg-amber-100 border-amber-200' : 'text-slate-400 bg-slate-50 border-slate-200'} px-2 py-0.5 rounded-full border">${total} libur</span>
+                        </div>
+                        <div class="flex gap-3">
+                            ${kolomShift('Pagi', 'fa-sun', 'text-orange-500', 'border-orange-100', perHari[i].pagi)}
+                            <div class="w-px bg-slate-100 shrink-0"></div>
+                            ${kolomShift('Siang', 'fa-cloud-sun', 'text-sky-500', 'border-sky-100', perHari[i].siang)}
+                        </div>
+                        ${perHari[i].lain.length ? `<div class="mt-2.5 pt-2 border-t border-slate-100">${kolomShift('Tanpa Shift', 'fa-circle-question', 'text-slate-400', 'border-slate-100', perHari[i].lain)}</div>` : ''}
+                    </div>`;
+            });
+
+            if (belum.length) {
+                html += `
+                    <div class="rounded-2xl border border-dashed border-rose-200 bg-rose-50/50 p-3 mb-2">
+                        <p class="text-[9px] font-black uppercase tracking-widest text-rose-600 mb-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Belum diatur (${belum.length})</p>
+                        <div class="grid grid-cols-2 gap-1">${belum.map(r => kartuRider(r, 'border-rose-100')).join('')}</div>
+                    </div>`;
+            }
+
+            html += `<p class="text-[9px] text-slate-400 italic text-center py-2">Ketuk nama rider untuk mengatur tanggal liburnya. Jadwal mundur satu hari tiap pergantian minggu.</p>`;
+            container.innerHTML = html;
+        };
+
+        // ---------- Editor: atur tanggal libur satu rider ----------
+        window.bukaEditorLibur = async (uid) => {
+            const uidU = String(uid).trim().toUpperCase();
+            await window.muatJadwalLibur();
+            const rider = (typeof getMergedRidersForDropdown === 'function' ? getMergedRidersForDropdown() : []).find(r => String(r.uid).trim().toUpperCase() === uidU);
+            const nama = rider ? (rider.name || rider.uid) : uid;
+            const adaJadwal = window._jadwalLibur.riders.find(r => String(r.uid).trim().toUpperCase() === uidU);
+
+            const senin = seninDariTanggal(new Date());
+            let pilihan = '';
+            HARI_LIBUR_NAMA.forEach((h, i) => {
+                const t = new Date(senin); t.setDate(senin.getDate() + i);
+                const skrg = adaJadwal ? window.hitungLiburMingguIni(adaJadwal.patokan) : null;
+                const aktif = skrg && skrg.pos === i;
+                pilihan += `<button type="button" onclick="window.pilihTanggalLibur('${escDx(uidU)}','${tglKeIsoLibur(t)}')" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border ${aktif ? 'border-amber-400 bg-amber-50' : 'border-slate-200 bg-white hover:bg-slate-50'} transition-colors mb-1.5">
+                    <span class="text-[11px] font-bold ${aktif ? 'text-amber-700' : 'text-slate-700'}">${h}</span>
+                    <span class="text-[10px] font-semibold text-slate-400">${escDx(tglKeTeksLibur(t))}</span>
+                    ${aktif ? '<i class="fa-solid fa-circle-check text-amber-500 text-xs"></i>' : '<i class="fa-regular fa-circle text-slate-300 text-xs"></i>'}
+                </button>`;
+            });
+
+            const isi = `
+                <p class="text-[10px] text-slate-500 mb-1">Atur libur untuk</p>
+                <p class="text-sm font-black text-slate-800 mb-3">${escDx(nama)}</p>
+                <p class="text-[9px] text-slate-500 mb-2 bg-slate-50 border border-slate-200 rounded-lg p-2 leading-relaxed">Pilih tanggal liburnya <b>di minggu ini</b>. Minggu berikutnya mundur sendiri satu hari, jadi cukup diatur sekali.</p>
+                ${pilihan}
+                ${adaJadwal ? `<button type="button" onclick="window.pilihTanggalLibur('${escDx(uidU)}','')" class="w-full mt-2 px-3 py-2.5 rounded-xl border border-rose-200 bg-rose-50 text-[10px] font-black text-rose-600 uppercase tracking-wide">Hapus dari jadwal libur</button>` : ''}`;
+
+            // Dialog sendiri (showConfirm memakai innerText, jadi tidak bisa menampilkan daftar ini)
+            document.getElementById('dialog-libur')?.remove();
+            const w = document.createElement('div');
+            w.id = 'dialog-libur';
+            w.className = 'fixed inset-0 z-[9999] bg-black/50 flex items-end sm:items-center justify-center p-4';
+            w.innerHTML = `<div class="bg-white w-full max-w-sm rounded-2xl p-4 max-h-[85vh] overflow-y-auto">${isi}<button type="button" onclick="document.getElementById('dialog-libur').remove()" class="w-full mt-3 py-2.5 bg-slate-100 text-slate-600 text-[10px] font-black rounded-xl uppercase tracking-wide">Tutup</button></div>`;
+            w.addEventListener('click', (e) => { if (e.target === w) w.remove(); });
+            document.body.appendChild(w);
+        };
+
+        window.pilihTanggalLibur = async (uid, tanggalIso) => {
+            const ok = await window.simpanJadwalLibur(uid, tanggalIso);
+            document.getElementById('dialog-libur')?.remove();
+            if (typeof window.showAlert === 'function') {
+                window.showAlert(ok ? 'Berhasil' : 'Gagal',
+                    ok ? (tanggalIso ? 'Jadwal libur tersimpan.' : 'Rider dikeluarkan dari jadwal libur.') : 'Gagal menyimpan. Periksa koneksi dan rules Firebase.',
+                    ok ? 'success' : 'error');
+            }
+            if (ok) window.loadRekomendasiOff(true);
+        };
+
 
         window.updateDayName = () => {
             const dateVal = document.getElementById('history-date').value;
