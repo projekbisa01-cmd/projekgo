@@ -6203,7 +6203,12 @@
         let allRiderData = []; // NEW: Menyimpan data seluruh rider untuk leaderboard
         let dailyIncomeTarget = 100000;
         let currentWeeklyAdmRate = 0.16; // Fix 16% untuk semua rider
-        let weeklyChartInstance = null;
+        // PENTING: dulu ini `let weeklyChartInstance`, sehingga TIDAK menempel di window.
+        // Padahal di dua tempat lain kode memanggil window.weeklyChartInstance.resize()
+        // saat halaman Pendapatan dibuka. Karena namanya beda, perintah resize itu tidak
+        // pernah jalan. Grafik terlanjur dibuat saat halaman masih tersembunyi (ukuran 0),
+        // lalu tidak pernah diukur ulang -> batangnya tidak pernah terlihat.
+        window.weeklyChartInstance = null;
         let lastUpdated = 0;
         let profileCached = false;
         let lastDataCount = -1;
@@ -9405,18 +9410,30 @@
             const newDataString = JSON.stringify(data);
             
             // Jika datanya sama persis dengan yang ada di memori dan grafik sudah terbentuk, hentikan render ulang!
-            if (window.lastChartDataCache === newDataString && weeklyChartInstance) {
+            if (window.lastChartDataCache === newDataString && window.weeklyChartInstance) {
                 return; // Sangat menghemat performa HP Rider
             }
             
+            // Chart.js dimuat dengan "defer", jadi bisa saja belum siap saat fungsi ini
+            // dipanggil pertama kali. Dulu tidak dicek, dan grafik gagal dibuat diam-diam.
+            if (typeof Chart === 'undefined') {
+                clearTimeout(window._timerGrafikMingguan);
+                window._timerGrafikMingguan = setTimeout(() => updateWeeklyChart(labels, data), 500);
+                return;
+            }
+
             // Simpan data terbaru ke memori
             window.lastChartDataCache = newDataString;
 
             const ctx = canvasEl.getContext('2d');
-            if (weeklyChartInstance) {
-                weeklyChartInstance.data.labels = labels; weeklyChartInstance.data.datasets[0].data = data; weeklyChartInstance.update('none'); return;
+            if (window.weeklyChartInstance) {
+                window.weeklyChartInstance.data.labels = labels;
+                window.weeklyChartInstance.data.datasets[0].data = data;
+                window.weeklyChartInstance.update('none');
+                window.weeklyChartInstance.resize();
+                return;
             }
-            weeklyChartInstance = new Chart(ctx, {
+            window.weeklyChartInstance = new Chart(ctx, {
                 type: 'bar',
                 data: { labels: labels, datasets: [{ label: 'Pendapatan Bersih', data: data, backgroundColor: 'rgba(255, 140, 0, 0.8)', borderRadius: 8, barThickness: 24 }] },
                 options: {
@@ -10362,10 +10379,12 @@
             
             // FIX: Pastikan grafik teresize jika dibuka
             if (page === 'pendapatan') {
-                setTimeout(() => {
+                // Diulang dua kali: sekali setelah tampilan berganti, sekali lagi setelah
+                // animasi halaman selesai, supaya ukuran kanvasnya sudah pasti benar.
+                [60, 350].forEach(jeda => setTimeout(() => {
                     if (window.weeklyChartInstance) window.weeklyChartInstance.resize();
                     if (window.monthlyWeeklyChartInstance) window.monthlyWeeklyChartInstance.resize();
-                }, 50);
+                }, jeda));
             }
         }
 
