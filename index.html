@@ -3367,30 +3367,34 @@
                 </div>
             </header>
             <main class="p-5 max-w-md mx-auto min-h-screen pb-24">
-                
-                <!-- KARTU JADWAL LIBUR -->
-                <div class="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm flex flex-col items-center text-center mt-4">
-                    <div class="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center text-3xl mb-4 shadow-inner">
-                        <i class="fa-regular fa-calendar-check"></i>
-                    </div>
-                    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-widest mb-1">Jadwal Libur Anda</h2>
-                    
-                    <p id="ID_TEKS_HARI" class="text-3xl font-black text-gray-800 mb-1">Memuat...</p>
-                    <p id="ID_TEKS_TANGGAL" class="text-xs font-bold text-orange-500 bg-orange-50 px-3 py-1 rounded-full border border-orange-100 mb-6">
-                        Menyinkronkan data...
-                    </p>
-                    
-                    <div class="w-full bg-blue-50 rounded-xl p-4 text-left border border-blue-100 flex gap-3 items-start">
-                        <i class="fa-solid fa-circle-info text-blue-500 mt-1"></i>
-                        <p class="text-xs text-blue-800 leading-relaxed">
-                            Jadwal ini hanya rekomendasi jika kamu ingin libur,jika kamu mau libur di lain hari kamu bisa tukeran dengan rider lain.
-                        </p>
-                    </div>
 
-                    <button onclick="window.refreshJadwalLibur()" class="mt-6 w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-rotate"></i> Muat Ulang Jadwal
-                    </button>
+                <!-- KARTU LIBUR SAYA (PALING ATAS) -->
+                <div id="libur-kartu-saya" class="rounded-3xl p-6 mb-4 text-white shadow-lg bg-gradient-to-br from-blue-400 to-blue-600">
+                    <p class="text-sm font-bold opacity-80">Memuat jadwal...</p>
                 </div>
+
+                <!-- PILIH MINGGU -->
+                <div class="flex bg-gray-100 p-1 rounded-xl border border-gray-200/60 mb-2">
+                    <button id="libur-tab-0" onclick="window.gantiMingguLibur(0)" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-blue-600 shadow-sm border border-gray-200/50">Minggu Ini</button>
+                    <button id="libur-tab-1" onclick="window.gantiMingguLibur(1)" class="flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500">Minggu Depan</button>
+                </div>
+                <p id="libur-label-minggu" class="text-[10px] font-bold text-gray-400 text-center mb-3">-</p>
+
+                <!-- DAFTAR LIBUR SEMUA RIDER -->
+                <div id="libur-daftar-semua">
+                    <div class="text-center py-10"><i class="fa-solid fa-spinner animate-spin text-2xl text-gray-300"></i></div>
+                </div>
+
+                <div class="bg-blue-50 rounded-xl p-4 text-left border border-blue-100 flex gap-3 items-start mt-2">
+                    <i class="fa-solid fa-circle-info text-blue-500 mt-0.5"></i>
+                    <p class="text-[11px] text-blue-800 leading-relaxed">
+                        Ini rekomendasi libur. Kalau mau libur di hari lain, kamu bisa tukaran dengan rider lain, lalu infokan ke admin. Jadwal mundur satu hari setiap pergantian minggu.
+                    </p>
+                </div>
+
+                <button onclick="window.refreshJadwalLibur()" class="mt-4 w-full py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold rounded-xl active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-rotate"></i> Muat Ulang Jadwal
+                </button>
 
             </main>
         </div>
@@ -5528,52 +5532,177 @@
             }
         };
 
-        // --- FUNGSI FETCH REKOMENDASI LIBUR ---
-        async function tampilkanJadwalLibur(uid) {
-            const elHari = document.getElementById('ID_TEKS_HARI');
-            const elTanggal = document.getElementById('ID_TEKS_TANGGAL');
+        // =====================================================================
+        // JADWAL LIBUR (SUMBER: FIREBASE, SATU DOKUMEN UNTUK SEMUA RIDER)
+        // Dulu memakai Google Apps Script yang lambat dan sering "Gagal Memuat".
+        // Sekarang 1 read untuk seluruh rider, lalu disimpan di HP untuk hari itu.
+        // Hari libur dihitung sendiri di HP: MUNDUR SATU HARI tiap pergantian minggu.
+        // =====================================================================
+        const HARI_LIBUR = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']; // 0..6
+        const BULAN_LIBUR = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'];
+        window._liburData = null;
+        window._liburOffsetMinggu = 0; // 0 = minggu ini, 1 = minggu depan
 
-            if (!uid) {
-                if (elHari) elHari.innerText = "-";
-                if (elTanggal) elTanggal.innerText = "Silakan login ulang.";
-                return;
+        const seninLibur = (d) => {
+            const x = new Date(d); x.setHours(0, 0, 0, 0);
+            const g = x.getDay();
+            x.setDate(x.getDate() - g + (g === 0 ? -6 : 1)); x.setHours(0, 0, 0, 0);
+            return x;
+        };
+        const teksTglLibur = (d) => `${d.getDate()} ${BULAN_LIBUR[d.getMonth()]}`;
+        const escLibur = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
+
+        function hitungLibur(patokanIso, acuan) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(String(patokanIso || ''))) return null;
+            const p = patokanIso.split('-').map(Number);
+            const patokan = new Date(p[0], p[1] - 1, p[2]);
+            if (isNaN(patokan.getTime())) return null;
+            const mingguBerlalu = Math.round((seninLibur(acuan) - seninLibur(patokan)) / (86400000 * 7));
+            if (mingguBerlalu < 0) return null;
+            const posPatokan = (patokan.getDay() === 0) ? 6 : patokan.getDay() - 1;
+            const pos = ((posPatokan - mingguBerlalu) % 7 + 7) % 7;
+            const tanggal = new Date(seninLibur(acuan));
+            tanggal.setDate(tanggal.getDate() + pos);
+            return { pos, tanggal, hari: HARI_LIBUR[pos] };
+        }
+
+        async function ambilJadwalLibur(paksa = false) {
+            const hariIniKey = (() => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; })();
+            const kunci = 'pg_libur_cache';
+            if (!paksa) {
+                if (window._liburData) return window._liburData;
+                try {
+                    const c = JSON.parse(localStorage.getItem(kunci) || 'null');
+                    if (c && c.tanggal === hariIniKey && Array.isArray(c.riders)) {
+                        window._liburData = c.riders; // hemat read: cukup sekali sehari
+                        return window._liburData;
+                    }
+                } catch (e) {}
+            }
+            const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+            const db = getFirestore();
+            const pid = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : 'onbid-2f87a';
+            const snap = await getDoc(doc(db, 'artifacts', pid, 'public', 'data', 'jadwal_libur', 'current'));
+            const isi = snap.exists() ? snap.data() : null;
+            window._liburData = (isi && Array.isArray(isi.riders)) ? isi.riders : [];
+            try { localStorage.setItem(kunci, JSON.stringify({ tanggal: hariIniKey, riders: window._liburData })); } catch (e) {}
+            return window._liburData;
+        }
+
+        window.gantiMingguLibur = function (offset) {
+            window._liburOffsetMinggu = Math.max(0, Math.min(1, offset));
+            renderJadwalLibur();
+        };
+
+        function renderJadwalLibur() {
+            const kotakSaya = document.getElementById('libur-kartu-saya');
+            const wadah = document.getElementById('libur-daftar-semua');
+            const labelMinggu = document.getElementById('libur-label-minggu');
+            if (!wadah) return;
+
+            const data = window._liburData || [];
+            const uidSaya = String(window.getRiderUid() || '').trim().toUpperCase();
+            const acuan = new Date();
+            acuan.setDate(acuan.getDate() + (window._liburOffsetMinggu * 7));
+            const senin = seninLibur(acuan);
+            const minggu = new Date(senin); minggu.setDate(senin.getDate() + 6);
+            const posHariIni = window._liburOffsetMinggu === 0 ? ((new Date().getDay() === 0) ? 6 : new Date().getDay() - 1) : -1;
+
+            // Tombol minggu ini / minggu depan
+            ['0', '1'].forEach(i => {
+                const b = document.getElementById('libur-tab-' + i);
+                if (!b) return;
+                const aktif = String(window._liburOffsetMinggu) === i;
+                b.className = aktif
+                    ? 'flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all bg-white text-blue-600 shadow-sm border border-gray-200/50'
+                    : 'flex-1 py-2.5 text-[11px] font-bold rounded-lg transition-all text-gray-500';
+            });
+            if (labelMinggu) labelMinggu.innerText = `${teksTglLibur(senin)} – ${teksTglLibur(minggu)} ${minggu.getFullYear()}`;
+
+            // --- Kartu libur saya ---
+            if (kotakSaya) {
+                const saya = data.find(r => String(r.uid).trim().toUpperCase() === uidSaya);
+                const h = saya ? hitungLibur(saya.patokan, acuan) : null;
+                if (h) {
+                    const tglTeks = `${h.tanggal.getDate()} ${BULAN_LIBUR[h.tanggal.getMonth()]} ${h.tanggal.getFullYear()}`;
+                    const iniHariIni = window._liburOffsetMinggu === 0 && h.pos === posHariIni;
+                    kotakSaya.innerHTML = `
+                        <p class="text-[10px] font-bold uppercase tracking-widest opacity-80">Libur kamu ${window._liburOffsetMinggu === 0 ? 'minggu ini' : 'minggu depan'}</p>
+                        <p class="text-4xl font-black mt-1 leading-none">${escLibur(h.hari)}</p>
+                        <p class="text-sm font-bold mt-2 opacity-90">${escLibur(tglTeks)}</p>
+                        ${iniHariIni ? '<p class="mt-3 inline-block text-[10px] font-black bg-white/20 px-3 py-1 rounded-full uppercase tracking-wide">Hari ini jatahmu libur</p>' : ''}`;
+                } else {
+                    kotakSaya.innerHTML = `
+                        <p class="text-[10px] font-bold uppercase tracking-widest opacity-80">Libur kamu</p>
+                        <p class="text-xl font-black mt-2 leading-tight">Belum diatur</p>
+                        <p class="text-[11px] font-medium mt-2 opacity-90">Hubungi admin untuk mengatur jadwal liburmu.</p>`;
+                }
             }
 
-            // Ubah teks saat memuat
-            if (elHari) elHari.innerText = 'Memuat...';
-            if (elTanggal) elTanggal.innerText = 'Menyinkronkan...';
+            // --- Daftar semua rider ---
+            const perHari = HARI_LIBUR.map(() => ({ pagi: [], siang: [], lain: [] }));
+            data.forEach(r => {
+                const h = hitungLibur(r.patokan, acuan);
+                if (!h) return;
+                const kolom = r.shift === 'pagi' ? 'pagi' : (r.shift === 'siang' ? 'siang' : 'lain');
+                perHari[h.pos][kolom].push({
+                    nama: r.nama || r.uid,
+                    saya: String(r.uid).trim().toUpperCase() === uidSaya
+                });
+            });
+            perHari.forEach(h => ['pagi', 'siang', 'lain'].forEach(k => h[k].sort((a, b) => String(a.nama).localeCompare(String(b.nama)))));
 
+            const chip = (r) => `<span class="inline-block text-[10px] font-bold px-2 py-1 rounded-lg border ${r.saya ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-700 border-gray-200'}">${escLibur(r.nama)}${r.saya ? ' (kamu)' : ''}</span>`;
+            const kolom = (judul, ikon, warna, daftar) => `
+                <div class="flex-1 min-w-0">
+                    <p class="text-[9px] font-black uppercase tracking-wider ${warna} mb-1.5"><i class="fa-solid ${ikon} mr-1"></i>${judul} (${daftar.length})</p>
+                    <div class="flex flex-wrap gap-1">${daftar.length ? daftar.map(chip).join('') : '<span class="text-[10px] text-gray-300">—</span>'}</div>
+                </div>`;
+
+            let html = '';
+            HARI_LIBUR.forEach((nama, i) => {
+                const t = new Date(senin); t.setDate(senin.getDate() + i);
+                const iniHariIni = i === posHariIni;
+                const adaSaya = perHari[i].pagi.concat(perHari[i].siang, perHari[i].lain).some(r => r.saya);
+                const total = perHari[i].pagi.length + perHari[i].siang.length + perHari[i].lain.length;
+                html += `
+                    <div class="rounded-2xl border ${adaSaya ? 'border-orange-300 bg-orange-50/50' : (iniHariIni ? 'border-blue-200 bg-blue-50' : 'border-gray-100 bg-white')} p-3 mb-2.5 shadow-sm">
+                        <div class="flex items-center justify-between mb-2.5 pb-2 border-b border-gray-100">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <span class="text-[12px] font-black ${adaSaya ? 'text-orange-700' : 'text-gray-800'}">${nama}</span>
+                                <span class="text-[10px] font-bold text-gray-400">${escLibur(teksTglLibur(t))}</span>
+                                ${iniHariIni ? '<span class="text-[8px] font-black text-white bg-blue-500 px-1.5 py-0.5 rounded uppercase">Hari ini</span>' : ''}
+                            </div>
+                            <span class="text-[9px] font-black ${total ? 'text-gray-600 bg-gray-100 border-gray-200' : 'text-gray-300 bg-gray-50 border-gray-100'} px-2 py-0.5 rounded-full border shrink-0">${total}</span>
+                        </div>
+                        <div class="flex gap-3">
+                            ${kolom('Pagi', 'fa-sun', 'text-orange-500', perHari[i].pagi)}
+                            <div class="w-px bg-gray-100 shrink-0"></div>
+                            ${kolom('Siang', 'fa-cloud-sun', 'text-sky-500', perHari[i].siang)}
+                        </div>
+                        ${perHari[i].lain.length ? `<div class="mt-2.5 pt-2 border-t border-gray-100">${kolom('Lainnya', 'fa-circle-question', 'text-gray-400', perHari[i].lain)}</div>` : ''}
+                    </div>`;
+            });
+            wadah.innerHTML = html;
+        }
+
+        async function tampilkanJadwalLibur(paksa = false) {
+            const wadah = document.getElementById('libur-daftar-semua');
+            const kotakSaya = document.getElementById('libur-kartu-saya');
+            if (kotakSaya) kotakSaya.innerHTML = '<p class="text-sm font-bold opacity-80">Memuat jadwal...</p>';
+            if (wadah) wadah.innerHTML = '<div class="text-center py-10"><i class="fa-solid fa-spinner animate-spin text-2xl text-gray-300"></i></div>';
             try {
-                // Endpoint untuk mengambil jadwal
-                const endpoint = `https://script.google.com/macros/s/AKfycby5fdgopf9gCle1qUVZpfTObuICIMZ1DZWBvuYJAct4C1yj-S52gWNaOffYCJtDq2k/exec?action=getSchedule&uid=${encodeURIComponent(uid)}`;
-                
-                const response = await fetch(endpoint);
-                
-                if (!response.ok) {
-                    throw new Error("Gagal terhubung ke server");
-                }
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    // Jika sukses (termasuk jika jadwal tidak masuk minggu ini, karena backend mengembalikan success: true dengan pesan khusus)
-                    if (elHari) elHari.innerText = data.rekomendasi_hari || "-";
-                    if (elTanggal) elTanggal.innerText = data.rekomendasi_tanggal || data.message || "-";
-                    try { playBeep(880, 0.1); } catch(e){} // Nada sukses
-                } else {
-                    throw new Error(data.message || "Data tidak ditemukan");
-                }
-                
-            } catch (error) {
-                console.error("Error fetching jadwal libur:", error);
-                if (elHari) elHari.innerText = "Gagal Memuat";
-                if (elTanggal) elTanggal.innerText = "Coba lagi nanti";
+                await ambilJadwalLibur(paksa);
+                renderJadwalLibur();
+            } catch (e) {
+                console.warn('[Libur] Gagal memuat:', e);
+                if (kotakSaya) kotakSaya.innerHTML = '<p class="text-sm font-bold">Gagal memuat jadwal</p><p class="text-[11px] opacity-90 mt-1">Periksa koneksi lalu coba muat ulang.</p>';
+                if (wadah) wadah.innerHTML = '<p class="text-[11px] text-gray-400 text-center py-8">Data jadwal belum bisa diambil.</p>';
             }
         }
-        
-        window.refreshJadwalLibur = function() {
-            tampilkanJadwalLibur(currentUserUID);
-        };
+
+        window.refreshJadwalLibur = function () { tampilkanJadwalLibur(true); };
+
 
         // --- FUNGSI SEGMENTED CONTROL PENDAPATAN ---
         window.switchPendapatanTab = function(tab) {
@@ -5979,7 +6108,8 @@
             'UID323': 'https://bit.ly/riderparyanto',
             'UID357': 'https://bit.ly/riderekofathullah',
             'UID371': 'https://bit.ly/riderirvan',
-            'UID559': 'https://bit.ly/riderarisjanuarianto'
+            'UID559': 'https://bit.ly/riderarisjanuarianto',
+            'UID364': 'https://bit.ly/riderchoirul'
         };
 
         // Wadah global untuk data cicilan dari Firebase
@@ -10209,7 +10339,7 @@
             if (page === 'calculator') { initProfitCalculator(); } 
             if (page === 'installments') { renderInstallmentsHistory(); } 
             if (page === 'transfer-history') { renderTransferHistory(); } 
-            if (page === 'rekomendasi-libur') { tampilkanJadwalLibur(currentUserUID); }
+            if (page === 'rekomendasi-libur') { tampilkanJadwalLibur(); }
             
             // FIX: Pastikan grafik teresize jika dibuka
             if (page === 'pendapatan') {
