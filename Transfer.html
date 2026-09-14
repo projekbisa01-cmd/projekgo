@@ -367,6 +367,11 @@ auth.onAuthStateChanged(function(user){
     if(!s) return '';
     return s.admin==='Lainnya' ? (s.adminCustom||'').trim() : (s.admin||'');
   }
+  function sessionDisplayLabel(s){
+    if(!s) return '';
+    const admin = sessionAdminLabel(s);
+    return admin ? `${s.label} (${admin})` : s.label;
+  }
   function getCurrent(){ return sessions.find(s=>s.id===currentSessionId); }
 
   async function load(){
@@ -444,7 +449,7 @@ auth.onAuthStateChanged(function(user){
 
   function topbar(s){
     const last = lastCompleteEntry();
-    const preview = last ? `${last.kode||'-'} · ${last.nama||'-'} · ${rupiah(last.nominal)}${last.pelanggan?` · ${last.pelanggan}`:''}` : s.label;
+    const preview = last ? `${last.kode||'-'} · ${last.nama||'-'} · ${rupiah(last.nominal)}${last.pelanggan?` · ${last.pelanggan}`:''}` : sessionDisplayLabel(s);
     const adminLabel = sessionAdminLabel(s);
     return `
       <div class="tf-topbar">
@@ -480,23 +485,25 @@ auth.onAuthStateChanged(function(user){
   }
 
   function renderStep1(s){
+    const adminLabel = sessionAdminLabel(s);
+    const adminSet = !!adminLabel;
     const rows = s.entries.map((e,i)=>`
       <div class="tf-row" data-eid="${e.id}" data-row-index="${i}">
-        <input placeholder="Kode" data-field="kode" data-col="0" value="${esc(e.kode)}">
-        <input placeholder="Nama rider" data-field="nama" data-col="1" value="${esc(e.nama)}">
-        <select data-field="bank" data-col="2">
+        <input placeholder="Kode" data-field="kode" data-col="0" value="${esc(e.kode)}" ${adminSet?'':'disabled'}>
+        <input placeholder="Nama rider" data-field="nama" data-col="1" value="${esc(e.nama)}" ${adminSet?'':'disabled'}>
+        <select data-field="bank" data-col="2" ${adminSet?'':'disabled'}>
           ${['BCA','BRI','BNI','Mandiri','DANA','OVO','Lainnya'].map(b=>`<option ${e.bank===b?'selected':''}>${b}</option>`).join('')}
         </select>
-        <input class="tf-nominal" placeholder="Rp0" inputmode="numeric" data-field="nominal" data-col="3" value="${formatNominalDisplay(e.nominal)}">
-        <input placeholder="Pelanggan" data-field="pelanggan" data-col="4" value="${esc(e.pelanggan)}">
-        <input placeholder="Jam" data-field="jam" data-col="5" value="${esc(e.jam)}">
-        <button class="tf-btn ghost" data-act="del-row" data-eid="${e.id}" title="Hapus" tabindex="-1">✕</button>
+        <input class="tf-nominal" placeholder="Rp0" inputmode="numeric" data-field="nominal" data-col="3" value="${formatNominalDisplay(e.nominal)}" ${adminSet?'':'disabled'}>
+        <input placeholder="Pelanggan" data-field="pelanggan" data-col="4" value="${esc(e.pelanggan)}" ${adminSet?'':'disabled'}>
+        <input placeholder="Jam" data-field="jam" data-col="5" value="${esc(e.jam)}" ${adminSet?'':'disabled'}>
+        <button class="tf-btn ghost" data-act="del-row" data-eid="${e.id}" title="Hapus" tabindex="-1" ${adminSet?'':'disabled'}>✕</button>
       </div>`).join('');
     const total = s.entries.reduce((a,e)=>a+(Number(e.nominal)||0),0);
     const isEmptyRow = (e)=> !e.kode.trim() && !e.nama.trim() && !e.nominal;
     const filled = s.entries.filter(e=>!isEmptyRow(e));
-    const valid = filled.length>0 && filled.every(e=>e.nama.trim() && Number(e.nominal)>0);
-    const lastComplete = isRowComplete(s.entries[s.entries.length-1]);
+    const valid = adminSet && filled.length>0 && filled.every(e=>e.nama.trim() && Number(e.nominal)>0);
+    const lastComplete = adminSet && isRowComplete(s.entries[s.entries.length-1]);
     const adminOptions = ['Alifah','Rohmah','Rasiti','Si e O','Lainnya'];
     const adminBlock = `
       <div class="tf-card" style="margin-bottom:10px;">
@@ -506,15 +513,16 @@ auth.onAuthStateChanged(function(user){
           ${adminOptions.map(a=>`<option value="${a}" ${s.admin===a?'selected':''}>${a}</option>`).join('')}
         </select>
         ${s.admin==='Lainnya' ? `<input placeholder="Tulis nama admin" data-field="session-admin-custom" value="${esc(s.adminCustom)}" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;margin-top:8px;">` : ''}
+        ${adminSet ? '' : '<div style="font-size:12px;color:var(--red);margin-top:8px;">⚠ Pilih admin penginputan dulu sebelum bisa mengisi data rider.</div>'}
       </div>`;
     return `
       ${adminBlock}
-      <div class="tf-card">
+      <div class="tf-card" style="${adminSet?'':'opacity:.5;'}">
         <div class="tf-colhead"><span>Kode</span><span>Nama</span><span>Bank</span><span>Nominal</span><span>Pelanggan</span><span>Jam</span><span></span></div>
         ${rows}
         <button class="tf-btn" data-act="add-row" style="width:100%;margin-top:4px;" ${lastComplete?'':'disabled'}>+ Tambah rider</button>
       </div>
-      ${lastComplete? '' : '<div class="tf-empty" style="padding:6px 4px;">Isi kode, nama, dan nominal baris terakhir dulu (atau tekan Enter) untuk menambah rider.</div>'}
+      ${!adminSet? '' : (lastComplete? '' : '<div class="tf-empty" style="padding:6px 4px;">Isi kode, nama, dan nominal baris terakhir dulu (atau tekan Enter) untuk menambah rider.</div>')}
       <div class="tf-summary-bar"><span>${filled.length} rider</span><b>${rupiah(total)}</b></div>
       <div class="tf-actions">
         <button class="tf-btn primary" data-act="to-step2" ${valid?'':'disabled'}>Lanjut: Cek awal (bawah → atas)</button>
@@ -754,7 +762,7 @@ auth.onAuthStateChanged(function(user){
     return `
       <div class="tf-done-screen">
         <div class="tf-done-check">✓</div>
-        <div style="font-size:16px;font-weight:700;">${s.label} selesai</div>
+        <div style="font-size:16px;font-weight:700;">${sessionDisplayLabel(s)} selesai</div>
         <div style="color:var(--sub);font-size:13px;margin:4px 0 16px;">${s.entries.length} rider · ${rupiah(total)}</div>
         <div class="tf-actions">
           <button class="tf-btn" data-act="riwayat">Lihat riwayat</button>
@@ -888,7 +896,7 @@ auth.onAuthStateChanged(function(user){
     filtered.forEach(s=>{
       s.entries.forEach(e=>{
         if(!e.kode.trim() || !e.nama.trim() || !(Number(e.nominal)>0)) return; // sembunyikan baris belum lengkap
-        combined.push({...e, sesiLabel:s.label, sesiId:s.id, editable: s.step!==5});
+        combined.push({...e, sesiLabel:sessionDisplayLabel(s), sesiId:s.id, editable: s.step!==5});
       });
     });
     return {filtered, combined};
@@ -1170,7 +1178,7 @@ auth.onAuthStateChanged(function(user){
     else if(act==='copy-session'){
       const sid = btn.dataset.sid; const sess = sessions.find(x=>x.id===sid);
       const total = sess.entries.reduce((a,e)=>a+(Number(e.nominal)||0),0);
-      const text = sess.label+'\n'+sess.entries.map(e=>`${e.kode||'-'} - ${e.nama} - ${e.bank} - ${rupiah(e.nominal)}`).join('\n')+`\nTotal: ${rupiah(total)}`;
+      const text = sessionDisplayLabel(sess)+'\n'+sess.entries.map(e=>`${e.kode||'-'} - ${e.nama} - ${e.bank} - ${rupiah(e.nominal)}`).join('\n')+`\nTotal: ${rupiah(total)}`;
       navigator.clipboard.writeText(text).then(()=>toast('Ringkasan disalin')).catch(()=>toast('Gagal menyalin'));
     }
   });
@@ -1346,4 +1354,4 @@ auth.onAuthStateChanged(function(user){
 })();
 </script>
 </body>
-</html>   
+</html>
