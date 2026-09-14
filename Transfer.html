@@ -339,6 +339,10 @@ auth.onAuthStateChanged(function(user){
     const d = new Date();
     return d.toLocaleDateString('id-ID',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
   }
+  function todayFullLabel(){
+    const d = new Date();
+    return d.toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
+  }
   function rupiah(n){
     n = Number(n)||0;
     return 'Rp' + n.toLocaleString('id-ID');
@@ -423,17 +427,11 @@ auth.onAuthStateChanged(function(user){
   }
 
   function formatJam(raw){
-    let digits = raw.replace(/[^0-9]/g,'').slice(0,4);
-    let hh = digits.slice(0,2);
-    let mm = digits.slice(2,4);
-    if(hh.length===2 && Number(hh)>23) hh='23';
-    if(mm.length===2 && Number(mm)>59) mm='59';
-    return mm.length ? hh+':'+mm : hh;
+    return raw;
   }
 
   function formatKode(raw){
-    const digits = raw.replace(/[^0-9]/g,'');
-    return digits.length ? 'A'+digits : '';
+    return raw;
   }
 
   function formatNominalDisplay(digitsOnly){
@@ -456,7 +454,7 @@ auth.onAuthStateChanged(function(user){
         </select>
         <input class="tf-nominal" placeholder="Rp0" inputmode="numeric" data-field="nominal" data-col="3" value="${formatNominalDisplay(e.nominal)}">
         <input placeholder="Pelanggan" data-field="pelanggan" data-col="4" value="${esc(e.pelanggan)}">
-        <input placeholder="HH:MM" inputmode="numeric" maxlength="5" data-field="jam" data-col="5" value="${esc(e.jam)}">
+        <input placeholder="Jam" data-field="jam" data-col="5" value="${esc(e.jam)}">
         <button class="tf-btn ghost" data-act="del-row" data-eid="${e.id}" title="Hapus" tabindex="-1">✕</button>
       </div>`).join('');
     const total = s.entries.reduce((a,e)=>a+(Number(e.nominal)||0),0);
@@ -598,6 +596,7 @@ auth.onAuthStateChanged(function(user){
           <div class="tf-done-check" style="margin:0 auto 12px;">✓</div>
           <div style="font-size:16px;font-weight:700;">Semua rider sudah ditransfer</div>
           <div style="color:var(--sub);font-size:13px;margin-top:4px;">${doneCount}/${total} transferan selesai</div>
+          <div style="color:var(--sub);font-size:12px;margin-top:6px;">${todayFullLabel()}</div>
         </div>
         ${historyList}
         <div class="tf-actions">
@@ -650,6 +649,7 @@ auth.onAuthStateChanged(function(user){
 
     return `
       <div class="tf-focus-wrap">
+        <div class="tf-focus-pos" style="margin-bottom:2px;">${todayFullLabel()}</div>
         <div class="tf-focus-pos">Eksekusi transfer ${idx+1} dari ${total} · urutan atas → bawah</div>
         <div class="tf-progress-wrap"><div class="tf-progress-fill" style="width:${(doneCount/total*100)}%"></div></div>
         ${card}
@@ -767,11 +767,11 @@ auth.onAuthStateChanged(function(user){
         <td>${i+1}</td>
         <td>${r.sesiLabel}</td>
         <td>${r.kode||'-'}</td>
-        <td>${esc(r.nama,'-')}</td>
+        <td class="${r.cekFinal?'tf-print-checked':''}">${esc(r.nama,'-')}</td>
         <td>${r.bank}</td>
         <td class="num">${rupiah(r.nominal)}</td>
         <td>${esc(r.pelanggan,'-')}</td>
-        <td class="chk">${r.cekFinal?'✓':''}</td>
+        <td class="chk ${r.cekFinal?'tf-print-checked':''}">${r.cekFinal?'✓':''}</td>
         <td>${r.jam||'-'}</td>
       </tr>`).join('');
     return `
@@ -789,7 +789,7 @@ auth.onAuthStateChanged(function(user){
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Riwayat Transfer</title>
       <style>
         @page{ size:A4; margin:9mm; }
-        *{box-sizing:border-box;}
+        *{box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important;}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#000;margin:0;padding:0;}
         .tf-print-header{text-align:center;font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:capitalize;}
         table.tf-excel{width:100%;border-collapse:collapse;font-size:9px;}
@@ -797,12 +797,17 @@ auth.onAuthStateChanged(function(user){
         table.tf-excel th{background:#eee;font-weight:700;text-transform:uppercase;font-size:8px;}
         table.tf-excel td.num{text-align:right;}
         table.tf-excel td.chk{text-align:center;}
+        table.tf-excel td.tf-print-checked{background:#FBDCB0;font-weight:700;color:#7A4A08;}
         table.tf-excel thead{display:table-header-group;}
         table.tf-excel tr{page-break-inside:avoid;}
+        .tf-print-notes{margin-top:10px;font-size:9.5px;border:1px solid #999;border-radius:4px;padding:6px 8px;page-break-inside:avoid;}
+        .tf-print-notes-label{font-weight:700;text-transform:uppercase;font-size:8px;color:#666;margin-bottom:3px;}
+        .tf-print-notes-body{white-space:pre-wrap;line-height:1.4;}
       </style>
       </head><body>
       <div class="tf-print-header">${headerDate}</div>
       ${tableHtml}
+      ${riwayatNotes.trim() ? `<div class="tf-print-notes"><div class="tf-print-notes-label">Catatan</div><div class="tf-print-notes-body">${esc(riwayatNotes).replace(/\n/g,'<br>')}</div></div>` : ''}
       </body></html>`;
     const old = document.getElementById('tf-print-frame');
     if(old) old.remove();
@@ -910,7 +915,7 @@ auth.onAuthStateChanged(function(user){
           <label>Pelanggan</label>
           <input data-redit="pelanggan" value="${esc(draft.pelanggan)}">
           <label>Jam</label>
-          <input data-redit="jam" inputmode="numeric" maxlength="5" value="${esc(draft.jam)}">
+          <input data-redit="jam" value="${esc(draft.jam)}">
           <div class="tf-actions" style="margin-top:4px;">
             <button class="tf-btn" data-act="riwayat-edit-cancel">Batal</button>
             <button class="tf-btn primary" data-act="riwayat-edit-save">Simpan</button>
