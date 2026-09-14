@@ -237,6 +237,13 @@ window.storage = {
     if(data[key] === undefined || data[key] === null) return null;
     return { key, value: data[key], shared: false };
   },
+  // Ambil seluruh dokumen sekaligus (1x read Firestore), dipakai saat load awal & refresh manual
+  // supaya tidak perlu 2 kali read terpisah untuk data sesi + catatan.
+  async getAll(){
+    if(!currentUser) return {};
+    const snap = await db.collection(FS_COLLECTION).doc(currentUser.uid).get();
+    return snap.exists ? snap.data() : {};
+  },
   async set(key, value){
     if(!currentUser) return null;
     await db.collection(FS_COLLECTION).doc(currentUser.uid).set({ [key]: value }, { merge: true });
@@ -351,22 +358,23 @@ auth.onAuthStateChanged(function(user){
     return {id:uid(), kode:'', nama:'', bank:'BCA', nominal:'', pelanggan:'', jam:'', cekAwal:false, cekPre:false, transferred:false, cekPin:false, cekFinal:false, xferStage:0};
   }
   function newSession(){
-    const s = { id: uid(), label: 'Sesi ' + (sessions.length+1), createdAt: Date.now(), finishedAt:null, step:1, entries:[emptyEntry()] };
+    const s = { id: uid(), label: 'Sesi ' + (sessions.length+1), createdAt: Date.now(), finishedAt:null, step:1, entries:[emptyEntry()], admin:'', adminCustom:'' };
     sessions.push(s);
     currentSessionId = s.id;
     view = 'session';
+  }
+  function sessionAdminLabel(s){
+    if(!s) return '';
+    return s.admin==='Lainnya' ? (s.adminCustom||'').trim() : (s.admin||'');
   }
   function getCurrent(){ return sessions.find(s=>s.id===currentSessionId); }
 
   async function load(){
     try{
-      const res = await window.storage.get(STORAGE_KEY, false);
-      sessions = res && res.value ? JSON.parse(res.value) : [];
-    }catch(e){ sessions = []; }
-    try{
-      const resN = await window.storage.get(NOTES_KEY, false);
-      riwayatNotes = resN && resN.value ? resN.value : '';
-    }catch(e){ riwayatNotes = ''; }
+      const data = await window.storage.getAll();
+      sessions = data[STORAGE_KEY] ? JSON.parse(data[STORAGE_KEY]) : [];
+      riwayatNotes = data[NOTES_KEY] || '';
+    }catch(e){ sessions = []; riwayatNotes = ''; }
     const active = sessions.find(s=>s.step!==5);
     if(active){ currentSessionId = active.id; }
     else if(sessions.length===0){ newSession(); }
@@ -377,6 +385,28 @@ auth.onAuthStateChanged(function(user){
   async function save(){
     try{ await window.storage.set(STORAGE_KEY, JSON.stringify(sessions), false); }
     catch(e){ console.error('gagal menyimpan', e); }
+  }
+  let isRefreshing = false;
+  async function refreshData(){
+    if(isRefreshing) return;
+    isRefreshing = true;
+    render();
+    try{
+      const data = await window.storage.getAll();
+      sessions = data[STORAGE_KEY] ? JSON.parse(data[STORAGE_KEY]) : [];
+      riwayatNotes = data[NOTES_KEY] || '';
+      if(!sessions.find(s=>s.id===currentSessionId)){
+        const active = sessions.find(s=>s.step!==5);
+        if(active){ currentSessionId = active.id; view='session'; }
+        else if(sessions.length===0){ newSession(); }
+        else { currentSessionId = sessions[sessions.length-1].id; view='riwayat'; }
+      }
+      toast('Data terbaru dimuat');
+    }catch(e){
+      toast('Gagal memuat data terbaru');
+    }
+    isRefreshing = false;
+    render();
   }
   async function saveNotes(){
     try{ await window.storage.set(NOTES_KEY, riwayatNotes, false); }
@@ -415,10 +445,15 @@ auth.onAuthStateChanged(function(user){
   function topbar(s){
     const last = lastCompleteEntry();
     const preview = last ? `${last.kode||'-'} · ${last.nama||'-'} · ${rupiah(last.nominal)}${last.pelanggan?` · ${last.pelanggan}`:''}` : s.label;
+    const adminLabel = sessionAdminLabel(s);
     return `
       <div class="tf-topbar">
-        <div class="tf-session-label">${preview}</div>
+        <div>
+          <div class="tf-session-label">${preview}</div>
+          ${adminLabel ? `<div style="font-size:11px;color:var(--sub);margin-top:2px;">Admin: ${esc(adminLabel)}</div>` : ''}
+        </div>
         <div style="display:flex;gap:6px;">
+          <button class="tf-btn small" data-act="refresh-data" title="Muat ulang data" ${isRefreshing?'disabled':''}>${isRefreshing?'⏳':'🔄'}</button>
           <button class="tf-btn small" data-act="riwayat">Riwayat</button>
           <button class="tf-btn small" data-act="new-session">+ Sesi baru</button>
           <button class="tf-btn small" data-act="logout" title="Keluar">⎋</button>
@@ -462,7 +497,18 @@ auth.onAuthStateChanged(function(user){
     const filled = s.entries.filter(e=>!isEmptyRow(e));
     const valid = filled.length>0 && filled.every(e=>e.nama.trim() && Number(e.nominal)>0);
     const lastComplete = isRowComplete(s.entries[s.entries.length-1]);
+    const adminOptions = ['Alifah','Rohmah','Rasiti','Si e O','Lainnya'];
+    const adminBlock = `
+      <div class="tf-card" style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:var(--sub);font-weight:600;margin-bottom:4px;">Admin penginputan sesi ini</label>
+        <select data-field="session-admin">
+          <option value="" ${!s.admin?'selected':''}>Pilih admin...</option>
+          ${adminOptions.map(a=>`<option value="${a}" ${s.admin===a?'selected':''}>${a}</option>`).join('')}
+        </select>
+        ${s.admin==='Lainnya' ? `<input placeholder="Tulis nama admin" data-field="session-admin-custom" value="${esc(s.adminCustom)}" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;margin-top:8px;">` : ''}
+      </div>`;
     return `
+      ${adminBlock}
       <div class="tf-card">
         <div class="tf-colhead"><span>Kode</span><span>Nama</span><span>Bank</span><span>Nominal</span><span>Pelanggan</span><span>Jam</span><span></span></div>
         ${rows}
@@ -937,6 +983,7 @@ auth.onAuthStateChanged(function(user){
             <div class="tf-sub" style="margin-bottom:0;">Semua sesi digabung dalam satu tabel.</div>
           </div>
           <div style="display:flex;gap:6px;">
+            <button class="tf-btn small" data-act="refresh-data" title="Muat ulang data" ${isRefreshing?'disabled':''}>${isRefreshing?'⏳':'🔄'}</button>
             <button class="tf-btn small" data-act="print-riwayat" ${combined.length?'':'disabled'}>🖨 Cetak</button>
             <button class="tf-btn small" data-act="back-to-session">← Kembali</button>
             <button class="tf-btn small" data-act="logout" title="Keluar">⎋</button>
@@ -1048,6 +1095,7 @@ auth.onAuthStateChanged(function(user){
     else if(act==='finish-session'){ s.step=5; s.finishedAt=Date.now(); save(); render(); toast('Sesi selesai'); }
     else if(act==='new-session'){ newSession(); save(); render(); }
     else if(act==='riwayat'){ view='riwayat'; render(); }
+    else if(act==='refresh-data'){ refreshData(); }
     else if(act==='back-to-session'){ view='session'; render(); }
     else if(act==='logout'){ if(window.tfLogout) window.tfLogout(); }
     else if(act==='clear-date-filter'){ riwayatDate=''; render(); }
@@ -1129,6 +1177,11 @@ auth.onAuthStateChanged(function(user){
 
   document.addEventListener('input', function(ev){
     const t = ev.target;
+    if(t.matches('[data-field="session-admin-custom"]')){
+      const s = getCurrent();
+      if(s){ s.adminCustom = t.value; save(); }
+      return;
+    }
     if(t.matches('[data-redit]') && riwayatEdit){
       const field = t.getAttribute('data-redit');
       let val = t.value;
@@ -1171,6 +1224,11 @@ auth.onAuthStateChanged(function(user){
   });
   document.addEventListener('change', function(ev){
     const t = ev.target;
+    if(t.matches('[data-field="session-admin"]')){
+      const s = getCurrent();
+      if(s){ s.admin = t.value; if(t.value!=='Lainnya') s.adminCustom=''; save(); render(); }
+      return;
+    }
     if(t.id==='riwayat-notes'){ riwayatNotes = t.value; saveNotes(); return; }
     if(t.matches('[data-redit]') && riwayatEdit && t.tagName==='SELECT'){
       riwayatEdit.draft[t.getAttribute('data-redit')] = t.value;
@@ -1283,6 +1341,7 @@ auth.onAuthStateChanged(function(user){
     entryDeleteConfirm = null;
     riwayatEdit = null;
     riwayatNotes = '';
+    isRefreshing = false;
   };
 })();
 </script>
