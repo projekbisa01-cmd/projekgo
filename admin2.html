@@ -2094,7 +2094,24 @@
                 startLanggananListener(); // PANGGIL LISTENER LANGGANAN
                 startShiftScheduleListener(); // PANGGIL LISTENER JADWAL SHIFT
                 startAnalyticsTargetsListener();
-                
+
+                // Tandai perangkat ini sebagai perangkat admin, lalu periksa apakah ada
+                // token rider yang masih nyasar ke HP admin / HP orang lain.
+                if (typeof window.tandaiPerangkatAdmin === 'function') window.tandaiPerangkatAdmin();
+                setTimeout(async () => {
+                    try {
+                        if (typeof window.auditTokenPerangkat !== 'function') return;
+                        const temuan = await window.auditTokenPerangkat();
+                        if (temuan.length && typeof window.peringatanNotif === 'function') {
+                            window.peringatanNotif(
+                                "Ada " + temuan.length + " akun rider yang token notifikasinya nyasar (menunjuk ke HP admin atau HP akun lain). Notifikasi ke akun itu otomatis ditahan.",
+                                "Bersihkan sekarang",
+                                () => window.bersihkanTokenNyasar()
+                            );
+                        }
+                    } catch (e) { console.warn("Audit otomatis gagal:", e); }
+                }, 10000);
+
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
                 setInterval(autoCleanUpOldData, 6 * 60 * 60 * 1000);
@@ -2121,41 +2138,247 @@
         };
         // initAuth();  <-- login anonim DIMATIKAN. Admin wajib login email/password.
 
+        // ============================================================
+        // PENJAGA PEMILIK PERANGKAT
+        // ------------------------------------------------------------
+        // Masalah aslinya: token FCM itu milik HP, bukan milik akun. Kalau satu HP
+        // dipakai login beberapa akun rider (mis. admin sedang tes), token HP itu
+        // ikut tercatat di semua akun tersebut, dan notifikasi rider jadi masuk ke
+        // HP admin. Penjaga di bawah memastikan notifikasi hanya dikirim kalau HP
+        // tujuan memang MASIH milik rider yang dituju.
+        // ============================================================
+
+        // Device ID dibaca dari localStorage yang sama dengan aplikasi rider
+        // (kedua aplikasi satu domain), jadi HP admin dikenali walau pernah
+        // dipakai membuka aplikasi rider.
+        function deviceIdPerangkatIni() {
+            let id = localStorage.getItem('projekgo_device_id');
+            if (!id) {
+                id = 'dev_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+                localStorage.setItem('projekgo_device_id', id);
+            }
+            return id;
+        }
+
+        // Menandai HP/komputer yang membuka panel admin sebagai perangkat admin.
+        // Perangkat bertanda ini TIDAK PERNAH dikirimi notifikasi orderan, walaupun
+        // tokennya sempat tercatat di akun rider mana pun.
+        window.tandaiPerangkatAdmin = async function() {
+            try {
+                const id = deviceIdPerangkatIni();
+                await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', id), {
+                    admin_device: true,
+                    admin_marked_at: serverTimestamp()
+                }, { merge: true });
+                console.log(">> Perangkat admin ditandai:", id);
+            } catch (e) {
+                // Kalau ini gagal, biasanya aturan Firestore untuk device_owners belum dipasang.
+                // Penjaga jadi tidak aktif, jadi kegagalannya harus terlihat, bukan diam-diam.
+                console.warn("Gagal menandai perangkat admin:", e);
+                if (typeof window.peringatanNotif === 'function') {
+                    window.peringatanNotif("PENJAGA PERANGKAT TIDAK AKTIF: gagal menulis device_owners. Periksa aturan Firestore untuk koleksi device_owners, kalau tidak notifikasi masih bisa nyasar.");
+                }
+            }
+        };
+
+        // Kalau HP admin nanti diserahkan ke rider, jalankan ini sekali dari HP itu
+        // supaya tandanya dilepas: window.lepasTandaPerangkatAdmin()
+        window.lepasTandaPerangkatAdmin = async function(deviceId = null) {
+            try {
+                const id = deviceId || deviceIdPerangkatIni();
+                await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', id), {
+                    admin_device: false,
+                    admin_marked_at: serverTimestamp()
+                }, { merge: true });
+                console.log(">> Tanda perangkat admin dilepas:", id);
+            } catch (e) { console.warn("Gagal melepas tanda perangkat admin:", e); }
+        };
+
+        // Cache kecil supaya tidak menambah banyak read Firestore saat banyak orderan.
+        const _cachePemilikPerangkat = new Map();
+        async function cekPemilikPerangkat(deviceId) {
+            if (!deviceId) return null;
+            const kini = Date.now();
+            const tersimpan = _cachePemilikPerangkat.get(deviceId);
+            if (tersimpan && (kini - tersimpan.waktu) < 120000) return tersimpan.data;
+            try {
+                const snap = await getDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', deviceId));
+                const data = snap.exists() ? snap.data() : null;
+                _cachePemilikPerangkat.set(deviceId, { waktu: kini, data: data });
+                return data;
+            } catch (e) {
+                console.warn("Gagal membaca pemilik perangkat:", e);
+                return null;
+            }
+        }
+
+        // Peringatan mengambang, supaya admin tahu ada notif yang sengaja tidak dikirim.
+        window.peringatanNotif = function(pesan, tombolTeks = null, aksi = null) {
+            try {
+                let box = document.getElementById('peringatan-notif-box');
+                if (!box) {
+                    box = document.createElement('div');
+                    box.id = 'peringatan-notif-box';
+                    box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#7f1d1d;color:#fff;padding:12px 14px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.35);line-height:1.5;';
+                    document.body.appendChild(box);
+                }
+                box.innerHTML = '';
+                const teks = document.createElement('div');
+                teks.textContent = pesan;
+                box.appendChild(teks);
+                const bar = document.createElement('div');
+                bar.style.cssText = 'margin-top:8px;display:flex;gap:8px;';
+                if (tombolTeks && typeof aksi === 'function') {
+                    const b = document.createElement('button');
+                    b.textContent = tombolTeks;
+                    b.style.cssText = 'background:#fff;color:#7f1d1d;border:none;padding:6px 10px;border-radius:8px;font-weight:900;font-size:11px;';
+                    b.onclick = aksi;
+                    bar.appendChild(b);
+                }
+                const tutup = document.createElement('button');
+                tutup.textContent = 'Tutup';
+                tutup.style.cssText = 'background:rgba(255,255,255,.2);color:#fff;border:none;padding:6px 10px;border-radius:8px;font-weight:900;font-size:11px;';
+                tutup.onclick = function() { box.remove(); };
+                bar.appendChild(tutup);
+                box.appendChild(bar);
+            } catch (e) { console.warn(pesan); }
+        };
+
         async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
             try {
-                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
+                const uidTujuan = String(riderUid).trim().toUpperCase();
+                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uidTujuan);
                 const tokenSnap = await getDoc(tokenRef);
-                
-                if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
-                    const fcmToken = tokenSnap.data().fcm_token;
-                    
-                    console.log(">> Mengirim Push Notif ke UID:", riderUid);
-                    console.log(">> Token FCM Ditemukan:", fcmToken);
-                    console.log(">> Action Payload:", actionType);
 
-                    const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
-                    
-                    const authTk = await window.tokenAdmin();
-                    fetch(GAS_URL, {
-                        method: 'POST',
-                        mode: 'no-cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            auth_token: authTk,
-                            token: fcmToken,
-                            priority: "high",
-                            data: {
-                                title: title, 
-                                body: body,
-                                action: actionType
-                            }
-                        })
-                    });
-                } else {
-                    console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", riderUid);
+                if (!tokenSnap.exists() || !tokenSnap.data().fcm_token) {
+                    console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", uidTujuan);
+                    return;
                 }
+
+                const dataPerangkat = tokenSnap.data();
+                const fcmToken = dataPerangkat.fcm_token;
+                const deviceId = dataPerangkat.device_id || null;
+
+                // PENJAGA 1 -- dokumen tokennya mengaku milik akun lain.
+                const pemilikTercatat = String(dataPerangkat.owner_uid || '').trim().toUpperCase();
+                if (pemilikTercatat && pemilikTercatat !== uidTujuan) {
+                    console.warn(">> Notif DIBATALKAN. Token di dokumen", uidTujuan, "tercatat milik", pemilikTercatat);
+                    window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: token tercatat milik akun " + pemilikTercatat + ". Minta rider login ulang.");
+                    return;
+                }
+
+                // PENJAGA 2 -- siapa pemilik HP itu sekarang.
+                if (deviceId) {
+                    const pemilik = await cekPemilikPerangkat(deviceId);
+                    if (pemilik) {
+                        if (pemilik.admin_device === true) {
+                            console.warn(">> Notif DIBATALKAN. Token", uidTujuan, "menunjuk ke perangkat ADMIN.");
+                            window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: token akun ini masih menunjuk ke HP admin. Minta rider login ulang dari HP-nya sendiri.");
+                            return;
+                        }
+                        const pemilikKini = String(pemilik.current_uid || '').trim().toUpperCase();
+                        if (pemilikKini && pemilikKini !== uidTujuan) {
+                            console.warn(">> Notif DIBATALKAN. HP tujuan sekarang dipakai akun", pemilikKini);
+                            window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: HP tersebut sekarang dipakai akun " + pemilikKini + ". Minta rider login ulang dari HP-nya sendiri.");
+                            return;
+                        }
+                    }
+                }
+
+                console.log(">> Mengirim Push Notif ke UID:", uidTujuan, "| action:", actionType);
+
+                const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
+
+                const authTk = await window.tokenAdmin();
+                fetch(GAS_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        auth_token: authTk,
+                        token: fcmToken,
+                        uid: uidTujuan,          // dikirim agar Apps Script bisa ikut memverifikasi
+                        device_id: deviceId,
+                        priority: "high",
+                        data: {
+                            title: title,
+                            body: body,
+                            action: actionType
+                        }
+                    })
+                });
             } catch(err) { console.warn("Push Notif Error", err); }
         }
+
+        // ------------------------------------------------------------
+        // AUDIT TOKEN NYASAR
+        // Menemukan catatan token yang sudah tidak sah: token yang menunjuk ke HP
+        // admin, HP yang sekarang dipakai akun lain, dan satu token yang sama
+        // terdaftar di lebih dari satu akun.
+        // ------------------------------------------------------------
+        window.auditTokenPerangkat = async function() {
+            const hasil = [];
+            try {
+                const basis = ['artifacts', firebaseConfig.projectId, 'public', 'data'];
+                const snapDev = await getDocs(collection(db, ...basis, 'rider_devices'));
+                const snapOwner = await getDocs(collection(db, ...basis, 'device_owners'));
+
+                const pemilik = {};
+                snapOwner.forEach(d => { pemilik[d.id] = d.data(); });
+
+                const hitungToken = {};
+                snapDev.forEach(d => {
+                    const t = d.data().fcm_token;
+                    if (t) hitungToken[t] = (hitungToken[t] || 0) + 1;
+                });
+
+                snapDev.forEach(d => {
+                    const uid = String(d.id).trim().toUpperCase();
+                    const v = d.data();
+                    const devId = v.device_id || null;
+                    const own = devId ? pemilik[devId] : null;
+                    let alasan = null;
+
+                    if (v.owner_uid && String(v.owner_uid).trim().toUpperCase() !== uid) {
+                        alasan = "token tercatat milik " + v.owner_uid;
+                    } else if (own && own.admin_device === true) {
+                        alasan = "menunjuk ke perangkat admin";
+                    } else if (own && own.current_uid && String(own.current_uid).trim().toUpperCase() !== uid) {
+                        alasan = "HP sekarang dipakai " + own.current_uid;
+                    } else if (v.fcm_token && hitungToken[v.fcm_token] > 1) {
+                        alasan = "token kembar di " + hitungToken[v.fcm_token] + " akun";
+                    }
+
+                    if (alasan) hasil.push({ uid: uid, device_id: devId, alasan: alasan });
+                });
+
+                console.log(">> Audit token perangkat:", hasil.length, "temuan");
+                if (hasil.length) console.table(hasil);
+            } catch (e) {
+                console.warn("Audit token gagal:", e);
+            }
+            return hasil;
+        };
+
+        // Menghapus catatan token yang nyasar. Rider yang catatannya dihapus tinggal
+        // login ulang dari HP-nya sendiri, dan tokennya akan tercatat lagi dengan benar.
+        window.bersihkanTokenNyasar = async function() {
+            const temuan = await window.auditTokenPerangkat();
+            if (!temuan.length) { alert("Tidak ada token nyasar. Semua bersih."); return; }
+            const daftar = temuan.map(t => t.uid + " (" + t.alasan + ")").join("\n");
+            if (!confirm("Hapus catatan token untuk " + temuan.length + " akun berikut?\n\n" + daftar + "\n\nRider tersebut perlu login ulang dari HP-nya sendiri agar notifikasi kembali jalan.")) return;
+            let sukses = 0;
+            for (const t of temuan) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', t.uid));
+                    sukses++;
+                } catch (e) { console.warn("Gagal hapus token", t.uid, e); }
+            }
+            _cachePemilikPerangkat.clear();
+            alert(sukses + " catatan token dibersihkan. Minta rider terkait login ulang.");
+            const box = document.getElementById('peringatan-notif-box');
+            if (box) box.remove();
+        };
 
         // Menjadi true setelah sinkron jam shift pertama di sesi ini selesai tanpa error.
         // Sebelum itu, poin hari ini TIDAK dihitung supaya rider tidak kena suspend palsu
