@@ -8292,6 +8292,15 @@
         }
 
         window.handleLogout = async function (reason = null) {
+            // Lepas klaim perangkat SEBELUM sign out -- setelah sign out, aturan
+            // Firestore menolak tulisan ini sehingga token lama akan tertinggal.
+            try {
+                const uidLama = (typeof currentUserUID !== 'undefined' && currentUserUID)
+                    ? currentUserUID
+                    : localStorage.getItem('rider_uid');
+                if (window.lepasKlaimPerangkat) await window.lepasKlaimPerangkat(uidLama);
+            } catch (e) { console.warn("Gagal melepas klaim perangkat saat logout:", e); }
+
             try { if (window.riderSignOut) await window.riderSignOut(); } catch (e) {}
             try { if (window.riderBersihkanCache) await window.riderBersihkanCache(); } catch (e) {}
             localStorage.removeItem('rider_uid');
@@ -11845,8 +11854,8 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy, limit as fsLimit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
-      import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
+      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, deleteDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy, limit as fsLimit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { getMessaging, getToken, onMessage, deleteToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
       import { getStorage, ref, uploadString, uploadBytes, uploadBytesResumable, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
       const firebaseConfig = {
@@ -12139,10 +12148,25 @@
 
                   // 3. SIMPAN TOKEN KE FIRESTORE
                   if (finalToken) {
+                      const deviceId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
                       const deviceRef = doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_devices', cleanUid);
-                      
+
+                      // KUNCI PEMILIK PERANGKAT.
+                      // Satu HP hanya boleh dimiliki satu akun pada satu waktu. Siapa pun yang
+                      // login terakhir di HP ini tercatat di sini, sehingga panel admin bisa tahu
+                      // token FCM ini sekarang benar-benar milik siapa. Tanpa catatan ini, HP yang
+                      // pernah dipakai login akun lain tetap menerima notifikasi akun lama.
+                      if (deviceId) {
+                          await setDoc(doc(db, 'artifacts', targetProjectId, 'public', 'data', 'device_owners', deviceId), {
+                              current_uid: cleanUid,
+                              fcm_token: finalToken,
+                              updated_at: serverTimestamp()
+                          }, { merge: true });
+                      }
+
                       await setDoc(deviceRef, {
-                          device_id: getDeviceID(),
+                          owner_uid: cleanUid,
+                          device_id: deviceId,
                           fcm_token: finalToken,
                           last_login: serverTimestamp(),
                           last_token_update: serverTimestamp(),
@@ -12157,6 +12181,37 @@
               } catch (err) {
                   console.error("Gagal memproses FCM token:", err);
               }
+          };
+
+          // --- MELEPAS KLAIM PERANGKAT (dipanggil saat logout) ---
+          // Ini yang memutus rantai masalah "notif rider masuk ke HP admin".
+          // Saat sebuah akun keluar dari HP ini: catatan tokennya dihapus, status
+          // pemilik HP dikosongkan, dan token FCM lama dibuang supaya akun
+          // berikutnya yang login di HP ini mendapat token yang benar-benar baru.
+          window.lepasKlaimPerangkat = async function(uid) {
+              const targetProjectId = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : "onbid-2f87a";
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const deviceId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+
+              try {
+                  if (cleanUid) {
+                      await deleteDoc(doc(db, 'artifacts', targetProjectId, 'public', 'data', 'rider_devices', cleanUid));
+                  }
+              } catch (e) { console.warn("Gagal menghapus catatan token rider:", e); }
+
+              try {
+                  if (deviceId) {
+                      await setDoc(doc(db, 'artifacts', targetProjectId, 'public', 'data', 'device_owners', deviceId), {
+                          current_uid: null,
+                          fcm_token: null,
+                          updated_at: serverTimestamp()
+                      }, { merge: true });
+                  }
+              } catch (e) { console.warn("Gagal mengosongkan pemilik perangkat:", e); }
+
+              // Token web push dibuang. Untuk build Android/Kodular token berasal dari
+              // native sehingga tidak berubah -- pengamanannya ada di catatan pemilik di atas.
+              try { if (messaging) await deleteToken(messaging); } catch (e) {}
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
