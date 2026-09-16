@@ -8217,7 +8217,20 @@
             }
         }
 
-        window.proceedWithLogin = function(uid) {
+        window.proceedWithLogin = async function(uid) {
+            // GERBANG IZIN PERANGKAT.
+            // HP yang belum terdaftar di akun ini tidak langsung masuk: permintaannya
+            // dikirim dulu, lalu harus disetujui dari HP lama atau oleh admin.
+            try {
+                const izin = (typeof window.cekIzinPerangkat === 'function')
+                    ? await window.cekIzinPerangkat(uid)
+                    : 'boleh';
+                if (izin !== 'boleh') {
+                    if (typeof window.tampilkanLayarIzin === 'function') window.tampilkanLayarIzin(uid, izin);
+                    return;
+                }
+            } catch (e) { console.warn("Gerbang izin perangkat dilewati:", e); }
+
             currentUserUID = uid;
             
             // Simpan UID ke local storage SETELAH lolos keamanan
@@ -8291,14 +8304,18 @@
             document.getElementById('login-error-msg').classList.add('hidden');
         }
 
-        window.handleLogout = async function (reason = null) {
+        window.handleLogout = async function (reason = null, lepasPerangkat = true) {
             // Lepas klaim perangkat SEBELUM sign out -- setelah sign out, aturan
             // Firestore menolak tulisan ini sehingga token lama akan tertinggal.
+            // lepasPerangkat = false dipakai saat sesi diambil alih perangkat lain:
+            // catatan perangkat sudah berpindah ke HP baru, jangan dihapus.
             try {
-                const uidLama = (typeof currentUserUID !== 'undefined' && currentUserUID)
-                    ? currentUserUID
-                    : localStorage.getItem('rider_uid');
-                if (window.lepasKlaimPerangkat) await window.lepasKlaimPerangkat(uidLama);
+                if (lepasPerangkat) {
+                    const uidLama = (typeof currentUserUID !== 'undefined' && currentUserUID)
+                        ? currentUserUID
+                        : localStorage.getItem('rider_uid');
+                    if (window.lepasKlaimPerangkat) await window.lepasKlaimPerangkat(uidLama);
+                }
             } catch (e) { console.warn("Gagal melepas klaim perangkat saat logout:", e); }
 
             try { if (window.riderSignOut) await window.riderSignOut(); } catch (e) {}
@@ -12157,11 +12174,17 @@
                       // token FCM ini sekarang benar-benar milik siapa. Tanpa catatan ini, HP yang
                       // pernah dipakai login akun lain tetap menerima notifikasi akun lama.
                       if (deviceId) {
-                          await setDoc(doc(db, 'artifacts', targetProjectId, 'public', 'data', 'device_owners', deviceId), {
-                              current_uid: cleanUid,
-                              fcm_token: finalToken,
-                              updated_at: serverTimestamp()
-                          }, { merge: true });
+                          try {
+                              await setDoc(doc(db, 'artifacts', targetProjectId, 'public', 'data', 'device_owners', deviceId), {
+                                  current_uid: cleanUid,
+                                  fcm_token: finalToken,
+                                  updated_at: serverTimestamp()
+                              }, { merge: true });
+                          } catch (e) {
+                              // Gagal mencatat pemilik perangkat TIDAK boleh membatalkan
+                              // penyimpanan token di bawah, kalau tidak rider jadi bisu total.
+                              console.warn("Catatan pemilik perangkat gagal ditulis:", e && e.code);
+                          }
                       }
 
                       await setDoc(deviceRef, {
@@ -12212,6 +12235,302 @@
               // Token web push dibuang. Untuk build Android/Kodular token berasal dari
               // native sehingga tidak berubah -- pengamanannya ada di catatan pemilik di atas.
               try { if (messaging) await deleteToken(messaging); } catch (e) {}
+          };
+
+          // ============================================================
+          // IZIN PERANGKAT (satu akun = satu HP aktif)
+          // ------------------------------------------------------------
+          // Alur: HP baru login -> permintaan tercatat -> HP lama yang sedang
+          // membuka aplikasi memunculkan peringatan "Izinkan / Tolak", dan admin
+          // juga melihatnya di menu Izin Perangkat. Begitu disetujui, HP baru
+          // masuk dan HP lama otomatis keluar.
+          // ============================================================
+          const PROYEK_ID = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId)
+              ? firebaseConfig.projectId : "onbid-2f87a";
+
+          function refPerangkat(uid) {
+              return doc(db, 'artifacts', PROYEK_ID, 'public', 'data', 'rider_devices',
+                         String(uid || '').trim().toUpperCase());
+          }
+
+          // Nama HP sekadar untuk dikenali manusia di layar persetujuan.
+          window.namaPerangkat = function() {
+              const ua = navigator.userAgent || '';
+              let merk = 'Perangkat';
+              const m = ua.match(/Android [^;]+; ([^)]+?)(?: Build|\))/);
+              if (m && m[1]) merk = m[1].split(';')[0].trim();
+              else if (/iPhone/.test(ua)) merk = 'iPhone';
+              else if (/iPad/.test(ua)) merk = 'iPad';
+              else if (/Windows/.test(ua)) merk = 'Komputer Windows';
+              else if (/Macintosh/.test(ua)) merk = 'Mac';
+              const lewat = window.AndroidInterface ? 'Aplikasi' : 'Browser';
+              return (merk + ' (' + lewat + ')').substring(0, 60);
+          };
+
+          // Memeriksa apakah HP ini boleh masuk. Nilai balik:
+          // 'boleh' | 'menunggu' | 'ditolak'
+          window.cekIzinPerangkat = async function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+              // Kalau ada yang tidak beres, JANGAN mengunci rider di jalan. Operasional
+              // lebih rugi kalau rider tidak bisa masuk daripada kalau satu HP lolos.
+              if (!cleanUid || !devId) return 'boleh';
+
+              const isiBaru = {
+                  owner_uid: cleanUid,
+                  device_id: devId,
+                  nama_perangkat: window.namaPerangkat(),
+                  last_login: serverTimestamp(),
+                  pending_device_id: null,
+                  pending_nama: null,
+                  pending_status: null,
+                  pending_oleh: null
+              };
+
+              try {
+                  const ref = refPerangkat(cleanUid);
+                  const snap = await getDoc(ref);
+
+                  // Belum ada HP terdaftar -> HP ini langsung jadi pemiliknya.
+                  if (!snap.exists() || !snap.data().device_id) {
+                      await setDoc(ref, isiBaru, { merge: true });
+                      return 'boleh';
+                  }
+
+                  const d = snap.data();
+
+                  // HP ini memang yang terdaftar (termasuk setelah permintaannya disetujui).
+                  if (d.device_id === devId) {
+                      await setDoc(ref, isiBaru, { merge: true });
+                      return 'boleh';
+                  }
+
+                  // HP lain yang terdaftar. Lihat status permintaan HP ini.
+                  if (d.pending_device_id === devId && d.pending_status === 'ditolak') return 'ditolak';
+                  if (d.pending_device_id === devId && d.pending_status === 'menunggu') return 'menunggu';
+
+                  await setDoc(ref, {
+                      pending_device_id: devId,
+                      pending_nama: window.namaPerangkat(),
+                      pending_at: serverTimestamp(),
+                      pending_status: 'menunggu',
+                      pending_oleh: null
+                  }, { merge: true });
+                  return 'menunggu';
+
+              } catch (e) {
+                  console.warn("Cek izin perangkat gagal, rider tetap diloloskan:", e);
+                  return 'boleh';
+              }
+          };
+
+          // --- LAYAR TUNGGU DI HP BARU ---
+          let _pantauIzin = null;
+          window.tampilkanLayarIzin = function(uid, status) {
+              window.riderSudahMasuk = false;
+              const overlay = document.getElementById('loading-overlay');
+              const halaman = document.getElementById('login-page');
+              if (overlay) overlay.style.display = 'none';
+              if (halaman) halaman.style.display = 'flex';
+
+              const pinSec = document.getElementById('pin-section');
+              if (pinSec) pinSec.classList.add('hidden');
+              const inputSec = document.getElementById('login-input-section');
+              if (inputSec) inputSec.classList.add('hidden');
+              const pwdSec = document.getElementById('password-section');
+              if (pwdSec) pwdSec.classList.remove('hidden');
+
+              let kotak = document.getElementById('kotak-status-izin');
+              if (!kotak && pwdSec) {
+                  kotak = document.createElement('div');
+                  kotak.id = 'kotak-status-izin';
+                  kotak.className = 'p-4 rounded-2xl border text-left text-[11px] font-bold leading-relaxed mb-2';
+                  pwdSec.insertBefore(kotak, pwdSec.firstChild);
+              }
+              if (kotak) {
+                  if (status === 'ditolak') {
+                      kotak.className = 'p-4 rounded-2xl border border-red-200 bg-red-50 text-red-600 text-left text-[11px] font-bold leading-relaxed mb-2';
+                      kotak.textContent = 'Permintaan masuk dari HP ini DITOLAK. Hubungi admin kalau ini memang HP kamu sendiri.';
+                  } else {
+                      kotak.className = 'p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-700 text-left text-[11px] font-bold leading-relaxed mb-2';
+                      kotak.textContent = 'Permintaan masuk sudah dikirim. Tunggu persetujuan dari HP lamamu (kalau aplikasinya sedang terbuka) atau dari admin. Layar ini akan lanjut sendiri begitu disetujui.';
+                  }
+              }
+
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+              if (_pantauIzin) { try { _pantauIzin(); } catch (e) {} _pantauIzin = null; }
+              _pantauIzin = onSnapshot(refPerangkat(cleanUid), (snap) => {
+                  if (!snap.exists()) return;
+                  const d = snap.data();
+                  if (d.device_id === devId) {
+                      try { _pantauIzin(); } catch (e) {}
+                      _pantauIzin = null;
+                      if (kotak) kotak.remove();
+                      if (pwdSec) pwdSec.classList.add('hidden');
+                      if (inputSec) inputSec.classList.remove('hidden');
+                      window.riderSudahMasuk = true;
+                      window.proceedWithLogin(cleanUid);
+                  } else if (d.pending_device_id === devId && d.pending_status === 'ditolak' && kotak) {
+                      kotak.className = 'p-4 rounded-2xl border border-red-200 bg-red-50 text-red-600 text-left text-[11px] font-bold leading-relaxed mb-2';
+                      kotak.textContent = 'Permintaan masuk dari HP ini DITOLAK. Hubungi admin kalau ini memang HP kamu sendiri.';
+                  }
+              }, (e) => console.warn("Pantau izin gagal:", e));
+          };
+
+          // --- PENGAWAS DI HP YANG SEDANG DIPAKAI ---
+          let _unsubPerangkat = null;
+          let _terakhirDaftarUlang = 0;
+          window.startDeviceListener = function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+              if (!cleanUid || !devId) return;
+
+              if (_unsubPerangkat) { try { _unsubPerangkat(); } catch (e) {} _unsubPerangkat = null; }
+              _unsubPerangkat = onSnapshot(refPerangkat(cleanUid), (snap) => {
+                  const d = snap.exists() ? snap.data() : null;
+                  const sedangDipakai = (typeof currentUserUID !== 'undefined' && currentUserUID === cleanUid);
+
+                  // PEMULIHAN SENDIRI.
+                  // Catatan token hilang atau kosong padahal rider sedang memakai
+                  // aplikasi -> daftarkan ulang saat itu juga. Ini yang menutup lubang
+                  // "dibersihkan dari panel admin lalu rider tidak dapat notifikasi lagi".
+                  if (sedangDipakai && (!d || !d.fcm_token)) {
+                      const sekarang = Date.now();
+                      if (sekarang - _terakhirDaftarUlang > 60000) {
+                          _terakhirDaftarUlang = sekarang;
+                          console.log("Catatan token hilang/kosong, mendaftarkan ulang...");
+                          if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
+                      }
+                  }
+
+                  if (!d) return;
+
+                  // Sesi dipindah ke HP lain -> keluar, tanpa menghapus catatan perangkat baru.
+                  if (sedangDipakai && d.device_id && d.device_id !== devId) {
+                      if (typeof window.handleLogout === 'function') {
+                          window.handleLogout("Akun ini sekarang aktif di perangkat lain. Kamu dikeluarkan dari HP ini.", false);
+                      }
+                      return;
+                  }
+
+                  // Ada HP lain minta masuk -> tampilkan peringatan di HP yang sah.
+                  if (d.device_id === devId && d.pending_status === 'menunggu'
+                      && d.pending_device_id && d.pending_device_id !== devId) {
+                      window.tampilkanPermintaanPerangkat(cleanUid, d.pending_nama || 'Perangkat baru');
+                  } else {
+                      window.tutupPermintaanPerangkat();
+                  }
+              }, (e) => console.warn("Pengawas perangkat gagal:", e));
+          };
+
+          // --- PERINGATAN "ADA YANG MINTA MASUK" ---
+          window.tampilkanPermintaanPerangkat = function(uid, nama) {
+              if (document.getElementById('modal-izin-perangkat')) return;
+              const bungkus = document.createElement('div');
+              bungkus.id = 'modal-izin-perangkat';
+              bungkus.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+
+              const kartu = document.createElement('div');
+              kartu.style.cssText = 'background:#fff;border-radius:20px;padding:20px;max-width:340px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.35);';
+
+              const judul = document.createElement('h3');
+              judul.textContent = 'Ada yang mencoba masuk';
+              judul.style.cssText = 'font-size:16px;font-weight:900;color:#b91c1c;margin:0 0 8px;';
+
+              const isi = document.createElement('p');
+              isi.textContent = 'Sebuah perangkat baru mencoba masuk ke akunmu: ' + nama
+                  + '. Kalau itu bukan kamu, tekan Tolak. Kalau kamu izinkan, HP ini akan otomatis keluar.';
+              isi.style.cssText = 'font-size:12px;color:#334155;line-height:1.6;margin:0 0 16px;font-weight:600;';
+
+              const baris = document.createElement('div');
+              baris.style.cssText = 'display:flex;gap:10px;';
+
+              const tolak = document.createElement('button');
+              tolak.textContent = 'Tolak';
+              tolak.style.cssText = 'flex:1;padding:12px;border:none;border-radius:12px;background:#e2e8f0;color:#334155;font-weight:900;font-size:13px;';
+              tolak.onclick = () => window.tolakPerangkat(uid);
+
+              const izinkan = document.createElement('button');
+              izinkan.textContent = 'Izinkan';
+              izinkan.style.cssText = 'flex:1;padding:12px;border:none;border-radius:12px;background:#dc2626;color:#fff;font-weight:900;font-size:13px;';
+              izinkan.onclick = () => window.setujuiPerangkat(uid);
+
+              baris.appendChild(tolak); baris.appendChild(izinkan);
+              kartu.appendChild(judul); kartu.appendChild(isi); kartu.appendChild(baris);
+              bungkus.appendChild(kartu);
+              document.body.appendChild(bungkus);
+
+              try { if (typeof playBeep === 'function') playBeep(880, 0.15); } catch (e) {}
+          };
+
+          window.tutupPermintaanPerangkat = function() {
+              const m = document.getElementById('modal-izin-perangkat');
+              if (m) m.remove();
+          };
+
+          window.setujuiPerangkat = async function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              try {
+                  const ref = refPerangkat(cleanUid);
+                  const snap = await getDoc(ref);
+                  if (!snap.exists() || !snap.data().pending_device_id) { window.tutupPermintaanPerangkat(); return; }
+                  const d = snap.data();
+                  await updateDoc(ref, {
+                      device_id: d.pending_device_id,
+                      nama_perangkat: d.pending_nama || null,
+                      fcm_token: null,            // token HP lama dibuang, notif tidak nyasar
+                      pending_device_id: null,
+                      pending_nama: null,
+                      pending_status: 'disetujui',
+                      pending_oleh: 'rider',
+                      pending_diputus_pada: serverTimestamp()
+                  });
+                  window.tutupPermintaanPerangkat();
+                  if (typeof window.handleLogout === 'function') {
+                      window.handleLogout("Perangkat baru sudah diizinkan. HP ini keluar dari akun.", false);
+                  }
+              } catch (e) {
+                  console.warn("Gagal menyetujui perangkat:", e);
+                  alert("Gagal menyetujui. Periksa koneksi.");
+              }
+          };
+
+          window.tolakPerangkat = async function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              try {
+                  await updateDoc(refPerangkat(cleanUid), {
+                      pending_status: 'ditolak',
+                      pending_oleh: 'rider',
+                      pending_diputus_pada: serverTimestamp()
+                  });
+              } catch (e) { console.warn("Gagal menolak perangkat:", e); }
+              window.tutupPermintaanPerangkat();
+          };
+
+          // Jalur cepat: admin mengetik passwordnya langsung di HP baru.
+          // Fungsi ini sudah dipanggil verifyAdminPassword() sejak dulu tapi belum pernah ada.
+          window.forceTakeoverDevice = async function(uid, devId) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              if (!cleanUid || !devId) return false;
+              try {
+                  await setDoc(refPerangkat(cleanUid), {
+                      owner_uid: cleanUid,
+                      device_id: devId,
+                      nama_perangkat: window.namaPerangkat(),
+                      fcm_token: null,
+                      last_login: serverTimestamp(),
+                      pending_device_id: null,
+                      pending_nama: null,
+                      pending_status: 'disetujui',
+                      pending_oleh: 'admin',
+                      pending_diputus_pada: serverTimestamp()
+                  }, { merge: true });
+                  return true;
+              } catch (e) {
+                  console.warn("Gagal mengambil alih perangkat:", e);
+                  return false;
+              }
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
