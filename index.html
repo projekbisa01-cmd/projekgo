@@ -2274,7 +2274,8 @@
         <!-- BANNER PERINGATAN NOTIFIKASI DIBLOKIR -->
         <div id="global-notif-warning" class="hidden bg-orange-600 text-white text-[10px] font-medium p-2.5 text-left z-[59] shadow-md sticky top-0 flex items-center justify-center gap-3 leading-tight transition-all duration-300">
             <i class="fa-solid fa-bell-slash text-2xl shrink-0"></i>
-            <p>Izin Notifikasi <strong class="font-black">DIBLOKIR!</strong> Kamu beresiko melewatkan orderan. Buka Pengaturan Situs di browser kamu lalu izinkan Notifikasi.</p>
+            <p id="teks-notif-warning" class="flex-1">Izin Notifikasi <strong class="font-black">DIBLOKIR!</strong> Kamu beresiko melewatkan orderan.</p>
+            <button id="btn-pengaturan-notif" onclick="window.bukaPengaturanNotifikasi()" class="shrink-0 bg-white text-orange-700 font-black text-[10px] px-3 py-1.5 rounded-lg active:scale-95 transition-all">Perbaiki</button>
         </div>
 
         <!-- HALAMAN BERANDA -->
@@ -8886,6 +8887,120 @@
         }
 
         // FUNGSI LOGIKA CUSTOM POPUP IZIN NOTIFIKASI
+        // ============================================================
+        // KESEHATAN NOTIFIKASI
+        // ------------------------------------------------------------
+        // Rider bisa sudah login tapi tetap tidak menerima notifikasi, karena
+        // izinnya diblokir, belum pernah ditanya, atau tokennya gagal terdaftar.
+        // Tiga keadaan itu kelihatan sama di mata rider: HP diam saja. Bagian ini
+        // menyebutkan keadaannya dan memberi jalan keluarnya.
+        // ============================================================
+        window.setPeringatanNotif = function(kode) {
+            const banner = document.getElementById('global-notif-warning');
+            const teks   = document.getElementById('teks-notif-warning');
+            const tombol = document.getElementById('btn-pengaturan-notif');
+            if (!banner || !teks || !tombol) return;
+
+            if (kode === 'ok') {
+                banner.classList.add('hidden');
+                if (typeof updateStickyPositions === 'function') setTimeout(updateStickyPositions, 50);
+                return;
+            }
+
+            if (kode === 'ditolak') {
+                teks.innerHTML = 'Izin Notifikasi <strong class="font-black">DIBLOKIR!</strong> Kamu beresiko melewatkan orderan.';
+                tombol.textContent = 'Buka Pengaturan';
+                tombol.onclick = function() { window.bukaPengaturanNotifikasi(); };
+            } else if (kode === 'belum') {
+                teks.innerHTML = 'Notifikasi <strong class="font-black">belum diizinkan.</strong> Orderan masuk tidak akan berbunyi.';
+                tombol.textContent = 'Izinkan';
+                tombol.onclick = function() {
+                    if (typeof requestNotificationPermissionCustom === 'function') requestNotificationPermissionCustom();
+                };
+            } else {
+                teks.innerHTML = 'HP ini <strong class="font-black">belum terdaftar</strong> untuk notifikasi, jadi orderan tidak akan berbunyi.';
+                tombol.textContent = 'Daftarkan';
+                tombol.onclick = function() {
+                    if (currentUserUID && typeof window.setupFCMToken === 'function') {
+                        tombol.textContent = 'Memproses...';
+                        window.setupFCMToken(currentUserUID);
+                        setTimeout(function() { tombol.textContent = 'Daftarkan'; }, 4000);
+                    }
+                };
+            }
+
+            banner.classList.remove('hidden');
+            if (typeof updateStickyPositions === 'function') setTimeout(updateStickyPositions, 50);
+        };
+
+        // Menentukan keadaan mana yang sedang terjadi. adaToken dibaca dari catatan
+        // perangkat di Firestore, bukan ditebak dari sisi HP.
+        window.periksaStatusNotif = function(adaToken) {
+            const punyaAPI = ('Notification' in window);
+            if (punyaAPI && Notification.permission === 'denied')  return window.setPeringatanNotif('ditolak');
+            if (punyaAPI && Notification.permission === 'default') return window.setPeringatanNotif('belum');
+            if (!adaToken) return window.setPeringatanNotif('tanpa_token');
+            window.setPeringatanNotif('ok');
+        };
+
+        // Halaman pengaturan tidak bisa dibuka lewat kode dari dalam browser.
+        // Jadi: coba jembatan aplikasi Android dulu, kalau tidak ada tampilkan langkahnya.
+        window.bukaPengaturanNotifikasi = function() {
+            try {
+                const A = window.AndroidInterface;
+                if (A) {
+                    const kandidat = ['openNotificationSettings', 'bukaPengaturanNotifikasi', 'openAppSettings', 'bukaPengaturan'];
+                    for (let i = 0; i < kandidat.length; i++) {
+                        if (typeof A[kandidat[i]] === 'function') { A[kandidat[i]](); return; }
+                    }
+                }
+            } catch (e) { console.warn("Jembatan pengaturan tidak tersedia:", e); }
+            window.tampilkanLangkahNotifikasi();
+        };
+
+        window.tampilkanLangkahNotifikasi = function() {
+            if (document.getElementById('modal-langkah-notif')) return;
+            const pakaiAplikasi = !!window.AndroidInterface;
+
+            const bungkus = document.createElement('div');
+            bungkus.id = 'modal-langkah-notif';
+            bungkus.style.cssText = 'position:fixed;inset:0;z-index:99996;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+
+            const kartu = document.createElement('div');
+            kartu.style.cssText = 'background:#fff;border-radius:20px;padding:20px;max-width:340px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.35);';
+
+            const judul = document.createElement('h3');
+            judul.textContent = 'Hidupkan Notifikasi';
+            judul.style.cssText = 'font-size:16px;font-weight:900;color:#0f172a;margin:0 0 10px;';
+
+            const daftar = document.createElement('ol');
+            daftar.style.cssText = 'margin:0 0 16px;padding-left:18px;font-size:12px;color:#334155;line-height:1.8;font-weight:600;';
+            const langkah = pakaiAplikasi
+                ? ['Buka Pengaturan di HP kamu',
+                   'Pilih Aplikasi, lalu cari ProjekGo',
+                   'Masuk ke Notifikasi',
+                   'Hidupkan izin notifikasinya',
+                   'Kembali ke aplikasi ini, lalu tutup dan buka lagi']
+                : ['Tekan ikon gembok di sebelah alamat situs',
+                   'Pilih Izin atau Setelan Situs',
+                   'Cari Notifikasi, ubah jadi Izinkan',
+                   'Muat ulang halaman ini'];
+            langkah.forEach(function(t) {
+                const li = document.createElement('li');
+                li.textContent = t;
+                daftar.appendChild(li);
+            });
+
+            const tutup = document.createElement('button');
+            tutup.textContent = 'Mengerti';
+            tutup.style.cssText = 'width:100%;padding:12px;border:none;border-radius:12px;background:#ea580c;color:#fff;font-weight:900;font-size:13px;';
+            tutup.onclick = function() { bungkus.remove(); };
+
+            kartu.appendChild(judul); kartu.appendChild(daftar); kartu.appendChild(tutup);
+            bungkus.appendChild(kartu);
+            document.body.appendChild(bungkus);
+        };
+
         function updateNotificationUI() {
             const btn = document.getElementById('btn-home-notif-permission');
             const notifBanner = document.getElementById('global-notif-warning');
@@ -12136,6 +12251,29 @@
           const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
 
           // --- FUNGSI SETUP FCM TOKEN (LANGKAH 2) - DENGAN DUKUNGAN KODULAR & OTOMATIS ---
+          // ============================================================
+          // DIAGNOSA TOKEN
+          // ------------------------------------------------------------
+          // Kalau token gagal didapat, sebabnya dicatat di dokumen perangkat rider
+          // supaya admin tahu ini APK lama, izin diblokir, atau dibuka lewat browser.
+          // Tanpa ini, semua kegagalan kelihatan sama: kolom token kosong.
+          // ============================================================
+          let _tokenTersimpanPada = 0;
+
+          async function catatDiagnosaToken(cleanUid, projectId, sebab) {
+              try {
+                  const A = window.AndroidInterface;
+                  await setDoc(doc(db, 'artifacts', projectId, 'public', 'data', 'rider_devices', cleanUid), {
+                      diagnosa_token: sebab,
+                      diagnosa_jembatan: !A ? 'tidak_ada'
+                                            : (typeof A.getFCMToken === 'function' ? 'lengkap' : 'apk_lama'),
+                      diagnosa_izin: ('Notification' in window) ? Notification.permission : 'tidak_ada',
+                      diagnosa_pada: serverTimestamp()
+                  }, { merge: true });
+                  console.warn("Diagnosa token dicatat:", sebab);
+              } catch (e) { console.warn("Gagal mencatat diagnosa token:", e && e.code); }
+          }
+
           window.setupFCMToken = async function(uid, nativeToken = null) {
               if (!uid) return;
               const cleanUid = String(uid).trim().toUpperCase();
@@ -12159,8 +12297,16 @@
 
                   // 2. METODE KODULAR (Fallback jika WebView menolak service worker web push)
                   if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
+                      const stempel = Date.now();
                       window.AndroidInterface.getFCMToken(cleanUid);
-                      return; // Berhenti di sini, biarkan Kodular merespon lewat receiveFCMTokenFromKodular
+                      // Kalau 15 detik APK tidak membalas lewat receiveFCMTokenFromKodular,
+                      // berarti jembatannya ada tapi versinya tidak cocok dengan halaman ini.
+                      setTimeout(function() {
+                          if (_tokenTersimpanPada < stempel) {
+                              catatDiagnosaToken(cleanUid, targetProjectId, 'jembatan_tidak_menjawab');
+                          }
+                      }, 15000);
+                      return; // Berhenti di sini, biarkan aplikasi Android merespon
                   }
 
                   // 3. SIMPAN TOKEN KE FIRESTORE
@@ -12193,13 +12339,16 @@
                           fcm_token: finalToken,
                           last_login: serverTimestamp(),
                           last_token_update: serverTimestamp(),
-                          source: window.AndroidInterface ? 'android_webview' : 'web'
+                          source: window.AndroidInterface ? 'android_webview' : 'web',
+                          diagnosa_token: null   // berhasil -> keterangan kegagalan lama dihapus
                       }, { merge: true });
-                      
+
+                      _tokenTersimpanPada = Date.now();
                       console.log("Token FCM berhasil disimpan!");
                       if (typeof updateNotificationUI === 'function') updateNotificationUI();
                   } else {
-                      console.warn("Gagal mendapatkan Token FCM. Pastikan izin diberikan atau Kodular terhubung.");
+                      console.warn("Gagal mendapatkan Token FCM. Pastikan izin diberikan atau aplikasi Android terhubung.");
+                      await catatDiagnosaToken(cleanUid, targetProjectId, 'token_tidak_didapat');
                   }
               } catch (err) {
                   console.error("Gagal memproses FCM token:", err);
@@ -12381,6 +12530,7 @@
           // --- PENGAWAS DI HP YANG SEDANG DIPAKAI ---
           let _unsubPerangkat = null;
           let _terakhirDaftarUlang = 0;
+          let _timerPanduanNotif = null;
           window.startDeviceListener = function(uid) {
               const cleanUid = String(uid || '').trim().toUpperCase();
               const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
@@ -12391,16 +12541,29 @@
                   const d = snap.exists() ? snap.data() : null;
                   const sedangDipakai = (typeof currentUserUID !== 'undefined' && currentUserUID === cleanUid);
 
-                  // PEMULIHAN SENDIRI.
+                  // PEMULIHAN SENDIRI + PENILAIAN KESEHATAN NOTIFIKASI.
                   // Catatan token hilang atau kosong padahal rider sedang memakai
-                  // aplikasi -> daftarkan ulang saat itu juga. Ini yang menutup lubang
-                  // "dibersihkan dari panel admin lalu rider tidak dapat notifikasi lagi".
-                  if (sedangDipakai && (!d || !d.fcm_token)) {
-                      const sekarang = Date.now();
-                      if (sekarang - _terakhirDaftarUlang > 60000) {
-                          _terakhirDaftarUlang = sekarang;
-                          console.log("Catatan token hilang/kosong, mendaftarkan ulang...");
-                          if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
+                  // aplikasi -> daftarkan ulang saat itu juga. Kalau setelah 20 detik
+                  // masih kosong juga, berarti bukan sekadar terhapus: izinnya diblokir
+                  // atau token gagal diambil. Rider diberi tahu dan diarahkan.
+                  if (sedangDipakai) {
+                      const adaToken = !!(d && d.fcm_token);
+                      if (adaToken) {
+                          if (_timerPanduanNotif) { clearTimeout(_timerPanduanNotif); _timerPanduanNotif = null; }
+                          if (typeof window.periksaStatusNotif === 'function') window.periksaStatusNotif(true);
+                      } else {
+                          const sekarang = Date.now();
+                          if (sekarang - _terakhirDaftarUlang > 60000) {
+                              _terakhirDaftarUlang = sekarang;
+                              console.log("Catatan token hilang/kosong, mendaftarkan ulang...");
+                              if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
+                          }
+                          if (!_timerPanduanNotif) {
+                              _timerPanduanNotif = setTimeout(function() {
+                                  _timerPanduanNotif = null;
+                                  if (typeof window.periksaStatusNotif === 'function') window.periksaStatusNotif(false);
+                              }, 20000);
+                          }
                       }
                   }
 
@@ -12412,6 +12575,11 @@
                           window.handleLogout("Akun ini sekarang aktif di perangkat lain. Kamu dikeluarkan dari HP ini.", false);
                       }
                       return;
+                  }
+
+                  // Peringatan dari admin (aplikasi lama / izin notifikasi mati).
+                  if (sedangDipakai && d.peringatan_jenis && d.peringatan_dibaca !== true) {
+                      window.tampilkanPeringatanAdmin(cleanUid, d.peringatan_jenis);
                   }
 
                   // Ada HP lain minta masuk -> tampilkan peringatan di HP yang sah.
@@ -12462,6 +12630,85 @@
               document.body.appendChild(bungkus);
 
               try { if (typeof playBeep === 'function') playBeep(880, 0.15); } catch (e) {}
+          };
+
+          window.tampilkanPeringatanAdmin = function(uid, jenis) {
+              if (document.getElementById('modal-peringatan-admin')) return;
+
+              const bungkus = document.createElement('div');
+              bungkus.id = 'modal-peringatan-admin';
+              bungkus.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.7);display:flex;align-items:center;justify-content:center;padding:20px;';
+
+              const kartu = document.createElement('div');
+              kartu.style.cssText = 'background:#fff;border-radius:20px;padding:22px;max-width:340px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.4);text-align:center;';
+
+              const ikon = document.createElement('div');
+              // Ikon dibuat dari karakter biasa, bukan emoji, supaya pasti tampil
+              // di semua versi WebView lama.
+              ikon.textContent = jenis === 'update' ? '\u21BB' : '!';
+              ikon.style.cssText = 'font-size:38px;line-height:1;margin-bottom:10px;color:#dc2626;font-weight:900;';
+
+              const judul = document.createElement('h3');
+              judul.style.cssText = 'font-size:16px;font-weight:900;color:#b91c1c;margin:0 0 10px;';
+              const isi = document.createElement('p');
+              isi.style.cssText = 'font-size:12px;color:#334155;line-height:1.7;margin:0 0 18px;font-weight:600;';
+
+              if (jenis === 'update') {
+                  judul.textContent = 'Aplikasi Harus Diperbarui';
+                  isi.textContent = 'Aplikasi di HP kamu versi lama, jadi orderan masuk tidak berbunyi sama sekali. '
+                      + 'Hubungi admin untuk minta file aplikasi yang baru, lalu pasang di HP kamu.';
+              } else if (jenis === 'izin') {
+                  judul.textContent = 'Notifikasi Kamu Mati';
+                  isi.textContent = 'Izin notifikasi di HP kamu tidak aktif, jadi orderan masuk tidak akan berbunyi. '
+                      + 'Hidupkan lewat pengaturan, lalu tutup dan buka lagi aplikasi ini.';
+              } else {
+                  judul.textContent = 'Notifikasi Kamu Mati';
+                  isi.textContent = 'HP kamu belum terdaftar untuk menerima notifikasi orderan. Hubungi admin.';
+              }
+
+              const baris = document.createElement('div');
+              baris.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+
+              if (jenis === 'update') {
+                  // APK tidak ditautkan langsung: rider diarahkan ke admin lewat WhatsApp,
+                  // memakai jalur yang sudah dipakai fitur lapor masalah.
+                  const hubungi = document.createElement('button');
+                  hubungi.textContent = 'Hubungi Admin';
+                  hubungi.style.cssText = 'padding:12px;border:none;border-radius:12px;background:#dc2626;color:#fff;font-weight:900;font-size:13px;';
+                  hubungi.onclick = function() {
+                      const pesan = 'Halo Admin, aplikasi saya versi lama dan notifikasi orderan tidak berbunyi.\n\n'
+                          + 'UID: *' + String(uid || '-') + '*\n\nMohon dikirimkan file aplikasi yang terbaru. Terima kasih.';
+                      if (typeof window.openWaSelector === 'function') {
+                          window.openWaSelector('6281292802623', pesan);
+                      } else {
+                          alert('Hubungi admin lewat WhatsApp untuk minta aplikasi terbaru.');
+                      }
+                  };
+                  baris.appendChild(hubungi);
+              } else if (jenis === 'izin') {
+                  const atur = document.createElement('button');
+                  atur.textContent = 'Buka Pengaturan';
+                  atur.style.cssText = 'padding:12px;border:none;border-radius:12px;background:#dc2626;color:#fff;font-weight:900;font-size:13px;';
+                  atur.onclick = function() {
+                      if (typeof window.bukaPengaturanNotifikasi === 'function') window.bukaPengaturanNotifikasi();
+                  };
+                  baris.appendChild(atur);
+              }
+
+              const paham = document.createElement('button');
+              paham.textContent = 'Mengerti';
+              paham.style.cssText = 'padding:12px;border:none;border-radius:12px;background:#e2e8f0;color:#334155;font-weight:900;font-size:13px;';
+              paham.onclick = async function() {
+                  try {
+                      await updateDoc(refPerangkat(uid), { peringatan_dibaca: true });
+                  } catch (e) { console.warn("Gagal menandai peringatan terbaca:", e); }
+                  bungkus.remove();
+              };
+              baris.appendChild(paham);
+
+              kartu.appendChild(ikon); kartu.appendChild(judul); kartu.appendChild(isi); kartu.appendChild(baris);
+              bungkus.appendChild(kartu);
+              document.body.appendChild(bungkus);
           };
 
           window.tutupPermintaanPerangkat = function() {

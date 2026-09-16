@@ -2392,29 +2392,115 @@
                 const snap = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'));
                 const menunggu = [];
                 const terdaftar = [];
-                const tanpaToken = [];
-                let punyaToken = 0;
+                const petaPerangkat = {};
                 snap.forEach(d => {
                     const v = d.data();
                     const uid = String(d.id).trim().toUpperCase();
+                    petaPerangkat[uid] = v;
                     if (v.pending_status === 'menunggu' && v.pending_device_id) {
                         menunggu.push({ uid: uid, nama: v.pending_nama || 'Perangkat baru', waktu: v.pending_at });
                     }
                     if (v.device_id) {
                         terdaftar.push({ uid: uid, nama: v.nama_perangkat || v.device_id, waktu: v.last_login });
                     }
-                    if (v.fcm_token) punyaToken++; else tanpaToken.push(uid);
                 });
+
+                // Penilaian kesiapan notifikasi dihitung dari DAFTAR RIDER, bukan dari
+                // daftar dokumen perangkat. Rider yang catatan perangkatnya terhapus
+                // seluruhnya tidak punya dokumen untuk diperiksa, jadi kalau basisnya
+                // dokumen, dia tidak akan pernah muncul padahal juga tidak bisa dinotif.
+                // allRiders sudah ada di memori panel, jadi tidak ada read tambahan.
+                const riderUnik = (typeof allRiders !== 'undefined' && Array.isArray(allRiders))
+                    ? Array.from(new Set(allRiders.map(r => String(r && r.uid || '').trim().toUpperCase()).filter(Boolean)))
+                    : [];
+                const tanpaToken = [];
+                const belumDaftar = [];
+                const yatim = [];
+                let punyaToken = 0;
+                // Menerjemahkan keterangan yang dikirim aplikasi rider jadi bahasa manusia.
+                const bacaDiagnosa = (v) => {
+                    if (!v) return '';
+                    if (v.diagnosa_jembatan === 'apk_lama') return 'APK lama, tidak ada jembatan token';
+                    if (v.diagnosa_token === 'jembatan_tidak_menjawab') return 'APK tidak membalas permintaan token';
+                    if (v.diagnosa_jembatan === 'tidak_ada') return 'dibuka lewat browser, bukan aplikasi';
+                    if (v.diagnosa_izin === 'denied') return 'izin notifikasi diblokir di HP';
+                    if (v.diagnosa_izin === 'default') return 'izin notifikasi belum diberikan';
+                    if (v.diagnosa_token) return 'token gagal diambil';
+                    return 'belum ada keterangan';
+                };
+
+                // Jenis masalah menentukan bunyi peringatan yang dikirim ke rider.
+                const jenisMasalah = (v) => {
+                    if (!v) return 'umum';
+                    if (v.diagnosa_jembatan === 'apk_lama' || v.diagnosa_token === 'jembatan_tidak_menjawab') return 'update';
+                    if (v.diagnosa_izin === 'denied' || v.diagnosa_izin === 'default') return 'izin';
+                    return 'umum';
+                };
+
+                riderUnik.forEach(uid => {
+                    const v = petaPerangkat[uid];
+                    if (!v) belumDaftar.push(uid);
+                    else if (!v.fcm_token) tanpaToken.push({
+                        uid: uid,
+                        alasan: bacaDiagnosa(v),
+                        jenis: jenisMasalah(v),
+                        sudahDiperingatkan: !!v.peringatan_jenis,
+                        sudahDibaca: v.peringatan_dibaca === true
+                    });
+                    else punyaToken++;
+                });
+                if (riderUnik.length) {
+                    Object.keys(petaPerangkat).forEach(uid => {
+                        if (riderUnik.indexOf(uid) === -1) yatim.push(uid);
+                    });
+                }
+                tanpaToken.sort((x, y) => x.uid.localeCompare(y.uid)); belumDaftar.sort(); yatim.sort();
                 menunggu.sort((a, b) => a.uid.localeCompare(b.uid));
                 terdaftar.sort((a, b) => a.uid.localeCompare(b.uid));
 
-                let html = '<div style="background:#f1f5f9;border-radius:12px;padding:10px;margin-bottom:14px;line-height:1.6;">'
-                    + '<b>' + punyaToken + '</b> dari <b>' + snap.size + '</b> catatan perangkat punya token notifikasi.';
-                if (tanpaToken.length) {
-                    html += '<div style="color:#b91c1c;margin-top:6px;"><b>Tanpa token:</b> ' + _escIzin(tanpaToken.join(', '))
-                        + '<br>Rider ini tidak akan menerima notifikasi sampai dia membuka aplikasinya (token mendaftar sendiri).</div>';
+                let html = '<div style="background:#f1f5f9;border-radius:12px;padding:10px;margin-bottom:14px;line-height:1.6;">';
+                if (!riderUnik.length) {
+                    // Daftar rider belum sempat dimuat. Jangan menampilkan angka yang
+                    // menyesatkan -- katakan apa adanya.
+                    html += 'Daftar rider belum termuat, jadi kesiapan notifikasi belum bisa dihitung. Tutup panel ini, tunggu halaman dispatch selesai memuat, lalu buka lagi.';
+                } else {
+                    html += '<b>' + punyaToken + '</b> dari <b>' + riderUnik.length + '</b> rider siap menerima notifikasi.';
+                    if (tanpaToken.length) {
+                        html += '<div style="color:#b91c1c;margin-top:6px;"><b>Tanpa token:</b> ' + tanpaToken.length + ' rider (rinciannya di bawah)</div>';
+                    }
+                    if (belumDaftar.length) {
+                        html += '<div style="color:#b91c1c;margin-top:6px;"><b>Belum pernah daftar:</b> ' + _escIzin(belumDaftar.join(', ')) + '</div>';
+                    }
+                    if (tanpaToken.length || belumDaftar.length) {
+                        html += '<div style="color:#64748b;margin-top:6px;">Minta rider di atas membuka aplikasinya. Token mendaftar sendiri dalam beberapa detik, tidak perlu login ulang.</div>';
+                    }
+                    if (yatim.length) {
+                        html += '<div style="color:#64748b;margin-top:6px;"><b>Catatan perangkat tanpa rider:</b> ' + _escIzin(yatim.join(', ')) + ' (sisa rider lama, bisa diabaikan)</div>';
+                    }
+                    if (!tanpaToken.length && !belumDaftar.length) {
+                        html += '<div style="color:#047857;margin-top:6px;font-weight:900;">Semua rider siap.</div>';
+                    }
                 }
                 html += '</div>';
+                if (tanpaToken.length) {
+                    html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#b91c1c;">Tanpa token notifikasi (' + tanpaToken.length + ')</h4>';
+                    tanpaToken.forEach(t => {
+                        const label = t.jenis === 'update' ? 'Suruh Update'
+                                    : t.jenis === 'izin'   ? 'Suruh Aktifkan Izin'
+                                    : 'Kirim Peringatan';
+                        const status = !t.sudahDiperingatkan ? ''
+                                     : (t.sudahDibaca ? '<span style="color:#047857;font-weight:900;"> &bull; sudah dibaca</span>'
+                                                      : '<span style="color:#b45309;font-weight:900;"> &bull; terkirim, belum dibaca</span>');
+                        html += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:10px;margin-bottom:8px;">'
+                            + '<div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + '</div>'
+                            + '<div style="color:#64748b;margin:2px 0 8px;">' + _escIzin(t.alasan) + status + '</div>'
+                            + '<button onclick="window.kirimPeringatanRider(\'' + _escIzin(t.uid) + '\', \'' + _escIzin(t.jenis) + '\')" '
+                            + 'style="width:100%;border:none;border-radius:9px;padding:8px;background:#dc2626;color:#fff;font-weight:900;font-size:11px;">' + label + '</button>'
+                            + '</div>';
+                    });
+                    html += '<p style="margin:0 0 16px;color:#64748b;line-height:1.6;">Peringatan muncul di dalam aplikasi rider, bukan lewat notifikasi &mdash; rider ini memang tidak bisa dinotif. Kalau aplikasinya sedang dibuka, peringatannya muncul saat itu juga.</p>';
+                }
+
                 html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#b91c1c;">Menunggu izin (' + menunggu.length + ')</h4>';
                 if (!menunggu.length) {
                     html += '<p style="margin:0 0 18px;color:#64748b;">Tidak ada permintaan.</p>';
@@ -2448,6 +2534,30 @@
             } catch (e) {
                 console.warn("Gagal memuat izin perangkat:", e);
                 wadah.innerHTML = '<p style="color:#b91c1c;font-weight:800;">Gagal memuat data perangkat.</p>';
+            }
+        };
+
+        // Peringatan dikirim sebagai penanda di dokumen perangkat rider, BUKAN push.
+        // Rider tanpa token memang tidak bisa dinotif; aplikasinya yang membaca
+        // penanda ini lewat pengawas perangkat yang sudah berjalan.
+        window.kirimPeringatanRider = async function(uid, jenis) {
+            const cleanUid = String(uid || '').trim().toUpperCase();
+            const teks = jenis === 'update'
+                ? "Kirim peringatan ke " + cleanUid + " untuk memperbarui aplikasinya?"
+                : jenis === 'izin'
+                ? "Kirim peringatan ke " + cleanUid + " untuk menghidupkan izin notifikasi?"
+                : "Kirim peringatan ke " + cleanUid + " bahwa notifikasinya mati?";
+            if (!confirm(teks + "\n\nPeringatan muncul di dalam aplikasinya, bukan sebagai notifikasi.")) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
+                    peringatan_jenis: jenis,
+                    peringatan_pada: serverTimestamp(),
+                    peringatan_dibaca: false
+                });
+                window.muatIzinPerangkat();
+            } catch (e) {
+                console.warn("Gagal mengirim peringatan:", e);
+                alert("Gagal mengirim peringatan.");
             }
         };
 
