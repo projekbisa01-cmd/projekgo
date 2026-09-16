@@ -666,6 +666,11 @@
                     <i class="fa-solid fa-user-lock text-3xl text-red-500 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Kelola<br>Suspend</span>
                 </button>
+                <button onclick="window.bukaIzinPerangkat()" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-cyan-300 hover:shadow-md active:scale-95 transition-all group">
+                    <i class="fa-solid fa-mobile-screen-button text-3xl text-cyan-500 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Izin<br>Perangkat</span>
+                    <span id="badge-izin-perangkat" class="absolute top-1.5 right-1.5 bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full hidden shadow-sm border border-white">0</span>
+                </button>
             </div>
         </div>
 
@@ -2098,6 +2103,7 @@
                 // Tandai perangkat ini sebagai perangkat admin, lalu periksa apakah ada
                 // token rider yang masih nyasar ke HP admin / HP orang lain.
                 if (typeof window.tandaiPerangkatAdmin === 'function') window.tandaiPerangkatAdmin();
+                startIzinPerangkatListener();
                 setTimeout(async () => {
                     try {
                         if (typeof window.auditTokenPerangkat !== 'function') return;
@@ -2252,6 +2258,7 @@
 
                 if (!tokenSnap.exists() || !tokenSnap.data().fcm_token) {
                     console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", uidTujuan);
+                    window.peringatanNotif("Notifikasi ke " + uidTujuan + " tidak terkirim: rider ini belum punya token notifikasi. Minta dia membuka aplikasinya, token akan terdaftar sendiri.");
                     return;
                 }
 
@@ -2309,6 +2316,202 @@
                 });
             } catch(err) { console.warn("Push Notif Error", err); }
         }
+
+        // ============================================================
+        // IZIN PERANGKAT
+        // ------------------------------------------------------------
+        // Satu akun rider = satu HP aktif. Kalau ada HP baru yang mencoba masuk,
+        // permintaannya muncul di sini dan di HP lama rider. Admin bisa mengizinkan,
+        // menolak, atau melepas ikatan perangkat (misalnya rider ganti HP).
+        // ============================================================
+        function _escIzin(t) {
+            return String(t == null ? '' : t)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function _waktuIzin(ts) {
+            try {
+                const d = ts && ts.toDate ? ts.toDate() : null;
+                if (!d) return '-';
+                return d.toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+            } catch (e) { return '-'; }
+        }
+
+        let _jumlahIzinMenunggu = 0;
+        function startIzinPerangkatListener() {
+            try {
+                const q = query(
+                    collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'),
+                    where('pending_status', '==', 'menunggu')
+                );
+                onSnapshot(q, (snap) => {
+                    const sebelumnya = _jumlahIzinMenunggu;
+                    _jumlahIzinMenunggu = snap.size;
+                    const badge = document.getElementById('badge-izin-perangkat');
+                    if (badge) {
+                        badge.innerText = snap.size;
+                        if (snap.size > 0) badge.classList.remove('hidden');
+                        else badge.classList.add('hidden');
+                    }
+                    // Beri tahu sekali saja saat permintaan baru muncul, jangan berulang.
+                    if (snap.size > sebelumnya && typeof window.peringatanNotif === 'function') {
+                        window.peringatanNotif(
+                            "Ada " + snap.size + " perangkat baru menunggu izin masuk ke akun rider.",
+                            "Buka menu izin",
+                            () => window.bukaIzinPerangkat()
+                        );
+                    }
+                    if (document.getElementById('panel-izin-perangkat')) window.muatIzinPerangkat();
+                }, (e) => console.warn("Listener izin perangkat gagal:", e));
+            } catch (e) { console.warn("Gagal memasang listener izin perangkat:", e); }
+        }
+
+        window.bukaIzinPerangkat = function() {
+            if (document.getElementById('panel-izin-perangkat')) return;
+            const bungkus = document.createElement('div');
+            bungkus.id = 'panel-izin-perangkat';
+            bungkus.style.cssText = 'position:fixed;inset:0;z-index:99997;background:rgba(15,23,42,.55);display:flex;align-items:flex-end;justify-content:center;';
+            bungkus.innerHTML = '<div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;">'
+                + '<div style="padding:16px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">'
+                + '<h3 style="margin:0;font-size:15px;font-weight:900;color:#0f172a;">Izin Perangkat</h3>'
+                + '<button id="tutup-izin-perangkat" style="border:none;background:#e2e8f0;color:#334155;border-radius:10px;padding:6px 12px;font-weight:900;font-size:12px;">Tutup</button>'
+                + '</div>'
+                + '<div id="isi-izin-perangkat" style="padding:14px 18px 24px;overflow-y:auto;font-size:12px;color:#334155;">Memuat...</div>'
+                + '</div>';
+            document.body.appendChild(bungkus);
+            document.getElementById('tutup-izin-perangkat').onclick = () => bungkus.remove();
+            bungkus.onclick = (e) => { if (e.target === bungkus) bungkus.remove(); };
+            window.muatIzinPerangkat();
+        };
+
+        window.muatIzinPerangkat = async function() {
+            const wadah = document.getElementById('isi-izin-perangkat');
+            if (!wadah) return;
+            try {
+                const snap = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'));
+                const menunggu = [];
+                const terdaftar = [];
+                const tanpaToken = [];
+                let punyaToken = 0;
+                snap.forEach(d => {
+                    const v = d.data();
+                    const uid = String(d.id).trim().toUpperCase();
+                    if (v.pending_status === 'menunggu' && v.pending_device_id) {
+                        menunggu.push({ uid: uid, nama: v.pending_nama || 'Perangkat baru', waktu: v.pending_at });
+                    }
+                    if (v.device_id) {
+                        terdaftar.push({ uid: uid, nama: v.nama_perangkat || v.device_id, waktu: v.last_login });
+                    }
+                    if (v.fcm_token) punyaToken++; else tanpaToken.push(uid);
+                });
+                menunggu.sort((a, b) => a.uid.localeCompare(b.uid));
+                terdaftar.sort((a, b) => a.uid.localeCompare(b.uid));
+
+                let html = '<div style="background:#f1f5f9;border-radius:12px;padding:10px;margin-bottom:14px;line-height:1.6;">'
+                    + '<b>' + punyaToken + '</b> dari <b>' + snap.size + '</b> catatan perangkat punya token notifikasi.';
+                if (tanpaToken.length) {
+                    html += '<div style="color:#b91c1c;margin-top:6px;"><b>Tanpa token:</b> ' + _escIzin(tanpaToken.join(', '))
+                        + '<br>Rider ini tidak akan menerima notifikasi sampai dia membuka aplikasinya (token mendaftar sendiri).</div>';
+                }
+                html += '</div>';
+                html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#b91c1c;">Menunggu izin (' + menunggu.length + ')</h4>';
+                if (!menunggu.length) {
+                    html += '<p style="margin:0 0 18px;color:#64748b;">Tidak ada permintaan.</p>';
+                } else {
+                    menunggu.forEach(m => {
+                        html += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:10px;margin-bottom:8px;">'
+                            + '<div style="font-weight:900;color:#0f172a;">' + _escIzin(m.uid) + '</div>'
+                            + '<div style="color:#64748b;margin:2px 0 8px;">' + _escIzin(m.nama) + ' &bull; ' + _escIzin(_waktuIzin(m.waktu)) + '</div>'
+                            + '<div style="display:flex;gap:8px;">'
+                            + '<button onclick="window.tolakPerangkatAdmin(\'' + _escIzin(m.uid) + '\')" style="flex:1;border:none;border-radius:9px;padding:8px;background:#e2e8f0;color:#334155;font-weight:900;font-size:11px;">Tolak</button>'
+                            + '<button onclick="window.izinkanPerangkatAdmin(\'' + _escIzin(m.uid) + '\')" style="flex:1;border:none;border-radius:9px;padding:8px;background:#dc2626;color:#fff;font-weight:900;font-size:11px;">Izinkan</button>'
+                            + '</div></div>';
+                    });
+                    html += '<div style="height:12px;"></div>';
+                }
+
+                html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#0f172a;">Perangkat terdaftar (' + terdaftar.length + ')</h4>';
+                if (!terdaftar.length) {
+                    html += '<p style="margin:0;color:#64748b;">Belum ada.</p>';
+                } else {
+                    terdaftar.forEach(t => {
+                        html += '<div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+                            + '<div style="min-width:0;"><div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + '</div>'
+                            + '<div style="color:#64748b;overflow:hidden;text-overflow:ellipsis;">' + _escIzin(t.nama) + ' &bull; ' + _escIzin(_waktuIzin(t.waktu)) + '</div></div>'
+                            + '<button onclick="window.resetPerangkatRider(\'' + _escIzin(t.uid) + '\')" style="border:none;border-radius:9px;padding:8px 10px;background:#f1f5f9;color:#334155;font-weight:900;font-size:11px;white-space:nowrap;">Lepas</button>'
+                            + '</div>';
+                    });
+                    html += '<p style="margin:10px 0 0;color:#64748b;line-height:1.6;">"Lepas" dipakai kalau rider ganti HP atau HP-nya hilang: ikatan perangkat dihapus, dan HP mana pun yang login berikutnya langsung diterima tanpa perlu izin.</p>';
+                }
+                wadah.innerHTML = html;
+            } catch (e) {
+                console.warn("Gagal memuat izin perangkat:", e);
+                wadah.innerHTML = '<p style="color:#b91c1c;font-weight:800;">Gagal memuat data perangkat.</p>';
+            }
+        };
+
+        window.izinkanPerangkatAdmin = async function(uid) {
+            const cleanUid = String(uid || '').trim().toUpperCase();
+            try {
+                const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid);
+                const snap = await getDoc(ref);
+                if (!snap.exists() || !snap.data().pending_device_id) { window.muatIzinPerangkat(); return; }
+                const d = snap.data();
+                if (!confirm("Izinkan " + cleanUid + " masuk dari " + (d.pending_nama || 'perangkat baru') + "?\n\nHP lamanya akan otomatis keluar.")) return;
+                await updateDoc(ref, {
+                    device_id: d.pending_device_id,
+                    nama_perangkat: d.pending_nama || null,
+                    fcm_token: null,
+                    pending_device_id: null,
+                    pending_nama: null,
+                    pending_status: 'disetujui',
+                    pending_oleh: 'admin',
+                    pending_diputus_pada: serverTimestamp()
+                });
+                window.muatIzinPerangkat();
+            } catch (e) {
+                console.warn("Gagal mengizinkan perangkat:", e);
+                alert("Gagal mengizinkan perangkat.");
+            }
+        };
+
+        window.tolakPerangkatAdmin = async function(uid) {
+            const cleanUid = String(uid || '').trim().toUpperCase();
+            if (!confirm("Tolak permintaan masuk untuk " + cleanUid + "?")) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
+                    pending_status: 'ditolak',
+                    pending_oleh: 'admin',
+                    pending_diputus_pada: serverTimestamp()
+                });
+                window.muatIzinPerangkat();
+            } catch (e) {
+                console.warn("Gagal menolak perangkat:", e);
+                alert("Gagal menolak perangkat.");
+            }
+        };
+
+        window.resetPerangkatRider = async function(uid) {
+            const cleanUid = String(uid || '').trim().toUpperCase();
+            if (!confirm("Lepas ikatan perangkat untuk " + cleanUid + "?\n\nHP mana pun yang login berikutnya akan langsung diterima.")) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
+                    device_id: null,
+                    nama_perangkat: null,
+                    fcm_token: null,
+                    pending_device_id: null,
+                    pending_nama: null,
+                    pending_status: null,
+                    pending_oleh: null,
+                    pending_diputus_pada: serverTimestamp()
+                });
+                window.muatIzinPerangkat();
+            } catch (e) {
+                console.warn("Gagal melepas perangkat:", e);
+                alert("Gagal melepas perangkat.");
+            }
+        };
 
         // ------------------------------------------------------------
         // AUDIT TOKEN NYASAR
