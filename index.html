@@ -8967,9 +8967,9 @@
                     try { await window.setupFCMToken(currentUserUID); } catch (e) {}
 
                     // Jalur aplikasi Android menjawab belakangan lewat jembatan, jadi
-                    // hasilnya ditunggu sampai 15 detik sebelum dinyatakan gagal.
+                    // hasilnya ditunggu sampai 25 detik sebelum dinyatakan gagal.
                     let berhasil = false;
-                    for (let i = 0; i < 15; i++) {
+                    for (let i = 0; i < 25; i++) {
                         await new Promise(function(r) { setTimeout(r, 1000); });
                         if (typeof window.tokenTersimpanPada === 'function'
                             && window.tokenTersimpanPada() > stempel) { berhasil = true; break; }
@@ -9005,11 +9005,21 @@
         // Menentukan keadaan mana yang sedang terjadi. adaToken dibaca dari catatan
         // perangkat di Firestore, bukan ditebak dari sisi HP.
         window.periksaStatusNotif = function(adaToken) {
+            // TOKEN ADALAH BUKTI TERTINGGI.
+            // Kalau token sudah terdaftar, notifikasi memang jalan -- tidak peduli apa
+            // kata izin notifikasi versi web. Pemeriksaan izin dulu saya taruh di atas,
+            // dan itu salah: di dalam aplikasi Android, izin web memang selalu 'default'
+            // karena notifikasinya datang dari sisi native, bukan dari browser. Akibatnya
+            // rider yang sebenarnya baik-baik saja ikut kena peringatan palsu.
+            if (adaToken) return window.setPeringatanNotif('ok');
+
+            const dalamAplikasi = !!window.AndroidInterface;
             const punyaAPI = ('Notification' in window);
-            if (punyaAPI && Notification.permission === 'denied')  return window.setPeringatanNotif('ditolak');
-            if (punyaAPI && Notification.permission === 'default') return window.setPeringatanNotif('belum');
-            if (!adaToken) return window.setPeringatanNotif('tanpa_token');
-            window.setPeringatanNotif('ok');
+
+            // Di dalam aplikasi Android, status izin web tidak ada artinya.
+            if (!dalamAplikasi && punyaAPI && Notification.permission === 'denied')  return window.setPeringatanNotif('ditolak');
+            if (!dalamAplikasi && punyaAPI && Notification.permission === 'default') return window.setPeringatanNotif('belum');
+            window.setPeringatanNotif('tanpa_token');
         };
 
         // Halaman pengaturan tidak bisa dibuka lewat kode dari dalam browser.
@@ -9073,6 +9083,14 @@
         function updateNotificationUI() {
             const btn = document.getElementById('btn-home-notif-permission');
             const notifBanner = document.getElementById('global-notif-warning');
+
+            // Di dalam aplikasi Android, notifikasi diurus sisi native. Status izin web
+            // di situ selalu tampak belum/ditolak, jadi jangan dipakai memberi peringatan.
+            if (window.AndroidInterface) {
+                if (btn) btn.classList.add('hidden');
+                if (typeof updateStickyPositions === 'function') setTimeout(updateStickyPositions, 50);
+                return;
+            }
 
             if ('Notification' in window) {
                 if (Notification.permission === 'default') {
@@ -12369,13 +12387,23 @@
                   if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
                       const stempel = Date.now();
                       window.AndroidInterface.getFCMToken(cleanUid);
-                      // Kalau 15 detik APK tidak membalas lewat receiveFCMTokenFromKodular,
-                      // berarti jembatannya ada tapi versinya tidak cocok dengan halaman ini.
+
+                      // Kesempatan kedua. Permintaan pertama sering jatuh saat aplikasi
+                      // masih sibuk membuka, dan sisi Android tidak mengantrekannya.
+                      setTimeout(function() {
+                          if (_tokenTersimpanPada < stempel && window.AndroidInterface
+                              && typeof window.AndroidInterface.getFCMToken === 'function') {
+                              console.log("Token belum datang, meminta ulang ke aplikasi...");
+                              try { window.AndroidInterface.getFCMToken(cleanUid); } catch (e) {}
+                          }
+                      }, 8000);
+
+                      // Kalau sampai 25 detik tetap tidak ada jawaban, barulah dicatat gagal.
                       setTimeout(function() {
                           if (_tokenTersimpanPada < stempel) {
                               catatDiagnosaToken(cleanUid, targetProjectId, 'jembatan_tidak_menjawab');
                           }
-                      }, 15000);
+                      }, 25000);
                       return; // Berhenti di sini, biarkan aplikasi Android merespon
                   }
 
@@ -12864,12 +12892,67 @@
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
-          window.receiveFCMTokenFromKodular = function(token) {
-              const uid = window.getRiderUid();
-              if (uid && token) {
-                  window.setupFCMToken(uid, token);
+          // ============================================================
+          // PENERIMA TOKEN DARI APLIKASI ANDROID
+          // ------------------------------------------------------------
+          // Versi lama hanya menerima satu bentuk panggilan, dan langsung membuang
+          // tokennya kalau UID belum siap. Dua kelemahan itu membuat token hilang
+          // diam-diam dan aplikasi terlihat "tidak menjawab". Sekarang:
+          //  - beberapa nama fungsi diterima, supaya APK versi berbeda tetap cocok
+          //  - bentuk kiriman yang berbeda-beda dikenali (satu argumen, dua argumen, JSON)
+          //  - kalau UID belum siap, token disimpan dan dicoba lagi sampai 30 detik
+          // ============================================================
+          function terimaTokenNative(a1, a2) {
+              let token = null;
+
+              const kandidat = [a1, a2];
+              for (let i = 0; i < kandidat.length; i++) {
+                  const k = kandidat[i];
+                  // Teks berbentuk JSON harus dilewati di sini, kalau tidak seluruh
+                  // JSON-nya ikut terambil dan dikira token.
+                  if (typeof k === 'string' && k.length > 20 && k.indexOf(' ') === -1
+                      && k.charAt(0) !== '{' && k.charAt(0) !== '[') { token = k; break; }
               }
-          };
+
+              if (!token && typeof a1 === 'string') {
+                  try {
+                      const o = JSON.parse(a1);
+                      if (o && (o.token || o.fcm_token)) token = o.token || o.fcm_token;
+                  } catch (e) {}
+              }
+
+              if (!token) {
+                  console.warn("Kiriman token dari aplikasi tidak dikenali:", a1, a2);
+                  return;
+              }
+
+              const pakai = function() {
+                  const uid = (typeof window.getRiderUid === 'function') ? window.getRiderUid() : null;
+                  if (uid && typeof window.setupFCMToken === 'function') {
+                      window.setupFCMToken(uid, token);
+                      return true;
+                  }
+                  return false;
+              };
+
+              if (pakai()) return;
+
+              // UID belum siap (aplikasi memanggil terlalu cepat saat pembukaan).
+              console.log("Token diterima sebelum UID siap, ditunda...");
+              let n = 0;
+              const jam = setInterval(function() {
+                  n++;
+                  if (pakai() || n > 30) clearInterval(jam);
+              }, 1000);
+          }
+
+          window.receiveFCMTokenFromKodular = terimaTokenNative;
+          // Nama lain yang mungkin dipakai APK versi berbeda.
+          window.receiveFCMToken            = terimaTokenNative;
+          window.receiveFCMTokenFromAndroid = terimaTokenNative;
+          window.onFCMToken                 = terimaTokenNative;
+          window.setFCMTokenFromAndroid     = terimaTokenNative;
+          window.terimaTokenFCM             = terimaTokenNative;
 
           // --- FUNGSI LISTENER FOREGROUND & PENDETEKSI NOTIFIKASI (LANGKAH 3) ---
           // Catatan: Pembaruan token otomatis teratasi karena getToken() dipanggil setiap login (di onAuthStateChanged).

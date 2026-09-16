@@ -2247,6 +2247,15 @@
                 tutup.onclick = function() { box.remove(); };
                 bar.appendChild(tutup);
                 box.appendChild(bar);
+
+                // Jangan menetap di layar. Isinya tetap tercatat di console kalau
+                // admin perlu membacanya lagi.
+                if (box._timerTutup) clearTimeout(box._timerTutup);
+                box._timerTutup = setTimeout(function() {
+                    const masihAda = document.getElementById('peringatan-notif-box');
+                    if (masihAda === box) box.remove();
+                }, 30000);
+                console.log(">> Peringatan panel:", pesan);
             } catch (e) { console.warn(pesan); }
         };
 
@@ -2401,7 +2410,12 @@
                         menunggu.push({ uid: uid, nama: v.pending_nama || 'Perangkat baru', waktu: v.pending_at });
                     }
                     if (v.device_id) {
-                        terdaftar.push({ uid: uid, nama: v.nama_perangkat || v.device_id, waktu: v.last_login });
+                        terdaftar.push({
+                            uid: uid,
+                            nama: v.nama_perangkat || v.device_id,
+                            waktu: v.last_login,
+                            punyaToken: !!v.fcm_token
+                        });
                     }
                 });
 
@@ -2455,6 +2469,19 @@
                     });
                 }
                 tanpaToken.sort((x, y) => x.uid.localeCompare(y.uid)); belumDaftar.sort(); yatim.sort();
+
+                // Bersihkan penanda peringatan yang tertinggal pada rider yang tokennya
+                // sudah ada. Tanpa ini, penanda lama menetap selamanya di database dan
+                // bisa memunculkan peringatan palsu di HP rider.
+                riderUnik.forEach(uid => {
+                    const v = petaPerangkat[uid];
+                    if (v && v.fcm_token && v.peringatan_jenis) {
+                        updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid), {
+                            peringatan_jenis: null,
+                            peringatan_dibaca: null
+                        }).catch(() => {});
+                    }
+                });
                 menunggu.sort((a, b) => a.uid.localeCompare(b.uid));
                 terdaftar.sort((a, b) => a.uid.localeCompare(b.uid));
 
@@ -2525,8 +2552,13 @@
                     html += '<p style="margin:0;color:#64748b;">Belum ada.</p>';
                 } else {
                     terdaftar.forEach(t => {
-                        html += '<div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
-                            + '<div style="min-width:0;"><div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + '</div>'
+                        // Penanda ini wajib: terdaftarnya perangkat TIDAK sama dengan
+                        // notifikasinya jalan. Tanpa penanda, baris ini menyesatkan.
+                        const tandaToken = t.punyaToken
+                            ? '<span style="display:inline-block;background:#d1fae5;color:#047857;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">NOTIF AKTIF</span>'
+                            : '<span style="display:inline-block;background:#fee2e2;color:#b91c1c;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">TANPA TOKEN</span>';
+                        html += '<div style="border:1px solid ' + (t.punyaToken ? '#e2e8f0' : '#fecaca') + ';border-radius:12px;padding:10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+                            + '<div style="min-width:0;"><div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + tandaToken + '</div>'
                             + '<div style="color:#64748b;overflow:hidden;text-overflow:ellipsis;">' + _escIzin(t.nama) + ' &bull; ' + _escIzin(_waktuIzin(t.waktu)) + '</div></div>'
                             + '<div style="display:flex;gap:6px;flex-shrink:0;">'
                             + '<button onclick="window.periksaPerangkatRider(\'' + _escIzin(t.uid) + '\')" style="border:none;border-radius:9px;padding:8px 10px;background:#e0f2fe;color:#075985;font-weight:900;font-size:11px;white-space:nowrap;">Periksa</button>'
@@ -2534,7 +2566,7 @@
                             + '</div>'
                             + '</div>';
                     });
-                    html += '<p style="margin:10px 0 0;color:#64748b;line-height:1.6;">"Lepas" dipakai kalau rider ganti HP atau HP-nya hilang: ikatan perangkat dihapus, dan HP mana pun yang login berikutnya langsung diterima tanpa perlu izin.</p>';
+                    html += '<p style="margin:10px 0 0;color:#64748b;line-height:1.6;">Daftar ini menunjukkan HP mana yang memegang akun, <b>bukan</b> jaminan notifikasinya jalan. Baris bertanda TANPA TOKEN tetap tidak akan menerima notifikasi &mdash; tekan Periksa untuk melihat sebabnya.<br><br>"Lepas" dipakai kalau rider ganti HP atau HP-nya hilang: ikatan perangkat dihapus, dan HP mana pun yang login berikutnya langsung diterima tanpa perlu izin.</p>';
                 }
                 wadah.innerHTML = html;
             } catch (e) {
