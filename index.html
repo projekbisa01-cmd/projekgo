@@ -8958,11 +8958,42 @@
             } else {
                 teks.innerHTML = 'HP ini <strong class="font-black">belum terdaftar</strong> untuk notifikasi, jadi orderan tidak akan berbunyi.';
                 tombol.textContent = 'Daftarkan';
-                tombol.onclick = function() {
-                    if (currentUserUID && typeof window.setupFCMToken === 'function') {
-                        tombol.textContent = 'Memproses...';
-                        window.setupFCMToken(currentUserUID);
-                        setTimeout(function() { tombol.textContent = 'Daftarkan'; }, 4000);
+                tombol.onclick = async function() {
+                    if (!currentUserUID || typeof window.setupFCMToken !== 'function') return;
+                    tombol.textContent = 'Memproses...';
+                    tombol.disabled = true;
+                    const stempel = Date.now();
+
+                    try { await window.setupFCMToken(currentUserUID); } catch (e) {}
+
+                    // Jalur aplikasi Android menjawab belakangan lewat jembatan, jadi
+                    // hasilnya ditunggu sampai 15 detik sebelum dinyatakan gagal.
+                    let berhasil = false;
+                    for (let i = 0; i < 15; i++) {
+                        await new Promise(function(r) { setTimeout(r, 1000); });
+                        if (typeof window.tokenTersimpanPada === 'function'
+                            && window.tokenTersimpanPada() > stempel) { berhasil = true; break; }
+                    }
+
+                    tombol.disabled = false;
+                    if (berhasil) {
+                        tombol.textContent = 'Berhasil';
+                        return;   // banner hilang sendiri lewat pengawas perangkat
+                    }
+
+                    tombol.textContent = 'Daftarkan';
+                    // Kegagalan TIDAK boleh diam. Sebutkan sebabnya dan jalan keluarnya.
+                    const A = window.AndroidInterface;
+                    const adaAPI = ('Notification' in window);
+                    if (adaAPI && Notification.permission === 'denied') {
+                        alert('Pendaftaran gagal: izin notifikasi di HP kamu diblokir.\n\nHidupkan lewat pengaturan, lalu coba lagi.');
+                        if (typeof window.bukaPengaturanNotifikasi === 'function') window.bukaPengaturanNotifikasi();
+                    } else if (!A) {
+                        alert('Pendaftaran gagal: aplikasi ini dibuka lewat browser, bukan lewat aplikasi ProjekGo.\n\nBuka lewat aplikasinya supaya notifikasi bisa jalan.');
+                    } else if (typeof A.getFCMToken !== 'function') {
+                        alert('Pendaftaran gagal: aplikasi di HP kamu versi lama dan belum bisa mendaftarkan notifikasi.\n\nHubungi admin untuk minta file aplikasi yang baru.');
+                    } else {
+                        alert('Pendaftaran gagal: aplikasi tidak menjawab permintaan token.\n\nCoba tutup aplikasi sepenuhnya lalu buka lagi. Kalau tetap begini, hubungi admin - kemungkinan aplikasinya perlu diperbarui.');
                     }
                 };
             }
@@ -12297,6 +12328,7 @@
           // Tanpa ini, semua kegagalan kelihatan sama: kolom token kosong.
           // ============================================================
           let _tokenTersimpanPada = 0;
+          window.tokenTersimpanPada = function() { return _tokenTersimpanPada; };
 
           async function catatDiagnosaToken(cleanUid, projectId, sebab) {
               try {
