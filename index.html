@@ -1010,9 +1010,6 @@
             <a href="https://api.whatsapp.com/send?phone=6285157467216&text=Halo%20Admin,%20saya%20mau%20minta%20file%20APK%20Aplikasi%20PROJEKGO%20Rider%20terbaru." target="_blank" class="w-full py-4 bg-green-500 text-white font-black rounded-2xl shadow-xl shadow-green-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
                 <i class="fa-brands fa-whatsapp text-xl"></i> Hubungi Admin
             </a>
-            <button onclick="window.bukaAksesAdmin()" class="mt-3 w-full py-2 text-[10px] font-bold text-gray-400 hover:text-gray-600 uppercase tracking-widest">
-                Akses Admin
-            </button>
         </div>
     </div>
 
@@ -7998,62 +7995,27 @@
             }
         };
 
-        // ============================================================
-        // BLOKIR AKSES DARI BROWSER
-        // ------------------------------------------------------------
-        // Aplikasi hanya boleh dibuka lewat APK ProjekGo. Ubah saklar di bawah
-        // jadi false untuk mematikan blokir dengan cepat kalau terjadi masalah
-        // di lapangan -- tidak perlu mencari-cari kode lagi.
-        // ============================================================
-        const BLOKIR_BROWSER = true;
-
-        // Jalan darurat: admin yang tahu passwordnya boleh melewati blokir di
-        // perangkat ini selama 24 jam. Tanpa ini, salah nilai sedikit saja
-        // membuat aplikasi tidak bisa dibuka dan tidak ada cara membukanya.
-        const MASA_LEWAT_BLOKIR = 24 * 60 * 60 * 1000;
-
-        function blokirDilewati() {
-            try {
-                const t = Number(localStorage.getItem('projekgo_lewati_blokir') || 0);
-                return t > 0 && (Date.now() - t) < MASA_LEWAT_BLOKIR;
-            } catch (e) { return false; }
-        }
-
-        window.bukaAksesAdmin = async function() {
-            const pwd = prompt("Password admin untuk melewati blokir browser:");
-            if (!pwd) return;
-            let sah = false;
-            try {
-                sah = window.verifikasiAdmin ? await window.verifikasiAdmin(pwd) : false;
-            } catch (e) { sah = false; }
-            if (!sah) { alert("Password salah."); return; }
-            try { localStorage.setItem('projekgo_lewati_blokir', String(Date.now())); } catch (e) {}
-            location.reload();
-        };
-
         window.onload = function() {
             // LOGIKA BLOKIR WEB BROWSER: Wajib dari Aplikasi Android Native
             // Mengecek keberadaan 'AndroidInterface' yang disuntikkan oleh Android Studio
-            if (BLOKIR_BROWSER && typeof window.AndroidInterface === 'undefined' && !blokirDilewati()) {
-                const popup = document.getElementById('block-browser-popup');
-                if (popup) {
-                    popup.classList.remove('hidden');
-                    popup.classList.add('flex');
-                }
-
+            
+            /* --- DINONAKTIFKAN SEMENTARA UNTUK TESTING DI BROWSER ---
+            if (typeof window.AndroidInterface === 'undefined') {
+                document.getElementById('block-browser-popup').classList.remove('hidden');
+                document.getElementById('block-browser-popup').classList.add('flex');
+                
                 // Sembunyikan elemen utama agar rider tidak bisa mengakali/menutup paksa
                 const loginPage = document.getElementById('login-page');
                 const loadingOverlay = document.getElementById('loading-overlay');
                 const mainApp = document.getElementById('main-app');
-
+                
                 if (loginPage) loginPage.style.display = 'none';
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (mainApp) mainApp.style.display = 'none';
-
+                
                 // Hentikan proses inisialisasi aplikasi selanjutnya
-                return;
-            }
-
+                return; 
+            /* --------------------------------------------------------- */
             
             initBackgroundMap(); // Jalankan Peta Leaflet Statis
             initPWA(); // Inisialisasi Deteksi PWA
@@ -8958,42 +8920,11 @@
             } else {
                 teks.innerHTML = 'HP ini <strong class="font-black">belum terdaftar</strong> untuk notifikasi, jadi orderan tidak akan berbunyi.';
                 tombol.textContent = 'Daftarkan';
-                tombol.onclick = async function() {
-                    if (!currentUserUID || typeof window.setupFCMToken !== 'function') return;
-                    tombol.textContent = 'Memproses...';
-                    tombol.disabled = true;
-                    const stempel = Date.now();
-
-                    try { await window.setupFCMToken(currentUserUID); } catch (e) {}
-
-                    // Jalur aplikasi Android menjawab belakangan lewat jembatan, jadi
-                    // hasilnya ditunggu sampai 25 detik sebelum dinyatakan gagal.
-                    let berhasil = false;
-                    for (let i = 0; i < 25; i++) {
-                        await new Promise(function(r) { setTimeout(r, 1000); });
-                        if (typeof window.tokenTersimpanPada === 'function'
-                            && window.tokenTersimpanPada() > stempel) { berhasil = true; break; }
-                    }
-
-                    tombol.disabled = false;
-                    if (berhasil) {
-                        tombol.textContent = 'Berhasil';
-                        return;   // banner hilang sendiri lewat pengawas perangkat
-                    }
-
-                    tombol.textContent = 'Daftarkan';
-                    // Kegagalan TIDAK boleh diam. Sebutkan sebabnya dan jalan keluarnya.
-                    const A = window.AndroidInterface;
-                    const adaAPI = ('Notification' in window);
-                    if (adaAPI && Notification.permission === 'denied') {
-                        alert('Pendaftaran gagal: izin notifikasi di HP kamu diblokir.\n\nHidupkan lewat pengaturan, lalu coba lagi.');
-                        if (typeof window.bukaPengaturanNotifikasi === 'function') window.bukaPengaturanNotifikasi();
-                    } else if (!A) {
-                        alert('Pendaftaran gagal: aplikasi ini dibuka lewat browser, bukan lewat aplikasi ProjekGo.\n\nBuka lewat aplikasinya supaya notifikasi bisa jalan.');
-                    } else if (typeof A.getFCMToken !== 'function') {
-                        alert('Pendaftaran gagal: aplikasi di HP kamu versi lama dan belum bisa mendaftarkan notifikasi.\n\nHubungi admin untuk minta file aplikasi yang baru.');
-                    } else {
-                        alert('Pendaftaran gagal: aplikasi tidak menjawab permintaan token.\n\nCoba tutup aplikasi sepenuhnya lalu buka lagi. Kalau tetap begini, hubungi admin - kemungkinan aplikasinya perlu diperbarui.');
+                tombol.onclick = function() {
+                    if (currentUserUID && typeof window.setupFCMToken === 'function') {
+                        tombol.textContent = 'Memproses...';
+                        window.setupFCMToken(currentUserUID);
+                        setTimeout(function() { tombol.textContent = 'Daftarkan'; }, 4000);
                     }
                 };
             }
@@ -9005,21 +8936,11 @@
         // Menentukan keadaan mana yang sedang terjadi. adaToken dibaca dari catatan
         // perangkat di Firestore, bukan ditebak dari sisi HP.
         window.periksaStatusNotif = function(adaToken) {
-            // TOKEN ADALAH BUKTI TERTINGGI.
-            // Kalau token sudah terdaftar, notifikasi memang jalan -- tidak peduli apa
-            // kata izin notifikasi versi web. Pemeriksaan izin dulu saya taruh di atas,
-            // dan itu salah: di dalam aplikasi Android, izin web memang selalu 'default'
-            // karena notifikasinya datang dari sisi native, bukan dari browser. Akibatnya
-            // rider yang sebenarnya baik-baik saja ikut kena peringatan palsu.
-            if (adaToken) return window.setPeringatanNotif('ok');
-
-            const dalamAplikasi = !!window.AndroidInterface;
             const punyaAPI = ('Notification' in window);
-
-            // Di dalam aplikasi Android, status izin web tidak ada artinya.
-            if (!dalamAplikasi && punyaAPI && Notification.permission === 'denied')  return window.setPeringatanNotif('ditolak');
-            if (!dalamAplikasi && punyaAPI && Notification.permission === 'default') return window.setPeringatanNotif('belum');
-            window.setPeringatanNotif('tanpa_token');
+            if (punyaAPI && Notification.permission === 'denied')  return window.setPeringatanNotif('ditolak');
+            if (punyaAPI && Notification.permission === 'default') return window.setPeringatanNotif('belum');
+            if (!adaToken) return window.setPeringatanNotif('tanpa_token');
+            window.setPeringatanNotif('ok');
         };
 
         // Halaman pengaturan tidak bisa dibuka lewat kode dari dalam browser.
@@ -9083,14 +9004,6 @@
         function updateNotificationUI() {
             const btn = document.getElementById('btn-home-notif-permission');
             const notifBanner = document.getElementById('global-notif-warning');
-
-            // Di dalam aplikasi Android, notifikasi diurus sisi native. Status izin web
-            // di situ selalu tampak belum/ditolak, jadi jangan dipakai memberi peringatan.
-            if (window.AndroidInterface) {
-                if (btn) btn.classList.add('hidden');
-                if (typeof updateStickyPositions === 'function') setTimeout(updateStickyPositions, 50);
-                return;
-            }
 
             if ('Notification' in window) {
                 if (Notification.permission === 'default') {
@@ -12346,7 +12259,6 @@
           // Tanpa ini, semua kegagalan kelihatan sama: kolom token kosong.
           // ============================================================
           let _tokenTersimpanPada = 0;
-          window.tokenTersimpanPada = function() { return _tokenTersimpanPada; };
 
           async function catatDiagnosaToken(cleanUid, projectId, sebab) {
               try {
@@ -12387,23 +12299,13 @@
                   if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
                       const stempel = Date.now();
                       window.AndroidInterface.getFCMToken(cleanUid);
-
-                      // Kesempatan kedua. Permintaan pertama sering jatuh saat aplikasi
-                      // masih sibuk membuka, dan sisi Android tidak mengantrekannya.
-                      setTimeout(function() {
-                          if (_tokenTersimpanPada < stempel && window.AndroidInterface
-                              && typeof window.AndroidInterface.getFCMToken === 'function') {
-                              console.log("Token belum datang, meminta ulang ke aplikasi...");
-                              try { window.AndroidInterface.getFCMToken(cleanUid); } catch (e) {}
-                          }
-                      }, 8000);
-
-                      // Kalau sampai 25 detik tetap tidak ada jawaban, barulah dicatat gagal.
+                      // Kalau 15 detik APK tidak membalas lewat receiveFCMTokenFromKodular,
+                      // berarti jembatannya ada tapi versinya tidak cocok dengan halaman ini.
                       setTimeout(function() {
                           if (_tokenTersimpanPada < stempel) {
                               catatDiagnosaToken(cleanUid, targetProjectId, 'jembatan_tidak_menjawab');
                           }
-                      }, 25000);
+                      }, 15000);
                       return; // Berhenti di sini, biarkan aplikasi Android merespon
                   }
 
@@ -12438,9 +12340,7 @@
                           last_login: serverTimestamp(),
                           last_token_update: serverTimestamp(),
                           source: window.AndroidInterface ? 'android_webview' : 'web',
-                          diagnosa_token: null,      // berhasil -> keterangan kegagalan lama dihapus
-                          peringatan_jenis: null,    // dan peringatan admin ikut dicabut
-                          peringatan_dibaca: null
+                          diagnosa_token: null   // berhasil -> keterangan kegagalan lama dihapus
                       }, { merge: true });
 
                       _tokenTersimpanPada = Date.now();
@@ -12507,12 +12407,7 @@
               const ua = navigator.userAgent || '';
               let merk = 'Perangkat';
               const m = ua.match(/Android [^;]+; ([^)]+?)(?: Build|\))/);
-              if (m && m[1]) {
-                  merk = m[1].split(';')[0].trim();
-                  // Chrome Android menyamarkan model HP dan selalu melaporkan "K".
-                  // Menampilkan "K" ke admin tidak ada gunanya, jadi diganti.
-                  if (merk === 'K' || merk.length < 3) merk = 'HP Android';
-              }
+              if (m && m[1]) merk = m[1].split(';')[0].trim();
               else if (/iPhone/.test(ua)) merk = 'iPhone';
               else if (/iPad/.test(ua)) merk = 'iPad';
               else if (/Windows/.test(ua)) merk = 'Komputer Windows';
@@ -12683,14 +12578,8 @@
                   }
 
                   // Peringatan dari admin (aplikasi lama / izin notifikasi mati).
-                  // Syarat !d.fcm_token penting: begitu token benar-benar terdaftar,
-                  // masalahnya sudah selesai dan peringatan harus berhenti sendiri,
-                  // tanpa menunggu rider menekan "Mengerti".
-                  if (sedangDipakai && d.peringatan_jenis && d.peringatan_dibaca !== true && !d.fcm_token) {
+                  if (sedangDipakai && d.peringatan_jenis && d.peringatan_dibaca !== true) {
                       window.tampilkanPeringatanAdmin(cleanUid, d.peringatan_jenis);
-                  } else if (d.fcm_token) {
-                      const sisa = document.getElementById('modal-peringatan-admin');
-                      if (sisa) sisa.remove();
                   }
 
                   // Ada HP lain minta masuk -> tampilkan peringatan di HP yang sah.
@@ -12892,67 +12781,12 @@
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
-          // ============================================================
-          // PENERIMA TOKEN DARI APLIKASI ANDROID
-          // ------------------------------------------------------------
-          // Versi lama hanya menerima satu bentuk panggilan, dan langsung membuang
-          // tokennya kalau UID belum siap. Dua kelemahan itu membuat token hilang
-          // diam-diam dan aplikasi terlihat "tidak menjawab". Sekarang:
-          //  - beberapa nama fungsi diterima, supaya APK versi berbeda tetap cocok
-          //  - bentuk kiriman yang berbeda-beda dikenali (satu argumen, dua argumen, JSON)
-          //  - kalau UID belum siap, token disimpan dan dicoba lagi sampai 30 detik
-          // ============================================================
-          function terimaTokenNative(a1, a2) {
-              let token = null;
-
-              const kandidat = [a1, a2];
-              for (let i = 0; i < kandidat.length; i++) {
-                  const k = kandidat[i];
-                  // Teks berbentuk JSON harus dilewati di sini, kalau tidak seluruh
-                  // JSON-nya ikut terambil dan dikira token.
-                  if (typeof k === 'string' && k.length > 20 && k.indexOf(' ') === -1
-                      && k.charAt(0) !== '{' && k.charAt(0) !== '[') { token = k; break; }
+          window.receiveFCMTokenFromKodular = function(token) {
+              const uid = window.getRiderUid();
+              if (uid && token) {
+                  window.setupFCMToken(uid, token);
               }
-
-              if (!token && typeof a1 === 'string') {
-                  try {
-                      const o = JSON.parse(a1);
-                      if (o && (o.token || o.fcm_token)) token = o.token || o.fcm_token;
-                  } catch (e) {}
-              }
-
-              if (!token) {
-                  console.warn("Kiriman token dari aplikasi tidak dikenali:", a1, a2);
-                  return;
-              }
-
-              const pakai = function() {
-                  const uid = (typeof window.getRiderUid === 'function') ? window.getRiderUid() : null;
-                  if (uid && typeof window.setupFCMToken === 'function') {
-                      window.setupFCMToken(uid, token);
-                      return true;
-                  }
-                  return false;
-              };
-
-              if (pakai()) return;
-
-              // UID belum siap (aplikasi memanggil terlalu cepat saat pembukaan).
-              console.log("Token diterima sebelum UID siap, ditunda...");
-              let n = 0;
-              const jam = setInterval(function() {
-                  n++;
-                  if (pakai() || n > 30) clearInterval(jam);
-              }, 1000);
-          }
-
-          window.receiveFCMTokenFromKodular = terimaTokenNative;
-          // Nama lain yang mungkin dipakai APK versi berbeda.
-          window.receiveFCMToken            = terimaTokenNative;
-          window.receiveFCMTokenFromAndroid = terimaTokenNative;
-          window.onFCMToken                 = terimaTokenNative;
-          window.setFCMTokenFromAndroid     = terimaTokenNative;
-          window.terimaTokenFCM             = terimaTokenNative;
+          };
 
           // --- FUNGSI LISTENER FOREGROUND & PENDETEKSI NOTIFIKASI (LANGKAH 3) ---
           // Catatan: Pembaruan token otomatis teratasi karena getToken() dipanggil setiap login (di onAuthStateChanged).
