@@ -666,10 +666,9 @@
                     <i class="fa-solid fa-user-lock text-3xl text-red-500 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Kelola<br>Suspend</span>
                 </button>
-                <button onclick="window.bukaIzinPerangkat()" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-cyan-300 hover:shadow-md active:scale-95 transition-all group">
+                <button onclick="window.bukaPerangkatRider()" class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-cyan-300 hover:shadow-md active:scale-95 transition-all group">
                     <i class="fa-solid fa-mobile-screen-button text-3xl text-cyan-500 group-hover:scale-110 transition-transform"></i>
-                    <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Izin<br>Perangkat</span>
-                    <span id="badge-izin-perangkat" class="absolute top-1.5 right-1.5 bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full hidden shadow-sm border border-white">0</span>
+                    <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Perangkat<br>Rider</span>
                 </button>
             </div>
         </div>
@@ -2099,25 +2098,7 @@
                 startLanggananListener(); // PANGGIL LISTENER LANGGANAN
                 startShiftScheduleListener(); // PANGGIL LISTENER JADWAL SHIFT
                 startAnalyticsTargetsListener();
-
-                // Tandai perangkat ini sebagai perangkat admin, lalu periksa apakah ada
-                // token rider yang masih nyasar ke HP admin / HP orang lain.
-                if (typeof window.tandaiPerangkatAdmin === 'function') window.tandaiPerangkatAdmin();
-                startIzinPerangkatListener();
-                setTimeout(async () => {
-                    try {
-                        if (typeof window.auditTokenPerangkat !== 'function') return;
-                        const temuan = await window.auditTokenPerangkat();
-                        if (temuan.length && typeof window.peringatanNotif === 'function') {
-                            window.peringatanNotif(
-                                "Ada " + temuan.length + " akun rider yang token notifikasinya nyasar (menunjuk ke HP admin atau HP akun lain). Notifikasi ke akun itu otomatis ditahan.",
-                                "Bersihkan sekarang",
-                                () => window.bersihkanTokenNyasar()
-                            );
-                        }
-                    } catch (e) { console.warn("Audit otomatis gagal:", e); }
-                }, 10000);
-
+                
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
                 setInterval(autoCleanUpOldData, 6 * 60 * 60 * 1000);
@@ -2145,18 +2126,17 @@
         // initAuth();  <-- login anonim DIMATIKAN. Admin wajib login email/password.
 
         // ============================================================
-        // PENJAGA PEMILIK PERANGKAT
+        // PENJAGA TUNGGAL: JANGAN KIRIM KE HP ADMIN SENDIRI
         // ------------------------------------------------------------
-        // Masalah aslinya: token FCM itu milik HP, bukan milik akun. Kalau satu HP
-        // dipakai login beberapa akun rider (mis. admin sedang tes), token HP itu
-        // ikut tercatat di semua akun tersebut, dan notifikasi rider jadi masuk ke
-        // HP admin. Penjaga di bawah memastikan notifikasi hanya dikirim kalau HP
-        // tujuan memang MASIH milik rider yang dituju.
+        // Masalah aslinya cuma satu: admin pernah login akun rider di HP admin,
+        // sehingga token HP admin tercatat di akun rider itu dan notifikasi
+        // orderan masuk ke HP admin. Karena panel admin dan aplikasi rider
+        // berada di domain yang sama, keduanya memakai device_id yang sama di
+        // localStorage -- jadi HP admin bisa mengenali dirinya sendiri.
+        //
+        // Tidak ada koleksi baru, tidak ada aturan baru, tidak ada pembacaan
+        // tambahan ke Firebase. Hanya satu perbandingan.
         // ============================================================
-
-        // Device ID dibaca dari localStorage yang sama dengan aplikasi rider
-        // (kedua aplikasi satu domain), jadi HP admin dikenali walau pernah
-        // dipakai membuka aplikasi rider.
         function deviceIdPerangkatIni() {
             let id = localStorage.getItem('projekgo_device_id');
             if (!id) {
@@ -2166,180 +2146,39 @@
             return id;
         }
 
-        // Menandai HP/komputer yang membuka panel admin sebagai perangkat admin.
-        // Perangkat bertanda ini TIDAK PERNAH dikirimi notifikasi orderan, walaupun
-        // tokennya sempat tercatat di akun rider mana pun.
-        window.tandaiPerangkatAdmin = async function() {
+        window.kabarPerangkat = function(pesan) {
             try {
-                const id = deviceIdPerangkatIni();
-                await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', id), {
-                    admin_device: true,
-                    admin_marked_at: serverTimestamp()
-                }, { merge: true });
-                console.log(">> Perangkat admin ditandai:", id);
-            } catch (e) {
-                // Kalau ini gagal, biasanya aturan Firestore untuk device_owners belum dipasang.
-                // Penjaga jadi tidak aktif, jadi kegagalannya harus terlihat, bukan diam-diam.
-                console.warn("Gagal menandai perangkat admin:", e);
-                if (typeof window.peringatanNotif === 'function') {
-                    window.peringatanNotif("PENJAGA PERANGKAT TIDAK AKTIF: gagal menulis device_owners. Periksa aturan Firestore untuk koleksi device_owners, kalau tidak notifikasi masih bisa nyasar.");
-                }
-            }
-        };
-
-        // Kalau HP admin nanti diserahkan ke rider, jalankan ini sekali dari HP itu
-        // supaya tandanya dilepas: window.lepasTandaPerangkatAdmin()
-        window.lepasTandaPerangkatAdmin = async function(deviceId = null) {
-            try {
-                const id = deviceId || deviceIdPerangkatIni();
-                await setDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', id), {
-                    admin_device: false,
-                    admin_marked_at: serverTimestamp()
-                }, { merge: true });
-                console.log(">> Tanda perangkat admin dilepas:", id);
-            } catch (e) { console.warn("Gagal melepas tanda perangkat admin:", e); }
-        };
-
-        // Cache kecil supaya tidak menambah banyak read Firestore saat banyak orderan.
-        const _cachePemilikPerangkat = new Map();
-        async function cekPemilikPerangkat(deviceId) {
-            if (!deviceId) return null;
-            const kini = Date.now();
-            const tersimpan = _cachePemilikPerangkat.get(deviceId);
-            if (tersimpan && (kini - tersimpan.waktu) < 120000) return tersimpan.data;
-            try {
-                const snap = await getDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'device_owners', deviceId));
-                const data = snap.exists() ? snap.data() : null;
-                _cachePemilikPerangkat.set(deviceId, { waktu: kini, data: data });
-                return data;
-            } catch (e) {
-                console.warn("Gagal membaca pemilik perangkat:", e);
-                return null;
-            }
-        }
-
-        // Peringatan mengambang, supaya admin tahu ada notif yang sengaja tidak dikirim.
-        window.peringatanNotif = function(pesan, tombolTeks = null, aksi = null) {
-            try {
-                let box = document.getElementById('peringatan-notif-box');
+                let box = document.getElementById('kabar-perangkat-box');
                 if (!box) {
                     box = document.createElement('div');
-                    box.id = 'peringatan-notif-box';
-                    box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#7f1d1d;color:#fff;padding:12px 14px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.35);line-height:1.5;';
+                    box.id = 'kabar-perangkat-box';
+                    box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;'
+                        + 'background:#7f1d1d;color:#fff;padding:12px 14px;border-radius:12px;'
+                        + 'font-size:12px;font-weight:700;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35);';
                     document.body.appendChild(box);
                 }
-                box.innerHTML = '';
-                const teks = document.createElement('div');
-                teks.textContent = pesan;
-                box.appendChild(teks);
-                const bar = document.createElement('div');
-                bar.style.cssText = 'margin-top:8px;display:flex;gap:8px;';
-                if (tombolTeks && typeof aksi === 'function') {
-                    const b = document.createElement('button');
-                    b.textContent = tombolTeks;
-                    b.style.cssText = 'background:#fff;color:#7f1d1d;border:none;padding:6px 10px;border-radius:8px;font-weight:900;font-size:11px;';
-                    b.onclick = aksi;
-                    bar.appendChild(b);
-                }
-                const tutup = document.createElement('button');
-                tutup.textContent = 'Tutup';
-                tutup.style.cssText = 'background:rgba(255,255,255,.2);color:#fff;border:none;padding:6px 10px;border-radius:8px;font-weight:900;font-size:11px;';
-                tutup.onclick = function() { box.remove(); };
-                bar.appendChild(tutup);
-                box.appendChild(bar);
-
-                // Jangan menetap di layar. Isinya tetap tercatat di console kalau
-                // admin perlu membacanya lagi.
-                if (box._timerTutup) clearTimeout(box._timerTutup);
-                box._timerTutup = setTimeout(function() {
-                    const masihAda = document.getElementById('peringatan-notif-box');
-                    if (masihAda === box) box.remove();
-                }, 30000);
-                console.log(">> Peringatan panel:", pesan);
-            } catch (e) { console.warn(pesan); }
+                box.textContent = pesan;
+                if (box._timer) clearTimeout(box._timer);
+                box._timer = setTimeout(function() {
+                    const m = document.getElementById('kabar-perangkat-box');
+                    if (m === box) box.remove();
+                }, 20000);
+            } catch (e) {}
+            console.warn(pesan);
         };
 
-        async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
-            try {
-                const uidTujuan = String(riderUid).trim().toUpperCase();
-                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uidTujuan);
-                const tokenSnap = await getDoc(tokenRef);
-
-                if (!tokenSnap.exists() || !tokenSnap.data().fcm_token) {
-                    console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", uidTujuan);
-                    window.peringatanNotif("Notifikasi ke " + uidTujuan + " tidak terkirim: rider ini belum punya token notifikasi. Minta dia membuka aplikasinya, token akan terdaftar sendiri.");
-                    return;
-                }
-
-                const dataPerangkat = tokenSnap.data();
-                const fcmToken = dataPerangkat.fcm_token;
-                const deviceId = dataPerangkat.device_id || null;
-
-                // PENJAGA 1 -- dokumen tokennya mengaku milik akun lain.
-                const pemilikTercatat = String(dataPerangkat.owner_uid || '').trim().toUpperCase();
-                if (pemilikTercatat && pemilikTercatat !== uidTujuan) {
-                    console.warn(">> Notif DIBATALKAN. Token di dokumen", uidTujuan, "tercatat milik", pemilikTercatat);
-                    window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: token tercatat milik akun " + pemilikTercatat + ". Minta rider login ulang.");
-                    return;
-                }
-
-                // PENJAGA 2 -- siapa pemilik HP itu sekarang.
-                if (deviceId) {
-                    const pemilik = await cekPemilikPerangkat(deviceId);
-                    if (pemilik) {
-                        if (pemilik.admin_device === true) {
-                            console.warn(">> Notif DIBATALKAN. Token", uidTujuan, "menunjuk ke perangkat ADMIN.");
-                            window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: token akun ini masih menunjuk ke HP admin. Minta rider login ulang dari HP-nya sendiri.");
-                            return;
-                        }
-                        const pemilikKini = String(pemilik.current_uid || '').trim().toUpperCase();
-                        if (pemilikKini && pemilikKini !== uidTujuan) {
-                            console.warn(">> Notif DIBATALKAN. HP tujuan sekarang dipakai akun", pemilikKini);
-                            window.peringatanNotif("Notifikasi ke " + uidTujuan + " dibatalkan: HP tersebut sekarang dipakai akun " + pemilikKini + ". Minta rider login ulang dari HP-nya sendiri.");
-                            return;
-                        }
-                    }
-                }
-
-                console.log(">> Mengirim Push Notif ke UID:", uidTujuan, "| action:", actionType);
-
-                const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
-
-                const authTk = await window.tokenAdmin();
-                fetch(GAS_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        auth_token: authTk,
-                        token: fcmToken,
-                        uid: uidTujuan,          // dikirim agar Apps Script bisa ikut memverifikasi
-                        device_id: deviceId,
-                        priority: "high",
-                        data: {
-                            title: title,
-                            body: body,
-                            action: actionType
-                        }
-                    })
-                });
-            } catch(err) { console.warn("Push Notif Error", err); }
-        }
-
         // ============================================================
-        // IZIN PERANGKAT
-        // ------------------------------------------------------------
-        // Satu akun rider = satu HP aktif. Kalau ada HP baru yang mencoba masuk,
-        // permintaannya muncul di sini dan di HP lama rider. Admin bisa mengizinkan,
-        // menolak, atau melepas ikatan perangkat (misalnya rider ganti HP).
+        // PANEL PERANGKAT RIDER
+        // Tiga hal saja: siapa yang punya token, token itu dari HP mana,
+        // dan tombol mengosongkan token supaya rider mendaftar ulang.
         // ============================================================
-        function _escIzin(t) {
+        function _escPr(t) {
             return String(t == null ? '' : t)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        function _waktuIzin(ts) {
+        function _waktuPr(ts) {
             try {
                 const d = ts && ts.toDate ? ts.toDate() : null;
                 if (!d) return '-';
@@ -2347,448 +2186,136 @@
             } catch (e) { return '-'; }
         }
 
-        let _jumlahIzinMenunggu = 0;
-        function startIzinPerangkatListener() {
-            try {
-                const q = query(
-                    collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'),
-                    where('pending_status', '==', 'menunggu')
-                );
-                onSnapshot(q, (snap) => {
-                    const sebelumnya = _jumlahIzinMenunggu;
-                    _jumlahIzinMenunggu = snap.size;
-                    const badge = document.getElementById('badge-izin-perangkat');
-                    if (badge) {
-                        badge.innerText = snap.size;
-                        if (snap.size > 0) badge.classList.remove('hidden');
-                        else badge.classList.add('hidden');
-                    }
-                    // Beri tahu sekali saja saat permintaan baru muncul, jangan berulang.
-                    if (snap.size > sebelumnya && typeof window.peringatanNotif === 'function') {
-                        window.peringatanNotif(
-                            "Ada " + snap.size + " perangkat baru menunggu izin masuk ke akun rider.",
-                            "Buka menu izin",
-                            () => window.bukaIzinPerangkat()
-                        );
-                    }
-                    if (document.getElementById('panel-izin-perangkat')) window.muatIzinPerangkat();
-                }, (e) => console.warn("Listener izin perangkat gagal:", e));
-            } catch (e) { console.warn("Gagal memasang listener izin perangkat:", e); }
-        }
-
-        window.bukaIzinPerangkat = function() {
-            if (document.getElementById('panel-izin-perangkat')) return;
+        window.bukaPerangkatRider = function() {
+            if (document.getElementById('panel-perangkat-rider')) return;
             const bungkus = document.createElement('div');
-            bungkus.id = 'panel-izin-perangkat';
+            bungkus.id = 'panel-perangkat-rider';
             bungkus.style.cssText = 'position:fixed;inset:0;z-index:99997;background:rgba(15,23,42,.55);display:flex;align-items:flex-end;justify-content:center;';
             bungkus.innerHTML = '<div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;">'
                 + '<div style="padding:16px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">'
-                + '<h3 style="margin:0;font-size:15px;font-weight:900;color:#0f172a;">Izin Perangkat</h3>'
-                + '<button id="tutup-izin-perangkat" style="border:none;background:#e2e8f0;color:#334155;border-radius:10px;padding:6px 12px;font-weight:900;font-size:12px;">Tutup</button>'
+                + '<h3 style="margin:0;font-size:15px;font-weight:900;color:#0f172a;">Perangkat Rider</h3>'
+                + '<button id="tutup-perangkat-rider" style="border:none;background:#e2e8f0;color:#334155;border-radius:10px;padding:6px 12px;font-weight:900;font-size:12px;">Tutup</button>'
                 + '</div>'
-                + '<div id="isi-izin-perangkat" style="padding:14px 18px 24px;overflow-y:auto;font-size:12px;color:#334155;">Memuat...</div>'
+                + '<div id="isi-perangkat-rider" style="padding:14px 18px 24px;overflow-y:auto;font-size:12px;color:#334155;">Memuat...</div>'
                 + '</div>';
             document.body.appendChild(bungkus);
-            document.getElementById('tutup-izin-perangkat').onclick = () => bungkus.remove();
+            document.getElementById('tutup-perangkat-rider').onclick = () => bungkus.remove();
             bungkus.onclick = (e) => { if (e.target === bungkus) bungkus.remove(); };
-            window.muatIzinPerangkat();
+            window.muatPerangkatRider();
         };
 
-        window.muatIzinPerangkat = async function() {
-            const wadah = document.getElementById('isi-izin-perangkat');
+        window.muatPerangkatRider = async function() {
+            const wadah = document.getElementById('isi-perangkat-rider');
             if (!wadah) return;
             try {
                 const snap = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'));
-                const menunggu = [];
-                const terdaftar = [];
-                const petaPerangkat = {};
+                const baris = [];
+                let punya = 0;
                 snap.forEach(d => {
                     const v = d.data();
-                    const uid = String(d.id).trim().toUpperCase();
-                    petaPerangkat[uid] = v;
-                    if (v.pending_status === 'menunggu' && v.pending_device_id) {
-                        menunggu.push({ uid: uid, nama: v.pending_nama || 'Perangkat baru', waktu: v.pending_at });
-                    }
-                    if (v.device_id) {
-                        terdaftar.push({
-                            uid: uid,
-                            nama: v.nama_perangkat || v.device_id,
-                            waktu: v.last_login,
-                            punyaToken: !!v.fcm_token
-                        });
-                    }
+                    const adaToken = !!v.fcm_token;
+                    if (adaToken) punya++;
+                    baris.push({
+                        uid: String(d.id).trim().toUpperCase(),
+                        nama: v.nama_perangkat || v.device_id || '(tidak diketahui)',
+                        waktu: v.last_token_update || v.last_login,
+                        adaToken: adaToken,
+                        hpAdmin: !!(v.device_id && v.device_id === deviceIdPerangkatIni())
+                    });
                 });
+                baris.sort((a, b) => a.uid.localeCompare(b.uid));
 
-                // Penilaian kesiapan notifikasi dihitung dari DAFTAR RIDER, bukan dari
-                // daftar dokumen perangkat. Rider yang catatan perangkatnya terhapus
-                // seluruhnya tidak punya dokumen untuk diperiksa, jadi kalau basisnya
-                // dokumen, dia tidak akan pernah muncul padahal juga tidak bisa dinotif.
-                // allRiders sudah ada di memori panel, jadi tidak ada read tambahan.
-                const riderUnik = (typeof allRiders !== 'undefined' && Array.isArray(allRiders))
-                    ? Array.from(new Set(allRiders.map(r => String(r && r.uid || '').trim().toUpperCase()).filter(Boolean)))
-                    : [];
-                const tanpaToken = [];
-                const belumDaftar = [];
-                const yatim = [];
-                let punyaToken = 0;
-                // Menerjemahkan keterangan yang dikirim aplikasi rider jadi bahasa manusia.
-                const bacaDiagnosa = (v) => {
-                    if (!v) return '';
-                    if (v.diagnosa_jembatan === 'apk_lama') return 'APK lama, tidak ada jembatan token';
-                    if (v.diagnosa_token === 'jembatan_tidak_menjawab') return 'APK tidak membalas permintaan token';
-                    if (v.diagnosa_jembatan === 'tidak_ada') return 'dibuka lewat browser, bukan aplikasi';
-                    if (v.diagnosa_izin === 'denied') return 'izin notifikasi diblokir di HP';
-                    if (v.diagnosa_izin === 'default') return 'izin notifikasi belum diberikan';
-                    if (v.diagnosa_token) return 'token gagal diambil';
-                    return 'belum ada keterangan';
-                };
+                let html = '<div style="background:#f1f5f9;border-radius:12px;padding:10px;margin-bottom:14px;line-height:1.6;">'
+                    + '<b>' + punya + '</b> dari <b>' + baris.length + '</b> catatan perangkat punya token notifikasi.'
+                    + '<br><span style="color:#64748b;">Rider bertanda TANPA TOKEN tidak akan menerima notifikasi. '
+                    + 'Cukup minta dia membuka aplikasinya, token mendaftar sendiri.</span></div>';
 
-                // Jenis masalah menentukan bunyi peringatan yang dikirim ke rider.
-                const jenisMasalah = (v) => {
-                    if (!v) return 'umum';
-                    if (v.diagnosa_jembatan === 'apk_lama' || v.diagnosa_token === 'jembatan_tidak_menjawab') return 'update';
-                    if (v.diagnosa_izin === 'denied' || v.diagnosa_izin === 'default') return 'izin';
-                    return 'umum';
-                };
-
-                riderUnik.forEach(uid => {
-                    const v = petaPerangkat[uid];
-                    if (!v) belumDaftar.push(uid);
-                    else if (!v.fcm_token) tanpaToken.push({
-                        uid: uid,
-                        alasan: bacaDiagnosa(v),
-                        jenis: jenisMasalah(v),
-                        sudahDiperingatkan: !!v.peringatan_jenis,
-                        sudahDibaca: v.peringatan_dibaca === true
-                    });
-                    else punyaToken++;
-                });
-                if (riderUnik.length) {
-                    Object.keys(petaPerangkat).forEach(uid => {
-                        if (riderUnik.indexOf(uid) === -1) yatim.push(uid);
-                    });
-                }
-                tanpaToken.sort((x, y) => x.uid.localeCompare(y.uid)); belumDaftar.sort(); yatim.sort();
-
-                // Bersihkan penanda peringatan yang tertinggal pada rider yang tokennya
-                // sudah ada. Tanpa ini, penanda lama menetap selamanya di database dan
-                // bisa memunculkan peringatan palsu di HP rider.
-                riderUnik.forEach(uid => {
-                    const v = petaPerangkat[uid];
-                    if (v && v.fcm_token && v.peringatan_jenis) {
-                        updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', uid), {
-                            peringatan_jenis: null,
-                            peringatan_dibaca: null
-                        }).catch(() => {});
-                    }
-                });
-                menunggu.sort((a, b) => a.uid.localeCompare(b.uid));
-                terdaftar.sort((a, b) => a.uid.localeCompare(b.uid));
-
-                let html = '<div style="background:#f1f5f9;border-radius:12px;padding:10px;margin-bottom:14px;line-height:1.6;">';
-                if (!riderUnik.length) {
-                    // Daftar rider belum sempat dimuat. Jangan menampilkan angka yang
-                    // menyesatkan -- katakan apa adanya.
-                    html += 'Daftar rider belum termuat, jadi kesiapan notifikasi belum bisa dihitung. Tutup panel ini, tunggu halaman dispatch selesai memuat, lalu buka lagi.';
+                if (!baris.length) {
+                    html += '<p style="color:#64748b;">Belum ada catatan perangkat.</p>';
                 } else {
-                    html += '<b>' + punyaToken + '</b> dari <b>' + riderUnik.length + '</b> rider siap menerima notifikasi.';
-                    if (tanpaToken.length) {
-                        html += '<div style="color:#b91c1c;margin-top:6px;"><b>Tanpa token:</b> ' + tanpaToken.length + ' rider (rinciannya di bawah)</div>';
-                    }
-                    if (belumDaftar.length) {
-                        html += '<div style="color:#b91c1c;margin-top:6px;"><b>Belum pernah daftar:</b> ' + _escIzin(belumDaftar.join(', ')) + '</div>';
-                    }
-                    if (tanpaToken.length || belumDaftar.length) {
-                        html += '<div style="color:#64748b;margin-top:6px;">Minta rider di atas membuka aplikasinya. Token mendaftar sendiri dalam beberapa detik, tidak perlu login ulang.</div>';
-                    }
-                    if (yatim.length) {
-                        html += '<div style="color:#64748b;margin-top:6px;"><b>Catatan perangkat tanpa rider:</b> ' + _escIzin(yatim.join(', ')) + ' (sisa rider lama, bisa diabaikan)</div>';
-                    }
-                    if (!tanpaToken.length && !belumDaftar.length) {
-                        html += '<div style="color:#047857;margin-top:6px;font-weight:900;">Semua rider siap.</div>';
-                    }
-                }
-                html += '</div>';
-                if (tanpaToken.length) {
-                    html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#b91c1c;">Tanpa token notifikasi (' + tanpaToken.length + ')</h4>';
-                    tanpaToken.forEach(t => {
-                        const label = t.jenis === 'update' ? 'Suruh Update'
-                                    : t.jenis === 'izin'   ? 'Suruh Aktifkan Izin'
-                                    : 'Kirim Peringatan';
-                        const status = !t.sudahDiperingatkan ? ''
-                                     : (t.sudahDibaca ? '<span style="color:#047857;font-weight:900;"> &bull; sudah dibaca</span>'
-                                                      : '<span style="color:#b45309;font-weight:900;"> &bull; terkirim, belum dibaca</span>');
-                        html += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:10px;margin-bottom:8px;">'
-                            + '<div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + '</div>'
-                            + '<div style="color:#64748b;margin:2px 0 8px;">' + _escIzin(t.alasan) + status + '</div>'
-                            + '<div style="display:flex;gap:8px;">'
-                            + '<button onclick="window.periksaPerangkatRider(\'' + _escIzin(t.uid) + '\')" '
-                            + 'style="flex:1;border:none;border-radius:9px;padding:8px;background:#e2e8f0;color:#334155;font-weight:900;font-size:11px;">Periksa</button>'
-                            + '<button onclick="window.kirimPeringatanRider(\'' + _escIzin(t.uid) + '\', \'' + _escIzin(t.jenis) + '\')" '
-                            + 'style="flex:2;border:none;border-radius:9px;padding:8px;background:#dc2626;color:#fff;font-weight:900;font-size:11px;">' + label + '</button>'
-                            + '</div></div>';
-                    });
-                    html += '<p style="margin:0 0 16px;color:#64748b;line-height:1.6;">Peringatan muncul di dalam aplikasi rider, bukan lewat notifikasi &mdash; rider ini memang tidak bisa dinotif. Kalau aplikasinya sedang dibuka, peringatannya muncul saat itu juga.</p>';
-                }
-
-                html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#b91c1c;">Menunggu izin (' + menunggu.length + ')</h4>';
-                if (!menunggu.length) {
-                    html += '<p style="margin:0 0 18px;color:#64748b;">Tidak ada permintaan.</p>';
-                } else {
-                    menunggu.forEach(m => {
-                        html += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:10px;margin-bottom:8px;">'
-                            + '<div style="font-weight:900;color:#0f172a;">' + _escIzin(m.uid) + '</div>'
-                            + '<div style="color:#64748b;margin:2px 0 8px;">' + _escIzin(m.nama) + ' &bull; ' + _escIzin(_waktuIzin(m.waktu)) + '</div>'
-                            + '<div style="display:flex;gap:8px;">'
-                            + '<button onclick="window.tolakPerangkatAdmin(\'' + _escIzin(m.uid) + '\')" style="flex:1;border:none;border-radius:9px;padding:8px;background:#e2e8f0;color:#334155;font-weight:900;font-size:11px;">Tolak</button>'
-                            + '<button onclick="window.izinkanPerangkatAdmin(\'' + _escIzin(m.uid) + '\')" style="flex:1;border:none;border-radius:9px;padding:8px;background:#dc2626;color:#fff;font-weight:900;font-size:11px;">Izinkan</button>'
-                            + '</div></div>';
-                    });
-                    html += '<div style="height:12px;"></div>';
-                }
-
-                html += '<h4 style="margin:0 0 8px;font-size:12px;font-weight:900;color:#0f172a;">Perangkat terdaftar (' + terdaftar.length + ')</h4>';
-                if (!terdaftar.length) {
-                    html += '<p style="margin:0;color:#64748b;">Belum ada.</p>';
-                } else {
-                    terdaftar.forEach(t => {
-                        // Penanda ini wajib: terdaftarnya perangkat TIDAK sama dengan
-                        // notifikasinya jalan. Tanpa penanda, baris ini menyesatkan.
-                        const tandaToken = t.punyaToken
-                            ? '<span style="display:inline-block;background:#d1fae5;color:#047857;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">NOTIF AKTIF</span>'
-                            : '<span style="display:inline-block;background:#fee2e2;color:#b91c1c;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">TANPA TOKEN</span>';
-                        html += '<div style="border:1px solid ' + (t.punyaToken ? '#e2e8f0' : '#fecaca') + ';border-radius:12px;padding:10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'
-                            + '<div style="min-width:0;"><div style="font-weight:900;color:#0f172a;">' + _escIzin(t.uid) + tandaToken + '</div>'
-                            + '<div style="color:#64748b;overflow:hidden;text-overflow:ellipsis;">' + _escIzin(t.nama) + ' &bull; ' + _escIzin(_waktuIzin(t.waktu)) + '</div></div>'
-                            + '<div style="display:flex;gap:6px;flex-shrink:0;">'
-                            + '<button onclick="window.periksaPerangkatRider(\'' + _escIzin(t.uid) + '\')" style="border:none;border-radius:9px;padding:8px 10px;background:#e0f2fe;color:#075985;font-weight:900;font-size:11px;white-space:nowrap;">Periksa</button>'
-                            + '<button onclick="window.resetPerangkatRider(\'' + _escIzin(t.uid) + '\')" style="border:none;border-radius:9px;padding:8px 10px;background:#f1f5f9;color:#334155;font-weight:900;font-size:11px;white-space:nowrap;">Lepas</button>'
-                            + '</div>'
+                    baris.forEach(t => {
+                        const tanda = t.adaToken
+                            ? '<span style="background:#d1fae5;color:#047857;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">NOTIF AKTIF</span>'
+                            : '<span style="background:#fee2e2;color:#b91c1c;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">TANPA TOKEN</span>';
+                        const tandaAdmin = t.hpAdmin
+                            ? '<span style="background:#fef3c7;color:#92400e;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">HP INI</span>'
+                            : '';
+                        html += '<div style="border:1px solid ' + (t.adaToken && !t.hpAdmin ? '#e2e8f0' : '#fecaca') + ';border-radius:12px;padding:10px;margin-bottom:8px;">'
+                            + '<div style="font-weight:900;color:#0f172a;">' + _escPr(t.uid) + tanda + tandaAdmin + '</div>'
+                            + '<div style="color:#64748b;margin:2px 0 8px;">' + _escPr(t.nama) + ' &bull; ' + _escPr(_waktuPr(t.waktu)) + '</div>'
+                            + '<button onclick="window.kosongkanTokenRider(\'' + _escPr(t.uid) + '\')" '
+                            + 'style="width:100%;border:none;border-radius:9px;padding:8px;background:#f1f5f9;color:#334155;font-weight:900;font-size:11px;">Kosongkan token</button>'
                             + '</div>';
                     });
-                    html += '<p style="margin:10px 0 0;color:#64748b;line-height:1.6;">Daftar ini menunjukkan HP mana yang memegang akun, <b>bukan</b> jaminan notifikasinya jalan. Baris bertanda TANPA TOKEN tetap tidak akan menerima notifikasi &mdash; tekan Periksa untuk melihat sebabnya.<br><br>"Lepas" dipakai kalau rider ganti HP atau HP-nya hilang: ikatan perangkat dihapus, dan HP mana pun yang login berikutnya langsung diterima tanpa perlu izin.</p>';
                 }
                 wadah.innerHTML = html;
             } catch (e) {
-                console.warn("Gagal memuat izin perangkat:", e);
+                console.warn("Gagal memuat perangkat rider:", e);
                 wadah.innerHTML = '<p style="color:#b91c1c;font-weight:800;">Gagal memuat data perangkat.</p>';
             }
         };
 
-        // Peringatan dikirim sebagai penanda di dokumen perangkat rider, BUKAN push.
-        // Rider tanpa token memang tidak bisa dinotif; aplikasinya yang membaca
-        // penanda ini lewat pengawas perangkat yang sudah berjalan.
-        // ------------------------------------------------------------
-        // PERIKSA PERANGKAT SATU RIDER
-        // Menjawab pertanyaan "token yang terdaftar itu HP siapa" dengan membaca
-        // langsung dua sumbernya: catatan perangkat rider dan catatan pemilik HP.
-        // ------------------------------------------------------------
-        window.periksaPerangkatRider = async function(uid) {
+        // Dipakai saat token nyasar ke HP yang salah. Setelah dikosongkan, aplikasi
+        // rider mendaftarkan ulang sendiri begitu dibuka -- token tidak hilang permanen.
+        window.kosongkanTokenRider = async function(uid) {
             const cleanUid = String(uid || '').trim().toUpperCase();
-            const basis = ['artifacts', firebaseConfig.projectId, 'public', 'data'];
-            try {
-                const snap = await getDoc(doc(db, ...basis, 'rider_devices', cleanUid));
-                if (!snap.exists()) {
-                    alert("UID " + cleanUid + "\n\nBelum ada catatan perangkat sama sekali.\nRider ini belum pernah berhasil mendaftar dari HP mana pun.");
-                    return;
-                }
-                const v = snap.data();
-                const devId = v.device_id || null;
-                const tok = v.fcm_token || null;
-
-                let pemilik = null;
-                if (devId) {
-                    try {
-                        const ps = await getDoc(doc(db, ...basis, 'device_owners', devId));
-                        pemilik = ps.exists() ? ps.data() : null;
-                    } catch (e) {}
-                }
-
-                const potong = (t) => !t ? '(kosong)' : (String(t).substring(0, 14) + '... panjang ' + String(t).length);
-                const pemilikKini = pemilik ? String(pemilik.current_uid || '').trim().toUpperCase() : '';
-
-                let kesimpulan;
-                if (!tok) kesimpulan = 'Belum ada token. Notifikasi TIDAK akan terkirim.';
-                else if (pemilik && pemilik.admin_device === true) kesimpulan = 'Token ini menunjuk ke HP ADMIN. Notifikasi ditahan.';
-                else if (pemilikKini && pemilikKini !== cleanUid) kesimpulan = 'HP ini sekarang dipakai akun ' + pemilikKini + '. Notifikasi ditahan.';
-                else if (!pemilik) kesimpulan = 'HP ini belum pernah mencatat pemiliknya (aplikasi versi lama). Notifikasi tetap dikirim, tapi asal HP tidak bisa dipastikan.';
-                else kesimpulan = 'Normal. Token milik HP rider ini.';
-
-                alert(
-                    "UID " + cleanUid
-                    + "\n\n-- Catatan perangkat --"
-                    + "\nPemilik tercatat : " + (v.owner_uid || '(kosong)')
-                    + "\nID perangkat     : " + (devId || '(kosong)')
-                    + "\nNama perangkat   : " + (v.nama_perangkat || '(kosong)')
-                    + "\nToken            : " + potong(tok)
-                    + "\nSumber           : " + (v.source || '(kosong)')
-                    + "\nDiagnosa         : " + (v.diagnosa_token || '-')
-                    + "\nJembatan         : " + (v.diagnosa_jembatan || '-')
-                    + "\nIzin notifikasi  : " + (v.diagnosa_izin || '-')
-                    + "\n\n-- Pemilik HP itu --"
-                    + "\nCatatan pemilik  : " + (pemilik ? 'ada' : 'TIDAK ADA')
-                    + "\nDipakai akun     : " + (pemilikKini || '(kosong)')
-                    + "\nPerangkat admin  : " + (pemilik && pemilik.admin_device === true ? 'YA' : 'tidak')
-                    + "\n\n-- Kesimpulan --\n" + kesimpulan
-                );
-            } catch (e) {
-                console.warn("Gagal memeriksa perangkat:", e);
-                alert("Gagal membaca data perangkat.");
-            }
-        };
-
-        window.kirimPeringatanRider = async function(uid, jenis) {
-            const cleanUid = String(uid || '').trim().toUpperCase();
-            const teks = jenis === 'update'
-                ? "Kirim peringatan ke " + cleanUid + " untuk memperbarui aplikasinya?"
-                : jenis === 'izin'
-                ? "Kirim peringatan ke " + cleanUid + " untuk menghidupkan izin notifikasi?"
-                : "Kirim peringatan ke " + cleanUid + " bahwa notifikasinya mati?";
-            if (!confirm(teks + "\n\nPeringatan muncul di dalam aplikasinya, bukan sebagai notifikasi.")) return;
+            if (!confirm("Kosongkan token " + cleanUid + "?\n\nRider itu tidak akan menerima notifikasi sampai dia membuka aplikasinya lagi.")) return;
             try {
                 await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
-                    peringatan_jenis: jenis,
-                    peringatan_pada: serverTimestamp(),
-                    peringatan_dibaca: false
-                });
-                window.muatIzinPerangkat();
-            } catch (e) {
-                console.warn("Gagal mengirim peringatan:", e);
-                alert("Gagal mengirim peringatan.");
-            }
-        };
-
-        window.izinkanPerangkatAdmin = async function(uid) {
-            const cleanUid = String(uid || '').trim().toUpperCase();
-            try {
-                const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid);
-                const snap = await getDoc(ref);
-                if (!snap.exists() || !snap.data().pending_device_id) { window.muatIzinPerangkat(); return; }
-                const d = snap.data();
-                if (!confirm("Izinkan " + cleanUid + " masuk dari " + (d.pending_nama || 'perangkat baru') + "?\n\nHP lamanya akan otomatis keluar.")) return;
-                await updateDoc(ref, {
-                    device_id: d.pending_device_id,
-                    nama_perangkat: d.pending_nama || null,
                     fcm_token: null,
-                    pending_device_id: null,
-                    pending_nama: null,
-                    pending_status: 'disetujui',
-                    pending_oleh: 'admin',
-                    pending_diputus_pada: serverTimestamp()
-                });
-                window.muatIzinPerangkat();
-            } catch (e) {
-                console.warn("Gagal mengizinkan perangkat:", e);
-                alert("Gagal mengizinkan perangkat.");
-            }
-        };
-
-        window.tolakPerangkatAdmin = async function(uid) {
-            const cleanUid = String(uid || '').trim().toUpperCase();
-            if (!confirm("Tolak permintaan masuk untuk " + cleanUid + "?")) return;
-            try {
-                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
-                    pending_status: 'ditolak',
-                    pending_oleh: 'admin',
-                    pending_diputus_pada: serverTimestamp()
-                });
-                window.muatIzinPerangkat();
-            } catch (e) {
-                console.warn("Gagal menolak perangkat:", e);
-                alert("Gagal menolak perangkat.");
-            }
-        };
-
-        window.resetPerangkatRider = async function(uid) {
-            const cleanUid = String(uid || '').trim().toUpperCase();
-            if (!confirm("Lepas ikatan perangkat untuk " + cleanUid + "?\n\nHP mana pun yang login berikutnya akan langsung diterima.")) return;
-            try {
-                await updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid), {
                     device_id: null,
-                    nama_perangkat: null,
-                    fcm_token: null,
-                    pending_device_id: null,
-                    pending_nama: null,
-                    pending_status: null,
-                    pending_oleh: null,
-                    pending_diputus_pada: serverTimestamp()
+                    nama_perangkat: null
                 });
-                window.muatIzinPerangkat();
+                window.muatPerangkatRider();
             } catch (e) {
-                console.warn("Gagal melepas perangkat:", e);
-                alert("Gagal melepas perangkat.");
+                console.warn("Gagal mengosongkan token:", e);
+                alert("Gagal mengosongkan token.");
             }
         };
 
-        // ------------------------------------------------------------
-        // AUDIT TOKEN NYASAR
-        // Menemukan catatan token yang sudah tidak sah: token yang menunjuk ke HP
-        // admin, HP yang sekarang dipakai akun lain, dan satu token yang sama
-        // terdaftar di lebih dari satu akun.
-        // ------------------------------------------------------------
-        window.auditTokenPerangkat = async function() {
-            const hasil = [];
+        async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
             try {
-                const basis = ['artifacts', firebaseConfig.projectId, 'public', 'data'];
-                const snapDev = await getDocs(collection(db, ...basis, 'rider_devices'));
-                const snapOwner = await getDocs(collection(db, ...basis, 'device_owners'));
+                const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
+                const tokenSnap = await getDoc(tokenRef);
 
-                const pemilik = {};
-                snapOwner.forEach(d => { pemilik[d.id] = d.data(); });
+                if (tokenSnap.exists() && tokenSnap.data().fcm_token) {
+                    const fcmToken = tokenSnap.data().fcm_token;
 
-                const hitungToken = {};
-                snapDev.forEach(d => {
-                    const t = d.data().fcm_token;
-                    if (t) hitungToken[t] = (hitungToken[t] || 0) + 1;
-                });
-
-                snapDev.forEach(d => {
-                    const uid = String(d.id).trim().toUpperCase();
-                    const v = d.data();
-                    const devId = v.device_id || null;
-                    const own = devId ? pemilik[devId] : null;
-                    let alasan = null;
-
-                    if (v.owner_uid && String(v.owner_uid).trim().toUpperCase() !== uid) {
-                        alasan = "token tercatat milik " + v.owner_uid;
-                    } else if (own && own.admin_device === true) {
-                        alasan = "menunjuk ke perangkat admin";
-                    } else if (own && own.current_uid && String(own.current_uid).trim().toUpperCase() !== uid) {
-                        alasan = "HP sekarang dipakai " + own.current_uid;
-                    } else if (v.fcm_token && hitungToken[v.fcm_token] > 1) {
-                        alasan = "token kembar di " + hitungToken[v.fcm_token] + " akun";
+                    if (tokenSnap.data().device_id && tokenSnap.data().device_id === deviceIdPerangkatIni()) {
+                        window.kabarPerangkat("Notifikasi ke " + riderUid + " ditahan: tokennya menunjuk ke HP ini (HP admin). "
+                            + "Minta rider login dari HP-nya sendiri, lalu tokennya akan tertimpa otomatis.");
+                        return;
                     }
 
-                    if (alasan) hasil.push({ uid: uid, device_id: devId, alasan: alasan });
-                });
+                    console.log(">> Mengirim Push Notif ke UID:", riderUid);
+                    console.log(">> Token FCM Ditemukan:", fcmToken);
+                    console.log(">> Action Payload:", actionType);
 
-                console.log(">> Audit token perangkat:", hasil.length, "temuan");
-                if (hasil.length) console.table(hasil);
-            } catch (e) {
-                console.warn("Audit token gagal:", e);
-            }
-            return hasil;
-        };
-
-        // Menghapus catatan token yang nyasar. Rider yang catatannya dihapus tinggal
-        // login ulang dari HP-nya sendiri, dan tokennya akan tercatat lagi dengan benar.
-        window.bersihkanTokenNyasar = async function() {
-            const temuan = await window.auditTokenPerangkat();
-            if (!temuan.length) { alert("Tidak ada token nyasar. Semua bersih."); return; }
-            const daftar = temuan.map(t => t.uid + " (" + t.alasan + ")").join("\n");
-            if (!confirm("Hapus catatan token untuk " + temuan.length + " akun berikut?\n\n" + daftar + "\n\nRider tersebut perlu login ulang dari HP-nya sendiri agar notifikasi kembali jalan.")) return;
-            let sukses = 0;
-            for (const t of temuan) {
-                try {
-                    await deleteDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', t.uid));
-                    sukses++;
-                } catch (e) { console.warn("Gagal hapus token", t.uid, e); }
-            }
-            _cachePemilikPerangkat.clear();
-            alert(sukses + " catatan token dibersihkan. Minta rider terkait login ulang.");
-            const box = document.getElementById('peringatan-notif-box');
-            if (box) box.remove();
-        };
+                    const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
+                    
+                    const authTk = await window.tokenAdmin();
+                    fetch(GAS_URL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            auth_token: authTk,
+                            token: fcmToken,
+                            priority: "high",
+                            data: {
+                                title: title, 
+                                body: body,
+                                action: actionType
+                            }
+                        })
+                    });
+                } else {
+                    console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", riderUid);
+                    window.kabarPerangkat("Notifikasi ke " + riderUid + " tidak terkirim: belum ada token. "
+                        + "Minta rider membuka aplikasinya; token akan mendaftar sendiri.");
+                }
+            } catch(err) { console.warn("Push Notif Error", err); }
+        }
 
         // Menjadi true setelah sinkron jam shift pertama di sesi ini selesai tanpa error.
         // Sebelum itu, poin hari ini TIDAK dihitung supaya rider tidak kena suspend palsu
