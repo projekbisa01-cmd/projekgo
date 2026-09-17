@@ -8217,7 +8217,17 @@
             }
         }
 
-        window.proceedWithLogin = function(uid) {
+        window.proceedWithLogin = async function(uid) {
+            // GERBANG IZIN LOGIN. HP yang bukan pemegang akun tidak langsung masuk.
+            try {
+                const izin = (typeof window.cekIzinLogin === 'function')
+                    ? await window.cekIzinLogin(uid) : 'boleh';
+                if (izin !== 'boleh') {
+                    if (typeof window.tampilkanLayarTunggu === 'function') window.tampilkanLayarTunggu(uid, izin);
+                    return;
+                }
+            } catch (e) { console.warn("Gerbang izin login dilewati:", e); }
+
             currentUserUID = uid;
             
             // Simpan UID ke local storage SETELAH lolos keamanan
@@ -8291,7 +8301,20 @@
             document.getElementById('login-error-msg').classList.add('hidden');
         }
 
-        window.handleLogout = async function (reason = null) {
+        window.handleLogout = async function (reason = null, kosongkanToken = true) {
+            // Dikerjakan SEBELUM sign out -- setelah keluar, aturan Firestore menolaknya.
+            // kosongkanToken = false dipakai saat akun dipindah ke HP lain, supaya
+            // token HP yang baru tidak ikut terhapus.
+            try {
+                if (kosongkanToken) {
+                    const uidLama = (typeof currentUserUID !== 'undefined' && currentUserUID)
+                        ? currentUserUID : localStorage.getItem('rider_uid');
+                    if (uidLama && window.kosongkanTokenPerangkat) {
+                        await window.kosongkanTokenPerangkat(uidLama);
+                    }
+                }
+            } catch (e) { console.warn("Gagal mengosongkan token saat logout:", e); }
+
             try { if (window.riderSignOut) await window.riderSignOut(); } catch (e) {}
             try { if (window.riderBersihkanCache) await window.riderBersihkanCache(); } catch (e) {}
             localStorage.removeItem('rider_uid');
@@ -12131,23 +12154,6 @@
                       }
                   }
 
-                  // 1b. JALUR CEPAT: token yang sudah tersimpan di aplikasi Android.
-                  // Dibaca LANGSUNG, tanpa menunggu panggilan balik. Inilah yang
-                  // mengatasi HP yang jembatannya "tidak menjawab", karena tidak ada
-                  // lagi jawaban yang perlu ditunggu.
-                  if (!finalToken && window.AndroidInterface
-                      && typeof window.AndroidInterface.getFCMTokenCached === 'function') {
-                      try {
-                          const tokenTersimpan = window.AndroidInterface.getFCMTokenCached();
-                          if (tokenTersimpan && String(tokenTersimpan).length > 20) {
-                              finalToken = String(tokenTersimpan);
-                              console.log("Token diambil langsung dari simpanan aplikasi Android.");
-                          }
-                      } catch (e) {
-                          console.warn("Tidak bisa membaca token tersimpan:", e);
-                      }
-                  }
-
                   // 2. METODE KODULAR (Fallback jika WebView menolak service worker web push)
                   if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
                       window.AndroidInterface.getFCMToken(cleanUid);
@@ -12179,15 +12185,13 @@
           };
 
           // ============================================================
-          // PENGAWAS PERANGKAT -- SEDERHANA, HANYA MEMPERINGATKAN
+          // IZIN LOGIN ANTAR PERANGKAT
           // ------------------------------------------------------------
-          // Aturannya cuma satu: token milik HP yang terakhir berhasil
-          // mendaftar. Token TIDAK PERNAH dihapus otomatis, karena
-          // pendaftaran ulang lewat aplikasi Android tidak selalu berhasil,
-          // dan rider tanpa token berarti tidak dapat orderan sama sekali.
-          //
-          // Kalau akun dipakai di HP lain, rider hanya DIPERINGATKAN --
-          // tidak dikeluarkan, tidak diblokir, tidak perlu persetujuan.
+          // Aturannya empat, tidak lebih:
+          //  1. Token terdaftar di HP yang sedang login.
+          //  2. Login dari HP lain tidak langsung masuk, tapi jadi permintaan.
+          //  3. Admin menyetujui -> HP baru masuk, HP lama otomatis keluar.
+          //  4. Logout -> token dikosongkan, akun bebas dipakai HP mana pun.
           // ============================================================
           const PROYEK_ID = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId)
               ? firebaseConfig.projectId : "onbid-2f87a";
@@ -12212,70 +12216,139 @@
               return (merk + ' (' + lewat + ')').substring(0, 60);
           };
 
-          let _unsubPerangkat = null;
-          let _terakhirDaftarUlang = 0;
+          // Nilai balik: 'boleh' | 'menunggu' | 'ditolak'
+          window.cekIzinLogin = async function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+              // Kalau ada yang tidak beres, rider tetap diloloskan. Rider tidak bisa
+              // kerja lebih merugikan daripada satu HP lolos tanpa persetujuan.
+              if (!cleanUid || !devId) return 'boleh';
 
+              try {
+                  const ref = refPerangkat(cleanUid);
+                  const snap = await getDoc(ref);
+                  const d = snap.exists() ? snap.data() : null;
+
+                  // Akun sedang bebas (belum ada HP, atau HP sebelumnya sudah logout).
+                  if (!d || !d.device_id) {
+                      await setDoc(ref, {
+                          owner_uid: cleanUid,
+                          device_id: devId,
+                          nama_perangkat: window.namaPerangkat(),
+                          last_login: serverTimestamp(),
+                          pending_device_id: null,
+                          pending_nama: null,
+                          pending_status: null
+                      }, { merge: true });
+                      return 'boleh';
+                  }
+
+                  // HP ini memang pemegang akunnya.
+                  if (d.device_id === devId) {
+                      await setDoc(ref, {
+                          last_login: serverTimestamp(),
+                          pending_device_id: null,
+                          pending_nama: null,
+                          pending_status: null
+                      }, { merge: true });
+                      return 'boleh';
+                  }
+
+                  // HP lain sedang memegang akun. Lihat status permintaan HP ini.
+                  if (d.pending_device_id === devId && d.pending_status === 'ditolak') return 'ditolak';
+                  if (d.pending_device_id === devId && d.pending_status === 'menunggu') return 'menunggu';
+
+                  await setDoc(ref, {
+                      pending_device_id: devId,
+                      pending_nama: window.namaPerangkat(),
+                      pending_at: serverTimestamp(),
+                      pending_status: 'menunggu'
+                  }, { merge: true });
+                  return 'menunggu';
+
+              } catch (e) {
+                  console.warn("Cek izin login gagal, rider tetap diloloskan:", e);
+                  return 'boleh';
+              }
+          };
+
+          // Layar tunggu di HP baru. Memakai bagian "Perangkat Tidak Dikenali"
+          // yang sudah ada di aplikasi ini, termasuk jalur password admin.
+          let _pantauIzin = null;
+          window.tampilkanLayarTunggu = function(uid, status) {
+              window.riderSudahMasuk = false;
+              const overlay = document.getElementById('loading-overlay');
+              const halaman = document.getElementById('login-page');
+              if (overlay) overlay.style.display = 'none';
+              if (halaman) halaman.style.display = 'flex';
+
+              const pinSec = document.getElementById('pin-section');
+              const inputSec = document.getElementById('login-input-section');
+              const pwdSec = document.getElementById('password-section');
+              if (pinSec) pinSec.classList.add('hidden');
+              if (inputSec) inputSec.classList.add('hidden');
+              if (pwdSec) pwdSec.classList.remove('hidden');
+
+              let kotak = document.getElementById('kotak-status-izin');
+              if (!kotak && pwdSec) {
+                  kotak = document.createElement('div');
+                  kotak.id = 'kotak-status-izin';
+                  pwdSec.insertBefore(kotak, pwdSec.firstChild);
+              }
+              const pasangTeks = function(gagal) {
+                  if (!kotak) return;
+                  kotak.className = gagal
+                      ? 'p-4 rounded-2xl border border-red-200 bg-red-50 text-red-600 text-left text-[11px] font-bold leading-relaxed mb-2'
+                      : 'p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-700 text-left text-[11px] font-bold leading-relaxed mb-2';
+                  kotak.textContent = gagal
+                      ? 'Permintaan login dari HP ini DITOLAK admin.'
+                      : 'Akun ini sedang aktif di HP lain. Permintaan login sudah dikirim ke admin. Layar ini akan lanjut sendiri begitu disetujui.';
+              };
+              pasangTeks(status === 'ditolak');
+
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
+              if (_pantauIzin) { try { _pantauIzin(); } catch (e) {} _pantauIzin = null; }
+              _pantauIzin = onSnapshot(refPerangkat(cleanUid), (snap) => {
+                  if (!snap.exists()) return;
+                  const d = snap.data();
+                  if (d.device_id === devId) {
+                      try { _pantauIzin(); } catch (e) {}
+                      _pantauIzin = null;
+                      if (kotak) kotak.remove();
+                      if (pwdSec) pwdSec.classList.add('hidden');
+                      if (inputSec) inputSec.classList.remove('hidden');
+                      window.riderSudahMasuk = true;
+                      window.proceedWithLogin(cleanUid);
+                  } else if (d.pending_device_id === devId && d.pending_status === 'ditolak') {
+                      pasangTeks(true);
+                  }
+              }, (e) => console.warn("Pantau izin gagal:", e));
+          };
+
+          // Mengawasi HP yang sedang dipakai. Kalau akun dipindah ke HP lain,
+          // HP ini keluar sendiri -- tanpa mengosongkan token HP yang baru.
+          let _unsubPerangkat = null;
           window.startDeviceListener = function(uid) {
               const cleanUid = String(uid || '').trim().toUpperCase();
               const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
               if (!cleanUid || !devId) return;
 
               if (_unsubPerangkat) { try { _unsubPerangkat(); } catch (e) {} _unsubPerangkat = null; }
-
               _unsubPerangkat = onSnapshot(refPerangkat(cleanUid), (snap) => {
-                  const d = snap.exists() ? snap.data() : null;
+                  if (!snap.exists()) return;
+                  const d = snap.data();
                   const sedangDipakai = (typeof currentUserUID !== 'undefined' && currentUserUID === cleanUid);
-                  if (!sedangDipakai) return;
-
-                  // (a) Token kosong -> daftarkan ulang sendiri. Dibatasi sekali per menit.
-                  if (!d || !d.fcm_token) {
-                      const sekarang = Date.now();
-                      if (sekarang - _terakhirDaftarUlang > 60000) {
-                          _terakhirDaftarUlang = sekarang;
-                          console.log("Token kosong, mendaftarkan ulang...");
-                          if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
+                  if (sedangDipakai && d.device_id && d.device_id !== devId) {
+                      if (typeof window.handleLogout === 'function') {
+                          window.handleLogout("Akun ini sekarang dipakai di perangkat lain.", false);
                       }
-                  }
-
-                  // (b) Akun dipakai di HP lain -> peringatkan saja.
-                  if (d && d.device_id && d.device_id !== devId) {
-                      window.peringatanAkunGanda(d.nama_perangkat || 'perangkat lain');
-                  } else {
-                      window.tutupPeringatanAkunGanda();
                   }
               }, (e) => console.warn("Pengawas perangkat gagal:", e));
           };
 
-          window.peringatanAkunGanda = function(namaHp) {
-              let box = document.getElementById('peringatan-akun-ganda');
-              if (!box) {
-                  box = document.createElement('div');
-                  box.id = 'peringatan-akun-ganda';
-                  box.style.cssText = 'position:fixed;left:10px;right:10px;bottom:10px;z-index:99990;'
-                      + 'background:#7f1d1d;color:#fff;padding:12px 14px;border-radius:12px;'
-                      + 'font-size:11px;font-weight:700;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35);';
-                  document.body.appendChild(box);
-              }
-              box.innerHTML = '';
-              const teks = document.createElement('div');
-              teks.textContent = 'Akun kamu sedang dipakai di ' + namaHp
-                  + '. Notifikasi orderan akan masuk ke HP itu, bukan ke HP ini. '
-                  + 'Kalau itu bukan kamu, segera lapor admin.';
-              const tutup = document.createElement('button');
-              tutup.textContent = 'Tutup';
-              tutup.style.cssText = 'margin-top:8px;background:rgba(255,255,255,.2);color:#fff;border:none;'
-                  + 'padding:6px 12px;border-radius:8px;font-weight:900;font-size:11px;';
-              tutup.onclick = function() { box.remove(); };
-              box.appendChild(teks); box.appendChild(tutup);
-          };
-
-          window.tutupPeringatanAkunGanda = function() {
-              const b = document.getElementById('peringatan-akun-ganda');
-              if (b) b.remove();
-          };
-
-          // Dipanggil verifyAdminPassword() sejak dulu tapi belum pernah didefinisikan.
-          // Menjadikan HP ini sebagai pemegang akun, lalu mendaftarkan tokennya.
+          // Jalur cepat: admin mengetik passwordnya langsung di HP rider.
+          // Dipanggil verifyAdminPassword() sejak dulu tapi belum pernah ada.
           window.forceTakeoverDevice = async function(uid, devId) {
               const cleanUid = String(uid || '').trim().toUpperCase();
               if (!cleanUid || !devId) return false;
@@ -12284,9 +12357,12 @@
                       owner_uid: cleanUid,
                       device_id: devId,
                       nama_perangkat: window.namaPerangkat(),
-                      last_login: serverTimestamp()
+                      fcm_token: null,
+                      last_login: serverTimestamp(),
+                      pending_device_id: null,
+                      pending_nama: null,
+                      pending_status: null
                   }, { merge: true });
-                  if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
                   return true;
               } catch (e) {
                   console.warn("Gagal mengambil alih perangkat:", e);
@@ -12294,20 +12370,21 @@
               }
           };
 
-          // Dipanggil sisi Android ketika pengambilan token benar-benar gagal,
-          // supaya sebabnya terlihat dan tidak hilang begitu saja.
-          window.gagalAmbilTokenFCM = function(pesan) {
-              console.error("Aplikasi Android gagal mengambil token FCM:", pesan);
-              window._sebabGagalToken = String(pesan || '');
+          // Logout -> token dikosongkan dan akun dibebaskan. Ini yang membuat
+          // notifikasi tidak lagi nyasar ke HP yang sudah keluar dari akun.
+          window.kosongkanTokenPerangkat = async function(uid) {
+              const cleanUid = String(uid || '').trim().toUpperCase();
+              if (!cleanUid) return;
               try {
-                  const uid = (typeof window.getRiderUid === 'function') ? window.getRiderUid() : null;
-                  if (uid) {
-                      setDoc(refPerangkat(uid), {
-                          diagnosa_token: 'android_gagal: ' + String(pesan || '').substring(0, 120),
-                          diagnosa_pada: serverTimestamp()
-                      }, { merge: true }).catch(function() {});
-                  }
-              } catch (e) {}
+                  await setDoc(refPerangkat(cleanUid), {
+                      fcm_token: null,
+                      device_id: null,
+                      nama_perangkat: null,
+                      pending_device_id: null,
+                      pending_nama: null,
+                      pending_status: null
+                  }, { merge: true });
+              } catch (e) { console.warn("Gagal mengosongkan token saat logout:", e); }
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
