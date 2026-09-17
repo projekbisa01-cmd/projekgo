@@ -12131,6 +12131,23 @@
                       }
                   }
 
+                  // 1b. JALUR CEPAT: token yang sudah tersimpan di aplikasi Android.
+                  // Dibaca LANGSUNG, tanpa menunggu panggilan balik. Inilah yang
+                  // mengatasi HP yang jembatannya "tidak menjawab", karena tidak ada
+                  // lagi jawaban yang perlu ditunggu.
+                  if (!finalToken && window.AndroidInterface
+                      && typeof window.AndroidInterface.getFCMTokenCached === 'function') {
+                      try {
+                          const tokenTersimpan = window.AndroidInterface.getFCMTokenCached();
+                          if (tokenTersimpan && String(tokenTersimpan).length > 20) {
+                              finalToken = String(tokenTersimpan);
+                              console.log("Token diambil langsung dari simpanan aplikasi Android.");
+                          }
+                      } catch (e) {
+                          console.warn("Tidak bisa membaca token tersimpan:", e);
+                      }
+                  }
+
                   // 2. METODE KODULAR (Fallback jika WebView menolak service worker web push)
                   if (!finalToken && window.AndroidInterface && window.AndroidInterface.getFCMToken) {
                       window.AndroidInterface.getFCMToken(cleanUid);
@@ -12275,6 +12292,22 @@
                   console.warn("Gagal mengambil alih perangkat:", e);
                   return false;
               }
+          };
+
+          // Dipanggil sisi Android ketika pengambilan token benar-benar gagal,
+          // supaya sebabnya terlihat dan tidak hilang begitu saja.
+          window.gagalAmbilTokenFCM = function(pesan) {
+              console.error("Aplikasi Android gagal mengambil token FCM:", pesan);
+              window._sebabGagalToken = String(pesan || '');
+              try {
+                  const uid = (typeof window.getRiderUid === 'function') ? window.getRiderUid() : null;
+                  if (uid) {
+                      setDoc(refPerangkat(uid), {
+                          diagnosa_token: 'android_gagal: ' + String(pesan || '').substring(0, 120),
+                          diagnosa_pada: serverTimestamp()
+                      }, { merge: true }).catch(function() {});
+                  }
+              } catch (e) {}
           };
 
           // Jembatan untuk menerima Token NATIVE dari Kodular
