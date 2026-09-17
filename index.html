@@ -12329,6 +12329,7 @@
           // Mengawasi HP yang sedang dipakai. Kalau akun dipindah ke HP lain,
           // HP ini keluar sendiri -- tanpa mengosongkan token HP yang baru.
           let _unsubPerangkat = null;
+          let _terakhirDaftarUlang = 0;
           window.startDeviceListener = function(uid) {
               const cleanUid = String(uid || '').trim().toUpperCase();
               const devId = (typeof getDeviceID === 'function') ? getDeviceID() : null;
@@ -12339,6 +12340,23 @@
                   if (!snap.exists()) return;
                   const d = snap.data();
                   const sedangDipakai = (typeof currentUserUID !== 'undefined' && currentUserUID === cleanUid);
+
+                  // PENDAFTARAN ULANG SENDIRI.
+                  // Token yang dikosongkan dari panel admin tidak akan terisi lagi
+                  // sampai aplikasi dimuat ulang, karena pendaftaran token hanya
+                  // berjalan saat halaman dibuka. Di sinilah lubang itu ditutup:
+                  // begitu kolom token terlihat kosong sementara HP ini memang
+                  // pemegang akunnya, pendaftaran dijalankan saat itu juga.
+                  const hpIni = (!d.device_id || d.device_id === devId);
+                  if (sedangDipakai && hpIni && !d.fcm_token) {
+                      const sekarang = Date.now();
+                      if (sekarang - _terakhirDaftarUlang > 60000) {
+                          _terakhirDaftarUlang = sekarang;
+                          console.log("Token kosong, mendaftarkan ulang sendiri...");
+                          if (typeof window.setupFCMToken === 'function') window.setupFCMToken(cleanUid);
+                      }
+                  }
+
                   if (sedangDipakai && d.device_id && d.device_id !== devId) {
                       if (typeof window.handleLogout === 'function') {
                           window.handleLogout("Akun ini sekarang dipakai di perangkat lain.", false);
