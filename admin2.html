@@ -344,7 +344,7 @@
                 <div class="dx-field">
                     <label for="cust-phone">Nomor WA pelanggan</label>
                     <div class="dx-row">
-                        <input type="text" id="cust-phone" required placeholder="08xxxx" inputmode="tel" autocomplete="off" class="dx-input">
+                        <input type="text" id="cust-phone" required placeholder="08xxxx" autocomplete="off" class="dx-input">
                         <button type="button" onclick="openContactPicker()" class="dx-icon-btn" title="Ambil dari kontak" aria-label="Ambil dari kontak"><i class="fa-solid fa-address-book"></i></button>
                     </div>
                 </div>
@@ -2147,7 +2147,37 @@
             } catch (e) { return '-'; }
         }
 
+        // Peta UID -> nama dari "Daftar Rider Aktif" di halaman Kelola Rider
+        // (sumbernya sama persis: getMergedRidersForDropdown). Mengembalikan null
+        // kalau data rider belum termuat, supaya daftar tidak mendadak kosong.
+        function _rosterRiderIl() {
+            const daftar = (typeof getMergedRidersForDropdown === 'function') ? getMergedRidersForDropdown() : [];
+            if (!daftar.length) return null;
+            const peta = new Map();
+            daftar.forEach(r => peta.set(String(r.uid).trim().toUpperCase(), r.name || r.uid));
+            return peta;
+        }
+
         let _jumlahIzinMenunggu = 0;
+        let _uidIzinMenunggu = [];
+        let _timerUlangIzin = null;
+
+        function _perbaruiBadgeIzin() {
+            const roster = _rosterRiderIl();
+            const jumlah = roster ? _uidIzinMenunggu.filter(u => roster.has(u)).length : _uidIzinMenunggu.length;
+            const badge = document.getElementById('badge-izin-login');
+            if (badge) {
+                badge.innerText = jumlah;
+                if (jumlah > 0) badge.classList.remove('hidden');
+                else badge.classList.add('hidden');
+            }
+            // Data rider belum termuat -> hitung ulang sebentar lagi
+            if (!roster && !_timerUlangIzin) {
+                _timerUlangIzin = setTimeout(() => { _timerUlangIzin = null; _perbaruiBadgeIzin(); }, 3000);
+            }
+            return jumlah;
+        }
+
         function startIzinLoginListener() {
             try {
                 const q = query(
@@ -2156,19 +2186,14 @@
                 );
                 onSnapshot(q, (snap) => {
                     const sebelumnya = _jumlahIzinMenunggu;
-                    _jumlahIzinMenunggu = snap.size;
-
-                    const badge = document.getElementById('badge-izin-login');
-                    if (badge) {
-                        badge.innerText = snap.size;
-                        if (snap.size > 0) badge.classList.remove('hidden');
-                        else badge.classList.add('hidden');
-                    }
+                    _uidIzinMenunggu = [];
+                    snap.forEach(d => { if (d.data().pending_device_id) _uidIzinMenunggu.push(String(d.id).trim().toUpperCase()); });
+                    _jumlahIzinMenunggu = _perbaruiBadgeIzin();
 
                     // Bunyi dan kabar hanya saat ada permintaan BARU, tidak berulang.
-                    if (snap.size > sebelumnya) {
+                    if (_jumlahIzinMenunggu > sebelumnya) {
                         try { if (typeof playBeep === 'function') playBeep(880, 0.15); } catch (e) {}
-                        window.kabarIzinLogin("Ada " + snap.size + " rider minta login dari HP berbeda.");
+                        window.kabarIzinLogin("Ada " + _jumlahIzinMenunggu + " rider minta login dari HP berbeda.");
                     }
 
                     if (document.getElementById('panel-izin-login')) window.muatIzinLogin();
@@ -2233,18 +2258,31 @@
             const wadah = document.getElementById('isi-izin-login');
             if (!wadah) return;
             try {
+                const roster = _rosterRiderIl();
+                if (!roster) {
+                    wadah.innerHTML = '<p style="color:#64748b;">Data rider belum termuat, mencoba lagi...</p>';
+                    setTimeout(() => { if (document.getElementById('isi-izin-login')) window.muatIzinLogin(); }, 2000);
+                    return;
+                }
                 const snap = await getDocs(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices'));
                 const menunggu = [];
                 const aktif = [];
+                let disembunyikan = 0;
                 snap.forEach(d => {
                     const v = d.data();
                     const uid = String(d.id).trim().toUpperCase();
+                    // Hanya rider yang ada di Daftar Rider Aktif (halaman Kelola Rider)
+                    if (!roster.has(uid)) {
+                        if (v.device_id || (v.pending_status === 'menunggu' && v.pending_device_id)) disembunyikan++;
+                        return;
+                    }
+                    const namaRider = roster.get(uid);
                     if (v.pending_status === 'menunggu' && v.pending_device_id) {
-                        menunggu.push({ uid: uid, nama: v.pending_nama || 'HP baru', waktu: v.pending_at,
+                        menunggu.push({ uid: uid, namaRider: namaRider, nama: v.pending_nama || 'HP baru', waktu: v.pending_at,
                                         hpLama: v.nama_perangkat || '-' });
                     }
                     if (v.device_id) {
-                        aktif.push({ uid: uid, nama: v.nama_perangkat || v.device_id,
+                        aktif.push({ uid: uid, namaRider: namaRider, nama: v.nama_perangkat || v.device_id,
                                      waktu: v.last_login, adaToken: !!v.fcm_token });
                     }
                 });
@@ -2257,7 +2295,7 @@
                 } else {
                     menunggu.forEach(m => {
                         html += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:10px;margin-bottom:8px;">'
-                            + '<div style="font-weight:900;color:#0f172a;">' + _escIl(m.uid) + '</div>'
+                            + '<div style="font-weight:900;color:#0f172a;">' + _escIl(m.uid) + ' &middot; ' + _escIl(m.namaRider) + '</div>'
                             + '<div style="color:#64748b;margin:2px 0 2px;">Minta masuk dari: <b>' + _escIl(m.nama) + '</b></div>'
                             + '<div style="color:#64748b;margin:0 0 8px;">Sekarang aktif di: ' + _escIl(m.hpLama) + ' &bull; ' + _escIl(_waktuIl(m.waktu)) + '</div>'
                             + '<div style="display:flex;gap:8px;">'
@@ -2277,10 +2315,11 @@
                             ? '<span style="background:#d1fae5;color:#047857;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">NOTIF AKTIF</span>'
                             : '<span style="background:#fee2e2;color:#b91c1c;font-weight:900;font-size:9px;padding:2px 6px;border-radius:6px;margin-left:6px;">TANPA TOKEN</span>';
                         html += '<div style="border:1px solid ' + (t.adaToken ? '#e2e8f0' : '#fecaca') + ';border-radius:12px;padding:10px;margin-bottom:8px;">'
-                            + '<div style="font-weight:900;color:#0f172a;">' + _escIl(t.uid) + tanda + '</div>'
+                            + '<div style="font-weight:900;color:#0f172a;">' + _escIl(t.uid) + ' &middot; ' + _escIl(t.namaRider) + tanda + '</div>'
                             + '<div style="color:#64748b;margin:2px 0 0;">' + _escIl(t.nama) + ' &bull; ' + _escIl(_waktuIl(t.waktu)) + '</div>'
                             + '</div>';
                     });
+                    if (disembunyikan) html += '<p style="margin:10px 0 0;color:#94a3b8;font-size:11px;">' + disembunyikan + ' perangkat milik ID yang tidak ada di Daftar Rider Aktif disembunyikan.</p>';
                     html += '<p style="margin:10px 0 0;color:#64748b;line-height:1.6;">Daftar ini untuk memantau saja. Rider bertanda <b>TANPA TOKEN</b> tidak bisa dibangunkan saat HP-nya tidur &mdash; suruh dia memasang aplikasi versi terbaru.<br><br>Rider yang ganti HP tidak perlu dibebaskan dari sini: begitu dia login dari HP barunya, permintaannya muncul sendiri di bagian <b>Menunggu izin</b> di atas.</p>';
                 }
                 wadah.innerHTML = html;
@@ -2296,6 +2335,8 @@
                 const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', cleanUid);
                 const snap = await getDoc(ref);
                 if (!snap.exists() || !snap.data().pending_device_id) { window.muatIzinLogin(); return; }
+                const roster = _rosterRiderIl();
+                if (!roster || !roster.has(cleanUid)) { alert(cleanUid + " tidak ada di Daftar Rider Aktif."); window.muatIzinLogin(); return; }
                 const d = snap.data();
                 if (!confirm("Izinkan " + cleanUid + " masuk dari " + (d.pending_nama || 'HP baru') + "?\n\nHP lamanya akan otomatis keluar.")) return;
                 await updateDoc(ref, {
@@ -5230,7 +5271,21 @@
             const fee = document.getElementById('order-fee');
             const tam = document.getElementById('order-tambahan');
             const det = document.getElementById('order-details');
-            if (phone) phone.addEventListener('input', () => window.cekHistoriOngkir());
+            if (phone) {
+                // Nomor hasil tempel (clipboard keyboard / paste) sering berisi spasi,
+                // tanda hubung, atau teks lain. Sisakan angka dan + saja, seperti
+                // yang sudah dilakukan tombol ambil-dari-kontak.
+                const rapikanNomorDx = () => {
+                    const bersih = phone.value.replace(/[^0-9+]/g, '');
+                    if (bersih !== phone.value) phone.value = bersih;
+                };
+                phone.addEventListener('input', (e) => {
+                    const tempel = e.inputType === 'insertFromPaste' || (e.data && e.data.length > 3);
+                    if (tempel && !e.isComposing) rapikanNomorDx();
+                    window.cekHistoriOngkir();
+                });
+                phone.addEventListener('blur', () => { rapikanNomorDx(); window.cekHistoriOngkir(); });
+            }
             if (fee) fee.addEventListener('input', () => { window.dxUpdateTombolKirim(); dxTandaiChipOngkir(); });
             if (tam) tam.addEventListener('input', () => window.dxUpdateTombolKirim());
             if (det) { det.addEventListener('input', window.dxAutoGrowPesanan); det.addEventListener('focus', window.dxAutoGrowPesanan); }
