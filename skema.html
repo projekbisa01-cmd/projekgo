@@ -27,10 +27,30 @@
         </div>
     </div>
 
-    <div class="max-w-7xl mx-auto">
-        <header class="mb-8 text-center md:text-left">
-            <h1 class="text-3xl font-bold text-blue-900">Dashboard Komparasi Skema Ongkir</h1>
-            <p class="text-gray-500 mt-2">Simulasi pendapatan Bersih Admin dan Rider berdasarkan 3 skema berbeda.</p>
+    <!-- Layar Login (tampil sebelum masuk) -->
+    <div id="login-screen" class="max-w-sm mx-auto mt-16 hidden">
+        <h1 class="text-2xl font-bold text-blue-900 mb-1">Komparasi Skema Ongkir</h1>
+        <p class="text-sm text-gray-500 mb-6">Masuk dengan akun admin untuk melanjutkan.</p>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <label for="login-email" class="block text-xs font-semibold text-gray-500 mb-1">Email</label>
+            <input id="login-email" type="email" autocomplete="username" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm mb-4 focus:ring-blue-500 focus:border-blue-500" placeholder="nama@email.com">
+            <label for="login-pass" class="block text-xs font-semibold text-gray-500 mb-1">Password</label>
+            <input id="login-pass" type="password" autocomplete="current-password" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm mb-4 focus:ring-blue-500 focus:border-blue-500">
+            <p id="login-error" class="text-sm text-red-600 mb-3 hidden"></p>
+            <button id="login-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors">Masuk</button>
+        </div>
+    </div>
+
+    <div id="app-root" class="max-w-7xl mx-auto hidden">
+        <header class="mb-8 flex flex-wrap justify-between items-start gap-4">
+            <div class="text-center md:text-left">
+                <h1 class="text-3xl font-bold text-blue-900">Dashboard Komparasi Skema Ongkir</h1>
+                <p class="text-gray-500 mt-2">Simulasi pendapatan Bersih Admin dan Rider berdasarkan 3 skema berbeda.</p>
+            </div>
+            <div class="text-right">
+                <p id="user-email" class="text-xs text-gray-500 mb-1"></p>
+                <button onclick="window.doLogout()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium py-1.5 px-3 rounded-lg">Keluar</button>
+            </div>
         </header>
 
         <!-- Data Input Section -->
@@ -194,28 +214,22 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // ==========================================
-        // 1. MASUKKAN KONFIGURASI FIREBASE ANDA DI SINI
-        // ==========================================
+        // Konfigurasi Firebase web memang terlihat publik; keamanannya ada di
+        // Firestore Rules (hanya email admin terdaftar) dan Authentication
+        // (pendaftaran akun baru dimatikan), bukan di kerahasiaan kunci ini.
         const firebaseConfig = {
+            apiKey: "AIzaSyB4rGg4plTKGF4q0LpSj_Z6dAF7DOzDOAk",
+            authDomain: "skema-75446.firebaseapp.com",
+            projectId: "skema-75446",
+            storageBucket: "skema-75446.firebasestorage.app",
+            messagingSenderId: "936375588719",
+            appId: "1:936375588719:web:36121a2cb897238c57ba9a"
+        };
 
-  apiKey: "AIzaSyB4rGg4plTKGF4q0LpSj_Z6dAF7DOzDOAk",
-
-  authDomain: "skema-75446.firebaseapp.com",
-
-  projectId: "skema-75446",
-
-  storageBucket: "skema-75446.firebasestorage.app",
-
-  messagingSenderId: "936375588719",
-
-  appId: "1:936375588719:web:36121a2cb897238c57ba9a"
-
-};
-
+        const HISTORY_COLLECTION = 'komparasi_public_history'; // nama lama dipertahankan agar data lama tetap terbaca
 
         let app, auth, db;
         let globalRawData = "";
@@ -223,10 +237,19 @@
         let isViewHistoryMode = false;
         let cachedHistories = []; 
         let docIdToDelete = null;
+        let unsubscribeHistory = null;
 
         const formatRp = (angka) => {
-            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(angka) || 0);
         };
+
+        // Mencegah XSS: semua teks dari data (hasil paste atau dari database)
+        // wajib lewat esc() sebelum dimasukkan ke innerHTML.
+        function esc(val) {
+            return String(val == null ? '' : val).replace(/[&<>"']/g, c => (
+                {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+            ));
+        }
 
         window.showToast = function(message, isError = false) {
             const container = document.getElementById('toast-container');
@@ -247,45 +270,97 @@
             setTimeout(() => { container.classList.add('hidden'); }, 3000);
         }
 
-        async function initApp() {
+        // ---------- Login ----------
+        function showLogin(errorMsg) {
+            document.getElementById('app-root').classList.add('hidden');
+            document.getElementById('login-screen').classList.remove('hidden');
+            const errEl = document.getElementById('login-error');
+            if (errorMsg) { errEl.innerText = errorMsg; errEl.classList.remove('hidden'); }
+            else { errEl.classList.add('hidden'); }
+            const btn = document.getElementById('login-btn');
+            btn.disabled = false; btn.innerText = 'Masuk';
+        }
+
+        function showApp(user) {
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('app-root').classList.remove('hidden');
+            document.getElementById('user-email').innerText = user.email || '';
+        }
+
+        async function doLogin() {
+            const email = document.getElementById('login-email').value.trim();
+            const pass = document.getElementById('login-pass').value;
+            if (!email || !pass) return showLogin('Isi email dan password.');
+            const btn = document.getElementById('login-btn');
+            btn.disabled = true; btn.innerText = 'Memproses…';
             try {
-                if(firebaseConfig.apiKey.includes("MASUKKAN_")) {
-                    console.warn("Harap masukkan API Key Firebase Anda agar sinkronisasi Cloud berfungsi!");
-                    document.getElementById('history-loading').innerText = "Konfigurasi Firebase belum diisi. Hubungi Admin.";
-                    document.getElementById('history-loading').classList.remove('hidden');
-                    return;
-                }
-
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-
-                await signInAnonymously(auth);
-                loadHistory();
+                await signInWithEmailAndPassword(auth, email, pass);
             } catch (err) {
-                console.error("Firebase init error:", err);
-                window.showToast("Gagal terhubung ke Database. Cek Console.", true);
+                // Pesan dibuat umum supaya tidak membocorkan email mana yang terdaftar
+                showLogin('Login gagal: email atau password salah.');
             }
         }
 
+        window.doLogout = async function() {
+            await signOut(auth);
+        }
+
+        function resetState() {
+            if (unsubscribeHistory) { unsubscribeHistory(); unsubscribeHistory = null; }
+            globalRawData = ""; globalSummaryData = null; isViewHistoryMode = false;
+            cachedHistories = []; docIdToDelete = null;
+            document.getElementById('history-list').innerHTML = '';
+            document.getElementById('rider-table-body').innerHTML = '';
+            document.getElementById('rawDataInput').value = '';
+            document.getElementById('login-pass').value = '';
+            window.goBack();
+        }
+
+        function initApp() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            } catch (err) {
+                console.error("Firebase init error:", err);
+                window.showToast("Gagal terhubung ke Database. Cek Console.", true);
+                return;
+            }
+
+            document.getElementById('login-btn').addEventListener('click', doLogin);
+            document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+            onAuthStateChanged(auth, (user) => {
+                resetState();
+                if (user) {
+                    showApp(user);
+                    loadHistory();
+                } else {
+                    showLogin();
+                }
+            });
+        }
+
         function loadHistory() {
-            // 2. PATH KOLEKSI PUBLIK (Agar sinkron di semua HP)
-            const historyRef = collection(db, 'komparasi_public_history');
-            
+            const historyRef = collection(db, HISTORY_COLLECTION);
             document.getElementById('history-loading').classList.remove('hidden');
 
-            onSnapshot(historyRef, (snapshot) => {
+            unsubscribeHistory = onSnapshot(historyRef, (snapshot) => {
                 document.getElementById('history-loading').classList.add('hidden');
                 cachedHistories = [];
-                snapshot.forEach(doc => {
-                    cachedHistories.push({ id: doc.id, ...doc.data() });
+                snapshot.forEach(d => {
+                    cachedHistories.push({ id: d.id, ...d.data() });
                 });
-                
-                cachedHistories.sort((a, b) => b.timestamp - a.timestamp);
+                cachedHistories.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
                 renderHistoryList();
             }, (error) => {
                 console.error("Gagal memuat riwayat", error);
-                window.showToast("Gagal memuat riwayat tersimpan", true);
+                document.getElementById('history-loading').classList.add('hidden');
+                if (error.code === 'permission-denied') {
+                    window.showToast("Akun ini tidak punya akses ke data riwayat.", true);
+                } else {
+                    window.showToast("Gagal memuat riwayat tersimpan", true);
+                }
             });
         }
 
@@ -297,56 +372,58 @@
             
             if (cachedHistories.length === 0) {
                 msgContainer.classList.remove('hidden');
-            } else {
-                msgContainer.classList.add('hidden');
-                
-                cachedHistories.forEach(item => {
-                    const sum = item.summary;
-                    const diffS1 = sum.adminS1 - sum.adminLama;
-                    const diffS2 = sum.adminS2 - sum.adminLama;
-                    
-                    const diffStrS1 = diffS1 >= 0 ? `(+${formatRp(diffS1)})` : `(${formatRp(diffS1).replace('-', '- ')})`;
-                    const diffColorS1 = diffS1 >= 0 ? 'text-green-500' : 'text-red-500';
-                    
-                    const diffStrS2 = diffS2 >= 0 ? `(+${formatRp(diffS2)})` : `(${formatRp(diffS2).replace('-', '- ')})`;
-                    const diffColorS2 = diffS2 >= 0 ? 'text-green-500' : 'text-red-500';
-
-                    const card = document.createElement('div');
-                    card.className = "bg-white border border-gray-200 p-4 rounded-xl shadow-sm cursor-pointer hover:bg-blue-50 transition-colors group relative";
-                    card.onclick = () => window.viewHistory(item.id);
-                    
-                    card.innerHTML = `
-                        <button onclick="window.confirmDelete('${item.id}', event)" class="absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-white rounded-md shadow-sm border border-gray-200 z-10" title="Hapus Riwayat">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
-                        <div class="flex justify-between items-center mb-2 pb-2 border-b border-gray-100 pr-8">
-                            <span class="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded">${item.dateStr}</span>
-                            <span class="text-xs text-gray-500 font-medium">Order: ${sum.orders}</span>
-                        </div>
-                        <div class="space-y-2 text-sm mt-3">
-                            <div class="flex justify-between items-center">
-                                <span class="text-gray-500">ADM Lama:</span>
-                                <span class="font-medium text-gray-700">${formatRp(sum.adminLama)}</span>
-                            </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-gray-500">ADM S1:</span>
-                                <div class="text-right flex flex-col items-end sm:block">
-                                    <span class="font-medium text-blue-600">${formatRp(sum.adminS1)}</span>
-                                    <span class="text-[11px] ${diffColorS1} font-bold sm:ml-1">${diffStrS1}</span>
-                                </div>
-                            </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-gray-500">ADM S2:</span>
-                                <div class="text-right flex flex-col items-end sm:block">
-                                    <span class="font-medium text-purple-600">${formatRp(sum.adminS2)}</span>
-                                    <span class="text-[11px] ${diffColorS2} font-bold sm:ml-1">${diffStrS2}</span>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                    listContainer.appendChild(card);
-                });
+                return;
             }
+            msgContainer.classList.add('hidden');
+                
+            cachedHistories.forEach(item => {
+                const sum = item.summary || {};
+                const diffS1 = (Number(sum.adminS1) || 0) - (Number(sum.adminLama) || 0);
+                const diffS2 = (Number(sum.adminS2) || 0) - (Number(sum.adminLama) || 0);
+                
+                const diffStrS1 = diffS1 >= 0 ? `(+${formatRp(diffS1)})` : `(${formatRp(diffS1).replace('-', '- ')})`;
+                const diffColorS1 = diffS1 >= 0 ? 'text-green-500' : 'text-red-500';
+                
+                const diffStrS2 = diffS2 >= 0 ? `(+${formatRp(diffS2)})` : `(${formatRp(diffS2).replace('-', '- ')})`;
+                const diffColorS2 = diffS2 >= 0 ? 'text-green-500' : 'text-red-500';
+
+                const card = document.createElement('div');
+                card.className = "bg-white border border-gray-200 p-4 rounded-xl shadow-sm cursor-pointer hover:bg-blue-50 transition-colors group relative";
+                card.addEventListener('click', () => window.viewHistory(item.id));
+                
+                card.innerHTML = `
+                    <button type="button" class="btn-del absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-white rounded-md shadow-sm border border-gray-200 z-10" title="Hapus Riwayat">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                    <div class="flex justify-between items-center mb-2 pb-2 border-b border-gray-100 pr-8">
+                        <span class="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded">${esc(item.dateStr)}</span>
+                        <span class="text-xs text-gray-500 font-medium">Order: ${esc(sum.orders)}</span>
+                    </div>
+                    <div class="space-y-2 text-sm mt-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-500">ADM Lama:</span>
+                            <span class="font-medium text-gray-700">${formatRp(sum.adminLama)}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-500">ADM S1:</span>
+                            <div class="text-right flex flex-col items-end sm:block">
+                                <span class="font-medium text-blue-600">${formatRp(sum.adminS1)}</span>
+                                <span class="text-[11px] ${diffColorS1} font-bold sm:ml-1">${diffStrS1}</span>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-500">ADM S2:</span>
+                            <div class="text-right flex flex-col items-end sm:block">
+                                <span class="font-medium text-purple-600">${formatRp(sum.adminS2)}</span>
+                                <span class="text-[11px] ${diffColorS2} font-bold sm:ml-1">${diffStrS2}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                // id dokumen dipasang lewat event listener, bukan disisipkan ke atribut onclick
+                card.querySelector('.btn-del').addEventListener('click', (ev) => window.confirmDelete(item.id, ev));
+                listContainer.appendChild(card);
+            });
         }
 
         window.processManualData = function() {
@@ -362,30 +439,34 @@
 
         window.viewHistory = function(docId) {
             const historyItem = cachedHistories.find(h => h.id === docId);
-            if(historyItem) {
+            if(historyItem && typeof historyItem.rawData === 'string') {
                 isViewHistoryMode = true;
                 const dataArray = historyItem.rawData.split('\n').map(row => row.split('\t'));
                 processSpreadsheetData(dataArray, historyItem.dateStr);
             }
         }
 
+        function isHeaderRow(row) {
+            if (!row) return false;
+            const c0 = String(row[0] || '').toLowerCase();
+            const c1 = String(row[1] || '').toLowerCase();
+            return c0.includes('uid') || c1.includes('nama');
+        }
+
         function extractAndFormatDate(rawData) {
             if (!rawData) return "Tanggal Tidak Diketahui";
             const dataArray = rawData.split('\n').map(row => row.split('\t'));
-            let startIdx = 0;
-            if (dataArray[0][0] && (dataArray[0][0].toString().toLowerCase().includes('uid') || dataArray[0][1].toString().toLowerCase().includes('nama'))) {
-                startIdx = 1; 
-            }
+            let startIdx = isHeaderRow(dataArray[0]) ? 1 : 0;
             
             for (let i = startIdx; i < dataArray.length; i++) {
                 if (dataArray[i].length >= 3 && dataArray[i][0].trim() !== '') {
                     let rawDate = dataArray[i][2].trim(); 
+                    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
                     
                     let parts = rawDate.split('-');
                     if (parts.length === 3) {
                         let year = parts[0]; let month = parts[1]; let day = parts[2];
                         let dateObj = new Date(year, parseInt(month) - 1, day);
-                        let days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
                         return `${days[dateObj.getDay()]}, ${day}-${month}-${year}`;
                     }
                     
@@ -393,15 +474,16 @@
                     if (partsSlash.length === 3) {
                         let day = partsSlash[0]; let month = partsSlash[1]; let year = partsSlash[2];
                         let dateObj = new Date(year, parseInt(month) - 1, day);
-                        let days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
                         return `${days[dateObj.getDay()]}, ${day}-${month}-${year}`;
                     }
                     
-                    return rawDate; 
+                    return rawDate.slice(0, 60); 
                 }
             }
             return "Tanggal Tidak Diketahui";
         }
+
+        const SAVE_BTN_HTML = `<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg> Simpan ke Cloud Bersama`;
 
         window.saveCurrentData = async function() {
             if (isViewHistoryMode) return window.showToast("Ini adalah data riwayat.", true);
@@ -412,22 +494,17 @@
             btn.disabled = true;
 
             try {
-                // 3. MENYIMPAN KE KOLEKSI PUBLIK
-                const historyRef = collection(db, 'komparasi_public_history');
-                const now = new Date();
-                
+                const historyRef = collection(db, HISTORY_COLLECTION);
                 const dateString = extractAndFormatDate(globalRawData);
 
                 const isDuplicate = cachedHistories.some(h => h.dateStr === dateString);
                 if (isDuplicate) {
                     window.showToast(`Gagal: Data untuk tanggal ${dateString} sudah tersimpan!`, true);
-                    btn.innerHTML = `<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg> Simpan ke Cloud Bersama`;
-                    btn.disabled = false;
                     return;
                 }
 
                 await addDoc(historyRef, {
-                    timestamp: now.getTime(), 
+                    timestamp: Date.now(), 
                     dateStr: dateString,
                     rawData: globalRawData,
                     summary: globalSummaryData
@@ -438,9 +515,9 @@
                 updateUIMode(dateString); 
             } catch (err) {
                 console.error("Save error", err);
-                window.showToast("Gagal menyimpan data", true);
+                window.showToast(err.code === 'permission-denied' ? "Ditolak: akun tidak punya izin atau data terlalu besar." : "Gagal menyimpan data", true);
             } finally {
-                btn.innerHTML = `<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg> Simpan ke Cloud Bersama`;
+                btn.innerHTML = SAVE_BTN_HTML;
                 btn.disabled = false;
             }
         }
@@ -448,10 +525,7 @@
         function processSpreadsheetData(dataArray, historyDate = null) {
             if (!dataArray || dataArray.length === 0) return window.showToast("Data kosong.", true);
 
-            let startIdx = 0;
-            if (dataArray[0][0] && (dataArray[0][0].toString().toLowerCase().includes('uid') || dataArray[0][1].toString().toLowerCase().includes('nama'))) {
-                startIdx = 1; 
-            }
+            let startIdx = isHeaderRow(dataArray[0]) ? 1 : 0;
 
             let summary = {
                 orders: 0,
@@ -508,18 +582,20 @@
                 summary.adminS2Cust += ptgAdminS2Cust; 
                 summary.riderS2 += riderS2Total;
 
-                if (!riderMap[uid]) {
-                    riderMap[uid] = { 
-                        nama: nama, orders: 0, 
+                // prefix "u:" mencegah UID seperti "__proto__" merusak objek riderMap
+                const key = 'u:' + uid;
+                if (!riderMap[key]) {
+                    riderMap[key] = { 
+                        uid: uid, nama: nama, orders: 0, 
                         rLama: 0, admLama: 0,
                         rS1: 0, admS1: 0,
                         rS2: 0, admS2: 0
                     };
                 }
-                riderMap[uid].orders++;
-                riderMap[uid].rLama += riderLamaTotal; riderMap[uid].admLama += ptgAdminLamaOngkir;
-                riderMap[uid].rS1 += riderS1Total;     riderMap[uid].admS1 += ptgAdminS1Ongkir;
-                riderMap[uid].rS2 += riderS2Total;     riderMap[uid].admS2 += ptgAdminS2Ongkir;
+                riderMap[key].orders++;
+                riderMap[key].rLama += riderLamaTotal; riderMap[key].admLama += ptgAdminLamaOngkir;
+                riderMap[key].rS1 += riderS1Total;     riderMap[key].admS1 += ptgAdminS1Ongkir;
+                riderMap[key].rS2 += riderS2Total;     riderMap[key].admS2 += ptgAdminS2Ongkir;
             }
 
             globalSummaryData = summary;
@@ -546,19 +622,18 @@
             document.getElementById('detail-admin-s2').innerText = `( ADM Ongkir: ${formatRp(summary.adminS2Ongkir)} | Cust: ${formatRp(summary.adminS2Cust)} )`;
             document.getElementById('sum-rider-s2').innerText = "Total Semua Rider: " + formatRp(summary.riderS2);
 
-            let tbody = document.getElementById('rider-table-body');
-            tbody.innerHTML = '';
-            for (let uid in riderMap) {
-                let r = riderMap[uid];
+            let rowsHtml = '';
+            for (let key in riderMap) {
+                let r = riderMap[key];
                 let diffS1 = r.rS1 - r.rLama;
                 let diffS2 = r.rS2 - r.rLama;
                 
                 let labelDiffS1 = diffS1 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS1).replace('-', '- ')} )</span>` : (diffS1 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS1)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
                 let labelDiffS2 = diffS2 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS2).replace('-', '- ')} )</span>` : (diffS2 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS2)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
 
-                tbody.innerHTML += `
+                rowsHtml += `
                     <tr class="bg-white border-b hover:bg-gray-50">
-                        <td class="px-6 py-4 font-medium text-gray-900">${uid} - ${r.nama}</td>
+                        <td class="px-6 py-4 font-medium text-gray-900">${esc(r.uid)} - ${esc(r.nama)}</td>
                         <td class="px-6 py-4 text-center">${r.orders}</td>
                         <td class="px-6 py-4 text-right">
                             <div class="font-medium text-gray-800">${formatRp(r.rLama)}</div>
@@ -577,6 +652,7 @@
                     </tr>
                 `;
             }
+            document.getElementById('rider-table-body').innerHTML = rowsHtml;
         }
 
         function updateUIMode(historyDate = null) {
@@ -636,11 +712,8 @@
 
         window.executeDelete = async function() {
             if (!docIdToDelete) return;
-            
             try {
-                // Hapus dari jalur publik
-                const docRef = doc(db, 'komparasi_public_history', docIdToDelete);
-                await deleteDoc(docRef);
+                await deleteDoc(doc(db, HISTORY_COLLECTION, docIdToDelete));
                 window.showToast("Riwayat berhasil dihapus!");
                 window.closeDeleteModal();
             } catch (error) {
@@ -653,7 +726,6 @@
             if (e.target === this) { window.closeDeleteModal(); }
         });
 
-        // Jalankan saat load
         initApp();
     </script>
 </body>
