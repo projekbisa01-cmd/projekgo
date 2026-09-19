@@ -2483,6 +2483,17 @@
                             <span id="weekly-achievement-text" class="text-xs font-black text-gray-800 leading-tight">0 / 90 Orderan</span>
                         </div>
                     </div>
+
+                    <!-- BADGE PERINGATAN ADM TAMBAHAN 4% (tampil bila order minggu ini < 90 & fitur aktif) -->
+                    <div id="adm4-badge-rider" class="hidden col-span-2 flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-2xl px-3 py-2.5">
+                        <i class="fa-solid fa-triangle-exclamation text-rose-500 text-xs mt-0.5 shrink-0"></i>
+                        <div class="min-w-0">
+                            <p class="text-[10px] font-black text-rose-700 leading-snug">Yuk capai 90 orderan per minggu, agar tidak terkena potongan tambahan 4%.</p>
+                            <p id="adm4-badge-sisa" class="text-[9px] font-bold text-rose-500 mt-0.5"></p>
+                            <span id="adm4-badge-estimasi" class="inline-block mt-1.5 bg-rose-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full"></span>
+                            <p id="adm4-badge-dasar" class="text-[8px] font-bold text-rose-400 mt-1"></p>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- KARTU KOMITMEN RIDER (HANYA TAMPIL SAAT ON-BID AKTIF) -->
@@ -5690,6 +5701,55 @@
             }
             return window._liburData;
         }
+
+        // --- BADGE ADM TAMBAHAN 4% ---
+        // Membaca 1 dokumen pengaturan (pengaturan_rider/adm_tambahan), paling sering 1x per 30 menit.
+        // Kalau dokumen tidak ada / aktif=false -> badge disembunyikan.
+        // Kalau gagal dibaca (mis. Rules belum diizinkan) -> badge tetap ditampilkan, supaya rider
+        // tidak sampai terpotong tanpa peringatan.
+        window._adm4Aktif = null;      // true / false / null (belum tahu)
+        window._adm4DibacaMs = 0;
+        window._adm4SedangBaca = false;
+        async function bacaPengaturanAdm4() {
+            if (window._adm4SedangBaca) return;
+            if (Date.now() - window._adm4DibacaMs < 30 * 60 * 1000) return;
+            window._adm4SedangBaca = true;
+            try {
+                const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                const db = getFirestore();
+                const pid = typeof firebaseConfig !== 'undefined' ? firebaseConfig.projectId : 'onbid-2f87a';
+                const snap = await getDoc(doc(db, 'artifacts', pid, 'public', 'data', 'pengaturan_rider', 'adm_tambahan'));
+                window._adm4Aktif = snap.exists() && snap.data().aktif === true;
+                window._adm4DibacaMs = Date.now();
+            } catch (e) {
+                console.warn('Pengaturan ADM tambahan tidak terbaca:', e && e.code);
+                window._adm4Aktif = null;
+                window._adm4DibacaMs = Date.now() - 25 * 60 * 1000; // coba lagi ~5 menit lagi
+            } finally {
+                window._adm4SedangBaca = false;
+                tampilkanBadgeAdm4();
+            }
+        }
+        function tampilkanBadgeAdm4() {
+            const el = document.getElementById('adm4-badge-rider');
+            if (!el) return;
+            const trips = Number(window._adm4TripsMingguIni);
+            const target = 90;
+            // Part-time tidak kena potongan; badge juga ditahan sampai jenis shift diketahui.
+            const shift = window._adm4ShiftType;
+            const tampil = Number.isFinite(trips) && trips < target && window._adm4Aktif !== false
+                           && !!shift && shift !== 'parttime';
+            el.classList.toggle('hidden', !tampil);
+            const sisaEl = document.getElementById('adm4-badge-sisa');
+            if (sisaEl) sisaEl.innerText = tampil ? `Kurang ${target - trips} orderan lagi minggu ini.` : '';
+            const ongkir = Math.max(0, Number(window._adm4OngkirMingguIni) || 0);
+            const estimasi = Math.round(ongkir * 0.04);
+            const estEl = document.getElementById('adm4-badge-estimasi');
+            if (estEl) estEl.innerText = tampil ? `Estimasi potongan 4% kamu: Rp ${estimasi.toLocaleString('id-ID')}` : '';
+            const dasarEl = document.getElementById('adm4-badge-dasar');
+            if (dasarEl) dasarEl.innerText = tampil ? `4% dari ongkir murni minggu ini Rp ${ongkir.toLocaleString('id-ID')} · dipotong Senin 06.50 bila tidak capai 90 orderan` : '';
+        }
+        window.renderBadgeAdm4 = () => { tampilkanBadgeAdm4(); bacaPengaturanAdm4(); };
 
         window.gantiMingguLibur = function (offset) {
             window._liburOffsetMinggu = Math.max(0, Math.min(1, offset));
@@ -9298,6 +9358,20 @@
             if (weeklyPercentEl) weeklyPercentEl.innerText = `${weeklyPct}%`;
             const weeklyTextEl = document.getElementById('weekly-achievement-text');
             if (weeklyTextEl) weeklyTextEl.innerText = `${wTripsCount} / ${WEEKLY_TARGET_ORDERS} Orderan`;
+            window._adm4TripsMingguIni = wTripsCount;
+            // Ongkir murni minggu ini (tanpa Tambahan), dasar estimasi ADM tambahan 4%
+            let adm4Ongkir = 0;
+            currentWeekKeys.forEach(key => {
+                rawData.forEach(item => {
+                    if (parseSheetDate(item.Tanggal) !== key || String(item.Status || '').trim().toLowerCase() !== 'selesai') return;
+                    let n = Number(item.Nominal_Kotor);
+                    if (!Number.isFinite(n) || n <= 0) return;
+                    if (n <= 500) n = n * 1000;
+                    adm4Ongkir += Math.round(n);
+                });
+            });
+            window._adm4OngkirMingguIni = adm4Ongkir;
+            if (typeof window.renderBadgeAdm4 === 'function') window.renderBadgeAdm4();
             // -------------------------------------------------------------------------
 
            // --- LOGIKA LEVEL RIDER (HALAMAN INSENTIF) ---
@@ -15581,9 +15655,12 @@
 
                   // Panggil fungsi untuk mengupdate UI (Membuat Badge Otomatis)
                   window.updateShiftBadgeUI(shiftType, poin);
+                  window._adm4ShiftType = shiftType; // part-time tidak kena ADM tambahan 4%
+                  if (typeof window.renderBadgeAdm4 === 'function') window.renderBadgeAdm4();
                   
               }, (error) => {
                   console.error("Error fetching shift data:", error);
+                  if (!window._adm4ShiftType) { window._adm4ShiftType = 'tidak-diketahui'; if (typeof window.renderBadgeAdm4 === 'function') window.renderBadgeAdm4(); }
               });
           };
 
