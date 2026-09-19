@@ -10,7 +10,7 @@
   Kalau isi skrip utama di bawah diubah walau satu huruf, hash harus dihitung
   ulang. Kalau tidak, halaman akan kosong total.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-85JRbcmNbjL8POK9gfmztBF+bp6gHZj+H/Ny0sCApuE=' https://www.gstatic.com; style-src 'unsafe-inline'; img-src data:; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-14n8c4v1GVWnT2pcZ6wOZtRyhedKg8oLjOJGOpuS2UE=' https://www.gstatic.com; style-src 'unsafe-inline'; img-src data:; connect-src https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>ProjekGo · Analisis target</title>
 <link rel="icon" href="data:,">
 <style>
@@ -153,7 +153,14 @@
   .daftar-donat li { display: flex; align-items: center; gap: 8px; }
   .daftar-donat i { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--garis); }
   .daftar-donat b { margin-left: auto; }
-  .kalimat { margin: 0 0 14px; max-width: 90ch; }
+  .kalimat { margin: 0 0 14px; max-width: 100ch; }
+  .baris-isian { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .baris-isian label.isian { margin: 0; }
+  .baris-isian input.isian { width: 140px; margin: 0; padding: 6px 10px; }
+  .baris-isian .galat { margin: 0; }
+  .deret-rider { margin-top: 6px; }
+  .rincian-rider { margin-top: 18px; }
+  .rincian-rider summary { cursor: pointer; font-weight: 600; font-size: 14px; }
   footer { max-width: 1440px; margin: 0 auto; padding: 0 32px 36px; color: var(--redup); font-size: 13px; }
 
   /* ---------- Dialog target ---------- */
@@ -335,6 +342,17 @@
     </section>
 
     <section class="panel">
+      <div class="panel-kepala"><h2>Estimasi penambahan rider</h2><span class="catatan" id="catatan-estimasi"></span></div>
+      <div class="baris-isian">
+        <label class="isian" for="rider-target-order">Target order per hari</label>
+        <input class="isian" id="rider-target-order" inputmode="numeric" autocomplete="off">
+        <button class="tombol kecil" type="button" data-aksi="simpan-target-rider">Hitung dan simpan</button>
+        <span class="galat" id="rider-target-galat" hidden></span>
+      </div>
+      <div id="isi-estimasi-rider"></div>
+    </section>
+
+    <section class="panel">
       <div class="panel-kepala"><h2 id="judul-rider">Rider</h2><span class="catatan" id="catatan-rider"></span></div>
       <div class="gulir"><table id="tabel-rider"></table></div>
     </section>
@@ -395,7 +413,8 @@ const S = {
   user: null, dataSiap: false, sedangMemuat: false, terkunci: false,
   hariIni: '', bulanKini: '', ringkasan: new Map(), bulanIni: null, target: {},
   bulanDipilih: '', bacaan: 0, dimuatPada: null, peringatan: [], simpanDiblokir: false,
-  dialogBulan: '', jamKini: null, jamDiblokir: false
+  dialogBulan: '', jamKini: null, jamDiblokir: false,
+  dokJam: new Map(), rider7: [], rider7Gagal: ''
 };
 
 // ================= Alat bantu =================
@@ -435,6 +454,14 @@ const namaBulanPendek = (k) => { const [y, m] = k.split('-').map(Number); return
 const milidetik = (ts) => (ts && typeof ts.toMillis === 'function') ? ts.toMillis() : 0;
 const fmtJamAngka = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', hourCycle: 'h23' });
 const jamJakarta = (ms) => Number(fmtJamAngka.format(new Date(ms))) % 24;
+const fmtJamMenit = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const menitJakarta = (ms) => { const [h, m] = fmtJamMenit.format(new Date(ms)).split(':').map(Number); return ((h % 24) * 60) + m; };
+const teksMenit = (m) => `${duaDigit(Math.floor(m / 60) % 24)}.${duaDigit(Math.round(m) % 60)}`;
+// Ringkasan rider per hari di rekap_jam: u = UID, n = nama, a = menit order pertama, z = menit order terakhir, o = jumlah order.
+const rapikanRiderHari = (arr) => (Array.isArray(arr) ? arr : []).map((r) => ({
+  u: String(r?.u ?? '').slice(0, 64), n: String(r?.n ?? '').slice(0, 80),
+  a: Math.min(1439, Math.max(0, angka(r?.a))), z: Math.min(1439, Math.max(0, angka(r?.z))), o: angka(r?.o)
+})).filter((r) => r.u && r.o > 0);
 const awalHari = (t) => new Date(t + 'T00:00:00+07:00');
 const akhirHari = (t) => new Date(t + 'T23:59:59.999+07:00');
 const jamKosong = () => Array.from({ length: 24 }, () => ({ o: 0, m: 0 }));
@@ -614,6 +641,7 @@ async function muatSemua() {
   teksMuat('Membaca rekap bulan berjalan…');
   S.bulanIni = ringkas(kini, await baca(query(koleksiHarian, where('tanggal', '>=', kini + '-01'), where('tanggal', '<=', S.hariIni))));
   await muatJamKini();
+  await muatRider7Hari();
   S.dimuatPada = new Date();
   if (!S.bulanDipilih || (S.bulanDipilih !== kini && !S.ringkasan.has(S.bulanDipilih))) S.bulanDipilih = kini;
 }
@@ -650,10 +678,18 @@ async function bacaOrderPerJam(dariTgl, sampaiTgl) {
     const ms = waktuOrder(d);
     if (!ms) return;
     const tg = tanggalJakarta(new Date(ms));
-    if (!perHari.has(tg)) perHari.set(tg, jamKosong());
-    const sel = perHari.get(tg)[jamJakarta(ms)];
+    if (!perHari.has(tg)) perHari.set(tg, { jam: jamKosong(), rider: new Map() });
+    const hari = perHari.get(tg);
+    const sel = hari.jam[jamJakarta(ms)];
     sel.o += 1;
     sel.m += Math.max(0, angka(d.fee));
+    const uid = String(d.rider_uid ?? '').trim().toUpperCase().slice(0, 64);
+    if (uid) {
+      const mnt = menitJakarta(ms);
+      const r = hari.rider.get(uid) || { u: uid, n: String(d.rider_name ?? uid).slice(0, 80), a: mnt, z: mnt, o: 0 };
+      r.a = Math.min(r.a, mnt); r.z = Math.max(r.z, mnt); r.o += 1;
+      hari.rider.set(uid, r);
+    }
   });
   return perHari;
 }
@@ -663,7 +699,7 @@ async function simpanJamHarian(daftar) {
   try {
     for (let i = 0; i < daftar.length; i += 400) {
       const batch = writeBatch(db);
-      daftar.slice(i, i + 400).forEach((x) => batch.set(doc(koleksiJam, x.tanggal), { tanggal: x.tanggal, jam: x.jam, total: jumlahJam(x.jam), versi: 1, dihitung_pada: serverTimestamp() }));
+      daftar.slice(i, i + 400).forEach((x) => batch.set(doc(koleksiJam, x.tanggal), { tanggal: x.tanggal, jam: x.jam, total: jumlahJam(x.jam), rider: x.rider || [], versi: 2, dihitung_pada: serverTimestamp() }));
       await batch.commit();
     }
   } catch (e) {
@@ -702,11 +738,14 @@ async function lengkapiJamDariHarian(daftar, dari) {
 async function muatJamKini() {
   const kini = S.bulanKini, hariKe = Number(S.hariIni.slice(8));
   S.jamKini = { jam: jamKosong(), hari: 0 };
+  S.dokJam = new Map();
   const ada = new Map();
   try {
     teksMuat('Membaca data jam sibuk…');
     (await baca(query(koleksiJam, where('tanggal', '>=', kini + '-01'), where('tanggal', '<', S.hariIni)))).forEach((d) => {
-      if (POLA_TANGGAL.test(String(d.tanggal || ''))) ada.set(d.tanggal, rapikanJam(d.jam));
+      if (!POLA_TANGGAL.test(String(d.tanggal || ''))) return;
+      ada.set(d.tanggal, rapikanJam(d.jam));
+      S.dokJam.set(d.tanggal, { jam: rapikanJam(d.jam), rider: Array.isArray(d.rider) ? rapikanRiderHari(d.rider) : null });
     });
   } catch (e) {
     console.warn('rekap_jam tidak bisa dibaca:', e);
@@ -720,8 +759,8 @@ async function muatJamKini() {
     try {
       teksMuat(`Menghitung jam sibuk ${hilang.length} hari (sekali saja)…`);
       const perHari = await bacaOrderPerJam(hilang[0], hilang[hilang.length - 1]);
-      const baru = hilang.map((tg) => ({ tanggal: tg, jam: perHari.get(tg) || jamKosong() }));
-      baru.forEach((x) => ada.set(x.tanggal, x.jam));
+      const baru = hilang.map((tg) => ({ tanggal: tg, jam: perHari.get(tg)?.jam || jamKosong(), rider: [...(perHari.get(tg)?.rider.values() || [])] }));
+      baru.forEach((x) => { ada.set(x.tanggal, x.jam); S.dokJam.set(x.tanggal, { jam: x.jam, rider: x.rider }); });
       await simpanJamHarian(baru);
     } catch (e) {
       console.warn('Order per jam gagal dibaca:', e);
@@ -744,7 +783,7 @@ async function ambilJamBulan(k) {
   const perHari = await bacaOrderPerJam(k + '-01', `${k}-${duaDigit(jumlahHari(k))}`);
   const jam = jamKosong();
   let hari = 0;
-  perHari.forEach((j) => { j.forEach((x, i) => { jam[i].o += x.o; jam[i].m += x.m; }); if (jumlahJam(j) > 0) hari++; });
+  perHari.forEach(({ jam: j }) => { j.forEach((x, i) => { jam[i].o += x.o; jam[i].m += x.m; }); if (jumlahJam(j) > 0) hari++; });
   s.jam = jam;
   s.jam_hari = hari;
   if (!S.simpanDiblokir) {
@@ -812,6 +851,223 @@ function rencanaJamSibuk() {
   let alasan = '';
   if (targetHari) alasan = targetHari === t.order ? 'sesuai target order harian' : (targetHari === kejarOrder ? 'untuk mengejar target order sebulan' : 'untuk mengejar target omset 16%');
   return { A, M, dasar, targetHari, alasan, tambahan, sisaOrder, kejarOrder, targetOrderBulan, baris, sumSibuk, nilaiOrder };
+}
+
+// ================= Estimasi penambahan rider =================
+// Memakai 7 hari terakhir yang sudah selesai. Rider yang tidak dapat order sama sekali
+// dalam 7 hari itu (misalnya sudah resign tapi masih di daftar) otomatis tidak dihitung.
+function tujuhHariTerakhir() {
+  const dasar = Date.parse(S.hariIni + 'T12:00:00+07:00');
+  const out = [];
+  for (let i = 7; i >= 1; i--) out.push(tanggalJakarta(new Date(dasar - i * 86400000)));
+  return out;
+}
+
+async function muatRider7Hari() {
+  S.rider7 = []; S.rider7Gagal = '';
+  if (S.jamDiblokir) { S.rider7Gagal = 'Data jam belum bisa dibaca atau disimpan, jadi estimasi rider belum bisa dihitung.'; return; }
+  const hari = tujuhHariTerakhir();
+  const punya = new Map();
+  hari.forEach((tg) => { const d = S.dokJam.get(tg); if (d && d.rider) punya.set(tg, d); });
+  try {
+    let kurang = hari.filter((tg) => !punya.has(tg));
+    const diLuar = kurang.filter((tg) => !S.dokJam.has(tg)); // hari bulan lalu yang belum pernah dibaca
+    if (diLuar.length) {
+      teksMuat('Membaca data rider 7 hari terakhir…');
+      (await baca(query(koleksiJam, where('tanggal', '>=', diLuar[0]), where('tanggal', '<=', diLuar[diLuar.length - 1])))).forEach((d) => {
+        if (hari.includes(d.tanggal) && Array.isArray(d.rider)) punya.set(d.tanggal, { jam: rapikanJam(d.jam), rider: rapikanRiderHari(d.rider) });
+      });
+      kurang = hari.filter((tg) => !punya.has(tg));
+    }
+    if (kurang.length) {
+      teksMuat(`Menghitung jam kerja rider ${kurang.length} hari (sekali saja)…`);
+      const perHari = await bacaOrderPerJam(kurang[0], kurang[kurang.length - 1]);
+      const baru = kurang.map((tg) => ({ tanggal: tg, jam: perHari.get(tg)?.jam || jamKosong(), rider: [...(perHari.get(tg)?.rider.values() || [])] }));
+      baru.forEach((x) => punya.set(x.tanggal, { jam: x.jam, rider: x.rider }));
+      await simpanJamHarian(baru);
+    }
+  } catch (e) {
+    console.warn('Data rider 7 hari gagal:', e);
+    S.rider7Gagal = e?.code === 'failed-precondition' ? 'Index Firestore untuk active_orders (status + created_at) belum ada.' : 'Data rider 7 hari terakhir gagal dibaca. Coba Muat ulang nanti.';
+  }
+  S.rider7 = hari.map((tg) => (punya.has(tg) ? { tanggal: tg, ...punya.get(tg) } : null)).filter((d) => d && jumlahJam(d.jam) > 0);
+}
+
+const SESI = [
+  { nama: 'Pagi', ket: 'order pertama sebelum 09.00', bawaan: [6, 14] },
+  { nama: 'Siang 1', ket: 'order pertama 09.00–10.59', bawaan: [9, 17] },
+  { nama: 'Siang 2', ket: 'order pertama 11.00–13.59', bawaan: [11, 20] },
+  { nama: 'Part time / sore', ket: 'order pertama 14.00 ke atas', bawaan: [15, 21] }
+];
+const sesiDari = (menit) => (menit < 540 ? 0 : menit < 660 ? 1 : menit < 840 ? 2 : 3);
+const median = (arr) => { const u = [...arr].sort((a, b) => a - b), m = u.length >> 1; return u.length ? (u.length % 2 ? u[m] : (u[m - 1] + u[m]) / 2) : 0; };
+const targetOrderRider = () => { const v = angka(S.target?.rider_order_hari); return v > 0 ? v : 600; };
+
+function analisisRider() {
+  const hari = S.rider7;
+  if (!hari.length) return null;
+  const D = hari.length, T = targetOrderRider();
+  const orderJam = Array(24).fill(0), onJam = Array(24).fill(0);
+  const perRider = new Map();
+  const perSesi = SESI.map(() => ({ hariRider: 0, mulai: [], selesai: [], orang: new Set() }));
+  let totalOrder = 0, riderHari = 0;
+  hari.forEach((d) => {
+    d.jam.forEach((x, i) => { orderJam[i] += x.o; });
+    totalOrder += jumlahJam(d.jam);
+    d.rider.forEach((r) => {
+      riderHari++;
+      const akhir = r.z + 30; // anggap order terakhir diantar sekitar 30 menit
+      for (let h = 0; h < 24; h++) if (r.a < h * 60 + 60 && akhir > h * 60) onJam[h]++;
+      const si = sesiDari(r.a);
+      perSesi[si].hariRider++; perSesi[si].mulai.push(r.a); perSesi[si].selesai.push(r.z); perSesi[si].orang.add(r.u);
+      const p = perRider.get(r.u) || { u: r.u, n: r.n, hari: 0, a: [], z: [], o: 0 };
+      p.hari++; p.a.push(r.a); p.z.push(r.z); p.o += r.o; p.n = r.n || p.n;
+      perRider.set(r.u, p);
+    });
+  });
+  if (!riderHari || !totalOrder) return null;
+
+  const riderDaftar = [...perRider.values()].map((p) => ({ ...p, mulai: median(p.a), selesai: median(p.z), sesi: sesiDari(median(p.a)), orderHari: p.o / p.hari }))
+    .sort((a, b) => a.sesi - b.sesi || a.mulai - b.mulai);
+
+  // Kecepatan: order per rider per jam. Jam yang ridernya sangat sedikit memakai rata-rata umum.
+  const totalJamRider = onJam.reduce((a, b) => a + b, 0);
+  const kecepatanUmum = totalJamRider ? totalOrder / totalJamRider : 0;
+  const jam = orderJam.map((o, h) => {
+    const onRata = onJam[h] / D;
+    const kecepatan = onRata >= 1.5 ? o / onJam[h] : kecepatanUmum;
+    const target = T * (o / totalOrder);
+    const butuh = kecepatan > 0 ? target / kecepatan : 0;
+    return { h, order: o / D, on: onRata, kecepatan, target, butuh, kurang: butuh - onRata };
+  });
+
+  const sesi = perSesi.map((x, i) => {
+    const cukup = x.hariRider >= 3;
+    const dari = cukup ? Math.floor(median(x.mulai) / 60) : SESI[i].bawaan[0];
+    const sampai = cukup ? Math.min(23, Math.ceil((median(x.selesai) + 30) / 60)) : SESI[i].bawaan[1];
+    const orangLama = riderDaftar.filter((r) => r.sesi === i && r.hari >= 2);
+    const hadir = orangLama.length ? Math.min(1, median(orangLama.map((r) => r.hari)) / D) : 0.75;
+    return { ...SESI[i], i, perHari: x.hariRider / D, orang: x.orang.size, dari, sampai: Math.max(dari + 1, sampai), hadir: Math.max(0.4, hadir), tambah: 0 };
+  });
+
+  // Tambah rider satu per satu ke sesi yang paling menutup kekurangan di jam terparah.
+  const sisa = jam.map((x) => x.kurang);
+  for (let n = 0; n < 300; n++) {
+    let hMax = 0;
+    for (let h = 1; h < 24; h++) if (sisa[h] > sisa[hMax]) hMax = h;
+    if (sisa[hMax] <= 0.3) break;
+    let pilih = null, skorPilih = -1;
+    sesi.forEach((x) => {
+      if (hMax < x.dari || hMax >= x.sampai) return;
+      let skor = 0;
+      for (let h = x.dari; h < x.sampai; h++) skor += Math.min(1, Math.max(0, sisa[h]));
+      if (skor > skorPilih) { skorPilih = skor; pilih = x; }
+    });
+    if (!pilih) {
+      // Tidak ada sesi yang mencakup jam ini: pakai sesi terdekat dan perluas jam kerjanya.
+      pilih = sesi.reduce((a, b) => (Math.abs((b.dari + b.sampai) / 2 - hMax) < Math.abs((a.dari + a.sampai) / 2 - hMax) ? b : a));
+      pilih.dari = Math.min(pilih.dari, hMax);
+      pilih.sampai = Math.max(pilih.sampai, hMax + 1);
+    }
+    pilih.tambah++;
+    for (let h = pilih.dari; h < pilih.sampai; h++) sisa[h] -= 1;
+  }
+  sesi.forEach((x) => { x.rekrut = x.tambah ? Math.ceil(x.tambah / x.hadir) : 0; });
+
+  const rataOrderHari = totalOrder / D, riderPerHari = riderHari / D;
+  const orderPerRider = rataOrderHari / riderPerHari;
+  const jamSibuk = [...jam].sort((a, b) => b.order - a.order).slice(0, 3).map((x) => x.h);
+  const kecepatanSibuk = jamSibuk.reduce((a, h) => a + jam[h].kecepatan, 0) / jamSibuk.length;
+  return {
+    D, T, hari, totalOrder, rataOrderHari, riderPerHari, orderPerRider, riderBerbeda: perRider.size,
+    butuhRiderHari: orderPerRider > 0 ? T / orderPerRider : 0,
+    jam, sesi, riderDaftar, kecepatanUmum, kecepatanSibuk,
+    tambahTotal: sesi.reduce((a, x) => a + x.tambah, 0), rekrutTotal: sesi.reduce((a, x) => a + x.rekrut, 0)
+  };
+}
+
+function renderEstimasiRider() {
+  const el = $('isi-estimasi-rider');
+  $('rider-target-order').value = nf.format(targetOrderRider());
+  const E = analisisRider();
+  if (!E) {
+    $('catatan-estimasi').textContent = '';
+    el.innerHTML = `<p class="catatan">${esc(S.rider7Gagal || 'Belum ada data order 7 hari terakhir.')}</p>`;
+    return;
+  }
+  const hariPertama = E.hari[0].tanggal, hariAkhir = E.hari[E.hari.length - 1].tanggal;
+  const fmtPendek = (t) => `${Number(t.slice(8))} ${NAMA_BULAN[Number(t.slice(5, 7)) - 1].slice(0, 3)}`;
+  $('catatan-estimasi').textContent = `${fmtPendek(hariPertama)}–${fmtPendek(hariAkhir)}, ${E.D} hari berjalan · hanya rider yang dapat order`;
+
+  let h = `<p class="kalimat">Dalam ${E.D} hari terakhir rata-rata <b>${bil(E.rataOrderHari, 1)} order per hari</b> dikerjakan <b>${bil(E.riderPerHari, 1)} rider aktif per hari</b> (${E.riderBerbeda} rider berbeda), sekitar ${bil(E.orderPerRider, 1)} order per rider. `;
+  h += `Untuk <b>${nf.format(E.T)} order per hari</b> dengan kecepatan yang sama, dibutuhkan sekitar <b>${bil(Math.ceil(E.butuhRiderHari))} rider aktif per hari</b>. `;
+  h += E.tambahTotal > 0
+    ? `Dihitung per jam, kekurangannya paling tertutup dengan <b>${E.tambahTotal} rider aktif tambahan per hari</b>; karena rider juga libur, perlu merekrut sekitar <b>${E.rekrutTotal} rider baru</b>.</p>`
+    : 'Jumlah rider sekarang sudah cukup untuk target ini.</p>';
+
+  h += '<div class="deret deret-rider">';
+  E.sesi.forEach((x) => {
+    h += `<div><div class="ket">${esc(x.nama)}</div><div class="nilai">${x.rekrut ? '+' + x.rekrut : '0'}</div><div class="sub">rider baru, mulai ±${duaDigit(x.dari)}.00</div></div>`;
+  });
+  h += '</div>';
+
+  // Grafik rider per jam
+  const jamTampil = E.jam.filter((x) => x.order > 0 || x.on > 0).map((x) => x.h);
+  const dari = Math.min(6, ...jamTampil), sampai = Math.max(21, ...jamTampil);
+  const daftarJam = []; for (let j = dari; j <= sampai; j++) daftarJam.push(j);
+  const W = 1320, H = 280, kiri = 44, kanan = 10, atas = 24, bawah = 34;
+  const tp = H - atas - bawah, lp = W - kiri - kanan;
+  const maks = Math.max(1, ...daftarJam.map((j) => Math.max(E.jam[j].on, E.jam[j].butuh))) * 1.15;
+  const y = (v) => atas + tp - (v / maks) * tp;
+  const pita = lp / daftarJam.length, lb = pita * 0.56;
+  let g = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Rider aktif per jam dibanding kebutuhan">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = (maks / 1.15) * i / 4;
+    g += `<line x1="${kiri}" x2="${W - kanan}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="#e6eaee"/><text x="${kiri - 6}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="#66727f">${bil(v, 0)}</text>`;
+  }
+  daftarJam.forEach((j, i) => {
+    const x = E.jam[j], cx = kiri + pita * i + pita / 2;
+    if (x.kurang > 0.3) g += `<rect x="${(cx - lb / 2).toFixed(1)}" y="${y(x.butuh).toFixed(1)}" width="${lb.toFixed(1)}" height="${(y(x.on) - y(x.butuh)).toFixed(1)}" fill="#f7e0de" stroke="#a8201a" stroke-dasharray="3 2"/>`;
+    g += `<rect x="${(cx - lb / 2).toFixed(1)}" y="${y(x.on).toFixed(1)}" width="${lb.toFixed(1)}" height="${(y(0) - y(x.on)).toFixed(1)}" fill="#1f2933"><title>${duaDigit(j)}.00: ${bil(x.on, 1)} rider aktif, ${bil(x.order, 1)} order, butuh ${bil(x.butuh, 1)} rider</title></rect>`;
+    g += `<line x1="${(cx - pita * 0.44).toFixed(1)}" x2="${(cx + pita * 0.44).toFixed(1)}" y1="${y(x.butuh).toFixed(1)}" y2="${y(x.butuh).toFixed(1)}" stroke="#e4570e" stroke-width="3" stroke-dasharray="6 3"/>`;
+    g += `<text x="${cx.toFixed(1)}" y="${(y(Math.max(x.on, x.butuh)) - 6).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" fill="${x.kurang > 0.3 ? '#a8201a' : '#3a4653'}">${x.kurang > 0.3 ? '+' + bil(Math.ceil(x.kurang)) : bil(x.on, 0)}</text>`;
+    g += `<text x="${cx.toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="11" fill="#66727f">${duaDigit(j)}</text>`;
+  });
+  g += `<line x1="${kiri}" x2="${W - kanan}" y1="${y(0)}" y2="${y(0)}" stroke="#a9b4be"/></svg>`;
+  h += `<div style="margin-top:22px">${g}</div>`;
+  h += `<div class="legenda"><span><i style="background:#1f2933"></i>Rider aktif sekarang (rata-rata)</span><span><i style="background:#e4570e;height:3px;vertical-align:3px"></i>Rider yang dibutuhkan untuk ${nf.format(E.T)} order</span><span><i style="background:#f7e0de;border:1px dashed #a8201a"></i>Kekurangan</span></div>`;
+
+  // Tabel per sesi
+  h += '<div class="gulir" style="margin-top:22px"><table><thead><tr><th class="kiri">Sesi</th><th class="kiri">Dasar pengelompokan</th><th>Jam kerja umum</th><th>Rider aktif per hari</th><th>Rider berbeda (7 hari)</th><th>Kehadiran</th><th>Tambahan aktif per hari</th><th>Rekrut baru</th></tr></thead><tbody>';
+  E.sesi.forEach((x) => {
+    h += `<tr><td class="kiri"><b>${esc(x.nama)}</b></td><td class="kiri catatan">${esc(x.ket)}</td><td>${duaDigit(x.dari)}.00–${duaDigit(x.sampai)}.00</td><td>${bil(x.perHari, 1)}</td><td>${x.orang}</td><td>${persen(x.hadir)}</td><td>${x.tambah || '–'}</td><td><b>${x.rekrut || '–'}</b></td></tr>`;
+  });
+  h += `<tr class="kini"><td class="kiri">Total</td><td></td><td></td><td>${bil(E.riderPerHari, 1)}</td><td>${E.riderBerbeda}</td><td></td><td>${E.tambahTotal || '–'}</td><td>${E.rekrutTotal || '–'}</td></tr></tbody></table></div>`;
+
+  // Daftar rider aktif
+  h += `<details class="rincian-rider"><summary>Lihat ${E.riderDaftar.length} rider yang aktif 7 hari terakhir</summary><div class="gulir"><table><thead><tr><th class="kiri">Nama</th><th class="kiri">Sesi</th><th>Hari aktif</th><th>Order pertama (biasanya)</th><th>Order terakhir (biasanya)</th><th>Order per hari aktif</th></tr></thead><tbody>`;
+  E.riderDaftar.forEach((r) => {
+    h += `<tr><td class="kiri">${esc(r.n || r.u)}</td><td class="kiri">${esc(SESI[r.sesi].nama)}</td><td>${r.hari} dari ${E.D}${r.hari <= 1 ? ' <span class="lencana kuning">jarang</span>' : ''}</td><td>${teksMenit(r.mulai)}</td><td>${teksMenit(r.selesai)}</td><td>${bil(r.orderHari, 1)}</td></tr>`;
+  });
+  h += '</tbody></table></div></details>';
+
+  h += `<p class="catatan" style="margin-top:14px">Cara hitung: jam kerja tiap rider dianggap dari order pertama sampai 30 menit setelah order terakhir; sesi ditentukan dari jam order pertama, jadi rider yang sudah on tapi belum dapat order tidak terlihat. Kebutuhan rider tiap jam = target order di jam itu dibagi kecepatan rider di jam itu (${bil(E.kecepatanUmum, 1)} order per rider per jam rata-rata). Kehadiran dipakai untuk menghitung rekrutan, karena rider tidak masuk setiap hari.</p>`;
+  if (E.kecepatanSibuk > E.kecepatanUmum * 1.4) {
+    h += `<p class="catatan">Di jam tersibuk rider mengerjakan ${bil(E.kecepatanSibuk, 1)} order per jam, jauh di atas rata-rata. Artinya di jam itu rider sudah kewalahan, dan tambahan rider paling berguna di sana.</p>`;
+  } else {
+    h += `<p class="catatan"><b>Penting:</b> kecepatan rider di jam sibuk tidak jauh berbeda dengan jam lain, tanda rider belum kewalahan. Order sekarang lebih dibatasi jumlah pesanan pelanggan. Menambah rider saja tidak otomatis menaikkan order ke ${nf.format(E.T)}; perlu dibarengi penambahan pelanggan atau mitra.</p>`;
+  }
+  el.innerHTML = h;
+}
+
+async function simpanTargetRider() {
+  const v = Number($('rider-target-order').value.replace(/\D/g, ''));
+  const galat = $('rider-target-galat');
+  galat.hidden = true;
+  if (!Number.isSafeInteger(v) || v < 1 || v > 100000) { galat.textContent = 'Isi angka order per hari (1–100.000).'; galat.hidden = false; return; }
+  await setDoc(dokTarget, { rider_order_hari: v }, { merge: true });
+  S.target = { ...S.target, rider_order_hari: v };
+  renderEstimasiRider();
 }
 
 // ================= Target =================
@@ -954,6 +1210,12 @@ function susunSaran() {
     tambah('info', `Jam tersibuk ${esc(rentangJam(RJ.A.sibuk))}`, `Memuat ${persen(RJ.A.porsiSibuk)} order harian. Pastikan rider siaga penuh di jam itu.`);
   }
 
+  const E = analisisRider();
+  if (E && E.rekrutTotal > 0) {
+    const bagian = E.sesi.filter((x) => x.rekrut).map((x) => `${esc(x.nama)} ${x.rekrut}`).join(', ');
+    tambah('info', `Rekrut sekitar ${E.rekrutTotal} rider baru untuk ${nf.format(E.T)} order per hari`, `Dari 7 hari terakhir: ${bagian}. Rinciannya di bagian Estimasi penambahan rider.`);
+  }
+
   const pola = polaPekan(k);
   const layak = pola.hari.filter((h) => h.n >= 2);
   if (layak.length >= 5 && pola.rataSemua > 0) {
@@ -1056,6 +1318,7 @@ function renderSemua() {
   renderRencanaJam();
   renderRincian();
   renderJam();
+  renderEstimasiRider();
   $('akun-email').textContent = S.user?.email || '';
   $('kaki').textContent = `Sumber: rekap harian yang disimpan dari menu Riwayat di aplikasi admin. Dibaca dari Firestore di sesi ini: ${nf.format(S.bacaan)} dokumen. Dimuat pukul ${S.dimuatPada ? fmtJam.format(S.dimuatPada) : '-'} WIB.`;
 }
@@ -1653,6 +1916,7 @@ $('pilih-bulan').addEventListener('change', (e) => {
   renderJam();
 });
 $('target-omset').addEventListener('input', (e) => formatRibuan(e.target));
+$('rider-target-order').addEventListener('input', (e) => formatRibuan(e.target));
 $('target-order').addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); });
 
 document.addEventListener('click', async (e) => {
@@ -1699,6 +1963,11 @@ document.addEventListener('click', async (e) => {
       alert(err?.code === 'failed-precondition' ? 'Index Firestore untuk active_orders (status + created_at) belum ada.' : 'Gagal mengambil data jam. Periksa koneksi lalu coba lagi.');
       el.disabled = false; el.textContent = 'Ambil data jam';
     }
+  } else if (aksi === 'simpan-target-rider') {
+    el.disabled = true;
+    try { await simpanTargetRider(); }
+    catch (err) { console.error(err); $('rider-target-galat').textContent = 'Gagal menyimpan. Periksa koneksi lalu coba lagi.'; $('rider-target-galat').hidden = false; }
+    finally { el.disabled = false; }
   } else if (aksi === 'ubah-target') {
     bukaDialogTarget(el.dataset.bulan || '');
   } else if (aksi === 'tutup-dialog') {
