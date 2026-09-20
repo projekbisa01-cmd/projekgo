@@ -1789,13 +1789,14 @@
         <div id="wallet-content" class="relative w-full max-w-md mx-auto bg-gray-50 rounded-t-[2rem] p-5 shadow-2xl transform translate-y-full transition-transform duration-300 max-h-[85vh] flex flex-col">
             <div class="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mb-4 shrink-0"></div>
             <div class="flex justify-between items-center mb-5 px-1 shrink-0">
-                <h2 class="font-bold text-lg text-gray-800"><i class="fa-solid fa-wallet text-orange-500 mr-2"></i>Isi Dompet</h2>
+                <h2 id="wallet-title" class="font-bold text-lg text-gray-800"><i class="fa-solid fa-wallet text-orange-500 mr-2"></i>Isi Dompet</h2>
                 <button onclick="closeWallet()" class="w-8 h-8 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded-full flex items-center justify-center active:scale-90 transition-colors"><i class="fa-solid fa-xmark"></i></button>
             </div>
             
             <div class="flex-1 overflow-y-auto no-scrollbar space-y-5 pb-6 px-1 pt-1">
                 
                 <!-- 1. KARTU PENDAPATAN HARI INI & TARGET -->
+                <div id="wallet-sec-pendapatan">
                 <section class="bg-orange-50 rounded-2xl p-5 border border-orange-200 shadow-sm relative overflow-hidden">
                     <div class="flex justify-between items-center mb-3">
                         <h3 class="text-[10px] font-black text-orange-600 uppercase tracking-widest">Pendapatan Hari Ini</h3>
@@ -1835,7 +1836,10 @@
                     <!-- Elemen hidden untuk total kotor (digunakan oleh Kalkulator JS) -->
                     <p id="today-gross-total" class="hidden">Rp 0</p>
                 </section>
+                </div>
 
+                <!-- 2 & 3. SALDO KREDIT + RIWAYAT (dibungkus agar bisa ditampilkan terpisah) -->
+                <div id="wallet-sec-kredit" class="space-y-5">
                 <!-- 2. KARTU SALDO RIDER -->
                 <section id="saldo-card" class="bg-emerald-50 rounded-2xl p-5 border border-emerald-200 shadow-sm relative overflow-hidden transition-all duration-300">
                     <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Total Saldo Kredit</h3>
@@ -1856,6 +1860,7 @@
                         <p class="text-xs text-center text-slate-400 py-6 font-bold animate-pulse">Menarik data dari server...</p>
                     </div>
                 </section>
+                </div>
             </div>
         </div>
     </div>
@@ -2340,15 +2345,26 @@
                                     </button>
                                 </div>
                                 
-                                <!-- Mini Badge Dompet -->
-                                <button onclick="openWallet(); window.toggleIncomeMenu()" class="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 active:bg-slate-100 transition-colors bg-white shadow-sm border border-gray-100/50 group">
+                                <!-- Mini Badge Pendapatan (membuka kartu pendapatan hari ini) -->
+                                <button onclick="openWallet('pendapatan'); window.toggleIncomeMenu()" class="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 active:bg-slate-100 transition-colors bg-white shadow-sm border border-gray-100/50 group">
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform">
                                             <i class="fa-solid fa-wallet text-orange-400 text-xs"></i>
                                         </div>
-                                        <span class="text-sm font-bold text-gray-700">Dompet</span>
+                                        <span class="text-sm font-bold text-gray-700">Pendapatan</span>
                                     </div>
                                     <span id="badge-net-earnings" class="text-sm font-black text-slate-800">Rp 0</span>
+                                </button>
+
+                                <!-- Mini Badge Saldo Kredit (membuka saldo kredit + riwayat potongan) -->
+                                <button onclick="openWallet('kredit'); window.toggleIncomeMenu()" class="flex items-center justify-between p-4 rounded-2xl hover:bg-emerald-50 active:bg-emerald-100 transition-colors bg-white shadow-sm border border-gray-100/50 group">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-9 h-9 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform">
+                                            <i class="fa-solid fa-credit-card text-white text-xs"></i>
+                                        </div>
+                                        <span class="text-sm font-bold text-gray-700">Saldo Kredit</span>
+                                    </div>
+                                    <span id="badge-saldo-kredit" class="text-sm font-black text-emerald-600">Memuat...</span>
                                 </button>
                                 
                                 <!-- Mini Badge Riwayat -->
@@ -6550,6 +6566,17 @@
             }
         };
 
+        // Angka saldo kredit di dropdown "Ringkasan Hari Ini"
+        window.updateBadgeSaldoKredit = function() {
+            const el = document.getElementById('badge-saldo-kredit');
+            if (!el) return;
+            const saldo = Number(window.currentRiderWalletBalance);
+            if (!Number.isFinite(saldo)) { el.innerText = 'Memuat...'; el.className = 'text-sm font-black text-slate-400'; return; }
+            if (window.isPrivacyMode) { el.innerText = 'Rp ••••••'; el.className = 'text-sm font-black text-emerald-600'; return; }
+            el.innerText = (saldo < 0 ? '-Rp ' : 'Rp ') + Math.abs(Math.round(saldo)).toLocaleString('id-ID');
+            el.className = 'text-sm font-black ' + (saldo < 0 ? 'text-red-600' : 'text-emerald-600');
+        };
+
         window.updatePrivacyUI = function() {
             const icon = document.getElementById('privacy-eye-icon');
             if (icon) {
@@ -6565,6 +6592,8 @@
             if (badgeTrips) {
                 badgeTrips.innerText = window.isPrivacyMode ? '••• Trip' : `${window.currentTodayTrips} Trip`;
             }
+
+            if (typeof window.updateBadgeSaldoKredit === 'function') window.updateBadgeSaldoKredit();
 
             // Update Saldo di Header Transparan (Tombol Utama)
             const headerSaldo = document.getElementById('header-saldo-amount');
@@ -7724,12 +7753,33 @@
         };
 
         // --- FUNGSI BUKA TUTUP DOMPET ---
-        function openWallet() {
+        // mode: 'pendapatan' = kartu pendapatan saja, 'kredit' = saldo kredit + riwayat,
+        // tanpa mode = semua (perilaku lama, untuk pemanggil lain).
+        function openWallet(mode) {
+            const m = (mode === 'pendapatan' || mode === 'kredit') ? mode : 'semua';
+            const secPend = document.getElementById('wallet-sec-pendapatan');
+            const secKred = document.getElementById('wallet-sec-kredit');
+            if (secPend) secPend.classList.toggle('hidden', m === 'kredit');
+            if (secKred) secKred.classList.toggle('hidden', m === 'pendapatan');
+            const judul = document.getElementById('wallet-title');
+            if (judul) {
+                judul.innerHTML = m === 'pendapatan'
+                    ? '<i class="fa-solid fa-wallet text-orange-500 mr-2"></i>Pendapatan'
+                    : m === 'kredit'
+                        ? '<i class="fa-solid fa-credit-card text-emerald-500 mr-2"></i>Saldo Kredit'
+                        : '<i class="fa-solid fa-wallet text-orange-500 mr-2"></i>Isi Dompet';
+            }
+            const isi = document.querySelector('#wallet-content .overflow-y-auto');
+            if (isi) isi.scrollTop = 0;
+
             window.walletHistoryLimit = 3; // Reset limit ke 3 setiap kali dompet dibuka
-            if (typeof window.loadRiwayatSaldo === 'function') {
-                window.loadRiwayatSaldo(); // Panggil fungsi asinkron baru
-            } else if (typeof window.renderWalletHistoryUI === 'function') {
-                window.renderWalletHistoryUI();
+            // Riwayat potongan hanya dimuat bila bagian saldo kredit ditampilkan (hemat read)
+            if (m !== 'pendapatan') {
+                if (typeof window.loadRiwayatSaldo === 'function') {
+                    window.loadRiwayatSaldo();
+                } else if (typeof window.renderWalletHistoryUI === 'function') {
+                    window.renderWalletHistoryUI();
+                }
             }
 
             const modal = document.getElementById('wallet-modal');
@@ -15214,6 +15264,7 @@
               const saldoBanner = document.getElementById('global-saldo-warning');
 
               window.currentRiderWalletBalance = saldo;
+              if (typeof window.updateBadgeSaldoKredit === 'function') window.updateBadgeSaldoKredit();
 
               if (!adaDokumen) {
                   if (saldoEl) {
