@@ -310,6 +310,7 @@
       <label class="baris-cek"><input type="checkbox" id="s-siap-selalu"> Umumkan rider tersedia walau tidak ada pending</label>
       <label class="baris-cek"><input type="checkbox" id="s-diam"> Diam di luar jam operasional</label>
     </div>
+    <pre id="diag-suara" style="white-space:pre-wrap;font-family:inherit;font-size:1.1rem;line-height:1.5;background:var(--bg);border:1px solid var(--line);border-radius:0.7rem;padding:0.8rem 1rem;color:var(--muted)"></pre>
     <div class="baris-tombol">
       <button class="btn" id="btn-simpan">Simpan</button>
       <button class="btn dua" id="btn-tes">Tes suara</button>
@@ -438,9 +439,9 @@ function bunyiNada(nada) {
   return pola.length * 240;
 }
 
-function pilihSuara() {
+function pilihSuara(opsi = SET) {
   const semua = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  if (SET.voice) { const v = semua.find(x => x.name === SET.voice); if (v) return v; }
+  if (opsi.voice) { const v = semua.find(x => x.name === opsi.voice); if (v) return v; }
   return semua.find(v => /^id/i.test(v.lang)) || null;
 }
 
@@ -459,37 +460,65 @@ function tampilSpanduk(teks, nada, lamaMs) {
   timerSpanduk = setTimeout(() => { el.className = ''; }, lamaMs);
 }
 
-function kabar(teks, nada = 'info') {
+// paksa = tetap bunyi walau "diam di luar jam" (dipakai untuk tes & saat mulai)
+function kabar(teks, nada = 'info', paksa = false) {
   logKabar.unshift({ t: kini(), teks });
   logKabar.length = Math.min(logKabar.length, 4);
   renderLog();
   if (antreSuara.length >= 6) antreSuara.shift();      // jangan menumpuk
-  antreSuara.push({ teks, nada });
+  antreSuara.push({ teks, nada, paksa });
   prosesSuara();
+}
+
+let ucapanAktif = null;   // disimpan global: di Chrome, ucapan yang tidak dirujuk bisa terhenti di tengah
+function ucapkan(teks, selesai, opsi = SET) {
+  if (!window.speechSynthesis) { setTimeout(selesai, 2500); return; }
+  try {
+    const ss = window.speechSynthesis;
+    // Chrome kadang "macet" (antrean suara tertahan / status pause). Bersihkan dulu.
+    if (ss.speaking || ss.pending) ss.cancel();
+    ss.resume();
+    const u = new SpeechSynthesisUtterance(teks);
+    const v = pilihSuara(opsi);
+    if (v) u.voice = v;
+    u.lang = v ? v.lang : 'id-ID';
+    u.rate = opsi.kecepatan; u.volume = opsi.volume;
+    u.onend = selesai;
+    u.onerror = (e) => { catatDiag('Suara gagal: ' + ((e && e.error) || 'tidak diketahui')); selesai(); };
+    ucapanAktif = u;
+    setTimeout(() => { try { ss.speak(u); } catch (e) { selesai(); } }, 60);
+    setTimeout(selesai, 15000);   // beberapa TV tidak pernah memanggil onend
+  } catch (e) { catatDiag('Suara gagal: ' + (e && e.message)); setTimeout(selesai, 2500); }
+}
+
+let diagTerakhir = '';
+function catatDiag(t) { diagTerakhir = t; if ($('dlg-setelan').open) isiDiag(); }
+function isiDiag() {
+  const ss = window.speechSynthesis;
+  const semua = ss ? ss.getVoices() : [];
+  const indo = semua.find(v => /^id/i.test(v.lang));
+  const baris = [
+    ss ? `Mesin suara browser: ada (${semua.length} suara terpasang)` : 'Mesin suara browser: TIDAK ADA. Pakai Google Chrome.',
+    indo ? `Suara Indonesia: ${indo.name}` : 'Suara Indonesia: tidak ditemukan. Pasang Google Text-to-Speech bahasa Indonesia.',
+    `Audio nada: ${audioCtx ? audioCtx.state : 'belum dibuka'}`,
+    `Tombol "Mulai monitor": ${suaraTerbuka ? 'sudah ditekan' : 'belum ditekan'}`,
+    !SET.suara ? 'Suara pemberitahuan: DIMATIKAN di setelan' : diamSekarang() ? `Sekarang di luar jam ${SET.buka}–${SET.tutup}: pemberitahuan otomatis sedang diam` : 'Suara pemberitahuan: aktif',
+  ];
+  if (diagTerakhir) baris.push(diagTerakhir);
+  $('diag-suara').textContent = baris.join('\n');
 }
 
 function prosesSuara() {
   if (sedangBicara || !antreSuara.length) return;
-  const { teks, nada } = antreSuara.shift();
+  const { teks, nada, paksa } = antreSuara.shift();
   sedangBicara = true;
   tampilSpanduk(teks, nada, 9000);
   const selesai = () => { if (!sedangBicara) return; sedangBicara = false; setTimeout(prosesSuara, 600); };
-  const bolehBunyi = suaraTerbuka && SET.suara && !diamSekarang();
+  const bolehBunyi = suaraTerbuka && (paksa || (SET.suara && !diamSekarang()));
   if (!bolehBunyi) { setTimeout(selesai, 3500); return; }
+  if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   const jedaNada = bunyiNada(nada) || 0;
-  setTimeout(() => {
-    if (!window.speechSynthesis) { setTimeout(selesai, 2500); return; }
-    try {
-      const u = new SpeechSynthesisUtterance(teks);
-      const v = pilihSuara();
-      if (v) u.voice = v;
-      u.lang = v ? v.lang : 'id-ID';
-      u.rate = SET.kecepatan; u.volume = SET.volume;
-      u.onend = selesai; u.onerror = selesai;
-      speechSynthesis.speak(u);
-      setTimeout(selesai, 15000);   // beberapa TV tidak pernah memanggil onend
-    } catch (e) { setTimeout(selesai, 2500); }
-  }, jedaNada + 150);
+  setTimeout(() => ucapkan(teks, selesai), jedaNada + 150);
 }
 
 function renderLog() {
@@ -750,7 +779,10 @@ function renderJam() {
   const putus = !navigator.onLine || D.dariCache;
   $('pil-koneksi').classList.toggle('putus', putus);
   $('teks-koneksi').textContent = putus ? 'Koneksi terputus' : 'Terhubung langsung';
-  $('pil-suara').textContent = !suaraTerbuka ? 'Suara belum aktif' : !SET.suara ? 'Suara dimatikan' : diamSekarang() ? 'Suara diam (di luar jam)' : 'Suara aktif';
+  $('pil-suara').textContent = !suaraTerbuka ? 'Suara belum aktif, tekan Mulai'
+    : !window.speechSynthesis ? 'Hanya nada (browser tanpa suara)'
+    : !SET.suara ? 'Suara dimatikan'
+    : diamSekarang() ? `Suara diam sampai ${SET.buka}` : 'Suara aktif';
 }
 
 function render() {
@@ -903,7 +935,7 @@ $('btn-mulai').addEventListener('click', async () => {
   try { if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); } catch (e) {}
   tahanLayar();
   $('tirai').hidden = true;
-  kabar(pilihSuara() ? 'Monitor aktif.' : 'Monitor aktif. Suara bahasa Indonesia tidak ditemukan di TV ini.', 'info');
+  kabar(pilihSuara() ? 'Monitor aktif.' : 'Monitor aktif. Suara bahasa Indonesia tidak ditemukan di TV ini.', 'info', true);
 });
 
 function isiPilihanSuara() {
@@ -913,7 +945,12 @@ function isiPilihanSuara() {
   sel.innerHTML = '<option value="">Otomatis (bahasa Indonesia)</option>' + urut.map(v => `<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join('');
   sel.value = SET.voice;
 }
-if (window.speechSynthesis) speechSynthesis.onvoiceschanged = isiPilihanSuara;
+if (window.speechSynthesis) {
+  speechSynthesis.onvoiceschanged = () => { isiPilihanSuara(); if ($('dlg-setelan').open) isiDiag(); };
+  speechSynthesis.getVoices();   // memancing daftar suara dimuat lebih awal
+  // Chrome bisa terjebak status "pause" setelah lama diam; pancing tiap 10 detik
+  setInterval(() => { try { if (!speechSynthesis.speaking) speechSynthesis.resume(); } catch (e) {} }, 10000);
+}
 
 function pilihTerdekat(sel, nilai) {
   let best = sel.options[0], d = Infinity;
@@ -927,6 +964,7 @@ $('btn-setelan').addEventListener('click', () => {
   pilihTerdekat($('s-kecepatan'), SET.kecepatan); pilihTerdekat($('s-volume'), SET.volume);
   $('s-suara').checked = SET.suara; $('s-siap-selalu').checked = SET.siapSelalu; $('s-diam').checked = SET.diam;
   isiPilihanSuara();
+  isiDiag();
   $('dlg-setelan').showModal();
 });
 function bacaForm() {
@@ -942,10 +980,17 @@ $('btn-simpan').addEventListener('click', () => {
   try { localStorage.setItem(KUNCI, JSON.stringify(SET)); } catch (e) {}
   $('dlg-setelan').close(); jadwalRender();
 });
-$('btn-tes').addEventListener('click', () => {
-  const lama = SET; SET = { ...bacaForm(), diam: false };
-  kabar('Rider Budi belum respon. Silakan up kembali.', 'alert');
-  setTimeout(() => { SET = lama; }, 8000);
+$('btn-tes').addEventListener('click', async () => {
+  // Tekanan tombol ini sekaligus membuka izin suara (kalau "Mulai monitor" terlewat)
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); await audioCtx.resume(); } catch (e) {}
+  suaraTerbuka = true;
+  const opsi = bacaForm();                           // pakai kecepatan/volume/suara yang sedang dipilih, tanpa mengubah setelan
+  antreSuara.length = 0; sedangBicara = false;       // tes langsung bunyi, tidak menunggu antrean
+  diagTerakhir = '';
+  bunyiNada('alert');
+  setTimeout(() => ucapkan('Rider Budi belum respon. Silakan up kembali.', () => {}, opsi), 1100);
+  setTimeout(isiDiag, 6000);
+  isiDiag();
 });
 $('btn-tutup').addEventListener('click', () => $('dlg-setelan').close());
 $('btn-keluar').addEventListener('click', async () => { $('dlg-setelan').close(); hentiSemua(); await signOut(auth); });
