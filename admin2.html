@@ -727,6 +727,8 @@
             </div>
             <p id="pendaftaran-info" class="text-[9px] text-slate-500 leading-relaxed">Data dari Google Form pendaftaran. Ketuk "Detail" untuk jawaban lengkap.</p>
 
+            <div id="pendaftaran-tabs" class="flex gap-2"></div>
+
             <div class="relative">
                 <i class="fa-solid fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                 <input type="text" id="pendaftaran-search" oninput="window.renderPendaftaran()" placeholder="Cari nama, domisili, motor, no HP..." class="w-full bg-slate-50 border border-gray-200 rounded-xl p-2.5 pl-9 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm">
@@ -3709,180 +3711,223 @@
             }
         };
 
-        // ================== PENDAFTARAN RIDER (Google Form) ==================
-        const PD_KUNCI_DILIHAT = 'pgo_pendaftaran_terakhir_dilihat';
-        const PD_INTERVAL_CEK = 3 * 60 * 1000; // cek pendaftar baru tiap 3 menit
-        let pdData = [];
-        let pdBatasBaru = 0;       // pendaftar dengan waktu > ini ditandai "BARU" saat halaman dibuka
-        let pdTimerCek = null;
-
-        const pdAmbilDilihat = () => {
-            try { const v = Number(localStorage.getItem(PD_KUNCI_DILIHAT)); return isFinite(v) && v > 0 ? v : 0; } catch (e) { return 0; }
-        };
-        const pdSimpanDilihat = (ms) => {
-            try { localStorage.setItem(PD_KUNCI_DILIHAT, String(ms)); } catch (e) {}
-        };
-
-        const pdPanggil = async (action, extra = {}) => {
-            if (!GAS_PENDAFTARAN_URL || !GAS_PENDAFTARAN_URL.startsWith('https://script.google.com/')) throw new Error('url_kosong');
-            const tk = await window.tokenAdmin();
-            if (!tk) throw new Error('belum_login');
-            // Token dikirim di body (bukan di URL) supaya tidak tercatat di riwayat/log alamat
-            const res = await fetch(GAS_PENDAFTARAN_URL, { method: 'POST', body: JSON.stringify({ token: tk, action, ...extra }) });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const j = await res.json();
-            if (!j || j.ok !== true) throw new Error((j && j.error) || 'gagal');
-            return j;
-        };
-
-        const pdSetBadge = (jumlah) => {
-            const n = Math.max(0, Number(jumlah) || 0);
-            ['badge-pendaftaran', 'pendaftaran-badge-menu'].forEach(id => {
-                const b = document.getElementById(id);
-                if (!b) return;
-                b.innerText = n > 99 ? '99+' : String(n);
-                if (n > 0) b.classList.remove('hidden'); else b.classList.add('hidden');
-            });
-        };
-
-        window.cekPendaftarBaru = async () => {
-            if (document.hidden) return;
-            try {
-                let dilihat = pdAmbilDilihat();
-                if (!dilihat) { dilihat = Date.now() - 24 * 60 * 60 * 1000; pdSimpanDilihat(dilihat); } // pertama kali: hitung 24 jam terakhir saja
-                const j = await pdPanggil('hitung', { sejak: dilihat });
-                const hal = document.getElementById('page-pendaftaran');
-                const sedangDibuka = hal && !hal.classList.contains('hidden-page');
-                pdSetBadge(sedangDibuka ? 0 : j.jumlah);
-            } catch (e) { /* diam saja: badge tidak wajib */ }
-        };
-
-        window.mulaiPendaftaran = () => {
-            if (pdTimerCek || !GAS_PENDAFTARAN_URL) return;
-            setTimeout(window.cekPendaftarBaru, 5000);
-            pdTimerCek = setInterval(window.cekPendaftarBaru, PD_INTERVAL_CEK);
-            document.addEventListener('visibilitychange', () => { if (!document.hidden) window.cekPendaftarBaru(); });
-        };
-
-        window.bukaPendaftaran = async () => {
-            const box = document.getElementById('pendaftaran-list');
-            if (!box) return;
-            box.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[10px] text-slate-500 font-bold">Memuat data pendaftaran...</p></div>';
-            try {
-                const j = await pdPanggil('daftar');
-                pdData = Array.isArray(j.data) ? j.data : [];
-                pdBatasBaru = pdAmbilDilihat();
-                const terbaru = pdData.reduce((m, r) => Math.max(m, Number(r.ts) || 0), 0);
-                if (terbaru > pdBatasBaru) pdSimpanDilihat(terbaru);
-                pdSetBadge(0);
-                window.renderPendaftaran();
-            } catch (e) {
-                const pesan = e.message === 'url_kosong' ? 'URL Apps Script pendaftaran belum diisi di kode HTML.'
-                    : e.message === 'unauthorized' ? 'Akses ditolak. Pastikan login sebagai admin dan API key di Apps Script sudah diisi.'
-                    : 'Gagal memuat data dari Google Sheet.';
-                box.innerHTML = `<div class="text-center py-4 bg-rose-50 rounded-xl border border-rose-100 p-3"><i class="fa-solid fa-triangle-exclamation text-rose-500 text-xl mb-2"></i><p class="text-[10px] text-rose-600 font-bold">${window.escHtml(pesan)}</p></div>`;
-            }
-        };
-
-        const pdSalam = () => {
-            const h = new Date().getHours();
-            if (h >= 4 && h < 11) return 'pagi';
-            if (h >= 11 && h < 15) return 'siang';
-            if (h >= 15 && h < 18) return 'sore';
-            return 'malam';
-        };
-
-        const pdRapikanNama = (n) => String(n || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
-
-        const pdNomorWa = (hp) => {
-            let d = String(hp || '').replace(/\D/g, '');
-            if (d.startsWith('0')) d = '62' + d.slice(1);
-            else if (d.startsWith('8')) d = '62' + d;
-            return /^62\d{8,13}$/.test(d) ? d : '';
-        };
-
-        const pdTanggal = (ms) => {
-            const t = new Date(Number(ms));
-            if (isNaN(t)) return '-';
-            return t.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        };
-
-        window.pdHubungiWa = (id) => {
-            const r = pdData.find(x => String(x.id) === String(id));
-            if (!r) return;
-            const no = pdNomorWa(r.hp);
-            if (!no) { window.showAlert('Nomor Tidak Valid', 'Nomor HP pendaftar ini tidak bisa dipakai untuk WhatsApp.', 'warning'); return; }
-            const pesan = `Selamat ${pdSalam()}, ${pdRapikanNama(r.nama)}. Kami sedang membutuhkan rider pengantaran segera. Terkait pengisian pendaftaran rider ProjekGo, apakah masih berminat untuk bergabung?`;
-            window.open('https://wa.me/' + no + '?text=' + encodeURIComponent(pesan), '_blank', 'noopener');
-        };
-
-        window.pdToggleDetail = (id) => {
-            const el = document.getElementById('pd-detail-' + String(id).replace(/[^0-9]/g, ''));
-            if (el) el.classList.toggle('hidden');
-        };
-
-        window.renderPendaftaran = () => {
-            const box = document.getElementById('pendaftaran-list');
-            if (!box) return;
-            const esc = window.escHtml;
-            const q = (document.getElementById('pendaftaran-search')?.value || '').toLowerCase().trim();
-            let list = pdData;
-            if (q) list = list.filter(r => [r.nama, r.domisili, r.motor, r.hp, r.status].some(v => String(v || '').toLowerCase().includes(q)));
-
-            const info = document.getElementById('pendaftaran-info');
-            if (info) info.innerText = `${pdData.length} pendaftar. Ketuk "Detail" untuk jawaban lengkap.`;
-
-            if (!list.length) {
-                box.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">' + (pdData.length ? 'Tidak ada yang cocok.' : 'Belum ada pendaftar.') + '</p>';
-                return;
-            }
-
-            const baris = (label, nilai) => nilai ? `<div class="flex flex-col"><span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">${esc(label)}</span><span class="text-[10px] font-bold text-slate-700 break-words">${esc(nilai)}</span></div>` : '';
-
-            box.innerHTML = list.map(r => {
-                const id = String(Number(r.id) || 0);
-                const baru = Number(r.ts) > pdBatasBaru;
-                const motor = [r.motor, r.tahunMotor].filter(Boolean).join(' · ');
-                const ringkas = [r.umur ? (/^\d+$/.test(String(r.umur).trim()) ? String(r.umur).trim() + ' th' : r.umur) : '', r.domisili, motor].filter(Boolean).join(' • ');
-                const status = r.status ? `<span class="text-[8px] font-black bg-slate-100 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded uppercase shrink-0">${esc(r.status)}</span>` : '';
-                const tagBaru = baru ? '<span class="text-[8px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase shrink-0 animate-pulse">Baru</span>' : '';
-                const bisaWa = !!pdNomorWa(r.hp);
-                const foto = (typeof r.foto === 'string' && /^https:\/\/drive\.google\.com\//.test(r.foto))
-                    ? `<a href="${esc(r.foto)}" target="_blank" rel="noopener noreferrer" class="text-[9px] font-black text-sky-600 underline">Lihat foto (Google Drive)</a>` : '';
-
-                return `
-                <div class="p-3 rounded-xl border ${baru ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-100 bg-white'} shadow-sm">
-                    <div class="flex items-center gap-1.5 mb-0.5">
-                        <span class="font-black text-[11px] text-slate-800 uppercase truncate">${esc(r.nama || '(tanpa nama)')}</span>
-                        ${tagBaru}${status}
-                    </div>
-                    <p class="text-[9px] font-bold text-slate-500 truncate">${esc(ringkas || '-')}</p>
-                    <p class="text-[8px] font-bold text-slate-400 mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${esc(pdTanggal(r.ts))}${r.hp ? ' · ' + esc(r.hp) : ''}</p>
-                    <div class="flex gap-1.5 mt-2">
-                        <button data-id="${id}" onclick="window.pdHubungiWa(this.dataset.id)" ${bisaWa ? '' : 'disabled'} class="flex-1 py-2 rounded-lg text-[9px] font-black uppercase flex items-center justify-center gap-1.5 ${bisaWa ? 'bg-emerald-500 text-white active:scale-95' : 'bg-slate-100 text-slate-400'}"><i class="fa-brands fa-whatsapp text-sm"></i> WhatsApp</button>
-                        <button data-id="${id}" onclick="window.pdToggleDetail(this.dataset.id)" class="px-3 py-2 rounded-lg text-[9px] font-black uppercase bg-slate-50 border border-slate-200 text-slate-600 active:scale-95">Detail</button>
-                    </div>
-                    <div id="pd-detail-${id}" class="hidden mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
-                        ${baris('Mendaftar sebagai', r.daftarSebagai)}
-                        ${baris('Menjadi rider untuk', r.tujuan)}
-                        ${baris('Pendidikan', r.pendidikan)}
-                        ${baris('Aktif di aplikasi lain', r.aplikasiLain)}
-                        ${baris('Dokumen pendukung', r.dokumen)}
-                        ${baris('Kelengkapan berkendara', r.berkendara)}
-                        ${baris('Spesifikasi motor', r.spekMotor)}
-                        ${baris('Sanggup on-bid 8 jam', r.onbid)}
-                        ${baris('Siap narik rutin', r.konsisten)}
-                        ${baris('Siap kerja sama tim', r.kerjasama)}
-                        ${baris('Rekomendasi dari', r.rekomendasi)}
-                        ${baris('Jawaban jujur', r.jujur)}
-                        <div class="col-span-2">${foto}</div>
-                    </div>
-                </div>`;
-            }).join('');
-        };
-        // ================== AKHIR PENDAFTARAN RIDER ==================
-
-
+        // ================== PENDAFTARAN RIDER (Google Form) ==================
+        const PD_KUNCI_DILIHAT = 'pgo_pendaftaran_terakhir_dilihat';
+        const PD_INTERVAL_CEK = 3 * 60 * 1000; // cek pendaftar baru tiap 3 menit
+        let pdData = [];
+        let pdBatasBaru = 0;       // pendaftar dengan waktu > ini ditandai "BARU" saat halaman dibuka
+        let pdTab = 'full';        // tab aktif: full | part | lain
+
+        // Kolom "menjadi Rider untuk" -> full time / part time
+        const pdJenisWaktu = (r) => {
+            const t = String(r.tujuan || '').toLowerCase();
+            if (/part|paruh|sampingan/.test(t)) return 'part';
+            if (/full|penuh/.test(t)) return 'full';
+            return 'lain';
+        };
+        // Kolom "Mendaftar untuk menjadi" -> rider (motor) / driver (mobil)
+        const pdJenisKendaraan = (r) => {
+            const t = String(r.daftarSebagai || '').toLowerCase();
+            if (/mobil|driver/.test(t)) return 'driver';
+            if (/motor|rider/.test(t)) return 'rider';
+            return '';
+        };
+        window.pdPilihTab = (tab) => {
+            pdTab = ['full', 'part', 'lain'].includes(tab) ? tab : 'full';
+            window.renderPendaftaran();
+        };
+        let pdTimerCek = null;
+
+        const pdAmbilDilihat = () => {
+            try { const v = Number(localStorage.getItem(PD_KUNCI_DILIHAT)); return isFinite(v) && v > 0 ? v : 0; } catch (e) { return 0; }
+        };
+        const pdSimpanDilihat = (ms) => {
+            try { localStorage.setItem(PD_KUNCI_DILIHAT, String(ms)); } catch (e) {}
+        };
+
+        const pdPanggil = async (action, extra = {}) => {
+            if (!GAS_PENDAFTARAN_URL || !GAS_PENDAFTARAN_URL.startsWith('https://script.google.com/')) throw new Error('url_kosong');
+            const tk = await window.tokenAdmin();
+            if (!tk) throw new Error('belum_login');
+            // Token dikirim di body (bukan di URL) supaya tidak tercatat di riwayat/log alamat
+            const res = await fetch(GAS_PENDAFTARAN_URL, { method: 'POST', body: JSON.stringify({ token: tk, action, ...extra }) });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const j = await res.json();
+            if (!j || j.ok !== true) throw new Error((j && j.error) || 'gagal');
+            return j;
+        };
+
+        const pdSetBadge = (jumlah) => {
+            const n = Math.max(0, Number(jumlah) || 0);
+            ['badge-pendaftaran', 'pendaftaran-badge-menu'].forEach(id => {
+                const b = document.getElementById(id);
+                if (!b) return;
+                b.innerText = n > 99 ? '99+' : String(n);
+                if (n > 0) b.classList.remove('hidden'); else b.classList.add('hidden');
+            });
+        };
+
+        window.cekPendaftarBaru = async () => {
+            if (document.hidden) return;
+            try {
+                let dilihat = pdAmbilDilihat();
+                if (!dilihat) { dilihat = Date.now() - 24 * 60 * 60 * 1000; pdSimpanDilihat(dilihat); } // pertama kali: hitung 24 jam terakhir saja
+                const j = await pdPanggil('hitung', { sejak: dilihat });
+                const hal = document.getElementById('page-pendaftaran');
+                const sedangDibuka = hal && !hal.classList.contains('hidden-page');
+                pdSetBadge(sedangDibuka ? 0 : j.jumlah);
+            } catch (e) { /* diam saja: badge tidak wajib */ }
+        };
+
+        window.mulaiPendaftaran = () => {
+            if (pdTimerCek || !GAS_PENDAFTARAN_URL) return;
+            setTimeout(window.cekPendaftarBaru, 5000);
+            pdTimerCek = setInterval(window.cekPendaftarBaru, PD_INTERVAL_CEK);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) window.cekPendaftarBaru(); });
+        };
+
+        window.bukaPendaftaran = async () => {
+            const box = document.getElementById('pendaftaran-list');
+            if (!box) return;
+            box.innerHTML = '<div class="text-center py-8"><div class="w-6 h-6 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mx-auto mb-2"></div><p class="text-[10px] text-slate-500 font-bold">Memuat data pendaftaran...</p></div>';
+            try {
+                const j = await pdPanggil('daftar');
+                pdData = Array.isArray(j.data) ? j.data : [];
+                pdBatasBaru = pdAmbilDilihat();
+                const terbaru = pdData.reduce((m, r) => Math.max(m, Number(r.ts) || 0), 0);
+                if (terbaru > pdBatasBaru) pdSimpanDilihat(terbaru);
+                pdSetBadge(0);
+                window.renderPendaftaran();
+            } catch (e) {
+                const pesan = e.message === 'url_kosong' ? 'URL Apps Script pendaftaran belum diisi di kode HTML.'
+                    : e.message === 'unauthorized' ? 'Akses ditolak. Pastikan login sebagai admin dan API key di Apps Script sudah diisi.'
+                    : 'Gagal memuat data dari Google Sheet.';
+                box.innerHTML = `<div class="text-center py-4 bg-rose-50 rounded-xl border border-rose-100 p-3"><i class="fa-solid fa-triangle-exclamation text-rose-500 text-xl mb-2"></i><p class="text-[10px] text-rose-600 font-bold">${window.escHtml(pesan)}</p></div>`;
+            }
+        };
+
+        const pdSalam = () => {
+            const h = new Date().getHours();
+            if (h >= 4 && h < 11) return 'pagi';
+            if (h >= 11 && h < 15) return 'siang';
+            if (h >= 15 && h < 18) return 'sore';
+            return 'malam';
+        };
+
+        const pdRapikanNama = (n) => String(n || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+
+        const pdNomorWa = (hp) => {
+            let d = String(hp || '').replace(/\D/g, '');
+            if (d.startsWith('0')) d = '62' + d.slice(1);
+            else if (d.startsWith('8')) d = '62' + d;
+            return /^62\d{8,13}$/.test(d) ? d : '';
+        };
+
+        const pdTanggal = (ms) => {
+            const t = new Date(Number(ms));
+            if (isNaN(t)) return '-';
+            return t.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        };
+
+        window.pdHubungiWa = (id) => {
+            const r = pdData.find(x => String(x.id) === String(id));
+            if (!r) return;
+            const no = pdNomorWa(r.hp);
+            if (!no) { window.showAlert('Nomor Tidak Valid', 'Nomor HP pendaftar ini tidak bisa dipakai untuk WhatsApp.', 'warning'); return; }
+            const pesan = `Selamat ${pdSalam()}, ${pdRapikanNama(r.nama)}. Kami sedang membutuhkan rider pengantaran segera. Terkait pengisian pendaftaran rider ProjekGo, apakah masih berminat untuk bergabung?`;
+            window.open('https://wa.me/' + no + '?text=' + encodeURIComponent(pesan), '_blank', 'noopener');
+        };
+
+        window.pdToggleDetail = (id) => {
+            const el = document.getElementById('pd-detail-' + String(id).replace(/[^0-9]/g, ''));
+            if (el) el.classList.toggle('hidden');
+        };
+
+        window.renderPendaftaran = () => {
+            const box = document.getElementById('pendaftaran-list');
+            if (!box) return;
+            const esc = window.escHtml;
+            const q = (document.getElementById('pendaftaran-search')?.value || '').toLowerCase().trim();
+            const hitung = { full: 0, part: 0, lain: 0 }, baruTab = { full: 0, part: 0, lain: 0 };
+            pdData.forEach(r => { const j = pdJenisWaktu(r); hitung[j]++; if (Number(r.ts) > pdBatasBaru) baruTab[j]++; });
+            if (pdTab === 'lain' && !hitung.lain) pdTab = 'full';
+
+            const wadahTab = document.getElementById('pendaftaran-tabs');
+            if (wadahTab) {
+                const daftarTab = [['full', 'Full Time'], ['part', 'Part Time']];
+                if (hitung.lain) daftarTab.push(['lain', 'Lainnya']);
+                wadahTab.innerHTML = daftarTab.map(([k, label]) => {
+                    const aktif = pdTab === k;
+                    const titik = baruTab[k] ? `<span class="ml-1 bg-emerald-500 text-white text-[8px] px-1.5 py-0.5 rounded-full">${baruTab[k]} baru</span>` : '';
+                    return `<button onclick="window.pdPilihTab('${k}')" class="flex-1 px-3 py-2 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm transition-colors border flex items-center justify-center ${aktif ? 'bg-slate-800 text-white border-slate-800' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}">${label} (${hitung[k]})${titik}</button>`;
+                }).join('');
+            }
+
+            let list = pdData.filter(r => pdJenisWaktu(r) === pdTab);
+            if (q) list = list.filter(r => [r.nama, r.domisili, r.motor, r.hp, r.status].some(v => String(v || '').toLowerCase().includes(q)));
+
+            const info = document.getElementById('pendaftaran-info');
+            if (info) info.innerText = `${pdData.length} pendaftar. Ketuk "Detail" untuk jawaban lengkap.`;
+
+            if (!list.length) {
+                box.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">' + (q ? 'Tidak ada yang cocok.' : 'Belum ada pendaftar di tab ini.') + '</p>';
+                return;
+            }
+
+            const baris = (label, nilai) => nilai ? `<div class="flex flex-col"><span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">${esc(label)}</span><span class="text-[10px] font-bold text-slate-700 break-words">${esc(nilai)}</span></div>` : '';
+
+            box.innerHTML = list.map(r => {
+                const id = String(Number(r.id) || 0);
+                const baru = Number(r.ts) > pdBatasBaru;
+                const motor = [r.motor, r.tahunMotor].filter(Boolean).join(' · ');
+                const ringkas = [r.umur ? (/^\d+$/.test(String(r.umur).trim()) ? String(r.umur).trim() + ' th' : r.umur) : '', r.domisili].filter(Boolean).join(' • ');
+                const status = r.status ? `<span class="text-[8px] font-black bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded uppercase">${esc(r.status)}</span>` : '';
+                const badgeMotor = motor ? `<span class="text-[8px] font-black bg-sky-50 text-sky-700 border border-sky-200 px-1.5 py-0.5 rounded uppercase"><i class="fa-solid fa-gear mr-0.5"></i>${esc(motor)}</span>` : '';
+                const kend = pdJenisKendaraan(r);
+                const badgeKend = kend === 'driver'
+                    ? '<span class="text-[8px] font-black bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded uppercase"><i class="fa-solid fa-car mr-0.5"></i>Driver (Mobil)</span>'
+                    : kend === 'rider'
+                    ? '<span class="text-[8px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded uppercase"><i class="fa-solid fa-motorcycle mr-0.5"></i>Rider (Motor)</span>'
+                    : (r.daftarSebagai ? `<span class="text-[8px] font-black bg-slate-100 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded uppercase">${esc(r.daftarSebagai)}</span>` : '');
+                const tagBaru = baru ? '<span class="text-[8px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase shrink-0 animate-pulse">Baru</span>' : '';
+                const bisaWa = !!pdNomorWa(r.hp);
+                const foto = (typeof r.foto === 'string' && /^https:\/\/drive\.google\.com\//.test(r.foto))
+                    ? `<a href="${esc(r.foto)}" target="_blank" rel="noopener noreferrer" class="text-[9px] font-black text-sky-600 underline">Lihat foto (Google Drive)</a>` : '';
+
+                return `
+                <div class="p-3 rounded-xl border ${baru ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-100 bg-white'} shadow-sm">
+                    <div class="flex items-center gap-1.5 mb-0.5">
+                        <span class="font-black text-[11px] text-slate-800 uppercase truncate">${esc(r.nama || '(tanpa nama)')}</span>
+                        ${tagBaru}
+                    </div>
+                    <div class="flex flex-wrap items-center gap-1 my-1">${status}${badgeMotor}${badgeKend}</div>
+                    <p class="text-[9px] font-bold text-slate-500 truncate">${esc(ringkas || '-')}</p>
+                    <p class="text-[8px] font-bold text-slate-400 mt-0.5"><i class="fa-regular fa-clock mr-1"></i>${esc(pdTanggal(r.ts))}${r.hp ? ' · ' + esc(r.hp) : ''}</p>
+                    <div class="flex gap-1.5 mt-2">
+                        <button data-id="${id}" onclick="window.pdHubungiWa(this.dataset.id)" ${bisaWa ? '' : 'disabled'} class="flex-1 py-2 rounded-lg text-[9px] font-black uppercase flex items-center justify-center gap-1.5 ${bisaWa ? 'bg-emerald-500 text-white active:scale-95' : 'bg-slate-100 text-slate-400'}"><i class="fa-brands fa-whatsapp text-sm"></i> WhatsApp</button>
+                        <button data-id="${id}" onclick="window.pdToggleDetail(this.dataset.id)" class="px-3 py-2 rounded-lg text-[9px] font-black uppercase bg-slate-50 border border-slate-200 text-slate-600 active:scale-95">Detail</button>
+                    </div>
+                    <div id="pd-detail-${id}" class="hidden mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+                        ${baris('Mendaftar sebagai', r.daftarSebagai)}
+                        ${baris('Menjadi rider untuk', r.tujuan)}
+                        ${baris('Pendidikan', r.pendidikan)}
+                        ${baris('Aktif di aplikasi lain', r.aplikasiLain)}
+                        ${baris('Dokumen pendukung', r.dokumen)}
+                        ${baris('Kelengkapan berkendara', r.berkendara)}
+                        ${baris('Spesifikasi motor', r.spekMotor)}
+                        ${baris('Sanggup on-bid 8 jam', r.onbid)}
+                        ${baris('Siap narik rutin', r.konsisten)}
+                        ${baris('Siap kerja sama tim', r.kerjasama)}
+                        ${baris('Rekomendasi dari', r.rekomendasi)}
+                        ${baris('Jawaban jujur', r.jujur)}
+                        <div class="col-span-2">${foto}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        };
+        // ================== AKHIR PENDAFTARAN RIDER ==================
+
+
         window.switchPemasukanTab = (tab) => {
             const btnCicilan = document.getElementById('tab-pemasukan-cicilan');
             const btnLangganan = document.getElementById('tab-pemasukan-langganan');
