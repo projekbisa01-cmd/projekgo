@@ -181,6 +181,13 @@
   .tf-notes-wrap textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;
     font-size:13px;font-family:inherit;resize:vertical;background:#fff;color:var(--ink);}
   .tf-notes-wrap textarea:focus{outline:2px solid var(--navy-dim);outline-offset:0;border-color:var(--navy-dim);}
+
+  .tf-datebar{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;}
+  .tf-datebar-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .tf-datebar-row input[type=date]{flex:1;min-width:130px;}
+  .tf-datebar-label{margin-top:8px;font-size:14px;font-weight:700;color:var(--navy);}
+  .tf-datebar-label.readonly{margin-top:0;}
+  .tf-date-warn{color:var(--amber);font-weight:600;font-size:12px;}
 </style>
 </head>
 <body>
@@ -326,7 +333,8 @@ auth.onAuthStateChanged(function(user){
   let pendingFocus = null; // {rowIndex, col}
   let editingEntryId = null;
   let editDraft = null;
-  let riwayatDate = '';
+  let riwayatDate = todayKey();   // tanggal filter halaman Riwayat & Cetak ('' = semua tanggal)
+  let berandaDate = todayKey();   // tanggal yang sedang dibuka di halaman Beranda
   let entryDeleteConfirm = null; // {sid, eid, nama, nominal}
   let riwayatEdit = null; // {sid, eid, draft:{kode,nama,bank,nominal,pelanggan,jam}}
   let riwayatNotes = '';
@@ -357,11 +365,45 @@ auth.onAuthStateChanged(function(user){
   function emptyEntry(){
     return {id:uid(), kode:'', nama:'', bank:'BCA', nominal:'', pelanggan:'', jam:'', cekAwal:false, cekPre:false, transferred:false, cekPin:false, cekFinal:false, xferStage:0};
   }
-  function newSession(){
-    const s = { id: uid(), label: 'Sesi ' + (sessions.length+1), createdAt: Date.now(), finishedAt:null, step:1, entries:[emptyEntry()], admin:'', adminCustom:'', adminCustomDraft:'' };
+  // ---------- helper tanggal ----------
+  function todayKey(){ return dateKey(Date.now()); }
+  // Validasi format YYYY-MM-DD sebelum dipakai (nilai <input type=date> tetap diperlakukan sebagai input tak tepercaya).
+  function isValidDateKey(v){
+    return typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(new Date(v+'T00:00:00').getTime());
+  }
+  function shiftDateKey(k, delta){
+    const d = new Date(k+'T00:00:00');
+    d.setDate(d.getDate()+delta);
+    return dateKey(d.getTime());
+  }
+  // Timestamp pada tanggal k dengan jam sekarang (supaya sesi tercatat di tanggal yang dipilih).
+  function tsForDate(k){
+    const p = k.split('-').map(Number), n = new Date();
+    return new Date(p[0], p[1]-1, p[2], n.getHours(), n.getMinutes(), n.getSeconds()).getTime();
+  }
+  function sessionsOn(k){ return sessions.filter(s=>dateKey(s.createdAt)===k); }
+  // Sesi yang dibuka untuk tanggal k: utamakan yang belum selesai, kalau tidak ada ambil yang terakhir.
+  function pickSessionFor(k){
+    const list = sessionsOn(k);
+    return list.find(s=>s.step!==5) || list[list.length-1] || null;
+  }
+
+  function newSession(dateK){
+    const k = isValidDateKey(dateK) ? dateK : (isValidDateKey(berandaDate) ? berandaDate : todayKey());
+    const s = { id: uid(), label: 'Sesi ' + (sessionsOn(k).length+1), createdAt: tsForDate(k), finishedAt:null, step:1, entries:[emptyEntry()], admin:'', adminCustom:'', adminCustomDraft:'' };
     sessions.push(s);
     currentSessionId = s.id;
+    berandaDate = k;
     view = 'session';
+  }
+  function setBerandaDate(k){
+    if(!isValidDateKey(k)) return;
+    berandaDate = k;
+    const p = pickSessionFor(k);
+    currentSessionId = p ? p.id : null;
+    editingEntryId = null; editDraft = null;
+    view = 'session';
+    render();
   }
   function sessionAdminLabel(s){
     if(!s) return '';
@@ -380,10 +422,13 @@ auth.onAuthStateChanged(function(user){
       sessions = data[STORAGE_KEY] ? JSON.parse(data[STORAGE_KEY]) : [];
       riwayatNotes = data[NOTES_KEY] || '';
     }catch(e){ sessions = []; riwayatNotes = ''; }
-    const active = sessions.find(s=>s.step!==5);
+    berandaDate = todayKey();
+    riwayatDate = berandaDate;
+    const todays = sessionsOn(berandaDate);
+    const active = todays.find(s=>s.step!==5);
     if(active){ currentSessionId = active.id; }
-    else if(sessions.length===0){ newSession(); }
-    else { currentSessionId = sessions[sessions.length-1].id; view='riwayat'; }
+    else if(todays.length===0){ newSession(berandaDate); }
+    else { currentSessionId = todays[todays.length-1].id; view='riwayat'; }
     ready = true;
     render();
   }
@@ -401,10 +446,8 @@ auth.onAuthStateChanged(function(user){
       sessions = data[STORAGE_KEY] ? JSON.parse(data[STORAGE_KEY]) : [];
       riwayatNotes = data[NOTES_KEY] || '';
       if(!sessions.find(s=>s.id===currentSessionId)){
-        const active = sessions.find(s=>s.step!==5);
-        if(active){ currentSessionId = active.id; view='session'; }
-        else if(sessions.length===0){ newSession(); }
-        else { currentSessionId = sessions[sessions.length-1].id; view='riwayat'; }
+        const p = pickSessionFor(berandaDate);
+        currentSessionId = p ? p.id : null;
       }
       toast('Data terbaru dimuat');
     }catch(e){
@@ -449,7 +492,7 @@ auth.onAuthStateChanged(function(user){
 
   function topbar(s){
     const last = lastCompleteEntry();
-    const preview = last ? `${last.kode||'-'} · ${last.nama||'-'} · ${rupiah(last.nominal)}${last.pelanggan?` · ${last.pelanggan}`:''}` : sessionDisplayLabel(s);
+    const preview = last ? `${esc(last.kode,'-')} · ${esc(last.nama,'-')} · ${rupiah(last.nominal)}${last.pelanggan?` · ${esc(last.pelanggan)}`:''}` : esc(sessionDisplayLabel(s));
     const adminLabel = sessionAdminLabel(s);
     return `
       <div class="tf-topbar">
@@ -676,7 +719,7 @@ auth.onAuthStateChanged(function(user){
           <div class="tf-done-check" style="margin:0 auto 12px;">✓</div>
           <div style="font-size:16px;font-weight:700;">Semua rider sudah ditransfer</div>
           <div style="color:var(--sub);font-size:13px;margin-top:4px;">${doneCount}/${total} transferan selesai</div>
-          <div style="color:var(--sub);font-size:12px;margin-top:6px;">${todayFullLabel()}</div>
+          <div style="color:var(--sub);font-size:12px;margin-top:6px;">${esc(formatFullDateID(dateKey(s.createdAt)))}</div>
         </div>
         ${historyList}
         <div class="tf-actions">
@@ -729,7 +772,7 @@ auth.onAuthStateChanged(function(user){
 
     return `
       <div class="tf-focus-wrap">
-        <div class="tf-focus-pos" style="margin-bottom:2px;">${todayFullLabel()}</div>
+        <div class="tf-focus-pos" style="margin-bottom:2px;">${esc(formatFullDateID(dateKey(s.createdAt)))}</div>
         <div class="tf-focus-pos">Eksekusi transfer ${idx+1} dari ${total} · urutan atas → bawah</div>
         <div class="tf-progress-wrap"><div class="tf-progress-fill" style="width:${(doneCount/total*100)}%"></div></div>
         ${card}
@@ -808,18 +851,19 @@ auth.onAuthStateChanged(function(user){
     <path d="M16.5 3.5C17.0304 2.96957 17.7496 2.6716 18.5 2.6716C19.2504 2.6716 19.9696 2.96957 20.5 3.5C21.0304 4.03043 21.3284 4.74957 21.3284 5.5C21.3284 6.25043 21.0304 6.96957 20.5 7.5L7 21L3 22L4 18L17.5 4.5L16.5 3.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
 
-  function renderCombinedExcelTable(rows){
+  function renderCombinedExcelTable(rows, showDate){
     const trs = rows.map((r,i)=>`
       <tr>
         <td>${i+1}</td>
-        <td>${r.sesiLabel}</td>
-        <td>${r.kode||'-'}</td>
+        ${showDate ? `<td>${esc(fmtTglShort(r.tgl))}</td>` : ''}
+        <td>${esc(r.sesiLabel)}</td>
+        <td>${esc(r.kode,'-')}</td>
         <td class="${r.cekFinal?'tf-cell-name-checked':''}">${esc(r.nama,'-')}</td>
-        <td>${r.bank}</td>
+        <td>${esc(r.bank)}</td>
         <td class="num">${rupiah(r.nominal)}</td>
         <td>${esc(r.pelanggan,'-')}</td>
         <td class="chk"><input type="checkbox" class="tf-cell-check" data-eid="${r.id}" data-field="cekFinal" ${r.cekFinal?'checked':''} ${r.editable?'':'disabled'}></td>
-        <td class="${r.jam?'':'tf-jam-empty'}">${r.jam||'-'}</td>
+        <td class="${r.jam?'':'tf-jam-empty'}">${esc(r.jam,'-')}</td>
         <td class="chk">
           <div class="tf-row-actions">
             <button class="tf-icon-btn edit" data-act="edit-entry" data-sid="${r.sesiId}" data-eid="${r.id}" title="Edit">${editSvg}</button>
@@ -830,10 +874,34 @@ auth.onAuthStateChanged(function(user){
     return `
       <div class="tf-excel-wrap">
         <table class="tf-excel">
-          <thead><tr><th>#</th><th>Sesi</th><th>Kode</th><th>Nama</th><th>Bank</th><th>Nominal</th><th>Pelanggan</th><th>✓</th><th>Jam</th><th></th></tr></thead>
+          <thead><tr><th>#</th>${showDate?'<th>Tanggal</th>':''}<th>Sesi</th><th>Kode</th><th>Nama</th><th>Bank</th><th>Nominal</th><th>Pelanggan</th><th>✓</th><th>Jam</th><th></th></tr></thead>
           <tbody>${trs}</tbody>
         </table>
       </div>`;
+  }
+
+  function dateNav(scope, value, allowAll){
+    const has = !!value;
+    const label = has ? formatFullDateID(value) : 'Semua tanggal';
+    const notToday = has && value!==todayKey();
+    return `
+      <div class="tf-datebar">
+        <div class="tf-datebar-row">
+          <button class="tf-btn small" data-act="date-prev" data-scope="${scope}" title="Hari sebelumnya" ${has?'':'disabled'}>‹</button>
+          <input type="date" class="tf-date-input" data-scope="${scope}" value="${esc(value)}">
+          <button class="tf-btn small" data-act="date-next" data-scope="${scope}" title="Hari berikutnya" ${has?'':'disabled'}>›</button>
+          <button class="tf-btn small" data-act="date-today" data-scope="${scope}">Hari ini</button>
+          ${allowAll && has ? '<button class="tf-btn small" data-act="clear-date-filter">Semua tanggal</button>' : ''}
+        </div>
+        <div class="tf-datebar-label">${esc(label)}${notToday ? ' <span class="tf-date-warn">· bukan hari ini</span>' : ''}</div>
+      </div>`;
+  }
+  // Saat transfer sedang dieksekusi (langkah 2-4) tanggal hanya ditampilkan, tidak bisa diganti, supaya tidak terpindah sesi tanpa sengaja.
+  function berandaDateBar(s){
+    if(s && s.step>=2 && s.step<=4){
+      return `<div class="tf-datebar"><div class="tf-datebar-label readonly">${esc(formatFullDateID(berandaDate))}</div></div>`;
+    }
+    return dateNav('beranda', berandaDate, false);
   }
 
   function formatFullDateID(dateStr){
@@ -841,22 +909,41 @@ auth.onAuthStateChanged(function(user){
     return d.toLocaleDateString('id-ID', {weekday:'long', day:'2-digit', month:'long', year:'numeric'});
   }
 
-  function renderPrintTable(rows){
+  // "deni prsetyo" -> "deni.p" ; "DEDI TRI KURNIAWAN" -> "DEDI.TK" ; satu kata dibiarkan.
+  function shortName(nama){
+    const words = String(nama==null?'':nama).trim().split(/\s+/).filter(Boolean);
+    if(words.length<=1) return words[0]||'';
+    const initials = words.slice(1).map(function(w){
+      const m = w.match(/[\p{L}\p{N}]/u);
+      return m ? m[0] : '';
+    }).join('');
+    return initials ? words[0]+'.'+initials : words[0];
+  }
+  // 'YYYY-MM-DD' -> 'dd/mm/yy'
+  function fmtTglShort(k){
+    return isValidDateKey(k) ? k.slice(8,10)+'/'+k.slice(5,7)+'/'+k.slice(2,4) : '';
+  }
+
+  function renderPrintTable(rows, showDate){
+    const cols = showDate ? [4,8,15,6,14,7,13,20,4,9] : [4,17,6,15,8,14,22,4,10];
+    const colgroup = '<colgroup>' + cols.map(w=>`<col style="width:${w}%">`).join('') + '</colgroup>';
     const trs = rows.map((r,i)=>`
       <tr>
         <td>${i+1}</td>
-        <td>${r.sesiLabel}</td>
-        <td>${r.kode||'-'}</td>
-        <td class="${r.cekFinal?'tf-print-checked':''}">${esc(r.nama,'-')}</td>
-        <td>${r.bank}</td>
+        ${showDate ? `<td>${esc(fmtTglShort(r.tgl))}</td>` : ''}
+        <td>${esc(r.sesiLabel)}</td>
+        <td>${esc(r.kode,'-')}</td>
+        <td class="${r.cekFinal?'tf-print-checked':''}">${esc(shortName(r.nama),'-')}</td>
+        <td>${esc(r.bank)}</td>
         <td class="num">${rupiah(r.nominal)}</td>
         <td>${esc(r.pelanggan,'-')}</td>
         <td class="chk ${r.cekFinal?'tf-print-checked':''}">${r.cekFinal?'✓':''}</td>
-        <td>${r.jam||'-'}</td>
+        <td>${esc(r.jam,'-')}</td>
       </tr>`).join('');
     return `
       <table class="tf-excel">
-        <thead><tr><th>#</th><th>Sesi</th><th>Kode</th><th>Nama</th><th>Bank</th><th>Nominal</th><th>Pelanggan</th><th>✓</th><th>Jam</th></tr></thead>
+        ${colgroup}
+        <thead><tr><th>#</th>${showDate?'<th>Tanggal</th>':''}<th>Sesi</th><th>Kode</th><th>Nama</th><th>Bank</th><th>Nominal</th><th>Pelanggan</th><th>✓</th><th>Jam</th></tr></thead>
         <tbody>${trs}</tbody>
       </table>`;
   }
@@ -864,30 +951,49 @@ auth.onAuthStateChanged(function(user){
   function printRiwayat(){
     const {combined} = getCombinedRows();
     if(!combined.length){ toast('Tidak ada data untuk dicetak'); return; }
-    const headerDate = formatFullDateID(riwayatDate);
-    const tableHtml = renderPrintTable(combined);
+    const allDates = !riwayatDate;
+    const headerDate = allDates ? 'Semua Tanggal' : formatFullDateID(riwayatDate);
+    const tableHtml = renderPrintTable(combined, allDates);
+    const notes = riwayatNotes.trim();
+
+    // Ukuran baris dihitung otomatis: normal kalau datanya sedikit, dirapatkan kalau banyak
+    // supaya semuanya muat maksimal 2 halaman (1 lembar bolak-balik). Satuan mm.
+    const PAGE_H = 281, HEAD_H = 8, MAX_PAGES = 2, ROW_MAX = 4.6, ROW_MIN = 2.3;
+    const n = combined.length;
+    const noteLines = notes ? notes.split('\n').reduce((a,l)=>a+Math.max(1,Math.ceil(l.length/120)),0) : 0;
+    const notesH = notes ? 11 + noteLines*3.6 : 0;
+    const usable = PAGE_H - HEAD_H - notesH;
+    let rowH = ROW_MAX;
+    let perPage = Math.max(1, Math.floor(usable/rowH) - 1); // -1 = baris judul kolom
+    if(Math.ceil(n/perPage) > MAX_PAGES){
+      perPage = Math.ceil(n/MAX_PAGES);
+      rowH = Math.max(ROW_MIN, (usable/(perPage+1))*0.97);
+    }
+    const fs = Math.min(7.5, Math.max(4.5, rowH*2.835*0.78)); // pt
+    const rowHs = rowH.toFixed(3), fss = fs.toFixed(2), ths = (fs*0.9).toFixed(2);
+
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Riwayat Transfer</title>
       <style>
-        @page{ size:A4; margin:9mm; }
+        @page{ size:A4; margin:8mm; }
         *{box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important;}
         body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#000;margin:0;padding:0;}
-        .tf-print-header{text-align:center;font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:capitalize;}
-        table.tf-excel{width:100%;border-collapse:collapse;font-size:9px;}
-        table.tf-excel th, table.tf-excel td{border:1px solid #999;padding:2.5px 4px;text-align:left;}
-        table.tf-excel th{background:#eee;font-weight:700;text-transform:uppercase;font-size:8px;}
+        .tf-print-header{text-align:center;font-size:12.5px;font-weight:700;height:5mm;line-height:5mm;margin:0 0 2mm;text-transform:capitalize;}
+        table.tf-excel{width:100%;border-collapse:collapse;table-layout:fixed;font-size:${fss}pt;}
+        table.tf-excel th, table.tf-excel td{border:0.2mm solid #999;padding:0 1mm;height:${rowHs}mm;line-height:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        table.tf-excel th{background:#eee;font-weight:700;text-transform:uppercase;font-size:${ths}pt;}
         table.tf-excel td.num{text-align:right;}
-        table.tf-excel td.chk{text-align:center;}
+        table.tf-excel td.chk, table.tf-excel th:nth-last-child(2){text-align:center;}
         table.tf-excel td.tf-print-checked{background:#FBDCB0;font-weight:700;color:#7A4A08;}
         table.tf-excel thead{display:table-header-group;}
         table.tf-excel tr{page-break-inside:avoid;}
-        .tf-print-notes{margin-top:10px;font-size:9.5px;border:1px solid #999;border-radius:4px;padding:6px 8px;page-break-inside:avoid;}
+        .tf-print-notes{margin-top:2mm;font-size:9.5px;border:1px solid #999;border-radius:4px;padding:6px 8px;page-break-inside:avoid;}
         .tf-print-notes-label{font-weight:700;text-transform:uppercase;font-size:8px;color:#666;margin-bottom:3px;}
         .tf-print-notes-body{white-space:pre-wrap;line-height:1.4;}
       </style>
       </head><body>
-      <div class="tf-print-header">${headerDate}</div>
+      <div class="tf-print-header">${esc(headerDate)}</div>
       ${tableHtml}
-      ${riwayatNotes.trim() ? `<div class="tf-print-notes"><div class="tf-print-notes-label">Catatan</div><div class="tf-print-notes-body">${esc(riwayatNotes).replace(/\n/g,'<br>')}</div></div>` : ''}
+      ${notes ? `<div class="tf-print-notes"><div class="tf-print-notes-label">Catatan</div><div class="tf-print-notes-body">${esc(riwayatNotes).replace(/\n/g,'<br>')}</div></div>` : ''}
       </body></html>`;
     const old = document.getElementById('tf-print-frame');
     if(old) old.remove();
@@ -922,19 +1028,14 @@ auth.onAuthStateChanged(function(user){
     filtered.forEach(s=>{
       s.entries.forEach(e=>{
         if(!e.kode.trim() || !e.nama.trim() || !(Number(e.nominal)>0)) return; // sembunyikan baris belum lengkap
-        combined.push({...e, sesiLabel:sessionDisplayLabel(s), sesiId:s.id, editable: s.step!==5});
+        combined.push({...e, sesiLabel:sessionDisplayLabel(s), sesiId:s.id, tgl:dateKey(s.createdAt), editable: s.step!==5});
       });
     });
     return {filtered, combined};
   }
 
   function renderRiwayat(){
-    const dateFilterBar = `
-      <div class="tf-summary-bar" style="justify-content:flex-start;gap:10px;">
-        <span style="font-size:12px;color:var(--sub);font-weight:600;">Tanggal</span>
-        <input type="date" id="riwayat-date-filter" value="${riwayatDate}">
-        ${riwayatDate?'<button class="tf-btn small" data-act="clear-date-filter">Semua tanggal</button>':''}
-      </div>`;
+    const dateFilterBar = dateNav('riwayat', riwayatDate, true);
     if(sessions.length===0){
       return dateFilterBar + `<div class="tf-empty">Belum ada sesi. Mulai sesi pertama untuk mencatat transferan.</div>
         <div class="tf-actions"><button class="tf-btn primary" data-act="new-session">Mulai sesi</button></div>`;
@@ -953,7 +1054,7 @@ auth.onAuthStateChanged(function(user){
         <div class="n">${rupiah(grand)}</div>
         <div class="l">${combined.length} transferan · ${filtered.length} sesi</div>
       </div>
-      ${combined.length ? renderCombinedExcelTable(combined) : '<div class="tf-empty">Belum ada transferan dengan kode, nama, dan nominal yang lengkap.</div>'}
+      ${combined.length ? renderCombinedExcelTable(combined, !riwayatDate) : '<div class="tf-empty">Belum ada transferan dengan kode, nama, dan nominal yang lengkap.</div>'}
       <div class="tf-card tf-notes-wrap">
         <label class="tf-notes-label" for="riwayat-notes">Catatan</label>
         <textarea id="riwayat-notes" rows="3" placeholder="Tulis catatan di sini...">${esc(riwayatNotes)}</textarea>
@@ -1025,10 +1126,13 @@ auth.onAuthStateChanged(function(user){
         </div>` + renderRiwayat();
     } else {
       const s = getCurrent();
-      if(!s){ view='riwayat'; render(); return; }
       body = `<div class="tf-h1">Transfer Rider</div><div class="tf-sub">Catat, cek, lalu eksekusi transfer per sesi.</div>`
-        + topbar(s);
-      if(s.step===5){ body += renderDone(s); }
+        + berandaDateBar(s) + topbar(s);
+      if(!s){
+        body += `<div class="tf-empty">Belum ada sesi pada ${esc(formatFullDateID(berandaDate))}.</div>
+          <div class="tf-actions"><button class="tf-btn primary" data-act="new-session">+ Mulai sesi</button></div>`;
+      }
+      else if(s.step===5){ body += renderDone(s); }
       else {
         body += stepsBar(s.step);
         if(s.step===1) body += renderStep1(s);
@@ -1137,7 +1241,17 @@ auth.onAuthStateChanged(function(user){
     }
     else if(act==='finish-session'){ s.step=5; s.finishedAt=Date.now(); save(); render(); toast('Sesi selesai'); }
     else if(act==='new-session'){ newSession(); save(); render(); }
-    else if(act==='riwayat'){ view='riwayat'; render(); }
+    else if(act==='riwayat'){ riwayatDate = berandaDate; view='riwayat'; render(); }
+    else if(act==='date-prev' || act==='date-next'){
+      const dir = act==='date-prev' ? -1 : 1;
+      if(btn.dataset.scope==='riwayat'){
+        if(riwayatDate){ riwayatDate = shiftDateKey(riwayatDate, dir); render(); }
+      } else { setBerandaDate(shiftDateKey(berandaDate, dir)); }
+    }
+    else if(act==='date-today'){
+      if(btn.dataset.scope==='riwayat'){ riwayatDate = todayKey(); render(); }
+      else { setBerandaDate(todayKey()); }
+    }
     else if(act==='refresh-data'){ refreshData(); }
     else if(act==='confirm-admin-custom'){
       const s2 = getCurrent();
@@ -1319,7 +1433,13 @@ auth.onAuthStateChanged(function(user){
       editDraft[field] = val;
       return;
     }
-    if(t.id==='riwayat-date-filter'){ riwayatDate = t.value; render(); return; }
+    if(t.matches('.tf-date-input')){
+      const v = t.value;
+      if(t.getAttribute('data-scope')==='riwayat'){ riwayatDate = isValidDateKey(v) ? v : ''; render(); }
+      else if(isValidDateKey(v)){ setBerandaDate(v); }
+      else { render(); }
+      return;
+    }
     if(t.matches('.tf-cell-check')){
       const eid = t.getAttribute('data-eid');
       const field = t.getAttribute('data-field');
