@@ -465,6 +465,7 @@
         <section>
             <div class="flex justify-between items-center mb-3 px-1 border-b border-gray-200 pb-2">
                 <h2 class="font-black text-black text-[11px] uppercase tracking-tight">Pantauan Order Aktif (<span id="stat-active-orders">0</span>)</h2>
+                <button type="button" id="ao-toggle-semua" onclick="window.aoToggleSemua()" class="hidden ml-auto mr-2 text-[9px] font-black uppercase text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-full shadow-sm active:scale-95">Buka semua</button>
                 <span id="stat-active-omset" class="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 shadow-sm" title="Potensi Omset 16% dari Order yang Sedang Jalan">16%: Rp 0</span>
             </div>
             <div id="active-orders-list" class="space-y-3 pb-6">
@@ -7028,11 +7029,12 @@
             let html = '';
             pendingOrders.sort((a, b) => (a.created_at?.seconds || 0) - (b.created_at?.seconds || 0));
             pendingOrders.forEach(order => {
+                if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(order.id || ''))) return; // id tidak wajar: jangan dimasukkan ke onclick
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
                 const tamVal = parseInt(order.tambahan || 0);
                 const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
-                const itemsText = order.items ? order.items.map(i => i.name).join('\n') : 'Order Biasa';
-                const custNameStr = order.customer_name ? ` | ${order.customer_name}` : '';
+                const itemsText = escDx(Array.isArray(order.items) ? order.items.map(i => i && i.name).join('\n') : 'Order Biasa');
+                const custNameStr = order.customer_name ? ` | ${escDx(order.customer_name)}` : '';
 
                 let timeStr = '--:--';
                 if (order.created_at && order.created_at.seconds) timeStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
@@ -7046,7 +7048,7 @@
                                     <span class="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 uppercase tracking-widest inline-block w-max"><i class="fa-solid fa-hourglass-half mr-1"></i>Menunggu Rider Aktif</span>
                                     <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100"><i class="fa-regular fa-clock text-[8px]"></i><span class="text-[9px] font-black text-black">${timeStr}</span></div>
                                 </div>
-                                <p class="text-xs font-black text-black leading-none mt-0.5">WA: ${order.customer_phone}${custNameStr}</p>
+                                <p class="text-xs font-black text-black leading-none mt-0.5">WA: ${escDx(order.customer_phone || '-')}${custNameStr}</p>
                             </div>
                             <div class="text-right shrink-0 ml-2"><p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p></div>
                         </div>
@@ -7070,6 +7072,37 @@
             container.innerHTML = html;
         };
 
+        // Kartu Pantauan Order Aktif bisa diringkas / dibuka. Yang sedang terbuka diingat
+        // selama halaman ini terbuka, jadi tidak tertutup sendiri saat daftar diperbarui.
+        const aoTerbuka = new Set();
+        const aoIdOk = (id) => /^[A-Za-z0-9_-]{1,128}$/.test(String(id || ''));
+        const aoIdAktif = () => allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing' || o.status === 'missed') && aoIdOk(o.id)).map(o => o.id);
+        function aoPerbaruiTombolSemua() {
+            const btn = document.getElementById('ao-toggle-semua');
+            if (!btn) return;
+            const ids = aoIdAktif();
+            btn.classList.toggle('hidden', ids.length === 0);
+            btn.innerText = (ids.length > 0 && ids.every(id => aoTerbuka.has(id))) ? 'Tutup semua' : 'Buka semua';
+        }
+        window.aoToggle = (id) => {
+            if (!aoIdOk(id)) return;
+            if (aoTerbuka.has(id)) aoTerbuka.delete(id); else aoTerbuka.add(id);
+            const buka = aoTerbuka.has(id);
+            const detail = document.getElementById('ao-detail-' + id);
+            const panah = document.getElementById('ao-panah-' + id);
+            const head = document.getElementById('ao-head-' + id);
+            if (detail) detail.classList.toggle('hidden', !buka);
+            if (panah) panah.classList.toggle('rotate-180', buka);
+            if (head) head.setAttribute('aria-expanded', buka ? 'true' : 'false');
+            aoPerbaruiTombolSemua();
+        };
+        window.aoToggleSemua = () => {
+            const ids = aoIdAktif();
+            const semuaTerbuka = ids.length > 0 && ids.every(id => aoTerbuka.has(id));
+            ids.forEach(id => { if (semuaTerbuka) aoTerbuka.delete(id); else aoTerbuka.add(id); });
+            renderActiveOrders();
+        };
+
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
             // Keluarkan unassigned dari pantauan aktif agar hanya muncul di tab Pending
@@ -7091,6 +7124,11 @@
             if (activeOrders.length > 0 && !window.hideActiveBadge) { badge.innerText = activeOrders.length; badge.classList.remove('hidden'); } 
             else { badge.classList.add('hidden'); }
 
+            // Lupakan status buka/tutup order yang sudah tidak aktif
+            const idAktif = new Set(activeOrders.map(o => o.id));
+            [...aoTerbuka].forEach(id => { if (!idAktif.has(id)) aoTerbuka.delete(id); });
+            aoPerbaruiTombolSemua();
+
             if (activeOrders.length === 0) {
                 container.innerHTML = `<p class="text-[10px] text-black italic text-center py-6 bg-slate-100/50 rounded-2xl">Tidak ada orderan tertahan.</p>`;
                 return;
@@ -7105,6 +7143,7 @@
                 return (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0);
             });
             activeOrders.forEach(order => {
+                if (!aoIdOk(order.id)) return; // id tidak wajar: jangan dimasukkan ke HTML/onclick
                 const isProcessing = order.status === 'processing';
                 const isMissed = order.status === 'missed' || order.status === 'unassigned';
                 
@@ -7113,44 +7152,58 @@
                 if (isProcessing) { statusColor = 'text-emerald-600 bg-emerald-50 border-emerald-200'; statusText = 'Sedang Diproses Rider'; borderLeft = 'bg-emerald-500'; } 
                 else if (isMissed) { statusColor = 'text-rose-600 bg-rose-50 border-rose-200'; statusText = order.status === 'unassigned' ? 'TIDAK ADA RIDER TERSEDIA' : 'DILEWATKAN (MENCARI RIDER...)'; borderLeft = 'bg-rose-500'; } 
                 else { statusColor = 'text-rose-600 bg-rose-50 border-rose-200'; statusText = 'BELUM DI-ACC RIDER'; borderLeft = 'bg-rose-500'; }
+                const statusPendek = isProcessing ? 'Diproses' : (isMissed ? (order.status === 'unassigned' ? 'Tak ada rider' : 'Dilewatkan') : 'Belum ACC');
+                const terbuka = aoTerbuka.has(order.id);
                 const cardBaseClass = isWaitingAcc ? 'bg-rose-50 border-rose-300 shadow-sm' : 'bg-white border-slate-200 shadow-sm';
 
-                const itemsText = order.items ? order.items.map(i => i.name).join('\n') : 'Order Biasa';
+                const itemsText = escDx(Array.isArray(order.items) ? order.items.map(i => i && i.name).join('\n') : 'Order Biasa');
                 const feeStr = parseInt(order.fee || 0).toLocaleString('id-ID');
                 const tamVal = parseInt(order.tambahan || 0);
                 const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
-                const custNameStr = order.customer_name ? ` | ${order.customer_name}` : '';
+                const custNameStr = order.customer_name ? ` | ${escDx(order.customer_name)}` : '';
+                const riderNama = escDx(order.rider_name || 'Tidak Ada');
+                const ringkasItem = escDx(Array.isArray(order.items) && order.items.length ? order.items.map(i => i && i.name).filter(Boolean).join(', ') : (order.customer_name || 'Order Biasa'));
 
                 let timeAssignedStr = '--:--';
                 if (order.created_at && order.created_at.seconds) timeAssignedStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
                 html += `
-                    <div id="card-order-${order.id}" class="rounded-2xl p-4 border ${cardBaseClass} flex flex-col gap-3 relative overflow-hidden transition-all duration-500">
+                    <div id="card-order-${order.id}" class="rounded-2xl border ${cardBaseClass} relative overflow-hidden transition-all duration-500">
                         <div class="absolute left-0 top-0 bottom-0 w-1 ${borderLeft}"></div>
-                        <div class="flex justify-between items-start pl-1">
-                            <div class="flex flex-col gap-1.5 overflow-hidden">
-                                <div class="flex items-center gap-2 flex-wrap">
-                                    <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
-                                    <div class="flex items-center gap-1 text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100" title="Waktu Order Diberikan"><i class="fa-regular fa-clock text-[8px]"></i><span class="text-[9px] font-black text-black">${timeAssignedStr}</span></div>
-                                    ${isWaitingAcc ? `<div id="status-wait-${order.id}" class="flex items-center gap-1 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200 transition-colors" title="Waktu Menunggu Konfirmasi"><i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i><span class="text-[9px] font-black">Menunggu...</span></div>` : ''}
+                        <button type="button" id="ao-head-${order.id}" onclick="window.aoToggle('${order.id}')" aria-expanded="${terbuka ? 'true' : 'false'}" class="w-full text-left pl-4 pr-3 py-2.5 flex items-center gap-2">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="text-[8px] font-black ${statusColor} px-1.5 py-0.5 rounded border uppercase tracking-wider">${statusPendek}</span>
+                                    <span class="text-[9px] font-black text-black"><i class="fa-regular fa-clock text-[8px] text-slate-400 mr-0.5"></i>${escDx(timeAssignedStr)}</span>
+                                    ${isWaitingAcc ? `<span id="status-wait-${order.id}" class="flex items-center gap-1 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200 transition-colors" title="Waktu Menunggu Konfirmasi"><i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i><span class="text-[9px] font-black">Menunggu...</span></span>` : ''}
                                 </div>
-                                <p class="text-xs font-black text-black leading-none mt-0.5">WA: ${order.customer_phone}${custNameStr}</p>
+                                <p class="text-[11px] font-black text-black truncate mt-1"><i class="fa-solid fa-motorcycle text-[9px] text-slate-400 mr-1"></i>${riderNama}</p>
+                                <p class="text-[9px] font-bold text-slate-500 truncate">${ringkasItem}</p>
                             </div>
-                            <div class="text-right shrink-0 ml-2"><p class="text-sm font-black text-black leading-none">Rp ${feeStr}${tamStr}</p></div>
-                        </div>
-                        <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
-                            <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas Terakhir:</p>
-                            <div class="flex items-center justify-between gap-2">
-                                <p class="text-xs font-bold text-black truncate">${order.rider_name || 'Tidak Ada'}</p>
-                                ${!isMissed ? `<div class="flex items-center gap-1.5 shrink-0"><button onclick="window.sendToPending('${order.id}')" class="px-2.5 h-7 bg-amber-50 text-amber-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-amber-500 hover:text-white transition-colors border border-amber-200" title="Tarik ke Pending"><i class="fa-solid fa-rotate-left text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Pending</span></button><button onclick="window.manualReassignOrder('${order.id}')" class="px-2.5 h-7 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-indigo-500 hover:text-white transition-colors border border-indigo-200" title="Alihkan ke Rider Berikutnya"><i class="fa-solid fa-shuffle text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Alihkan</span></button></div>` : ''}
+                            <div class="text-right shrink-0 flex flex-col items-end">
+                                <p class="text-xs font-black text-black leading-none">Rp ${feeStr}${tamStr}</p>
+                                <i id="ao-panah-${order.id}" class="fa-solid fa-chevron-down text-[10px] text-slate-400 mt-2 transition-transform ${terbuka ? 'rotate-180' : ''}"></i>
                             </div>
-                            <p class="text-[9px] text-black mt-1.5 italic whitespace-pre-wrap">"${itemsText}"</p>
-                        </div>
-                        <div class="grid ${!isMissed ? 'grid-cols-4' : 'grid-cols-2'} gap-1.5 ml-1 mt-1">
-                            <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
-                            ${!isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
-                            ${!isMissed ? `<button onclick="window.completeOrderByAdmin('${order.id}')" class="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-emerald-200"><i class="fa-solid fa-check-double"></i> Selesai</button>` : ''}
-                            <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
+                        </button>
+                        <div id="ao-detail-${order.id}" class="${terbuka ? '' : 'hidden '}px-4 pb-4 pt-3 flex flex-col gap-3 border-t border-slate-100">
+                            <div class="pl-1">
+                                <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
+                            </div>
+                            <p class="text-xs font-black text-black leading-none pl-1">WA: ${escDx(order.customer_phone || '-')}${custNameStr}</p>
+                            <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
+                                <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas Terakhir:</p>
+                                <div class="flex items-center justify-between gap-2">
+                                    <p class="text-xs font-bold text-black truncate">${riderNama}</p>
+                                    ${!isMissed ? `<div class="flex items-center gap-1.5 shrink-0"><button onclick="window.sendToPending('${order.id}')" class="px-2.5 h-7 bg-amber-50 text-amber-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-amber-500 hover:text-white transition-colors border border-amber-200" title="Tarik ke Pending"><i class="fa-solid fa-rotate-left text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Pending</span></button><button onclick="window.manualReassignOrder('${order.id}')" class="px-2.5 h-7 bg-indigo-50 text-indigo-600 rounded-md flex items-center justify-center gap-1.5 hover:bg-indigo-500 hover:text-white transition-colors border border-indigo-200" title="Alihkan ke Rider Berikutnya"><i class="fa-solid fa-shuffle text-[10px]"></i> <span class="text-[9px] font-black uppercase tracking-wider">Alihkan</span></button></div>` : ''}
+                                </div>
+                                <p class="text-[9px] text-black mt-1.5 italic whitespace-pre-wrap">"${itemsText}"</p>
+                            </div>
+                            <div class="grid ${!isMissed ? 'grid-cols-4' : 'grid-cols-2'} gap-1.5 ml-1">
+                                <button onclick="window.openEditOrder('${order.id}')" class="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-amber-200"><i class="fa-solid fa-pen"></i> Edit</button>
+                                ${!isMissed ? `<button onclick="window.pingOrder('${order.id}')" class="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-slate-200"><i class="fa-solid fa-bell"></i> Up</button>` : ''}
+                                ${!isMissed ? `<button onclick="window.completeOrderByAdmin('${order.id}')" class="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-emerald-200"><i class="fa-solid fa-check-double"></i> Selesai</button>` : ''}
+                                <button onclick="window.deleteOrder('${order.id}')" class="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[8px] sm:text-[9px] font-black rounded-lg uppercase transition-all border border-rose-200"><i class="fa-solid fa-trash"></i> Batal</button>
+                            </div>
                         </div>
                     </div>`;
             });
