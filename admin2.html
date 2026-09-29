@@ -2405,6 +2405,7 @@
                 startShiftScheduleListener(); // PANGGIL LISTENER JADWAL SHIFT
                 startAnalyticsTargetsListener();
                 startIzinLoginListener();
+                startOnbidListener(); // jam ON awal & lama onbid hari ini
                 if (typeof window.mulaiPendaftaran === 'function') window.mulaiPendaftaran(); // badge pendaftar rider baru
                 if (typeof window.mulaiAdmTambahan === 'function') window.mulaiAdmTambahan(); // ADM tambahan 4% (Senin 06.50)
 
@@ -5069,6 +5070,8 @@
                 </div>`;
 
             try {
+                // Jam ON awal & lama onbid hanya ditampilkan untuk data HARI INI
+                const tampilOnbid = tfSelect.value === 'today' || (tfSelect.value === 'custom' && customDateVal === onbidTanggalHariIni());
                 let sortedRiders = [];
                 let totalOmsetSemua = 0;
                 let displayDate = "";
@@ -5237,8 +5240,9 @@
                             <div class="flex items-center gap-2.5 overflow-hidden flex-1 ${index < 3 ? 'ml-3' : ''}">
                                 ${index >= 3 ? rankBadge : ''}
                                 <div class="overflow-hidden">
-                                    <p class="font-black text-black text-[11px] uppercase truncate leading-tight">${r.name}</p>
+                                    <p class="font-black text-black text-[11px] uppercase truncate leading-tight">${window.escHtml(r.name)}</p>
                                     <p class="text-[9px] font-bold text-slate-500 mt-0.5 w-max"><span class="text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100"><i class="fa-solid fa-check-double mr-1"></i>${r.orders} Order Selesai</span></p>
+                                    ${tampilOnbid ? `<p class="hidden text-[9px] font-bold text-slate-500 mt-1" data-onbid-uid="${window.escHtml(String(r.uid || '').trim().toUpperCase())}"></p>` : ''}
                                 </div>
                             </div>
                             <div class="text-right shrink-0">
@@ -5251,6 +5255,7 @@
 
                 html += '</div>';
                 container.innerHTML = html;
+                if (tampilOnbid) onbidIsiLabel();
 
             } catch (error) {
                 console.error("Error fetching rider data:", error);
@@ -5776,6 +5781,117 @@
             container.innerHTML = html;
         }
 
+        // ===== HITUNG LAMA ONBID (dari catatan server onbid_harian) =====
+        // Aturan (bisa diubah di sini tanpa kehilangan data):
+        //  - "antre" (ON & siap terima order) dihitung penuh
+        //  - "order" (membawa order) dihitung maksimal ONBID_BATAS_ORDER_MENIT per order
+        //  - "keluar" / "off" tidak dihitung
+        //  - "lewat" (order tidak di-ACC) menghentikan hitungan sejak order itu dikirim,
+        //    sampai status rider berubah lagi (ACC order / toggle ulang)
+        //  - tidak ada yang dihitung setelah ONBID_JAM_TUTUP
+        const ONBID_BATAS_ORDER_MENIT = 60;
+        const ONBID_JAM_TUTUP = [21, 0];
+        const ONBID_STATUS_SAH = ['antre', 'order', 'keluar', 'off', 'lewat'];
+        const onbidKeMs = (t) => {
+            if (!t) return 0;
+            if (typeof t.toMillis === 'function') return t.toMillis();
+            if (typeof t.seconds === 'number') return t.seconds * 1000 + Math.floor((t.nanoseconds || 0) / 1e6);
+            const v = new Date(t).getTime();
+            return isFinite(v) ? v : 0;
+        };
+        const onbidTanggalHariIni = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+        const onbidJam = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+        const onbidDurasiTeks = (ms) => {
+            const menit = Math.floor(Math.max(0, ms) / 60000);
+            const j = Math.floor(menit / 60), m = menit % 60;
+            return j > 0 ? `${j}j ${m}m` : `${m}m`;
+        };
+        function onbidHitung(events, tanggal, nowMs) {
+            const hasil = { totalMs: 0, jamOnAwal: null, sedangOn: false };
+            const p = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(tanggal || ''));
+            if (!p) return hasil;
+            const tutup = new Date(Number(p[1]), Number(p[2]) - 1, Number(p[3]), ONBID_JAM_TUTUP[0], ONBID_JAM_TUTUP[1], 0, 0).getTime();
+            const akhir = Math.min(nowMs, tutup);
+            const batasOrder = ONBID_BATAS_ORDER_MENIT * 60000;
+            const ev = (Array.isArray(events) ? events : [])
+                .map(e => ({ t: onbidKeMs(e && e.t), s: String((e && e.s) || '') }))
+                .filter(e => e.t > 0 && ONBID_STATUS_SAH.includes(e.s))
+                .sort((a, b) => a.t - b.t);
+            let status = 'off', mulai = 0, tertahan = false;
+            const hitungSampai = (t) => {
+                if (tertahan || !mulai || (status !== 'antre' && status !== 'order')) return;
+                const b = Math.min(t, akhir);
+                if (b <= mulai) return;
+                let dur = b - mulai;
+                if (status === 'order') dur = Math.min(dur, batasOrder);
+                hasil.totalMs += dur;
+            };
+            for (const e of ev) {
+                if (e.s === 'lewat') {
+                    if (!tertahan && (status === 'antre' || status === 'order') && e.t >= mulai) {
+                        hitungSampai(e.t);
+                        tertahan = true;
+                    }
+                    continue;
+                }
+                hitungSampai(e.t);
+                status = e.s; mulai = e.t; tertahan = false;
+                if ((status === 'antre' || status === 'order') && hasil.jamOnAwal === null) hasil.jamOnAwal = e.t;
+            }
+            hitungSampai(akhir);
+            hasil.sedangOn = !tertahan && (status === 'antre' || status === 'order') && nowMs < tutup;
+            return hasil;
+        }
+        // ===== AKHIR HITUNG LAMA ONBID =====
+
+        // ===== DATA ONBID HARI INI (koleksi onbid_harian, ditulis Cloud Function) =====
+        // 1 listener untuk semua rider hari ini: ±40 read saat dibuka, lalu 1 read per perubahan status.
+        let onbidData = new Map();   // UID -> events
+        let onbidUnsub = null, onbidTanggalAktif = '', onbidTimer = null;
+        function startOnbidListener() {
+            const tgl = onbidTanggalHariIni();
+            if (onbidUnsub && onbidTanggalAktif === tgl) return;
+            if (onbidUnsub) { try { onbidUnsub(); } catch (e) {} onbidUnsub = null; }
+            onbidTanggalAktif = tgl;
+            onbidData = new Map();
+            const q = query(
+                collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'onbid_harian'),
+                where('tanggal', '==', tgl)
+            );
+            onbidUnsub = onSnapshot(q, (snap) => {
+                const peta = new Map();
+                snap.forEach(d => {
+                    const x = d.data() || {};
+                    const uid = String(x.uid || '').trim().toUpperCase();
+                    if (/^[A-Z0-9_-]{1,64}$/.test(uid)) peta.set(uid, Array.isArray(x.events) ? x.events : []);
+                });
+                onbidData = peta;
+                onbidIsiLabel();
+            }, (err) => {
+                console.warn('Gagal memuat data onbid:', err);
+                onbidUnsub = null;
+            });
+            if (!onbidTimer) {
+                // Tiap menit: perbarui angka di layar + ganti listener saat tanggal berganti
+                onbidTimer = setInterval(() => { startOnbidListener(); onbidIsiLabel(); }, 60000);
+            }
+        }
+        // Mengisi semua elemen bertanda data-onbid-uid (kartu antrean & kartu Performa).
+        // Memakai textContent, jadi aman dari sisipan kode.
+        function onbidIsiLabel() {
+            const tgl = onbidTanggalAktif || onbidTanggalHariIni();
+            const now = Date.now();
+            document.querySelectorAll('[data-onbid-uid]').forEach(el => {
+                const uid = String(el.getAttribute('data-onbid-uid') || '').trim().toUpperCase();
+                const r = onbidHitung(onbidData.get(uid) || [], tgl, now);
+                el.textContent = r.jamOnAwal
+                    ? `ON ${onbidJam(r.jamOnAwal)} · Onbid ${onbidDurasiTeks(r.totalMs)}`
+                    : 'Onbid belum tercatat';
+                el.classList.remove('hidden');
+            });
+        }
+        window.onbidIsiLabel = onbidIsiLabel;
+
         // Statistik order selesai HARI INI per rider, dari listener riwayat hari ini (0 read tambahan).
         // Ongkir bersih = ongkir kotor - potongan admin 16% (tambahan tidak dihitung).
         function dxStatHariIni() {
@@ -5939,6 +6055,9 @@
                         statHtml = '<div class="dx-q-stat"><span class="dx-tag">0 order selesai</span></div>';
                     }
                 }
+                // Jam ON awal & lama onbid (diisi onbidIsiLabel)
+                const onbidTag = `<span class="dx-tag" data-onbid-uid="${escDx(String(rider.uid || '').trim().toUpperCase())}" title="Jam ON pertama & lama onbid hari ini"></span>`;
+                statHtml = statHtml ? statHtml.replace(/<\/div>$/, onbidTag + '</div>') : `<div class="dx-q-stat">${onbidTag}</div>`;
 
                 const terpilih = document.getElementById('selected-rider-uid').value === rider.uid;
                 const stHtml = stTeks ? `<span class="st ${stKelas}">${escDx(stTeks)}</span> · ` : '';
@@ -5959,6 +6078,7 @@
             _dxInfoAntrean = infoAntreanBaru;
             window.dxRenderRiderStrip();
             container.innerHTML = html;
+            onbidIsiLabel();
 
             const currentId = document.getElementById('selected-rider-uid').value;
             const isCurrentSelectedStillInMainQueue = availableMainQueue.find(r => r.uid === currentId);
