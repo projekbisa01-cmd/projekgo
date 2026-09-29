@@ -236,6 +236,10 @@
         .dx-tag.low { color: var(--dx-warn); background: var(--dx-warn-soft); }
         .dx-q-ringkas { padding: 0 4px 8px; font-size: 12.5px; color: var(--dx-muted); }
         .dx-q-ringkas b { color: var(--dx-ink); font-weight: 700; }
+        /* MODE OMSET TERKUNCI: grafik di halaman bisnis dikaburkan (angka di dalam gambar grafik) */
+        body.uang-terkunci #page-omset canvas,
+        body.uang-terkunci #page-analisis canvas,
+        body.uang-terkunci #page-pemasukan-lainnya canvas { filter: blur(10px); pointer-events: none; }
         .dx-q.selected { background: var(--dx-brand-soft); box-shadow: inset 3px 0 0 var(--dx-brand); }
         .dx-q .dx-q-kill { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity .15s; }
         .dx-q:hover .dx-q-kill, .dx-q .dx-q-kill:focus { opacity: 1; }
@@ -319,6 +323,10 @@
                     <span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                     <span class="text-[11px] font-bold"><span id="stat-online-riders">0</span> antre</span>
                 </div>
+                <!-- TOMBOL MODE OMSET (kunci angka uang bisnis) -->
+                <button id="uang-kunci-btn" type="button" onclick="window.uangToggleKunci()" class="bg-slate-800 text-amber-300 px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1.5 shadow-sm active:scale-95 transition-all" title="Tampilkan angka omset (password pemilik)">
+                    <i class="fa-solid fa-lock text-[10px]"></i>
+                </button>
                 <!-- TOMBOL MODE MALAM -->
                 <button onclick="window.toggleHomeDarkMode()" class="bg-slate-800 text-yellow-400 px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1.5 shadow-sm active:scale-95 transition-all" title="Mode Malam Beranda">
                     <i id="icon-dark-mode" class="fa-solid fa-moon text-[10px]"></i>
@@ -330,6 +338,11 @@
                     <span id="pendaftaran-badge-menu" class="hidden absolute -top-2 -left-2 bg-emerald-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full border-2 border-white shadow-sm" title="Pendaftar rider baru">0</span>
                 </button>
             </div>
+        </div>
+        <!-- BANNER MODE OMSET TERBUKA -->
+        <div id="uang-mode-banner" class="hidden max-w-md mx-auto mt-2 flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5">
+            <span class="text-[10px] font-black text-emerald-700 uppercase tracking-wide"><i class="fa-solid fa-lock-open mr-1"></i>Mode omset terbuka · kunci otomatis <span id="uang-mode-sisa">5:00</span></span>
+            <button type="button" onclick="window.uangKunci()" class="shrink-0 bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1 rounded-lg active:scale-95">Keluar mode omset</button>
         </div>
     </nav>
 
@@ -2179,7 +2192,7 @@
 
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getAuth, initializeAuth, inMemoryPersistence, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, limit, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = {
@@ -14375,7 +14388,208 @@
             }
         };
 
-    </script>
+    
+        // =====================================================================
+        // MODE OMSET: angka uang bisnis disamarkan, dibuka dengan PASSWORD AKUN PEMILIK
+        // ---------------------------------------------------------------------
+        // - Password diperiksa oleh server Firebase lewat instance Auth terpisah yang
+        //   hanya disimpan di memori (sesi pemilik TIDAK tersimpan di browser ini dan
+        //   sesi admin yang sedang login tidak terganggu). Tidak ada PIN di kode.
+        // - Ini PELINDUNG LAYAR (dari orang yang melihat layar), bukan pengganti rules:
+        //   datanya tetap ada di browser akun yang login.
+        // - Terkunci lagi otomatis: 5 menit tanpa aktivitas, aplikasi disembunyikan /
+        //   pindah tab, atau halaman dimuat ulang.
+        // =====================================================================
+        const UANG_EMAIL_PEMILIK = 'projekbisa01@gmail.com';
+        const UANG_BATAS_DIAM_MS = 5 * 60 * 1000;
+        // Area angka BISNIS yang disamarkan. Ongkir tiap order & saldo rider sengaja tidak termasuk.
+        const UANG_AREA = ['#page-omset', '#page-analisis', '#page-pemasukan-lainnya', '#history-total-fee',
+            '#history-total-admin', '#history-pembanding-admin', '#cloud-recaps-list', '#stat-active-omset'];
+        const UANG_POLA = /Rp\.?\s*-?\s*\d[\d.,]*(?:\s?(?:rb|jt|k)\b)?/gi;
+        const UANG_SAMAR = 'Rp ••••••';
+        let uangTerbuka = false;
+        let uangBukaSampai = 0;
+        let uangTimerHitung = null;
+        let uangGagal = 0, uangTahanSampai = 0;
+        const uangNodeSamar = new Map(); // textNode -> { asli, samar }
+
+        function uangSamarkanNode(node) {
+            const t = node.nodeValue;
+            if (!t || t.indexOf('Rp') === -1) return;
+            UANG_POLA.lastIndex = 0;
+            if (!UANG_POLA.test(t)) return;
+            UANG_POLA.lastIndex = 0;
+            const samar = t.replace(UANG_POLA, UANG_SAMAR);
+            if (samar === t) return;
+            uangNodeSamar.set(node, { asli: t, samar });
+            node.nodeValue = samar; // hasilnya tidak mengandung angka, jadi tidak memicu penyamaran ulang
+        }
+        function uangSamarkanDi(akar) {
+            if (!akar) return;
+            if (akar.nodeType === Node.TEXT_NODE) { uangSamarkanNode(akar); return; }
+            const w = document.createTreeWalker(akar, NodeFilter.SHOW_TEXT);
+            let n; while ((n = w.nextNode())) uangSamarkanNode(n);
+        }
+        function uangSamarkanSemua() {
+            UANG_AREA.forEach(sel => document.querySelectorAll(sel).forEach(uangSamarkanDi));
+        }
+        function uangKembalikanSemua() {
+            uangNodeSamar.forEach((v, node) => {
+                // Hanya dikembalikan jika teksnya masih teks samaran dari kita (belum diganti aplikasi)
+                if (node.isConnected && node.nodeValue === v.samar) node.nodeValue = v.asli;
+            });
+            uangNodeSamar.clear();
+        }
+        // Pantau area yang dirender ulang, supaya angka baru langsung disamarkan
+        const uangPengamat = new MutationObserver((daftar) => {
+            if (uangTerbuka) return;
+            for (const m of daftar) {
+                if (m.type === 'characterData') uangSamarkanNode(m.target);
+                else m.addedNodes.forEach(uangSamarkanDi);
+            }
+        });
+        UANG_AREA.forEach(sel => document.querySelectorAll(sel).forEach(el => {
+            uangPengamat.observe(el, { childList: true, subtree: true, characterData: true });
+            // Ketuk angka yang tersamar untuk membuka kunci
+            el.addEventListener('click', (e) => {
+                if (uangTerbuka) return;
+                const t = (e.target && e.target.textContent) || '';
+                if (t.indexOf('••••') !== -1) window.uangMintaBuka();
+            });
+        }));
+
+        function uangPerbaruiTampilan() {
+            document.body.classList.toggle('uang-terkunci', !uangTerbuka);
+            const btn = document.getElementById('uang-kunci-btn');
+            if (btn) {
+                btn.innerHTML = uangTerbuka ? '<i class="fa-solid fa-lock-open text-[10px]"></i>' : '<i class="fa-solid fa-lock text-[10px]"></i>';
+                btn.title = uangTerbuka ? 'Keluar mode omset' : 'Tampilkan angka omset (password pemilik)';
+                btn.className = uangTerbuka
+                    ? 'bg-emerald-500 text-white px-2.5 py-1 rounded border border-emerald-600 flex items-center gap-1.5 shadow-sm active:scale-95 transition-all'
+                    : 'bg-slate-800 text-amber-300 px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1.5 shadow-sm active:scale-95 transition-all';
+            }
+            const banner = document.getElementById('uang-mode-banner');
+            if (banner) banner.classList.toggle('hidden', !uangTerbuka);
+        }
+        function uangHitungMundur() {
+            const el = document.getElementById('uang-mode-sisa');
+            const sisa = Math.max(0, uangBukaSampai - Date.now());
+            if (el) el.textContent = `${Math.floor(sisa / 60000)}:${String(Math.floor((sisa % 60000) / 1000)).padStart(2, '0')}`;
+            if (uangTerbuka && sisa <= 0) window.uangKunci();
+        }
+        window.uangKunci = () => {
+            uangTerbuka = false;
+            uangBukaSampai = 0;
+            clearInterval(uangTimerHitung); uangTimerHitung = null;
+            uangSamarkanSemua();
+            uangPerbaruiTampilan();
+        };
+        function uangBuka() {
+            uangTerbuka = true;
+            uangBukaSampai = Date.now() + UANG_BATAS_DIAM_MS;
+            uangKembalikanSemua();
+            uangPerbaruiTampilan();
+            clearInterval(uangTimerHitung);
+            uangTimerHitung = setInterval(uangHitungMundur, 1000);
+            uangHitungMundur();
+        }
+        // Aktivitas pengguna memperpanjang waktu terbuka
+        ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => {
+            if (uangTerbuka) uangBukaSampai = Date.now() + UANG_BATAS_DIAM_MS;
+        }, { passive: true }));
+        document.addEventListener('visibilitychange', () => { if (document.hidden && uangTerbuka) window.uangKunci(); });
+
+        // Pemeriksaan password pemilik oleh Firebase (instance terpisah, disimpan di memori saja)
+        let uangAuthPemeriksa = null;
+        async function uangCekPasswordPemilik(pw) {
+            if (!uangAuthPemeriksa) {
+                const appPemeriksa = initializeApp(firebaseConfig, 'kunci-mode-omset');
+                uangAuthPemeriksa = initializeAuth(appPemeriksa, { persistence: inMemoryPersistence });
+            }
+            await signInWithEmailAndPassword(uangAuthPemeriksa, UANG_EMAIL_PEMILIK, pw);
+            try { await signOut(uangAuthPemeriksa); } catch (e) {}
+        }
+
+        let uangSetelahBuka = null;
+        function uangModal() {
+            let m = document.getElementById('uang-modal');
+            if (m) return m;
+            m = document.createElement('div');
+            m.id = 'uang-modal';
+            m.className = 'hidden fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm items-center justify-center p-6';
+            m.innerHTML = `
+                <div class="bg-white rounded-3xl p-5 w-full max-w-xs shadow-2xl">
+                    <div class="w-12 h-12 mx-auto mb-3 rounded-full bg-amber-50 text-amber-500 border-4 border-amber-100 flex items-center justify-center text-lg"><i class="fa-solid fa-lock"></i></div>
+                    <h3 class="text-center font-black text-slate-800 text-sm uppercase tracking-wide">Buka Mode Omset</h3>
+                    <p class="text-center text-[10px] font-bold text-slate-500 mt-1 mb-3">Masukkan password akun pemilik untuk menampilkan angka omset &amp; pendapatan.</p>
+                    <input id="uang-modal-pw" type="password" autocomplete="new-password" placeholder="Password pemilik" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-amber-400">
+                    <p id="uang-modal-err" class="hidden text-[10px] font-bold text-rose-600 mt-2 text-center"></p>
+                    <div class="flex gap-2 mt-4">
+                        <button type="button" id="uang-modal-batal" class="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-black text-xs uppercase">Batal</button>
+                        <button type="button" id="uang-modal-ok" class="flex-[2] py-3 rounded-xl bg-amber-500 text-white font-black text-xs uppercase shadow-sm active:scale-95">Buka</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(m);
+            const tutup = () => { m.classList.add('hidden'); m.classList.remove('flex'); document.getElementById('uang-modal-pw').value = ''; uangSetelahBuka = null; };
+            const salah = (teks) => { const e = document.getElementById('uang-modal-err'); e.textContent = teks; e.classList.remove('hidden'); };
+            const kirim = async () => {
+                const inp = document.getElementById('uang-modal-pw');
+                const btn = document.getElementById('uang-modal-ok');
+                const pw = inp.value;
+                if (!pw) { salah('Password belum diisi.'); return; }
+                if (Date.now() < uangTahanSampai) { salah(`Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((uangTahanSampai - Date.now()) / 1000)} detik.`); return; }
+                btn.disabled = true; btn.textContent = 'Memeriksa...';
+                try {
+                    await uangCekPasswordPemilik(pw);
+                    uangGagal = 0;
+                    const lanjut = uangSetelahBuka;
+                    tutup();
+                    uangBuka();
+                    if (typeof lanjut === 'function') lanjut();
+                } catch (e) {
+                    const kode = String((e && e.code) || '');
+                    if (kode === 'auth/too-many-requests') {
+                        salah('Terlalu banyak percobaan. Firebase menahan sementara, coba lagi beberapa menit lagi.');
+                    } else if (kode === 'auth/network-request-failed') {
+                        salah('Tidak ada koneksi. Periksa internet lalu coba lagi.');
+                    } else {
+                        uangGagal++;
+                        if (uangGagal >= 5) { uangTahanSampai = Date.now() + 60000; uangGagal = 0; }
+                        salah('Password salah.');
+                    }
+                    inp.value = ''; inp.focus();
+                } finally {
+                    btn.disabled = false; btn.textContent = 'Buka';
+                }
+            };
+            document.getElementById('uang-modal-batal').addEventListener('click', tutup);
+            document.getElementById('uang-modal-ok').addEventListener('click', kirim);
+            document.getElementById('uang-modal-pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') kirim(); });
+            return m;
+        }
+        // Minta password; jika sudah terbuka, langsung jalankan aksinya
+        window.uangMintaBuka = (setelahBuka) => {
+            if (uangTerbuka) { if (typeof setelahBuka === 'function') setelahBuka(); return; }
+            const m = uangModal();
+            uangSetelahBuka = setelahBuka || null;
+            document.getElementById('uang-modal-err').classList.add('hidden');
+            m.classList.remove('hidden'); m.classList.add('flex');
+            setTimeout(() => { const i = document.getElementById('uang-modal-pw'); if (i) i.focus(); }, 50);
+        };
+        window.uangToggleKunci = () => { if (uangTerbuka) window.uangKunci(); else window.uangMintaBuka(); };
+
+        // Ekspor/cetak laporan yang memuat total omset juga wajib membuka kunci dulu
+        ['exportToCSV', 'cetakLaporanA4'].forEach(nama => {
+            const asli = window[nama];
+            if (typeof asli !== 'function') return;
+            window[nama] = (...arg) => window.uangMintaBuka(() => asli(...arg));
+        });
+
+        // Mulai dalam keadaan terkunci
+        window.uangKunci();
+        // ===================== AKHIR MODE OMSET =====================
+
+</script>
 <!-- === MODAL PRATINJAU IMPOR ORDERAN === -->
 <div id="modal-impor" class="hidden fixed inset-0 z-[12000] bg-black/60 flex items-center justify-center p-3">
   <div class="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
