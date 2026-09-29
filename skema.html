@@ -132,11 +132,13 @@
                     <div class="absolute right-0 top-0 h-full w-2 bg-blue-400"></div>
                     <div class="flex justify-between items-start">
                         <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Skema 1)</h3>
+                        <span id="pct-admin-s1" class="hidden"></span>
                     </div>
                     <p id="sum-admin-s1" class="text-2xl font-bold text-blue-700 mt-1">Rp 0</p>
                     <p id="detail-admin-s1" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
-                    <div class="border-t border-blue-50 pt-2">
+                    <div class="border-t border-blue-50 pt-2 flex flex-wrap items-center justify-between gap-2">
                         <p id="sum-rider-s1" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                        <span id="badge-rider-s1" class="hidden"></span>
                     </div>
                 </div>
 
@@ -145,11 +147,13 @@
                     <div class="absolute right-0 top-0 h-full w-2 bg-purple-500"></div>
                     <div class="flex justify-between items-start">
                         <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Skema 2)</h3>
+                        <span id="pct-admin-s2" class="hidden"></span>
                     </div>
                     <p id="sum-admin-s2" class="text-2xl font-bold text-purple-700 mt-1">Rp 0</p>
                     <p id="detail-admin-s2" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
-                    <div class="border-t border-purple-50 pt-2">
+                    <div class="border-t border-purple-50 pt-2 flex flex-wrap items-center justify-between gap-2">
                         <p id="sum-rider-s2" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                        <span id="badge-rider-s2" class="hidden"></span>
                     </div>
                 </div>
             </div>
@@ -601,6 +605,38 @@
             renderDashboard(summary, riderMap, historyDate);
         }
 
+        // Persentase perubahan baru vs lama; null jika pembanding 0 (tidak bisa dihitung)
+        function pctChange(baru, lama) {
+            return lama > 0 ? ((baru - lama) / lama) * 100 : null;
+        }
+
+        // Menampilkan badge persentase. Hanya teks & kelas tetap yang dipakai (tanpa data mentah ke HTML).
+        function setPctBadge(id, value, label) {
+            const el = document.getElementById(id);
+            if (value === null || !isFinite(value)) {
+                el.className = 'text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap bg-gray-100 text-gray-500';
+                el.innerText = label + ' -';
+                return;
+            }
+            const rounded = Math.round(value * 10) / 10;
+            const teks = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(Math.abs(rounded));
+            let warna = 'bg-gray-100 text-gray-500', ikon = '';
+            if (rounded > 0) { warna = 'bg-green-100 text-green-700'; ikon = '▲ +'; }
+            else if (rounded < 0) { warna = 'bg-red-100 text-red-700'; ikon = '▼ -'; }
+            el.className = 'text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap ' + warna;
+            el.innerText = label + ' ' + ikon + teks + '%';
+        }
+
+        // Rata-rata persentase perubahan pendapatan rider (rata-rata dari tiap rider)
+        function avgRiderPct(riderMap, field) {
+            let total = 0, n = 0;
+            for (const key in riderMap) {
+                const pct = pctChange(riderMap[key][field], riderMap[key].rLama);
+                if (pct !== null) { total += pct; n++; }
+            }
+            return n > 0 ? total / n : null;
+        }
+
         function renderDashboard(summary, riderMap, historyDate = null) {
             document.getElementById('data-section').classList.add('hidden');
             document.getElementById('dashboard-section').classList.remove('hidden');
@@ -620,6 +656,11 @@
             document.getElementById('sum-admin-s2').innerText = formatRp(summary.adminS2);
             document.getElementById('detail-admin-s2').innerText = `( ADM Ongkir: ${formatRp(summary.adminS2Ongkir)} | Cust: ${formatRp(summary.adminS2Cust)} )`;
             document.getElementById('sum-rider-s2').innerText = "Total Semua Rider: " + formatRp(summary.riderS2);
+
+            setPctBadge('pct-admin-s1', pctChange(summary.adminS1, summary.adminLama), '');
+            setPctBadge('pct-admin-s2', pctChange(summary.adminS2, summary.adminLama), '');
+            setPctBadge('badge-rider-s1', avgRiderPct(riderMap, 'rS1'), 'Rata-rata rider');
+            setPctBadge('badge-rider-s2', avgRiderPct(riderMap, 'rS2'), 'Rata-rata rider');
 
             let rowsHtml = '';
             for (let key in riderMap) {
