@@ -15105,15 +15105,16 @@
 
         // ===== HITUNG LAMA ONBID (dari catatan server onbid_harian) =====
         // Aturan (bisa diubah di sini tanpa kehilangan data):
-        //  - "antre" (ON & siap terima order) dihitung penuh
-        //  - "order" (membawa order) dihitung maksimal ONBID_BATAS_ORDER_MENIT per order
-        //  - "keluar" / "off" tidak dihitung
+        //  - hanya dihitung antara ONBID_JAM_MULAI dan ONBID_JAM_TUTUP
+        //  - "antre" (ON & di antrean utama) dihitung penuh
+        //  - "order" (mengantar order) dihitung maksimal ONBID_BATAS_ORDER_MENIT per order
+        //  - "verifikasi" (ON tapi masih di antrean verifikasi), "keluar", "off" tidak dihitung
         //  - "lewat" (order tidak di-ACC) menghentikan hitungan sejak order itu dikirim,
         //    sampai status rider berubah lagi (ACC order / toggle ulang)
-        //  - tidak ada yang dihitung setelah ONBID_JAM_TUTUP
-        const ONBID_BATAS_ORDER_MENIT = 60;
+        const ONBID_BATAS_ORDER_MENIT = 40;
+        const ONBID_JAM_MULAI = [6, 30];
         const ONBID_JAM_TUTUP = [21, 0];
-        const ONBID_STATUS_SAH = ['antre', 'order', 'keluar', 'off', 'lewat'];
+        const ONBID_STATUS_SAH = ['antre', 'order', 'verifikasi', 'keluar', 'off', 'lewat'];
         const onbidKeMs = (t) => {
             if (!t) return 0;
             if (typeof t.toMillis === 'function') return t.toMillis();
@@ -15128,11 +15129,17 @@
             const j = Math.floor(menit / 60), m = menit % 60;
             return j > 0 ? `${j}j ${m}m` : `${m}m`;
         };
+        // Hasil: totalMs (lama onbid terhitung), jamOnAwal (ON pertama, termasuk saat verifikasi),
+        // sedangOn (hitungan sedang berjalan), tertahan (dijeda karena order terlewat),
+        // status (status terakhir), belumMulai (sekarang sebelum jam mulai hitung),
+        // orderLewatBatas (sedang mengantar tapi sudah melewati batas menit per order)
         function onbidHitung(events, tanggal, nowMs) {
-            const hasil = { totalMs: 0, jamOnAwal: null, sedangOn: false };
+            const hasil = { totalMs: 0, jamOnAwal: null, sedangOn: false, tertahan: false, status: 'off', belumMulai: false, orderLewatBatas: false };
             const p = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(tanggal || ''));
             if (!p) return hasil;
-            const tutup = new Date(Number(p[1]), Number(p[2]) - 1, Number(p[3]), ONBID_JAM_TUTUP[0], ONBID_JAM_TUTUP[1], 0, 0).getTime();
+            const y = Number(p[1]), mo = Number(p[2]) - 1, d = Number(p[3]);
+            const buka = new Date(y, mo, d, ONBID_JAM_MULAI[0], ONBID_JAM_MULAI[1], 0, 0).getTime();
+            const tutup = new Date(y, mo, d, ONBID_JAM_TUTUP[0], ONBID_JAM_TUTUP[1], 0, 0).getTime();
             const akhir = Math.min(nowMs, tutup);
             const batasOrder = ONBID_BATAS_ORDER_MENIT * 60000;
             const ev = (Array.isArray(events) ? events : [])
@@ -15142,11 +15149,10 @@
             let status = 'off', mulai = 0, tertahan = false;
             const hitungSampai = (t) => {
                 if (tertahan || !mulai || (status !== 'antre' && status !== 'order')) return;
-                const b = Math.min(t, akhir);
-                if (b <= mulai) return;
-                let dur = b - mulai;
-                if (status === 'order') dur = Math.min(dur, batasOrder);
-                hasil.totalMs += dur;
+                let ujung = Math.min(t, akhir);
+                if (status === 'order') ujung = Math.min(ujung, mulai + batasOrder);
+                const awal = Math.max(mulai, buka);
+                if (ujung > awal) hasil.totalMs += ujung - awal;
             };
             for (const e of ev) {
                 if (e.s === 'lewat') {
@@ -15158,11 +15164,14 @@
                 }
                 hitungSampai(e.t);
                 status = e.s; mulai = e.t; tertahan = false;
-                if ((status === 'antre' || status === 'order') && hasil.jamOnAwal === null) hasil.jamOnAwal = e.t;
+                if ((status === 'antre' || status === 'order' || status === 'verifikasi') && hasil.jamOnAwal === null) hasil.jamOnAwal = e.t;
             }
             hitungSampai(akhir);
-            hasil.sedangOn = !tertahan && (status === 'antre' || status === 'order') && nowMs < tutup;
+            hasil.status = status;
             hasil.tertahan = tertahan;
+            hasil.belumMulai = nowMs < buka;
+            hasil.orderLewatBatas = status === 'order' && !tertahan && nowMs >= mulai + batasOrder;
+            hasil.sedangOn = !tertahan && !hasil.orderLewatBatas && (status === 'antre' || status === 'order') && nowMs >= buka && nowMs < tutup;
             return hasil;
         }
         // ===== AKHIR HITUNG LAMA ONBID =====
@@ -15186,10 +15195,17 @@
                   const sejak = r.jamOnAwal ? onbidJam(r.jamOnAwal) : '--:--';
                   if (badge) {
                       if (sedangOnbid) {
-                          const jeda = !!r.tertahan;
+                          // Keadaan saat hitungan TIDAK berjalan -> badge abu-abu, jarum berhenti
+                          let labelJeda = '';
+                          if (r.tertahan) labelJeda = 'Dijeda · order terlewat';
+                          else if (r.status === 'verifikasi') labelJeda = 'Menunggu verifikasi admin';
+                          else if (r.status === 'keluar') labelJeda = 'Di luar antrean';
+                          else if (r.orderLewatBatas) labelJeda = `Antar maks ${ONBID_BATAS_ORDER_MENIT} menit`;
+                          else if (r.belumMulai) labelJeda = `Dihitung mulai ${String(ONBID_JAM_MULAI[0]).padStart(2, '0')}:${String(ONBID_JAM_MULAI[1]).padStart(2, '0')}`;
+                          const jeda = !!labelJeda;
                           document.getElementById('odb-durasi').textContent = durasi;
                           document.getElementById('odb-sejak').textContent = sejak;
-                          document.getElementById('odb-label').textContent = jeda ? 'Dijeda · order terlewat' : 'Lama onbid hari ini';
+                          document.getElementById('odb-label').textContent = jeda ? labelJeda : 'Lama onbid hari ini';
                           badge.classList.toggle('odb-jeda', jeda);
                           badge.classList.remove('hidden');
                       } else {
@@ -15247,7 +15263,7 @@
                   return;
               }
               if (tgl > onbidTanggalHariIni()) { el.classList.add('hidden'); el.classList.remove('flex'); return; }
-              const kunciCache = `onbid_riwayat_${uid}_${tgl}`;
+              const kunciCache = `onbid_riwayat_v2_${uid}_${tgl}`; // v2: aturan 06:30, antar 40 menit, verifikasi tidak dihitung
               try {
                   const c = JSON.parse(localStorage.getItem(kunciCache) || 'null');
                   if (c && typeof c === 'object') { tampilkan(c); return; }
