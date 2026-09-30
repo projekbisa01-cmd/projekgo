@@ -354,17 +354,6 @@
         }
 
         /* ANIMASI SEMUT UNTUK BINTANG 1 */
-        @keyframes ant-crawl {
-            0% { transform: translate(0,0) rotate(0deg); }
-            25% { transform: translate(15px, -15px) rotate(45deg); }
-            50% { transform: translate(30px, 0px) rotate(90deg); }
-            75% { transform: translate(15px, 15px) rotate(180deg); }
-            100% { transform: translate(0,0) rotate(360deg); }
-        }
-        .ant-swarm {
-            animation: ant-crawl 3s infinite linear;
-        }
-        
         /* Custom Menu Grid */
         .menu-btn {
             display: flex;
@@ -922,7 +911,6 @@
         
         .animate-pulse, 
         .animate-bounce, 
-        .ant-swarm, 
         .animate-ring-bell, 
         .animate-heartbeat, 
         .animate-swipe-arrows {
@@ -8805,7 +8793,10 @@
                                 Tambahan: nExtra,
                                 Status: 'Selesai',
                                 Keterangan: data.proof_desc || data.Keterangan || '',
-                                List_Pesanan: listPesananStr
+                                List_Pesanan: listPesananStr,
+                                Metode_Bayar: data.payment_method || data.metode_bayar || '',
+                                Nominal_Transfer: Number(data.payment_nominal || data.nominal_transfer || 0) || 0,
+                                Order_Ref: data.order_id || data.active_order_id || data.orderId || data.original_order_id || ''
                             });
                         });
                         
@@ -9522,21 +9513,9 @@
                 const rating = Math.min(5, Math.max(1, Math.round(Number(item.Rating))));
                 let stars = '';
                 for (let i = 0; i < 5; i++) stars += `<i class="fa-solid fa-star ${i < rating ? 'on' : 'off'}"></i>`;
-                // Efek semut untuk bintang 1 (sama seperti sebelumnya)
-                let antsHtml = '';
-                if (rating === 1) {
-                    antsHtml = '<div class="absolute inset-0 pointer-events-none z-0 opacity-60">';
-                    for (let k = 0; k < 15; k++) {
-                        const top = Math.floor(Math.random() * 90), left = Math.floor(Math.random() * 90);
-                        const delay = (Math.random() * 2).toFixed(2), duration = (2 + Math.random() * 3).toFixed(2);
-                        antsHtml += `<i class="fa-solid fa-bug absolute text-[8px] text-black ant-swarm" style="top:${top}%; left:${left}%; animation-delay:${delay}s; animation-duration:${duration}s;"></i>`;
-                    }
-                    antsHtml += '</div>';
-                }
                 const komentar = String(item.Komentar || '').trim();
                 html += `
                 <div class="pf-ulasan${rating === 1 ? ' bintang1' : ''}">
-                    ${antsHtml}
                     <div class="pf-ulasan-atas">
                         <div class="pf-bintang" aria-label="${rating} bintang">${stars}</div>
                         <span class="pf-ulasan-tgl">${escUlasan(tanggalUlasan(item.Tanggal))}</span>
@@ -10558,6 +10537,73 @@
             }
             // -------------------------------------------------------------
 
+            // --- PENCOCOKAN METODE PEMBAYARAN (DUA TAHAP, SEBELUM MENGGAMBAR) ---
+            // Tahap 1: cocok PASTI (ID order / kunci lama). Tahap 2: cocok CERDAS untuk sisanya,
+            // nama pelanggan diutamakan, lalu jam terdekat. Catatan yang sudah dipakai tidak dipakai lagi.
+            // Dulu: nama tidak pernah cocok (beda cara membersihkan spasi) dan batas 30 menit dari jam order
+            // sering terlewat (jam catatan = jam SELESAI), jadi banyak order jatuh ke "Tunai".
+            const bakuNama = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const keMenit = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(t || '')); return m ? (Number(m[1]) * 60 + Number(m[2])) : null; };
+            const pembayaranPerIndex = new Array(sortedData.length).fill(null);
+            const kunciTerpakai = new Set();
+            const infoItem = sortedData.map((item) => {
+                const isDoneX = String(item.Status || '').trim().toLowerCase() === 'selesai' || item.is_leftover_live;
+                const kotorX = Math.round((parseFloat(String(item.Nominal_Kotor || 0).replace(',', '.')) || 0) * 1000);
+                const namaX = item.Nama_Pelanggan || item.Customer_Name || item.customer_name || item.Nama_Customer || item.Pelanggan || item.Customer || '';
+                return { isDone: isDoneX, kotor: kotorX, tgl: parseSheetDate(item.Tanggal), jam: parseSheetTime(item.Jam), nama: bakuNama(namaX) };
+            });
+            // Tahap 0: data dari server (dokumen order menyimpan metode bayar) selalu paling benar
+            sortedData.forEach((item, i) => {
+                if (!infoItem[i].isDone) return;
+                const m = String(item.Metode_Bayar || '').trim();
+                if (m === 'Tunai' || m === 'Transfer') pembayaranPerIndex[i] = { type: m, nominal: Number(item.Nominal_Transfer) || 0, _server: true };
+            });
+            // Tahap 1: cocok pasti
+            sortedData.forEach((item, i) => {
+                if (!infoItem[i].isDone || pembayaranPerIndex[i]) return;
+                const calon = [];
+                if (item.id) calon.push(`pay_${currentUserUID}_${item.id}`);
+                if (item.Order_Ref) calon.push(`pay_${currentUserUID}_${item.Order_Ref}`);
+                calon.push(`pay_${currentUserUID}_${infoItem[i].tgl.replace(/-/g, '')}_${infoItem[i].jam.replace(/:/g, '')}_${infoItem[i].kotor}`);
+                for (const k of calon) {
+                    if (localPaymentsMap[k] && !kunciTerpakai.has(k)) { pembayaranPerIndex[i] = localPaymentsMap[k]; kunciTerpakai.add(k); return; }
+                }
+                // ID order yang tersimpan DI DALAM catatan (catatan baru menyimpan orderId)
+                const ids = [item.id, item.Order_Ref].filter(Boolean).map(String);
+                if (ids.length) {
+                    for (const k in localPaymentsMap) {
+                        if (kunciTerpakai.has(k)) continue;
+                        const oid = localPaymentsMap[k] && localPaymentsMap[k].orderId;
+                        if (oid && ids.includes(String(oid))) { pembayaranPerIndex[i] = localPaymentsMap[k]; kunciTerpakai.add(k); return; }
+                    }
+                }
+            });
+            // Tahap 2: cocok cerdas, dicari pasangan terbaik secara keseluruhan (bukan siapa cepat dia dapat)
+            const pasangan = [];
+            sortedData.forEach((item, i) => {
+                if (!infoItem[i].isDone || pembayaranPerIndex[i]) return;
+                const daftar = localPaymentsByDate[infoItem[i].tgl];
+                if (!daftar) return;
+                const menitOrder = keMenit(infoItem[i].jam);
+                daftar.forEach(pay => {
+                    if (kunciTerpakai.has(pay.key)) return;
+                    const namaCocok = !!(pay.orderName && infoItem[i].nama && bakuNama(pay.orderName) === infoItem[i].nama);
+                    const menitBayar = keMenit(pay.timeStr);
+                    // Catatan dibuat saat order SELESAI: wajar 0-180 menit setelah jam order (toleransi 15 menit sebelumnya)
+                    const selisih = (menitOrder !== null && menitBayar !== null) ? (menitBayar - menitOrder) : null;
+                    const jamWajar = selisih !== null && selisih >= -15 && selisih <= 180;
+                    if (!namaCocok && !jamWajar) return;
+                    const skor = (namaCocok ? 0 : 100000) + (selisih === null ? 5000 : Math.abs(selisih));
+                    pasangan.push({ i, key: pay.key, pay, skor });
+                });
+            });
+            pasangan.sort((a, b) => a.skor - b.skor).forEach(p => {
+                if (pembayaranPerIndex[p.i] || kunciTerpakai.has(p.key)) return;
+                pembayaranPerIndex[p.i] = p.pay; kunciTerpakai.add(p.key);
+            });
+            const escRiwayat = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
+            // -------------------------------------------------------------
+
             sortedData.forEach((item, index) => {
                 const isDone = String(item.Status || '').trim().toLowerCase() === 'selesai' || item.is_leftover_live;
                 
@@ -10617,7 +10663,7 @@
                 // NEW: Pastikan Nama Pelanggan Selalu Tampil
                 const namaPelanggan = item.Nama_Pelanggan || item.Customer_Name || item.customer_name || item.Nama_Customer || item.Pelanggan || item.Customer || 'Pelanggan';
                 const safeCustomerName = String(namaPelanggan).replace(/['"\\]/g, ''); // Membersihkan karakter agar aman untuk fungsi klik
-                const customerDisplay = `<p class="text-xs font-normal text-black mt-0.5 flex items-center gap-1.5"><i class="fa-solid fa-circle-dot text-green-500 text-[10px]"></i> ${namaPelanggan}</p>`;
+                const customerDisplay = `<p class="text-xs font-normal text-black mt-0.5 flex items-center gap-1.5"><i class="fa-solid fa-circle-dot text-green-500 text-[10px]"></i> ${escRiwayat(namaPelanggan)}</p>`;
 
                 // Kalkulasi data untuk popup riwayat
                 const potonganAdm = isDone ? Math.round(kotor * dynamicRate) : 0;
@@ -10696,75 +10742,20 @@
 
                 innerHtml += `${(isDone && !isWaitingAdmin && !item.is_leftover_live) ? `<div class="pl-14 hidden flex justify-between items-center"><div class="flex items-center space-x-4"><div><p class="text-[8px] text-gray-400 uppercase font-bold">Kotor</p><p class="text-[10px] font-bold ${kotorStyle}">Rp ${kotor.toLocaleString('id-ID')}</p></div><div class="w-px h-3 bg-gray-300"></div><div><p class="text-[8px] text-gray-400 uppercase font-bold">Ongkir+</p><p class="text-[10px] font-bold text-blue-500">Rp ${tambahan.toLocaleString('id-ID')}</p></div></div><div class="text-[9px] font-bold ${admBadgeColor} border px-2 py-0.5 rounded-full">${admText}</div></div>` : ''}`;
 
-                // --- LOGIKA BARU PENCARIAN METODE PEMBAYARAN YANG AKURAT ---
+                // --- METODE PEMBAYARAN (hasil pencocokan dua tahap di atas) ---
                 if (isDone) {
-                    const dateStr = parseSheetDate(item.Tanggal);
-                    const timeStr = parseSheetTime(item.Jam);
-                    
-                    let savedPayment = { type: 'Tunai', nominal: '' };
-                    let foundMatch = false;
-
-                    // 1. Coba pencocokan PASTI dengan ID Document (jika orderan masih memiliki id Firebase)
-                    if (item.id) {
-                        const exactKey = `pay_${currentUserUID}_${item.id}`;
-                        if (localPaymentsMap[exactKey]) {
-                            savedPayment = localPaymentsMap[exactKey];
-                            foundMatch = true;
-                        }
-                    }
-
-                    // 2. Coba pencocokan PASTI dengan kunci Format Lama
-                    if (!foundMatch) {
-                        const fallbackKey = `pay_${currentUserUID}_${dateStr.replace(/-/g, '')}_${timeStr.replace(/:/g, '')}_${kotor}`;
-                        if (localPaymentsMap[fallbackKey]) {
-                            savedPayment = localPaymentsMap[fallbackKey];
-                            foundMatch = true;
-                        }
-                    }
-
-                    // 3. Pencocokan CERDAS (Fuzzy Match) jika kunci tidak ketemu (Berguna untuk riwayat lama dari Sheet)
-                    if (!foundMatch && localPaymentsByDate[dateStr]) {
-                        const orderTimeMinutes = (() => {
-                            const [h, m] = timeStr.split(':').map(Number);
-                            return (h * 60) + (m || 0);
-                        })();
-
-                        let bestMatch = null;
-                        let minTimeDiff = 9999;
-
-                        for (const pay of localPaymentsByDate[dateStr]) {
-                            if (pay._used) continue; // Jangan pakai data yang sudah dicocokkan ke order lain
-
-                            const isNameMatch = pay.orderName && safeName && pay.orderName.toLowerCase() === safeName.toLowerCase();
-                            
-                            let timeDiff = 9999;
-                            if (pay.timeStr) {
-                                const [pH, pM] = pay.timeStr.split(':').map(Number);
-                                timeDiff = Math.abs(orderTimeMinutes - ((pH * 60) + (pM || 0)));
-                            }
-
-                            // Match jika nama sama atau selisih waktu kurang dari 30 menit
-                            if (isNameMatch || timeDiff <= 30) {
-                                if (timeDiff < minTimeDiff) {
-                                    minTimeDiff = timeDiff;
-                                    bestMatch = pay;
-                                }
-                            }
-                        }
-
-                        if (bestMatch) {
-                            savedPayment = bestMatch;
-                            bestMatch._used = true; // Tandai sudah terpakai agar tidak kembar
-                        }
-                    }
+                    const savedPayment = pembayaranPerIndex[index];
 
                     // Render Label
                     let paymentLabel = '';
-                    if (savedPayment.type === 'Transfer') {
-                        const nomStr = savedPayment.nominal ? `Rp ${Number(savedPayment.nominal).toLocaleString('id-ID')}` : 'Rp 0';
+                    if (savedPayment && savedPayment.type === 'Transfer') {
+                        const nomStr = Number(savedPayment.nominal) > 0 ? `Rp ${Number(savedPayment.nominal).toLocaleString('id-ID')}` : 'nominal tidak tercatat';
                         paymentLabel = `<span class="px-2 py-1 rounded-md bg-blue-50 text-blue-600 border border-blue-100 font-bold text-[9px] flex items-center gap-1 shadow-sm"><i class="fa-solid fa-building-columns"></i> Transfer (${nomStr})</span>`;
-                    } else {
+                    } else if (savedPayment && savedPayment.type === 'Tunai') {
                         paymentLabel = `<span class="px-2 py-1 rounded-md bg-green-50 text-green-600 border border-green-100 font-bold text-[9px] flex items-center gap-1 shadow-sm"><i class="fa-solid fa-money-bill-wave"></i> Tunai (Cash)</span>`;
+                    } else {
+                        // Tidak ada catatan: JANGAN dianggap Tunai, tampilkan apa adanya
+                        paymentLabel = `<span class="px-2 py-1 rounded-md bg-gray-100 text-gray-500 border border-gray-200 font-bold text-[9px] flex items-center gap-1"><i class="fa-solid fa-circle-question"></i> Belum tercatat</span>`;
                     }
 
                     innerHtml += `
@@ -11275,7 +11266,7 @@
 
         window.cleanupOldPayments = function() {
             const now = Date.now();
-            const maxAge = 5 * 24 * 60 * 60 * 1000; // 5 hari
+            const maxAge = 35 * 24 * 60 * 60 * 1000; // 35 hari (dulu 5 hari -> riwayat lebih lama jadi "Tunai" semua)
             // Iterasi mundur untuk menghindari error saat menghapus item
             for (let i = localStorage.length - 1; i >= 0; i--) {
                 const key = localStorage.key(i);
@@ -13622,7 +13613,10 @@
                               Tambahan: nExtra,
                               Status: 'Selesai', // Paksa jadi Selesai karena sudah lolos filter completed
                               Keterangan: data.proof_desc || data.Keterangan || '',
-                              List_Pesanan: listPesananStr
+                              List_Pesanan: listPesananStr,
+                              Metode_Bayar: data.payment_method || data.metode_bayar || '',
+                              Nominal_Transfer: Number(data.payment_nominal || data.nominal_transfer || 0) || 0,
+                              Order_Ref: data.order_id || data.active_order_id || data.orderId || data.original_order_id || ''
                           });
                       });
                       
@@ -14595,12 +14589,22 @@
                   if (isResting && btnRest) btnRest.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Memproses Data...';
                   
                   const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', window.currentActiveOrderId);
-                  await updateDoc(orderRef, {
+                  // Metode bayar yang diisi rider ikut disimpan di dokumen order (bukan hanya di HP),
+                  // supaya riwayat tetap benar walau ganti HP / cache terhapus.
+                  const metodeBayarDipilih = document.querySelector('input[name="payment_method"]:checked')?.value;
+                  const dataSelesai = {
                       status: 'completed',
                       finished_at: serverTimestamp(),
                       proof_desc: desc,
                       proof_image: proofImageUrl // SEKARANG MENYIMPAN URL YANG RINGAN
-                  });
+                  };
+                  if (metodeBayarDipilih === 'Tunai' || metodeBayarDipilih === 'Transfer') {
+                      dataSelesai.payment_method = metodeBayarDipilih;
+                      dataSelesai.payment_nominal = metodeBayarDipilih === 'Transfer'
+                          ? Math.max(0, Math.min(100000000, parseInt(String(document.getElementById('payment-nominal-input')?.value || '').replace(/\./g, ''), 10) || 0))
+                          : 0;
+                  }
+                  await updateDoc(orderRef, dataSelesai);
                   
                   const toggleEl = document.getElementById('onbid-toggle');
                   const isToggleOn = toggleEl ? toggleEl.checked : false;
@@ -14658,7 +14662,8 @@
                           timestamp: Date.now(),
                           orderName: safeName,
                           dateStr: dateStr,
-                          timeStr: timeStr
+                          timeStr: timeStr,
+                          orderId: lockedOrderId || window.currentActiveOrderId || ''
                       };
                       localStorage.setItem(orderKey, JSON.stringify(saved));
                       if (typeof window.cleanupOldPayments === 'function') window.cleanupOldPayments();
