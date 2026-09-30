@@ -107,7 +107,7 @@
             </div>
 
             <!-- Summary Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
                 <!-- Total Order -->
                 <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-center">
                     <h3 class="text-gray-500 text-sm font-medium">Total Order</h3>
@@ -156,6 +156,21 @@
                         <span id="badge-rider-s2" class="hidden"></span>
                     </div>
                 </div>
+
+                <!-- Skema 3 -->
+                <div class="bg-white p-5 rounded-xl border border-orange-200 shadow-sm relative overflow-hidden cursor-pointer hover:shadow-md transition-shadow group" onclick="window.openModal('skema3')">
+                    <div class="absolute right-0 top-0 h-full w-2 bg-orange-500"></div>
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-gray-500 text-sm font-medium">Pendapatan Admin (Skema 3)</h3>
+                        <span id="pct-admin-s3" class="hidden"></span>
+                    </div>
+                    <p id="sum-admin-s3" class="text-2xl font-bold text-orange-700 mt-1">Rp 0</p>
+                    <p id="detail-admin-s3" class="text-xs text-gray-500 mt-1 mb-3">( ADM Ongkir: Rp 0 | Cust: Rp 0 )</p>
+                    <div class="border-t border-orange-50 pt-2 flex flex-wrap items-center justify-between gap-2">
+                        <p id="sum-rider-s3" class="text-sm text-green-600 font-medium">Rider: Rp 0</p>
+                        <span id="badge-rider-s3" class="hidden"></span>
+                    </div>
+                </div>
             </div>
 
             <!-- Rider Breakdown -->
@@ -172,6 +187,7 @@
                                 <th class="px-6 py-3 text-right">Rider Skema Lama</th>
                                 <th class="px-6 py-3 text-right text-blue-700">Rider Skema 1</th>
                                 <th class="px-6 py-3 text-right text-purple-700">Rider Skema 2</th>
+                                <th class="px-6 py-3 text-right text-orange-700">Rider Skema 3</th>
                             </tr>
                         </thead>
                         <tbody id="rider-table-body">
@@ -391,6 +407,20 @@
                 const diffStrS2 = diffS2 >= 0 ? `(+${formatRp(diffS2)})` : `(${formatRp(diffS2).replace('-', '- ')})`;
                 const diffColorS2 = diffS2 >= 0 ? 'text-green-500' : 'text-red-500';
 
+                // Riwayat lama belum punya angka Skema 3: barisnya disembunyikan (tetap muncul saat riwayat dibuka)
+                const punyaS3 = sum.adminS3 !== undefined && sum.adminS3 !== null;
+                const diffS3 = (Number(sum.adminS3) || 0) - (Number(sum.adminLama) || 0);
+                const diffStrS3 = diffS3 >= 0 ? `(+${formatRp(diffS3)})` : `(${formatRp(diffS3).replace('-', '- ')})`;
+                const diffColorS3 = diffS3 >= 0 ? 'text-green-500' : 'text-red-500';
+                const barisS3 = punyaS3 ? `
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-500">ADM S3:</span>
+                            <div class="text-right flex flex-col items-end sm:block">
+                                <span class="font-medium text-orange-600">${formatRp(sum.adminS3)}</span>
+                                <span class="text-[11px] ${diffColorS3} font-bold sm:ml-1">${diffStrS3}</span>
+                            </div>
+                        </div>` : '';
+
                 const card = document.createElement('div');
                 card.className = "bg-white border border-gray-200 p-4 rounded-xl shadow-sm cursor-pointer hover:bg-blue-50 transition-colors group relative";
                 card.addEventListener('click', () => window.viewHistory(item.id));
@@ -421,7 +451,7 @@
                                 <span class="font-medium text-purple-600">${formatRp(sum.adminS2)}</span>
                                 <span class="text-[11px] ${diffColorS2} font-bold sm:ml-1">${diffStrS2}</span>
                             </div>
-                        </div>
+                        </div>${barisS3}
                     </div>
                 `;
                 // id dokumen dipasang lewat event listener, bukan disisipkan ke atribut onclick
@@ -535,7 +565,8 @@
                 orders: 0,
                 adminLama: 0, adminLamaOngkir: 0, adminLamaCust: 0, riderLama: 0,
                 adminS1: 0, adminS1Ongkir: 0, adminS1Cust: 0, riderS1: 0,
-                adminS2: 0, adminS2Ongkir: 0, adminS2Cust: 0, riderS2: 0
+                adminS2: 0, adminS2Ongkir: 0, adminS2Cust: 0, riderS2: 0,
+                adminS3: 0, adminS3Ongkir: 0, adminS3Cust: 0, riderS3: 0
             };
 
             let riderMap = {};
@@ -570,6 +601,13 @@
                 let adminS2Total = ptgAdminS2Ongkir + ptgAdminS2Cust;
                 let riderS2Total = nominalKotor - ptgAdminS2Ongkir + tambahan;
 
+                // Skema 3: di bawah 10rb tanpa potongan ADM; 10rb-19rb = 1.000; 20rb-29rb = 1.500; dst naik 500 per tingkat
+                const tingkatS3 = Math.max(0, Math.floor(nominalKotor / 10000));
+                let ptgAdminS3Ongkir = tingkatS3 === 0 ? 0 : 500 * (tingkatS3 + 1);
+                let ptgAdminS3Cust = 1000;
+                let adminS3Total = ptgAdminS3Ongkir + ptgAdminS3Cust;
+                let riderS3Total = nominalKotor - ptgAdminS3Ongkir + tambahan;
+
                 summary.adminLama += adminLamaTotal; 
                 summary.adminLamaOngkir += ptgAdminLamaOngkir; 
                 summary.adminLamaCust += ptgAdminLamaCust; 
@@ -585,6 +623,11 @@
                 summary.adminS2Cust += ptgAdminS2Cust; 
                 summary.riderS2 += riderS2Total;
 
+                summary.adminS3 += adminS3Total; 
+                summary.adminS3Ongkir += ptgAdminS3Ongkir; 
+                summary.adminS3Cust += ptgAdminS3Cust; 
+                summary.riderS3 += riderS3Total;
+
                 // prefix "u:" mencegah UID seperti "__proto__" merusak objek riderMap
                 const key = 'u:' + uid;
                 if (!riderMap[key]) {
@@ -592,13 +635,15 @@
                         uid: uid, nama: nama, orders: 0, 
                         rLama: 0, admLama: 0,
                         rS1: 0, admS1: 0,
-                        rS2: 0, admS2: 0
+                        rS2: 0, admS2: 0,
+                        rS3: 0, admS3: 0
                     };
                 }
                 riderMap[key].orders++;
                 riderMap[key].rLama += riderLamaTotal; riderMap[key].admLama += ptgAdminLamaOngkir;
                 riderMap[key].rS1 += riderS1Total;     riderMap[key].admS1 += ptgAdminS1Ongkir;
                 riderMap[key].rS2 += riderS2Total;     riderMap[key].admS2 += ptgAdminS2Ongkir;
+                riderMap[key].rS3 += riderS3Total;     riderMap[key].admS3 += ptgAdminS3Ongkir;
             }
 
             globalSummaryData = summary;
@@ -657,10 +702,16 @@
             document.getElementById('detail-admin-s2').innerText = `( ADM Ongkir: ${formatRp(summary.adminS2Ongkir)} | Cust: ${formatRp(summary.adminS2Cust)} )`;
             document.getElementById('sum-rider-s2').innerText = "Total Semua Rider: " + formatRp(summary.riderS2);
 
+            document.getElementById('sum-admin-s3').innerText = formatRp(summary.adminS3);
+            document.getElementById('detail-admin-s3').innerText = `( ADM Ongkir: ${formatRp(summary.adminS3Ongkir)} | Cust: ${formatRp(summary.adminS3Cust)} )`;
+            document.getElementById('sum-rider-s3').innerText = "Total Semua Rider: " + formatRp(summary.riderS3);
+
             setPctBadge('pct-admin-s1', pctChange(summary.adminS1, summary.adminLama), '');
             setPctBadge('pct-admin-s2', pctChange(summary.adminS2, summary.adminLama), '');
             setPctBadge('badge-rider-s1', avgRiderPct(riderMap, 'rS1'), 'Rata-rata rider');
             setPctBadge('badge-rider-s2', avgRiderPct(riderMap, 'rS2'), 'Rata-rata rider');
+            setPctBadge('pct-admin-s3', pctChange(summary.adminS3, summary.adminLama), '');
+            setPctBadge('badge-rider-s3', avgRiderPct(riderMap, 'rS3'), 'Rata-rata rider');
 
             // Urutkan dari rider dengan jumlah order terbanyak (sama banyak: urutan awal dipertahankan)
             const riderList = Object.keys(riderMap).map(k => riderMap[k]).sort((x, y) => y.orders - x.orders);
@@ -668,10 +719,11 @@
             for (const r of riderList) {
                 let diffS1 = r.rS1 - r.rLama;
                 let diffS2 = r.rS2 - r.rLama;
+                let diffS3 = r.rS3 - r.rLama;
                 
                 let labelDiffS1 = diffS1 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS1).replace('-', '- ')} )</span>` : (diffS1 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS1)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
                 let labelDiffS2 = diffS2 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS2).replace('-', '- ')} )</span>` : (diffS2 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS2)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
-
+                let labelDiffS3 = diffS3 < 0 ? `<span class="text-red-500 font-semibold">( Pendapatan turun: ${formatRp(diffS3).replace('-', '- ')} )</span>` : (diffS3 > 0 ? `<span class="text-green-500 font-semibold">( Pendapatan naik: +${formatRp(diffS3)} )</span>` : `<span class="text-gray-400 font-semibold">( Pendapatan tetap )</span>`);
                 rowsHtml += `
                     <tr class="bg-white border-b hover:bg-gray-50">
                         <td class="px-6 py-4 font-medium text-gray-900">${esc(r.uid)} - ${esc(r.nama)}</td>
@@ -689,6 +741,11 @@
                             <div class="font-medium text-purple-600">${formatRp(r.rS2)}</div>
                             <div class="text-[11px] text-purple-400 mt-1">( ADM: ${formatRp(r.admS2)} )</div>
                             <div class="text-[11px] mt-1">${labelDiffS2}</div>
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="font-medium text-orange-600">${formatRp(r.rS3)}</div>
+                            <div class="text-[11px] text-orange-400 mt-1">( ADM: ${formatRp(r.admS3)} )</div>
+                            <div class="text-[11px] mt-1">${labelDiffS3}</div>
                         </td>
                     </tr>
                 `;
@@ -728,6 +785,9 @@
             } else if (tipe === 'skema2') {
                 title.innerText = "Logika Skema 2";
                 content.innerHTML = `<p><b>Admin:</b> Bertingkat (Bawah 10k = Rp 800, 10-20k = Rp 1.400, 20-30k = Rp 2.000, dst naik Rp 600 per tingkat). Ditambah Rp 1.000 biaya pelanggan.</p><hr class="my-2"/><p><b>Rider:</b> Sisa ongkir setelah dipotong admin bertingkat + tambahan 100%.</p>`;
+            } else if (tipe === 'skema3') {
+                title.innerText = "Logika Skema 3";
+                content.innerHTML = `<p><b>Admin:</b> Bertingkat berdasarkan ongkir kotor. Di bawah 10k = Rp 0 (tanpa potongan), 10-20k = Rp 1.000, 20-30k = Rp 1.500, dst naik Rp 500 per tingkat. Ditambah Rp 1.000 biaya pelanggan di semua tingkat.</p><hr class="my-2"/><p><b>Rider:</b> Sisa ongkir setelah dipotong admin bertingkat + tambahan 100%.</p>`;
             }
             modal.classList.remove('hidden');
         }
