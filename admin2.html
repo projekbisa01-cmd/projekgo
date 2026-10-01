@@ -14599,6 +14599,545 @@
         window.uangKunci();
         // ===================== AKHIR MODE OMSET =====================
 
+        // =====================================================================
+        // TABUNGAN LEBARAN (ADMIN) — potongan saldo harian otomatis
+        // ---------------------------------------------------------------------
+        // - Peserta: artifacts/<proyek>/public/data/tabungan_lebaran/<UID>
+        //   (rider mengisi sendiri sekali dari aplikasinya; admin bisa ubah / atur).
+        // - Laporan per hari: tabungan_lebaran_harian/<YYYY-MM-DD> berisi status tiap rider
+        //   (berhasil / gagal + alasannya). Ini yang dipakai kartu "Berhasil / Gagal".
+        // - Potongan dijalankan oleh aplikasi admin ini (seperti cicilan & ADM 4%) setiap hari
+        //   mulai pukul 06.00 WIB, SELAMA aplikasi admin terbuka di salah satu HP/komputer.
+        //   Hari yang terlewat dikejar otomatis maksimal 7 hari ke belakang.
+        // - Anti potong dobel: catatan riwayat_potongan ber-ID tetap tl_<tanggal>_<UID>.
+        // - Saldo hanya dipotong jika SISA SALDO tetap di atas Rp 0, supaya rider tidak
+        //   otomatis terblokir. Kalau saldo kurang -> GAGAL, dicoba ulang tiap 1 jam.
+        // - TERPISAH TOTAL dari ADM 16%: tidak menyentuh order, adm_potong, rekap omset.
+        //   Kartu "Pembanding Omset Admin" di Histori otomatis mengeluarkan tabungan ini
+        //   dari hitungan, jadi tetap MATCH.
+        // =====================================================================
+        (function tabunganLebaranAdmin() {
+            const TL_MULAI = '2026-10-02';     // hari potongan pertama (besok)
+            const TL_SELESAI = '2027-03-07';   // H-3 Idul Fitri 1448 H (perkiraan 10 Maret 2027)
+            const TL_JAM_POTONG = 6;           // mulai dipotong pukul 06.00 WIB
+            const TL_MIN = 2000, TL_MAKS = 100000, TL_KELIPATAN = 1000;
+            const TL_MUNDUR_HARI = 7;
+            const TL_ULANG_GAGAL_MS = 60 * 60 * 1000;
+            const TL_KUNCI_BASI_MS = 3 * 60 * 1000;
+            const tlTabId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+            const P = firebaseConfig.projectId;
+            const pesertaCol = () => collection(db, 'artifacts', P, 'public', 'data', 'tabungan_lebaran');
+            const lapCol = () => collection(db, 'artifacts', P, 'public', 'data', 'tabungan_lebaran_harian');
+            const trackerRef = () => doc(db, 'artifacts', P, 'public', 'data', 'admin_config', 'daily_balance_tracker');
+
+            const esc = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
+            const rp = (n) => 'Rp ' + Math.round(Number(n) || 0).toLocaleString('id-ID');
+            const uidSah = (u) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(String(u || ''));
+            const tglSah = (t) => /^\d{4}-\d{2}-\d{2}$/.test(String(t || ''));
+            const nominalSah = (n) => Number.isInteger(n) && n >= TL_MIN && n <= TL_MAKS && n % TL_KELIPATAN === 0;
+            const tglWib = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+            const jamWib = (d) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', hourCycle: 'h23' }).format(d));
+            const tglLokal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            const keUtc = (t) => { const [y, m, d] = t.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+            const geser = (t, n) => new Date(keUtc(t) + n * 86400000).toISOString().slice(0, 10);
+            const jmlHari = (a, b) => a > b ? 0 : Math.round((keUtc(b) - keUtc(a)) / 86400000) + 1;
+            const teksTgl = (t) => { const [y, m, d] = t.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }); };
+            const emailSaya = () => (auth.currentUser && auth.currentUser.email) || '-';
+
+            let tlPeserta = [];       // [{id, ...data}]
+            let tlLaporan = [];       // [{id: tanggal, ...data}] 15 hari terakhir
+            let tlSiapPeserta = false, tlSiapLap = false, tlSudahMulai = false;
+            let tlSibuk = false, tlTimerJalan = null;
+            let tlTglLihat = '';
+            let tlCari = '';
+
+            // Tanggal mulai potong untuk satu peserta = besok setelah mendaftar (atau 1 Okt, mana yang lebih akhir)
+            const mulaiPeserta = (p) => {
+                const ts = p && p.dibuat_at;
+                if (!ts || typeof ts.toDate !== 'function') return null; // baru dibuat, waktu server belum turun
+                const besok = geser(tglWib(ts.toDate()), 1);
+                return besok > TL_MULAI ? besok : TL_MULAI;
+            };
+            const adaDompet = (uid) => allRiderBalances.some(b => String(b.id) === String(uid));
+            const namaRider = (uid, cadangan) => {
+                const r = getMergedRidersForDropdown().find(x => String(x.uid) === String(uid));
+                return (r && r.name) || cadangan || uid;
+            };
+
+            // Rider yang wajib dipotong pada tanggal D
+            const targetHari = (D) => {
+                if (D < TL_MULAI || D > TL_SELESAI) return [];
+                return tlPeserta.filter(p => {
+                    if (!uidSah(p.id) || p.status === 'berhenti' || !nominalSah(Number(p.nominal_harian))) return false;
+                    const m = mulaiPeserta(p);
+                    return m && m <= D && adaDompet(p.id);
+                }).map(p => ({ uid: p.id, nama: namaRider(p.id, p.nama), nominal: Number(p.nominal_harian) }));
+            };
+
+            const estimasiPeserta = (p) => {
+                const terkumpul = Number(p.total_terkumpul) || 0;
+                if (p.status === 'berhenti' || !nominalSah(Number(p.nominal_harian))) return terkumpul;
+                const m = mulaiPeserta(p) || geser(tglWib(new Date()), 1);
+                const lanjut = p.terakhir_potong && tglSah(p.terakhir_potong) ? geser(p.terakhir_potong, 1) : m;
+                const dari = lanjut > m ? lanjut : m;
+                return terkumpul + Number(p.nominal_harian) * jmlHari(dari, TL_SELESAI);
+            };
+
+            // ---------- POTONG SATU RIDER UNTUK SATU TANGGAL ----------
+            async function tlPotongSatu(D, t) {
+                const ledgerRef = doc(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan', `tl_${D}_${t.uid}`);
+                const balRef = doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', t.uid);
+                const pRef = doc(pesertaCol(), t.uid);
+                const hariLokal = tglLokal(new Date());
+                let hasil;
+                try {
+                    hasil = await runTransaction(db, async (tx) => {
+                        const led = await tx.get(ledgerRef);
+                        const ps = await tx.get(pRef);
+                        const bal = await tx.get(balRef);
+                        if (led.exists()) return { status: 'ok', nominal: Number(led.data().amount) || 0, pesan: 'Sudah terpotong sebelumnya' };
+                        if (!ps.exists() || ps.data().status === 'berhenti') return { status: 'lewat', nominal: 0, pesan: 'Tabungan tidak aktif' };
+                        const nominal = Number(ps.data().nominal_harian);
+                        if (!nominalSah(nominal)) return { status: 'gagal', nominal: 0, pesan: 'Nominal tidak sah' };
+                        if (!bal.exists()) return { status: 'gagal', nominal, pesan: 'Dompet saldo tidak ditemukan' };
+                        const saldo = Number(bal.data().saldo) || 0;
+                        if (saldo - nominal <= 0) return { status: 'gagal', nominal, saldo_sebelum: saldo, pesan: `Saldo kurang (${rp(saldo)})` };
+                        const nama = String(t.nama || t.uid).slice(0, 60); // nama dari daftar rider admin, bukan isian rider
+                        const terakhirLama = String(ps.data().terakhir_potong || '');
+                        tx.set(balRef, { saldo: increment(-nominal), updated_at: serverTimestamp() }, { merge: true });
+                        tx.set(ledgerRef, {
+                            rider_uid: t.uid, rider_name: nama, amount: nominal, omset_order: 0,
+                            type: 'tabungan_lebaran', desc: `Tabungan Lebaran ${D}`, tanggal_tabungan: D,
+                            dieksekusi_oleh: emailSaya(), created_at: serverTimestamp()
+                        });
+                        tx.update(pRef, {
+                            total_terkumpul: increment(nominal), jml_hari_terpotong: increment(1),
+                            terakhir_potong: D > terakhirLama ? D : terakhirLama, updated_at: serverTimestamp()
+                        });
+                        // Dicatat agar kartu Pembanding Omset Admin di Histori tetap MATCH
+                        tx.set(trackerRef(), { tl_potong: { [hariLokal]: increment(nominal) } }, { merge: true });
+                        return { status: 'ok', nominal, saldo_sebelum: saldo, saldo_sesudah: saldo - nominal, pesan: '' };
+                    });
+                } catch (e) {
+                    console.error('[TL] potong', t.uid, D, e);
+                    hasil = { status: 'gagal', nominal: t.nominal, pesan: String((e && (e.code || e.message)) || e).slice(0, 100) };
+                }
+                hasil.nama = t.nama;
+                hasil.at_ms = Date.now();
+                return hasil;
+            }
+
+            // ---------- PROSES SATU TANGGAL ----------
+            async function tlProsesHari(D, daftar) {
+                if (!tglSah(D) || !daftar.length) return;
+                const lapRef = doc(lapCol(), D);
+                const dapatKunci = await runTransaction(db, async (tx) => {
+                    const s = await tx.get(lapRef);
+                    const now = Date.now();
+                    if (s.exists()) {
+                        const d = s.data();
+                        if (d.kunci_tab && d.kunci_tab !== tlTabId && now - (Number(d.detak_ms) || 0) < TL_KUNCI_BASI_MS) return false;
+                        tx.update(lapRef, { status: 'proses', kunci_tab: tlTabId, detak_ms: now });
+                    } else {
+                        tx.set(lapRef, { tanggal: D, status: 'proses', rincian: {}, kunci_tab: tlTabId, detak_ms: now, dibuat_at: serverTimestamp() });
+                    }
+                    return true;
+                });
+                if (!dapatKunci) return;
+                for (const t of daftar) {
+                    if (!uidSah(t.uid)) continue;
+                    const h = await tlPotongSatu(D, t);
+                    try { await updateDoc(lapRef, { [`rincian.${t.uid}`]: h, detak_ms: Date.now() }); }
+                    catch (e) { console.error('[TL] simpan rincian', t.uid, e); }
+                }
+                await runTransaction(db, async (tx) => {
+                    const s = await tx.get(lapRef);
+                    const r = (s.exists() && s.data().rincian) || {};
+                    const semua = Object.values(r);
+                    const ok = semua.filter(x => x.status === 'ok');
+                    tx.update(lapRef, {
+                        status: 'selesai', kunci_tab: null, detak_ms: Date.now(), coba_terakhir_ms: Date.now(),
+                        jml_ok: ok.length, jml_gagal: semua.filter(x => x.status === 'gagal').length,
+                        total_potong: ok.reduce((a, b) => a + (Number(b.nominal) || 0), 0)
+                    });
+                });
+            }
+
+            // ---------- PENJADWAL ----------
+            async function tlJalankan(paksaTanggal) {
+                if (tlSibuk || !tlSiapPeserta || !tlSiapLap || !isBalancesLoaded || !auth.currentUser) return;
+                const now = new Date();
+                const tr = window.dailyBalanceTracker;
+                if (!tr || tr.shift_date !== tglLokal(now)) return; // tunggu pelacak saldo hari ini siap (agar Pembanding tetap benar)
+                const hariIni = tglWib(now);
+                let akhir = jamWib(now) >= TL_JAM_POTONG ? hariIni : geser(hariIni, -1);
+                if (akhir > TL_SELESAI) akhir = TL_SELESAI;
+                let awal = geser(hariIni, -TL_MUNDUR_HARI);
+                if (awal < TL_MULAI) awal = TL_MULAI;
+                const daftarTgl = [];
+                if (paksaTanggal) { if (tglSah(paksaTanggal) && paksaTanggal >= TL_MULAI && paksaTanggal <= akhir) daftarTgl.push(paksaTanggal); }
+                else for (let D = awal; D <= akhir; D = geser(D, 1)) daftarTgl.push(D);
+                if (!daftarTgl.length) return;
+
+                tlSibuk = true; window.renderTabunganLebaran();
+                try {
+                    for (const D of daftarTgl) {
+                        const target = targetHari(D);
+                        if (!target.length) continue;
+                        const lap = tlLaporan.find(l => l.id === D);
+                        const rinc = (lap && lap.rincian) || {};
+                        if (lap && lap.kunci_tab && lap.kunci_tab !== tlTabId && Date.now() - (Number(lap.detak_ms) || 0) < TL_KUNCI_BASI_MS) continue;
+                        const belumAda = target.filter(t => !rinc[t.uid]);
+                        const gagal = target.filter(t => rinc[t.uid] && rinc[t.uid].status === 'gagal');
+                        const bolehUlang = !!paksaTanggal || Date.now() - (Number(lap && lap.coba_terakhir_ms) || 0) >= TL_ULANG_GAGAL_MS;
+                        const daftar = [...belumAda, ...(bolehUlang ? gagal : [])];
+                        if (daftar.length) await tlProsesHari(D, daftar);
+                    }
+                } catch (e) {
+                    console.error('[TL] penjadwal:', e);
+                } finally {
+                    tlSibuk = false; window.renderTabunganLebaran();
+                }
+            }
+            const tlJadwalkan = (jeda = 4000) => {
+                clearTimeout(tlTimerJalan);
+                tlTimerJalan = setTimeout(() => tlJalankan(), jeda);
+            };
+
+            function tlMulai() {
+                if (tlSudahMulai) return;
+                tlSudahMulai = true;
+                onSnapshot(pesertaCol(), (snap) => {
+                    tlPeserta = snap.docs.filter(d => uidSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
+                    tlSiapPeserta = true;
+                    window.renderTabunganLebaran(); tlJadwalkan();
+                }, (e) => { console.error('[TL] baca peserta:', e); tlPeserta = []; tlSiapPeserta = false; window._tlGalat = e.code || 'error'; window.renderTabunganLebaran(); });
+                onSnapshot(query(lapCol(), orderBy('tanggal', 'desc'), limit(15)), (snap) => {
+                    tlLaporan = snap.docs.filter(d => tglSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
+                    tlSiapLap = true;
+                    window.renderTabunganLebaran(); tlJadwalkan();
+                }, (e) => { console.error('[TL] baca laporan:', e); window._tlGalat = e.code || 'error'; window.renderTabunganLebaran(); });
+                setInterval(() => tlJalankan(), 2 * 60 * 1000);
+            }
+            onAuthStateChanged(auth, (u) => { if (u && window.roleFromEmail(u.email)) tlMulai(); });
+
+            // ---------- HALAMAN & MENU (dibuat lewat JS, tanpa mengubah HTML lama) ----------
+            (function pasangHalaman() {
+                const tileTabungan = document.querySelector('#page-lainnya button[onclick="switchPage(\'tabungan\')"]');
+                if (tileTabungan && !document.getElementById('tl-tile')) {
+                    const b = document.createElement('button');
+                    b.id = 'tl-tile';
+                    b.type = 'button';
+                    b.className = 'relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-emerald-300 hover:shadow-md active:scale-95 transition-all group';
+                    b.innerHTML = '<span id="tl-tile-badge" class="hidden absolute top-2 right-2 bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full"></span><i class="fa-solid fa-moon text-3xl text-emerald-600 group-hover:scale-110 transition-transform"></i><span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Tabungan<br>Lebaran</span>';
+                    b.addEventListener('click', () => window.switchPage('tabungan-lebaran'));
+                    tileTabungan.insertAdjacentElement('afterend', b);
+                }
+                if (!document.getElementById('page-tabungan-lebaran')) {
+                    const m = document.createElement('main');
+                    m.id = 'page-tabungan-lebaran';
+                    m.className = 'hidden-page max-w-md mx-auto p-4 space-y-4';
+                    m.innerHTML = `
+                        <button type="button" onclick="switchPage('lainnya')" class="mb-1 bg-white border border-gray-200 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-sm flex items-center gap-1.5 w-max hover:bg-slate-50 active:scale-95 transition-all"><i class="fa-solid fa-arrow-left"></i> Kembali</button>
+                        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
+                            <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-moon text-emerald-600 mr-1.5"></i> Tabungan Lebaran</h2>
+                            <div id="tl-ringkas"></div>
+                        </section>
+                        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
+                            <div class="flex justify-between items-center gap-2 border-b border-gray-100 pb-2">
+                                <h2 class="font-black text-black text-[11px] uppercase tracking-wider"><i class="fa-solid fa-clipboard-check text-slate-400 mr-1.5"></i> Cek Potongan Harian</h2>
+                                <input type="date" id="tl-tgl" class="bg-slate-50 border border-gray-200 rounded-lg px-2 py-1 text-[10px] font-bold text-black focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div id="tl-cek"></div>
+                        </section>
+                        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
+                            <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-users text-slate-400 mr-1.5"></i> Peserta</h2>
+                            <div class="relative">
+                                <i class="fa-solid fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                                <input type="text" id="tl-cari" placeholder="Cari nama / ID rider..." class="w-full bg-slate-50 border border-gray-200 rounded-xl p-2.5 pl-9 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div id="tl-peserta" class="space-y-2"></div>
+                        </section>`;
+                    const navBawah = document.querySelector('nav.fixed.bottom-0');
+                    if (navBawah) navBawah.insertAdjacentElement('beforebegin', m); else document.body.appendChild(m);
+                    m.querySelector('#tl-tgl').addEventListener('change', (e) => { tlTglLihat = tglSah(e.target.value) ? e.target.value : ''; window.renderTabunganLebaran(); });
+                    m.querySelector('#tl-cari').addEventListener('input', (e) => { tlCari = String(e.target.value || '').toLowerCase().trim(); window.renderTabunganLebaran(); });
+                    // Semua tombol di halaman ini memakai data-aksi (tanpa onclick berisi data)
+                    m.addEventListener('click', (e) => {
+                        const el = e.target.closest('[data-tl]');
+                        if (!el) return;
+                        const aksi = el.dataset.tl, uid = el.dataset.uid || '';
+                        if (aksi === 'ubah' || aksi === 'atur') { if (uidSah(uid)) bukaEditor(uid); }
+                        else if (aksi === 'henti') { if (uidSah(uid)) ubahStatus(uid, 'berhenti'); }
+                        else if (aksi === 'aktif') { if (uidSah(uid)) ubahStatus(uid, 'aktif'); }
+                        else if (aksi === 'proses') prosesManual();
+                    });
+                }
+            })();
+
+            // Bungkus switchPage: halaman ini tidak ada di daftar halaman lama
+            const asliSwitch = window.switchPage;
+            window.switchPage = (page) => {
+                const hal = document.getElementById('page-tabungan-lebaran');
+                if (page === 'tabungan-lebaran') {
+                    asliSwitch('lainnya'); // menjalankan semua penyesuaian lama (navigasi, mode malam)
+                    document.getElementById('page-lainnya')?.classList.add('hidden-page');
+                    hal?.classList.remove('hidden-page');
+                    window.scrollTo(0, 0);
+                    window.renderTabunganLebaran();
+                    return;
+                }
+                if (hal) hal.classList.add('hidden-page');
+                return asliSwitch(page);
+            };
+
+            // ---------- EDIT / ATUR NOMINAL OLEH ADMIN ----------
+            function bukaEditor(uid) {
+                const p = tlPeserta.find(x => x.id === uid);
+                const nama = namaRider(uid, p && p.nama);
+                document.getElementById('tl-editor')?.remove();
+                const w = document.createElement('div');
+                w.id = 'tl-editor';
+                w.className = 'fixed inset-0 z-[9999] bg-slate-900/60 flex items-center justify-center p-6';
+                w.innerHTML = `
+                    <div class="bg-white rounded-3xl p-5 w-full max-w-xs shadow-2xl">
+                        <p class="text-[10px] font-bold text-slate-500">${p ? 'Ubah potongan harian' : 'Atur tabungan lebaran'}</p>
+                        <p id="tl-ed-nama" class="text-sm font-black text-slate-800 uppercase mb-3"></p>
+                        <label class="text-[9px] font-black text-black uppercase tracking-widest block mb-1">Nominal per hari (min Rp 2.000, kelipatan Rp 1.000)</label>
+                        <input id="tl-ed-input" type="text" inputmode="numeric" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 text-lg font-black text-black focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        <p id="tl-ed-est" class="text-[10px] font-bold text-emerald-700 mt-1.5 min-h-[14px]"></p>
+                        <div class="flex gap-2 mt-4">
+                            <button type="button" id="tl-ed-batal" class="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-black text-xs uppercase">Batal</button>
+                            <button type="button" id="tl-ed-simpan" class="flex-[2] py-3 rounded-xl bg-emerald-600 text-white font-black text-xs uppercase">Simpan</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(w);
+                w.querySelector('#tl-ed-nama').textContent = `${nama} (${uid})`;
+                const inp = w.querySelector('#tl-ed-input');
+                const est = w.querySelector('#tl-ed-est');
+                const baca = () => parseInt(String(inp.value).replace(/[^0-9]/g, ''), 10) || 0;
+                const segar = () => {
+                    const n = baca();
+                    inp.value = n ? n.toLocaleString('id-ID') : '';
+                    if (!n) { est.textContent = ''; return; }
+                    if (!nominalSah(n)) { est.style.color = '#e11d48'; est.textContent = 'Minimal Rp 2.000, maksimal Rp 100.000, kelipatan Rp 1.000'; return; }
+                    est.style.color = '';
+                    const contoh = { ...(p || {}), nominal_harian: n, status: 'aktif' };
+                    if (!p) contoh.dibuat_at = { toDate: () => new Date() };
+                    est.textContent = `Estimasi terkumpul H-3: ${rp(estimasiPeserta(contoh))}`;
+                };
+                if (p && nominalSah(Number(p.nominal_harian))) inp.value = String(p.nominal_harian);
+                segar();
+                inp.addEventListener('input', segar);
+                w.querySelector('#tl-ed-batal').addEventListener('click', () => w.remove());
+                w.addEventListener('click', (e) => { if (e.target === w) w.remove(); });
+                w.querySelector('#tl-ed-simpan').addEventListener('click', async () => {
+                    const n = baca();
+                    if (!nominalSah(n)) { segar(); return; }
+                    const btn = w.querySelector('#tl-ed-simpan');
+                    btn.disabled = true; btn.textContent = 'Menyimpan...';
+                    try {
+                        const ref = doc(pesertaCol(), uid);
+                        await runTransaction(db, async (tx) => {
+                            const s = await tx.get(ref);
+                            if (s.exists()) {
+                                const d = s.data();
+                                const riwayat = (Array.isArray(d.riwayat_ubah) ? d.riwayat_ubah : []).slice(-9);
+                                riwayat.push({ dari: Number(d.nominal_harian) || 0, ke: n, oleh: emailSaya(), at_ms: Date.now() });
+                                tx.update(ref, { nominal_harian: n, riwayat_ubah: riwayat, diubah_oleh: emailSaya(), diubah_at: serverTimestamp() });
+                            } else {
+                                tx.set(ref, { uid, nama: String(nama).slice(0, 60), nominal_harian: n, dibuat_at: serverTimestamp(), diisi_oleh: 'admin', dibuat_oleh: emailSaya(), status: 'aktif' });
+                            }
+                        });
+                        w.remove();
+                        window.showAlert('Berhasil', `Tabungan lebaran ${esc(nama)} diatur ${rp(n)} per hari.`, 'success');
+                    } catch (e) {
+                        console.error('[TL] simpan nominal', e);
+                        btn.disabled = false; btn.textContent = 'Simpan';
+                        window.showAlert('Gagal', 'Tidak bisa menyimpan. Periksa koneksi atau Firestore Rules.', 'error');
+                    }
+                });
+            }
+
+            function ubahStatus(uid, status) {
+                const p = tlPeserta.find(x => x.id === uid);
+                if (!p) return;
+                const nama = namaRider(uid, p.nama);
+                const henti = status === 'berhenti';
+                window.showConfirm(henti ? 'Hentikan tabungan?' : 'Aktifkan lagi?',
+                    henti ? `Potongan harian ${nama} dihentikan. Uang yang sudah terkumpul tetap tercatat.` : `Potongan harian ${nama} dimulai lagi.`,
+                    async () => {
+                        try { await updateDoc(doc(pesertaCol(), uid), { status, diubah_oleh: emailSaya(), diubah_at: serverTimestamp() }); }
+                        catch (e) { window.showAlert('Gagal', 'Tidak bisa mengubah status.', 'error'); }
+                    });
+            }
+
+            function prosesManual() {
+                const D = tlTglLihat || tglWib(new Date());
+                window.showConfirm('Proses potongan sekarang?', `Rider yang belum terpotong / gagal pada ${teksTgl(D)} akan dicoba dipotong sekarang. Yang sudah berhasil tidak dipotong dua kali.`, () => tlJalankan(D));
+            }
+
+            // ---------- TAMPILAN ----------
+            window.renderTabunganLebaran = () => {
+                // Badge gagal hari ini di menu
+                const hariIni = tglWib(new Date());
+                const lapHariIni = tlLaporan.find(l => l.id === hariIni);
+                const gagalHariIni = lapHariIni ? Object.values(lapHariIni.rincian || {}).filter(x => x.status === 'gagal').length : 0;
+                const badge = document.getElementById('tl-tile-badge');
+                if (badge) { badge.textContent = `${gagalHariIni} gagal`; badge.classList.toggle('hidden', !gagalHariIni); }
+
+                const hal = document.getElementById('page-tabungan-lebaran');
+                if (!hal || hal.classList.contains('hidden-page')) return;
+                const ringkasEl = document.getElementById('tl-ringkas');
+                const cekEl = document.getElementById('tl-cek');
+                const pesertaEl = document.getElementById('tl-peserta');
+                const tglEl = document.getElementById('tl-tgl');
+
+                if (window._tlGalat && !tlSiapPeserta) {
+                    ringkasEl.innerHTML = `<p class="text-[10px] font-bold text-rose-600">Data tidak bisa dibaca (${esc(window._tlGalat)}). Pasang Firestore Rules tabungan lebaran dulu.</p>`;
+                    cekEl.innerHTML = ''; pesertaEl.innerHTML = '';
+                    return;
+                }
+
+                // Ringkasan
+                const aktif = tlPeserta.filter(p => p.status !== 'berhenti');
+                const terkumpul = tlPeserta.reduce((a, p) => a + (Number(p.total_terkumpul) || 0), 0);
+                const estimasi = tlPeserta.reduce((a, p) => a + estimasiPeserta(p), 0);
+                const idPeserta = new Set(tlPeserta.map(p => p.id));
+                const belumIsi = getMergedRidersForDropdown().filter(r => uidSah(r.uid) && !idPeserta.has(String(r.uid)));
+                const hariKe = hariIni < TL_MULAI ? 0 : jmlHari(TL_MULAI, hariIni < TL_SELESAI ? hariIni : TL_SELESAI);
+                const totalHari = jmlHari(TL_MULAI, TL_SELESAI);
+                const kotak = (judul, isi, warna) => `<div class="rounded-xl bg-${warna}-50 border border-${warna}-100 p-2.5 text-center"><p class="text-[8px] font-black text-${warna}-700 uppercase tracking-wider">${judul}</p><p class="text-[13px] font-black text-${warna}-700 leading-tight mt-0.5">${isi}</p></div>`;
+                ringkasEl.innerHTML = `
+                    <p class="text-[9px] text-slate-500 leading-relaxed">Periode <b>${esc(teksTgl(TL_MULAI))}</b> s/d <b>${esc(teksTgl(TL_SELESAI))}</b> (H-3). Dipotong otomatis tiap hari mulai pukul 06.00 WIB selama aplikasi admin ini terbuka. Saldo hanya dipotong kalau sisanya tetap di atas Rp 0. Tidak mengubah potongan ADM 16%.</p>
+                    <p class="text-[10px] font-black text-emerald-700 mt-2">Hari ke-${hariKe} dari ${totalHari}${tlSibuk ? ' · <span class="text-amber-600">memotong saldo…</span>' : ''}</p>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        ${kotak('Peserta aktif', `${aktif.length} rider`, 'emerald')}
+                        ${kotak('Belum mengisi', `${belumIsi.length} rider`, belumIsi.length ? 'amber' : 'slate')}
+                        ${kotak('Sudah terkumpul', esc(rp(terkumpul)), 'sky')}
+                        ${kotak('Estimasi H-3', esc(rp(estimasi)), 'indigo')}
+                    </div>`;
+
+                // Cek potongan per tanggal
+                const batasAkhir = hariIni < TL_SELESAI ? hariIni : TL_SELESAI;
+                if (!tlTglLihat) tlTglLihat = batasAkhir < TL_MULAI ? TL_MULAI : batasAkhir;
+                if (tglEl) { tglEl.min = TL_MULAI; tglEl.max = batasAkhir < TL_MULAI ? TL_MULAI : batasAkhir; tglEl.value = tlTglLihat; }
+                const D = tlTglLihat;
+                const lap = tlLaporan.find(l => l.id === D);
+                const rinc = (lap && lap.rincian) || {};
+                const target = targetHari(D);
+                const sudahWaktu = D < hariIni || (D === hariIni && jamWib(new Date()) >= TL_JAM_POTONG);
+                const baris = [];
+                Object.entries(rinc).forEach(([uid, x]) => { if (uidSah(uid) && (x.status === 'ok' || x.status === 'gagal')) baris.push({ uid, ...x }); });
+                target.forEach(t => { if (!rinc[t.uid]) baris.push({ uid: t.uid, nama: t.nama, nominal: t.nominal, status: 'belum' }); });
+                const nOk = baris.filter(x => x.status === 'ok').length;
+                const nGagal = baris.filter(x => x.status === 'gagal').length;
+                const nBelum = baris.filter(x => x.status === 'belum').length;
+                const totalOk = baris.filter(x => x.status === 'ok').reduce((a, b) => a + (Number(b.nominal) || 0), 0);
+                const semua = nOk + nGagal + nBelum;
+                const persen = semua ? Math.floor((nOk / semua) * 100) : 0;
+                let lencana;
+                if (!semua) lencana = '<span class="text-[9px] font-black bg-slate-100 text-slate-500 px-2 py-1 rounded-lg">Tidak ada peserta di tanggal ini</span>';
+                else if (!sudahWaktu) lencana = '<span class="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">Belum waktunya (mulai 06.00 WIB)</span>';
+                else if (persen === 100) lencana = '<span class="text-[10px] font-black bg-emerald-500 text-white px-2.5 py-1 rounded-lg"><i class="fa-solid fa-circle-check mr-1"></i>SUKSES 100%</span>';
+                else lencana = `<span class="text-[10px] font-black bg-rose-500 text-white px-2.5 py-1 rounded-lg"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Baru ${persen}% terpotong</span>`;
+
+                const urut = { gagal: 0, belum: 1, ok: 2 };
+                baris.sort((a, b) => (urut[a.status] - urut[b.status]) || String(a.nama || '').localeCompare(String(b.nama || '')));
+                const daftarHtml = baris.map(x => {
+                    const ikon = x.status === 'ok' ? 'fa-circle-check text-emerald-500' : x.status === 'gagal' ? 'fa-circle-xmark text-rose-500' : 'fa-clock text-slate-400';
+                    const ket = x.status === 'ok' ? `Terpotong ${rp(x.nominal)}${x.pesan ? ' · ' + x.pesan : ''}`
+                        : x.status === 'gagal' ? `GAGAL · ${x.pesan || 'tidak diketahui'}` : (sudahWaktu ? 'Menunggu diproses' : 'Belum waktunya');
+                    return `<div class="flex justify-between items-start gap-2 py-1.5 border-b border-slate-100 last:border-0 ${x.status === 'gagal' ? 'bg-rose-50 -mx-2 px-2 rounded' : ''}">
+                        <p class="text-[10px] font-black text-slate-700 uppercase truncate min-w-0"><i class="fa-solid ${ikon} mr-1"></i>${esc(x.nama || x.uid)} <span class="text-slate-400 font-bold normal-case">(${esc(x.uid)})</span></p>
+                        <p class="text-[9px] font-black text-right shrink-0 max-w-[55%] ${x.status === 'gagal' ? 'text-rose-700' : x.status === 'ok' ? 'text-emerald-700' : 'text-slate-500'}">${esc(ket)}</p>
+                    </div>`;
+                }).join('');
+                cekEl.innerHTML = `
+                    <div class="flex justify-between items-center gap-2"><p class="text-[10px] font-black text-slate-700">${esc(teksTgl(D))}</p>${lencana}</div>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl"><p class="text-[9px] font-bold text-emerald-800 uppercase tracking-widest">Berhasil terpotong</p><p class="text-xl font-black text-emerald-700">${nOk}</p><p class="text-[8px] font-bold text-emerald-600 uppercase">Rider · ${esc(rp(totalOk))}</p></div>
+                        <div class="${nGagal ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200'} border p-3 rounded-2xl"><p class="text-[9px] font-bold ${nGagal ? 'text-rose-800' : 'text-slate-500'} uppercase tracking-widest">Gagal terpotong</p><p class="text-xl font-black ${nGagal ? 'text-rose-700' : 'text-slate-600'}">${nGagal}</p><p class="text-[8px] font-bold ${nGagal ? 'text-rose-600' : 'text-slate-400'} uppercase">Rider${nBelum ? ` · ${nBelum} belum diproses` : ''}</p></div>
+                    </div>
+                    ${nGagal ? '<p class="text-[9px] font-bold text-rose-600 mt-2">Yang gagal dicoba ulang otomatis tiap 1 jam (misalnya setelah rider top up).</p>' : ''}
+                    <div class="mt-2 bg-white rounded-lg">${daftarHtml || '<p class="text-[9px] text-slate-400 italic py-2 text-center">Belum ada data.</p>'}</div>
+                    ${sudahWaktu && (nGagal || nBelum) && !tlSibuk ? '<button type="button" data-tl="proses" class="w-full mt-3 py-2.5 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase active:scale-95"><i class="fa-solid fa-rotate-right mr-1"></i>Proses / ulangi sekarang</button>' : ''}`;
+
+                // Peserta
+                const cocok = (nama, uid) => !tlCari || String(nama).toLowerCase().includes(tlCari) || String(uid).toLowerCase().includes(tlCari);
+                const urutPeserta = [...tlPeserta].map(p => ({ ...p, _nama: namaRider(p.id, p.nama) }))
+                    .filter(p => cocok(p._nama, p.id))
+                    .sort((a, b) => a._nama.localeCompare(b._nama));
+                const htmlPeserta = urutPeserta.map(p => {
+                    const henti = p.status === 'berhenti';
+                    const tanpaDompet = !adaDompet(p.id);
+                    const mulai = mulaiPeserta(p);
+                    const asal = p.diisi_oleh === 'admin' ? 'diatur admin' : 'diisi rider';
+                    return `<div class="p-3 rounded-xl border ${henti ? 'bg-slate-50 border-slate-200 opacity-75' : 'bg-white border-gray-100'} shadow-sm">
+                        <div class="flex justify-between items-start gap-2">
+                            <div class="min-w-0">
+                                <p class="text-[11px] font-black text-slate-800 uppercase truncate">${esc(p._nama)} <span class="text-slate-400 font-bold normal-case">(${esc(p.id)})</span></p>
+                                <p class="text-[9px] font-bold text-slate-500">${esc(rp(p.nominal_harian))}/hari · ${esc(asal)}${mulai ? ' · mulai ' + esc(mulai) : ''}</p>
+                                ${henti ? '<p class="text-[9px] font-black text-slate-500 uppercase mt-0.5">Dihentikan</p>' : ''}
+                                ${tanpaDompet ? '<p class="text-[9px] font-black text-rose-600 mt-0.5">Rider tidak ada di daftar saldo — tidak dipotong</p>' : ''}
+                            </div>
+                            <div class="text-right shrink-0">
+                                <p class="text-[12px] font-black text-emerald-600">${esc(rp(p.total_terkumpul))}</p>
+                                <p class="text-[8px] font-bold text-slate-400 uppercase">terkumpul · ${Number(p.jml_hari_terpotong) || 0} hari</p>
+                                <p class="text-[9px] font-bold text-indigo-600">Est. H-3 ${esc(rp(estimasiPeserta(p)))}</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-1.5 mt-2">
+                            <button type="button" data-tl="ubah" data-uid="${esc(p.id)}" class="flex-1 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 text-[9px] font-black uppercase"><i class="fa-solid fa-pen mr-1"></i>Ubah nominal</button>
+                            <button type="button" data-tl="${henti ? 'aktif' : 'henti'}" data-uid="${esc(p.id)}" class="flex-1 py-1.5 rounded-lg ${henti ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-600'} border text-[9px] font-black uppercase">${henti ? 'Aktifkan lagi' : 'Hentikan'}</button>
+                        </div>
+                    </div>`;
+                }).join('');
+                const belumTampil = belumIsi.filter(r => cocok(r.name, r.uid));
+                const htmlBelum = belumTampil.length ? `
+                    <p class="text-[9px] font-black text-amber-700 uppercase tracking-wider mt-3"><i class="fa-solid fa-hourglass-half mr-1"></i>Belum mengisi (${belumTampil.length})</p>
+                    <p class="text-[9px] text-slate-500">Rider ini akan diminta mengisi saat membuka aplikasinya. Admin juga bisa mengaturkan.</p>
+                    ${belumTampil.map(r => `<div class="flex justify-between items-center gap-2 p-2 rounded-xl bg-amber-50 border border-amber-100">
+                        <p class="text-[10px] font-black text-slate-700 uppercase truncate">${esc(r.name)} <span class="text-slate-400 font-bold normal-case">(${esc(r.uid)})</span></p>
+                        <button type="button" data-tl="atur" data-uid="${esc(r.uid)}" class="shrink-0 px-2.5 py-1 rounded-lg bg-white border border-amber-200 text-amber-700 text-[9px] font-black uppercase">Atur</button>
+                    </div>`).join('')}` : '';
+                pesertaEl.innerHTML = (htmlPeserta || '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada peserta.</p>') + htmlBelum;
+            };
+
+            // ---------- PENYESUAIAN FITUR LAMA (tanpa mengubah kodenya) ----------
+            // 1) Kartu Pembanding Omset Admin: tabungan lebaran hari ini dikeluarkan dari hitungan
+            const asliBanding = window.compareOmsetAdmin;
+            if (typeof asliBanding === 'function') {
+                window.compareOmsetAdmin = (aktual) => {
+                    const tr = window.dailyBalanceTracker;
+                    const T = (tr && tr.tl_potong && Number(tr.tl_potong[tr.shift_date])) || 0;
+                    asliBanding((Number(aktual) || 0) + T);
+                    const dateVal = document.getElementById('history-date')?.value;
+                    if (T > 0 && tr && dateVal === tr.shift_date && typeof window._currentTotalSaldo !== 'undefined' && window.userRole !== 'admin') {
+                        const nilai = (Number(tr.saldo_jam_6) || 0) + (Number(tr.top_up) || 0) - (Number(window._currentTotalSaldo) || 0) - T;
+                        const el = document.getElementById('history-pembanding-admin');
+                        if (el) el.innerText = `Rp ${Math.round(nilai).toLocaleString('id-ID')}`;
+                        const st = document.getElementById('status-pembanding-admin');
+                        if (st) {
+                            const s = document.createElement('span');
+                            s.className = 'block text-[8px] font-medium mt-0.5 normal-case tracking-normal';
+                            s.textContent = `tabungan lebaran hari ini ${rp(T)} sudah dikeluarkan dari hitungan`;
+                            st.appendChild(s);
+                        }
+                    }
+                };
+            }
+            // 2) Riwayat saldo rider di admin: tulis "Tabungan Lebaran", bukan "Potongan ADM"
+            const asliRiwayat = window.renderRiwayatSaldoUI;
+            if (typeof asliRiwayat === 'function') {
+                window.renderRiwayatSaldoUI = (logs, wadah) => {
+                    (logs || []).forEach(l => { if (l && l.type === 'system_cut' && /^Tabungan Lebaran/i.test(String(l.desc || ''))) l.action = 'Tabungan Lebaran'; });
+                    return asliRiwayat(logs, wadah);
+                };
+            }
+        })();
+        // ===================== AKHIR TABUNGAN LEBARAN (ADMIN) =====================
+
 </script>
 <!-- === MODAL PRATINJAU IMPOR ORDERAN === -->
 <div id="modal-impor" class="hidden fixed inset-0 z-[12000] bg-black/60 flex items-center justify-center p-3">
