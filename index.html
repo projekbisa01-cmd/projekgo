@@ -11400,6 +11400,7 @@
 
         // --- FUNGSI PERPINDAHAN HALAMAN INSTAN (SANGAT CEPAT) ---
         function switchPage(page, isHistoryEvent = false) {
+            if (page !== 'tabungan' && typeof window.tbkBerhenti === 'function') window.tbkBerhenti(); // tabungan hari raya: matikan pemantauan
             // TAMBAHAN CEK LAYANAN KESEHATAN
             if (window.needsHealthService && page !== 'profile-info') {
                 alert("Sistem Terkunci: Wajib melengkapi data Layanan Kesehatan di Profil Anda terlebih dahulu.");
@@ -16652,6 +16653,7 @@
               if (pp) pp.style.display = tab === 'pribadi' ? '' : 'none';
               if (pr) pr.style.display = tab === 'raya' ? '' : 'none';
               if (tab === 'raya') window.muatTabunganHariRaya();
+              else if (typeof window.tbkBerhenti === 'function') window.tbkBerhenti();
           };
 
           const tlTglSah = (t) => /^\d{4}-\d{2}-\d{2}$/.test(String(t || ''));
@@ -16677,38 +16679,65 @@
               return hasil;
           }
 
-          window.muatTabunganHariRaya = async (paksa = false) => {
+          // Dipantau langsung (realtime) selama tab Tabungan Hari Raya terbuka:
+          // perubahan dari admin (ubah nominal, potongan baru, dihentikan) langsung tampil.
+          // Biaya: 1 read saat dibuka + 1 read setiap kali admin mengubah data rider ini.
+          // Pemantauan dimatikan saat rider pindah tab / keluar dari halaman Tabungan Ku.
+          let tbkUnsub = null, tbkUnsubUid = '', tbkVersi = 0;
+          window.tbkBerhenti = () => {
+              if (tbkUnsub) { try { tbkUnsub(); } catch (e) {} }
+              tbkUnsub = null; tbkUnsubUid = '';
+          };
+
+          async function tbkSusunRiwayat(uid, data) {
+              const ambil = () => {
+                  const r = [];
+                  (Array.isArray(data.riwayat) ? data.riwayat : []).forEach(x => {
+                      const n = Number(x && x.n);
+                      if (x && tlTglSah(x.tgl) && Number.isFinite(n) && n > 0) r.push({ tgl: x.tgl, n });
+                  });
+                  return r;
+              };
+              let riwayat = ambil();
+              const jmlHari = Number(data.jml_hari_terpotong) || 0;
+              if (riwayat.length >= jmlHari) return riwayat;
+              // Cadangan: potongan lama yang belum tercatat di kolom "riwayat"
+              try {
+                  for (let coba = 0; coba < 2; coba++) {
+                      const peta = new Map(riwayat.map(r => [r.tgl, r]));
+                      (await tbkAmbilLedger(uid)).forEach(r => { if (!peta.has(r.tgl)) peta.set(r.tgl, r); });
+                      if (peta.size >= jmlHari || coba === 1) return [...peta.values()];
+                      delete tbkLedgerCache[uid]; // data cadangan sudah usang, ambil ulang sekali
+                  }
+              } catch (e) { console.warn('Riwayat cadangan tabungan hari raya gagal:', e && e.code); }
+              return riwayat;
+          }
+
+          window.muatTabunganHariRaya = (paksa = false) => {
               const panel = document.getElementById('tbk-panel-raya');
               const uid = String(window.getRiderUid() || '').trim().toUpperCase();
               if (!panel || !uid || !/^[A-Z0-9_-]{1,64}$/.test(uid) || !auth.currentUser) return;
-              if (uid !== tbkUid) { tbkCache = null; tbkUid = uid; tbkTampilSemua = false; }
-              if (!paksa && tbkCache && Date.now() - tbkWaktu < 2 * 60 * 1000) { tbkGambar(panel, tbkCache); return; }
-              if (!tbkCache) panel.innerHTML = '<div class="tbk-kosong"><i class="fa-solid fa-spinner animate-spin"></i><p>Memuat tabungan hari raya...</p></div>';
-              try {
-                  const snap = await getDoc(tlRef(uid));
+              if (uid !== tbkUid) { tbkCache = null; tbkUid = uid; tbkTampilSemua = false; window.tbkBerhenti(); }
+              if (tbkCache) tbkGambar(panel, tbkCache);
+              else panel.innerHTML = '<div class="tbk-kosong"><i class="fa-solid fa-spinner animate-spin"></i><p>Memuat tabungan hari raya...</p></div>';
+              if (tbkUnsub && tbkUnsubUid === uid && !paksa) return; // sudah dipantau, tidak perlu read lagi
+              window.tbkBerhenti();
+              tbkUnsubUid = uid;
+              tbkUnsub = onSnapshot(tlRef(uid), async (snap) => {
+                  const versi = ++tbkVersi;
                   const data = snap.exists() ? snap.data() : null;
-                  let riwayat = [];
-                  if (data) {
-                      (Array.isArray(data.riwayat) ? data.riwayat : []).forEach(x => {
-                          const n = Number(x && x.n);
-                          if (x && tlTglSah(x.tgl) && Number.isFinite(n) && n > 0) riwayat.push({ tgl: x.tgl, n });
-                      });
-                      const jmlHari = Number(data.jml_hari_terpotong) || 0;
-                      if (riwayat.length < jmlHari) {
-                          try {
-                              const peta = new Map(riwayat.map(r => [r.tgl, r]));
-                              (await tbkAmbilLedger(uid)).forEach(r => { if (!peta.has(r.tgl)) peta.set(r.tgl, r); });
-                              riwayat = [...peta.values()];
-                          } catch (e) { console.warn('Riwayat cadangan tabungan hari raya gagal:', e && e.code); }
-                      }
-                  }
+                  const riwayat = data ? await tbkSusunRiwayat(uid, data) : [];
+                  if (versi !== tbkVersi || uid !== tbkUid) return; // sudah ada data yang lebih baru
                   tbkCache = { data, riwayat };
                   tbkWaktu = Date.now();
-                  tbkGambar(panel, tbkCache);
-              } catch (e) {
+                  const p = document.getElementById('tbk-panel-raya');
+                  if (p) tbkGambar(p, tbkCache);
+              }, (e) => {
                   console.warn('Gagal memuat tabungan hari raya:', e && e.code);
-                  if (!tbkCache) panel.innerHTML = '<div class="tbk-kosong"><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444"></i><p>Gagal memuat. Periksa koneksi internet lalu buka lagi.</p></div>';
-              }
+                  window.tbkBerhenti();
+                  const p = document.getElementById('tbk-panel-raya');
+                  if (p && !tbkCache) p.innerHTML = '<div class="tbk-kosong"><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444"></i><p>Gagal memuat. Periksa koneksi internet lalu buka lagi.</p></div>';
+              });
           };
 
           function tbkGambar(panel, c) {
