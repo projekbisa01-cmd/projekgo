@@ -6899,6 +6899,37 @@
             finally { setTimeout(() => processingMissedOrders.delete(orderId), 2000); }
         };
 
+        // PENGAMAN: order berstatus aktif (assigned / processing) tetapi TIDAK punya rider.
+        // Ini terjadi bila HP rider (versi lama) menulis ulang status order yang baru saja
+        // ditarik admin ke Pending. Order seperti itu dikembalikan ke Pending otomatis.
+        // Dicek ulang di dalam transaksi, jadi aman walau beberapa admin membuka aplikasi.
+        window.kembalikanOrderTanpaRider = async (order) => {
+            if (!order || !order.id) return;
+            const kunci = 'tanpa_rider_' + order.id;
+            if (processingMissedOrders.has(kunci)) return;
+            processingMissedOrders.add(kunci);
+            try {
+                const orderRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', order.id);
+                await runTransaction(db, async (transaction) => {
+                    const orderDoc = await transaction.get(orderRef);
+                    if (!orderDoc.exists()) return;
+                    const d = orderDoc.data();
+                    if (d.rider_uid) return; // sudah punya rider lagi, biarkan
+                    if (d.status !== 'assigned' && d.status !== 'processing') return;
+                    transaction.update(orderRef, {
+                        status: 'unassigned',
+                        rider_uid: null,
+                        rider_name: null,
+                        daily_order_id: null,
+                        missed_by: null,
+                        adm_potong: null,
+                        accepted_at: null
+                    });
+                });
+            } catch (e) { console.warn('Gagal mengembalikan order tanpa rider ke Pending', e); }
+            finally { setTimeout(() => processingMissedOrders.delete(kunci), 5000); }
+        };
+
         window.autoReassignMissedOrder = async (order) => {
             if (processingMissedOrders.has(order.id)) return;
             processingMissedOrders.add(order.id);
@@ -7130,6 +7161,7 @@
                     newGlobalOrders.push(data);
                     if ((data.status === 'assigned' || data.status === 'processing') && !allGlobalOrders.find(o => o.id === data.id)) hasNewOrder = true;
                     if (data.status === 'missed') window.autoReassignMissedOrder(data);
+                    if ((data.status === 'assigned' || data.status === 'processing') && !data.rider_uid) window.kembalikanOrderTanpaRider(data);
                     // Matikan auto assign
                     // if (data.status === 'unassigned') window.autoAssignPendingOrder(data.id);
                 });
@@ -14870,6 +14902,7 @@
                         if (aksi === 'ubah' || aksi === 'atur') { if (uidSah(uid)) bukaEditor(uid); }
                         else if (aksi === 'henti') { if (uidSah(uid)) ubahStatus(uid, 'berhenti'); }
                         else if (aksi === 'aktif') { if (uidSah(uid)) ubahStatus(uid, 'aktif'); }
+                        else if (aksi === 'hapus') { if (uidSah(uid)) bukaHapus(uid); }
                         else if (aksi === 'proses') prosesManual();
                     });
                 }
@@ -14970,6 +15003,56 @@
                         try { await updateDoc(doc(pesertaCol(), uid), { status, diubah_oleh: emailSaya(), diubah_at: serverTimestamp() }); }
                         catch (e) { window.showAlert('Gagal', 'Tidak bisa mengubah status.', 'error'); }
                     });
+            }
+
+            // ---------- HAPUS PESERTA (rider keluar) — wajib mengetik nama rider ----------
+            const rapikanNama = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            function bukaHapus(uid) {
+                const p = tlPeserta.find(x => x.id === uid);
+                if (!p) return;
+                if (tlSibuk) { window.showAlert('Tunggu sebentar', 'Potongan tabungan sedang diproses. Coba lagi setelah selesai.', 'warning'); return; }
+                const nama = String(namaRider(uid, p.nama));
+                const terkumpul = Number(p.total_terkumpul) || 0;
+                document.getElementById('tl-hapus')?.remove();
+                const w = document.createElement('div');
+                w.id = 'tl-hapus';
+                w.className = 'fixed inset-0 z-[9999] bg-slate-900/60 flex items-center justify-center p-6';
+                w.innerHTML = `
+                    <div class="bg-white rounded-3xl p-5 w-full max-w-xs shadow-2xl">
+                        <p class="text-[10px] font-black text-rose-600 uppercase tracking-widest"><i class="fa-solid fa-trash mr-1"></i>Hapus tabungan lebaran</p>
+                        <p id="tl-hp-nama" class="text-sm font-black text-slate-800 uppercase mt-1"></p>
+                        <p id="tl-hp-info" class="text-[10px] font-bold text-slate-600 leading-relaxed mt-2"></p>
+                        <label class="text-[9px] font-black text-black uppercase tracking-widest block mt-3 mb-1">Ketik nama rider untuk konfirmasi</label>
+                        <input id="tl-hp-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" class="w-full bg-slate-50 border border-gray-200 rounded-xl p-3 text-sm font-black text-black focus:outline-none focus:ring-2 focus:ring-rose-500">
+                        <div class="flex gap-2 mt-4">
+                            <button type="button" id="tl-hp-batal" class="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-black text-xs uppercase">Batal</button>
+                            <button type="button" id="tl-hp-hapus" disabled class="flex-[2] py-3 rounded-xl bg-rose-600 text-white font-black text-xs uppercase opacity-40">Hapus</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(w);
+                w.querySelector('#tl-hp-nama').textContent = `${nama} (${uid})`;
+                w.querySelector('#tl-hp-info').textContent = `Tabungan terkumpul ${rp(terkumpul)} (${Number(p.jml_hari_terpotong) || 0} hari). Catatan tabungan rider ini akan DIHAPUS PERMANEN dan potongan harian berhenti. Saldo rider TIDAK dikembalikan otomatis — pastikan uangnya sudah diserahkan ke rider.`;
+                const inp = w.querySelector('#tl-hp-input');
+                const btn = w.querySelector('#tl-hp-hapus');
+                inp.placeholder = nama;
+                const cocokNama = () => rapikanNama(inp.value) !== '' && rapikanNama(inp.value) === rapikanNama(nama);
+                inp.addEventListener('input', () => { const ok = cocokNama(); btn.disabled = !ok; btn.classList.toggle('opacity-40', !ok); });
+                w.querySelector('#tl-hp-batal').addEventListener('click', () => w.remove());
+                w.addEventListener('click', (e) => { if (e.target === w) w.remove(); });
+                btn.addEventListener('click', async () => {
+                    if (!cocokNama() || tlSibuk) return;
+                    btn.disabled = true; btn.textContent = 'Menghapus...';
+                    try {
+                        await deleteDoc(doc(pesertaCol(), uid));
+                        w.remove();
+                        window.showAlert('Berhasil', `Tabungan lebaran ${esc(nama)} dihapus.`, 'success');
+                    } catch (e) {
+                        console.error('[TL] hapus peserta', e);
+                        btn.disabled = false; btn.textContent = 'Hapus';
+                        window.showAlert('Gagal', 'Tidak bisa menghapus. Periksa koneksi atau Firestore Rules.', 'error');
+                    }
+                });
+                setTimeout(() => inp.focus(), 50);
             }
 
             function prosesManual() {
@@ -15090,6 +15173,7 @@
                         <div class="flex gap-1.5 mt-2">
                             <button type="button" data-tl="ubah" data-uid="${esc(p.id)}" class="flex-1 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 text-[9px] font-black uppercase"><i class="fa-solid fa-pen mr-1"></i>Ubah nominal</button>
                             <button type="button" data-tl="${henti ? 'aktif' : 'henti'}" data-uid="${esc(p.id)}" class="flex-1 py-1.5 rounded-lg ${henti ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-50 border-rose-200 text-rose-600'} border text-[9px] font-black uppercase">${henti ? 'Aktifkan lagi' : 'Hentikan'}</button>
+                            <button type="button" data-tl="hapus" data-uid="${esc(p.id)}" title="Hapus (rider keluar)" class="shrink-0 px-3 py-1.5 rounded-lg bg-white border border-rose-300 text-rose-600 text-[9px] font-black uppercase"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>`;
                 }).join('');
