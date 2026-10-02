@@ -8458,16 +8458,31 @@
             // Terapkan status privasi saat pertama kali web dimuat
             if(typeof window.updatePrivacyUI === 'function') window.updatePrivacyUI();
 
-            window.addEventListener('popstate', function(event) {
+            // Tombol kembali HP. Di Beranda: tampilkan konfirmasi keluar (Batal / Keluar),
+            // supaya aplikasi tidak tertutup karena tidak sengaja.
+            const tanganiTombolKembali = function(dariAndroid) {
+                if (window._sedangKeluarApp) return true;
+                const kk = window.konfirmasiKeluar;
+                const tetapDiSini = () => { try { window.history.pushState({page: 'home'}, '', '#home'); } catch (e) {} };
+                if (kk && kk.terbuka()) { // tombol kembali saat popup terbuka = Batal
+                    kk.tutup();
+                    if (!dariAndroid) tetapDiSini();
+                    return true;
+                }
                 const homeIsActive = !document.getElementById('page-home').classList.contains('hidden-page');
                 if (homeIsActive) {
-                    try { window.history.pushState({page: 'home'}, '', '#home'); } catch (e) {}
+                    if (!dariAndroid) tetapDiSini();
+                    if (kk) kk.tampil();
                 } else if (!document.getElementById('page-profile-info').classList.contains('hidden-page')) {
                     switchPage('profile', true); // dari Info Tambahan, tombol kembali HP balik ke Profil
                 } else {
                     switchPage('home', true); 
                 }
-            });
+                return true;
+            };
+            window.addEventListener('popstate', function(event) { tanganiTombolKembali(false); });
+            // Dipanggil langsung dari aplikasi Android (onBackPressed)
+            window.tombolKembaliAndroid = function() { return tanganiTombolKembali(true); };
 
             const savedUID = window.getRiderUid();
             const savedTarget = localStorage.getItem('rider_target_income');
@@ -17500,6 +17515,105 @@
       btn.innerHTML = 'Simpan';
     }
   };
+</script>
+<!-- ================= KONFIRMASI KELUAR (TOMBOL KEMBALI HP) ================= -->
+<script>
+(function () {
+    // Popup "Keluar aplikasi?" saat tombol kembali HP ditekan, supaya aplikasi
+    // tidak tertutup karena tidak sengaja. Semua teks statis (tanpa data dari luar).
+    var MANDIRI = false; // true = skrip ini sendiri yang menjaga tombol kembali
+    var latar = null;
+    var sedangKeluar = false;
+
+    function pasangPenjaga() {
+        try { window.history.pushState({ penjagaKeluar: true }, '', window.location.href); } catch (e) {}
+    }
+    function terbuka() { return !!latar; }
+    function tutup() { if (latar) { latar.remove(); latar = null; } }
+
+    function keluar() {
+        tutup();
+        sedangKeluar = true;
+        window._sedangKeluarApp = true;
+        // 1) Kalau aplikasi Android menyediakan perintah keluar, pakai itu
+        try {
+            if (window.AndroidInterface && typeof window.AndroidInterface.exitApp === 'function') {
+                window.AndroidInterface.exitApp();
+                return;
+            }
+        } catch (e) {}
+        // 2) Browser / PWA: coba tutup, lalu mundur ke awal riwayat
+        try { window.close(); } catch (e) {}
+        try { var n = window.history.length; if (n > 1) window.history.go(-(n - 1)); } catch (e) {}
+        // 3) Kalau masih terbuka, satu kali tekan kembali lagi akan menutup aplikasi
+        setTimeout(function () {
+            if (document.hidden) return;
+            var t = document.createElement('div');
+            t.textContent = 'Tekan tombol kembali sekali lagi untuk keluar';
+            t.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:2147483600;background:#111827;color:#fff;padding:10px 16px;border-radius:999px;font:700 12px sans-serif;white-space:nowrap;';
+            document.body.appendChild(t);
+            setTimeout(function () {
+                t.remove();
+                sedangKeluar = false;
+                window._sedangKeluarApp = false;
+                pasangPenjaga(); // batal keluar -> penjaga dipasang lagi
+            }, 4000);
+        }, 500);
+    }
+
+    function tampil() {
+        if (latar || sedangKeluar) return;
+        latar = document.createElement('div');
+        latar.style.cssText = 'position:fixed;inset:0;z-index:2147483600;background:rgba(15,23,42,.7);display:flex;align-items:center;justify-content:center;padding:24px;';
+        var kotak = document.createElement('div');
+        kotak.style.cssText = 'background:#fff;color:#111;border-radius:22px;padding:22px;max-width:320px;width:100%;text-align:center;font-family:inherit;box-shadow:0 20px 50px rgba(0,0,0,.35);';
+        var judul = document.createElement('div');
+        judul.textContent = 'Keluar dari aplikasi?';
+        judul.style.cssText = 'font-weight:900;font-size:16px;margin-bottom:6px;';
+        var isi = document.createElement('div');
+        isi.textContent = 'Tekan Batal untuk tetap di aplikasi.';
+        isi.style.cssText = 'font-size:13px;font-weight:600;color:#475569;margin-bottom:18px;';
+        var baris = document.createElement('div');
+        baris.style.cssText = 'display:flex;gap:10px;';
+        var bBatal = document.createElement('button');
+        bBatal.type = 'button'; bBatal.textContent = 'BATAL';
+        bBatal.style.cssText = 'flex:2;padding:14px;border:0;border-radius:14px;background:#059669;color:#fff;font-weight:900;font-size:13px;';
+        var bKeluar = document.createElement('button');
+        bKeluar.type = 'button'; bKeluar.textContent = 'KELUAR';
+        bKeluar.style.cssText = 'flex:1;padding:14px;border:0;border-radius:14px;background:#f1f5f9;color:#e11d48;font-weight:900;font-size:13px;';
+        bBatal.onclick = tutup;
+        bKeluar.onclick = keluar;
+        latar.addEventListener('click', function (e) { if (e.target === latar) tutup(); });
+        baris.appendChild(bKeluar); baris.appendChild(bBatal);
+        kotak.appendChild(judul); kotak.appendChild(isi); kotak.appendChild(baris);
+        latar.appendChild(kotak);
+        document.body.appendChild(latar);
+    }
+
+    window.konfirmasiKeluar = { tampil: tampil, tutup: tutup, terbuka: terbuka, pasangPenjaga: pasangPenjaga };
+
+    if (MANDIRI) {
+        var tangani = function () {
+            if (sedangKeluar) return true;
+            pasangPenjaga();                 // tetap di aplikasi dulu
+            if (terbuka()) tutup();          // tombol kembali saat popup terbuka = Batal
+            else tampil();
+            return true;
+        };
+        pasangPenjaga();
+        window.addEventListener('popstate', tangani);
+        // Dipanggil dari aplikasi Android (kalau dibungkus WebView)
+        window.tombolKembaliAndroid = tangani;
+    }
+
+    // Chrome hanya menghormati penjaga yang dipasang SETELAH layar disentuh,
+    // jadi dipasang sekali lagi pada sentuhan pertama.
+    var sekali = function () {
+        document.removeEventListener('pointerdown', sekali, true);
+        if (!sedangKeluar) pasangPenjaga();
+    };
+    document.addEventListener('pointerdown', sekali, true);
+})();
 </script>
 </body>
 </html>
