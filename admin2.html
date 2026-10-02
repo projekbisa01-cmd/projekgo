@@ -2194,6 +2194,42 @@
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, initializeAuth, inMemoryPersistence, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, query, orderBy, where, limit, deleteDoc, updateDoc, runTransaction, addDoc, getDoc, increment, getDocs, getDocsFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import * as __fsSemua from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // ================= PENYARING DATA MASUK (ANTI SKRIP TITIPAN) =================
+        // Banyak tampilan admin menyusun HTML langsung dari isi Firestore. Sebagian isi itu
+        // bisa ditulis rider (status rider, laporan resto tutup, keterangan bukti order).
+        // Tanpa penyaring, rider yang iseng bisa menitipkan kode di namanya dan kode itu
+        // berjalan di layar admin. Di sini SEMUA teks yang dibaca dari Firestore dibersihkan
+        // sekali di pintu masuk: tanda < > " ' ` \ diganti tanda baca biasa yang tidak
+        // bisa dijalankan. Angka, tanggal, dan ID tidak berubah.
+        const __PETA_AMAN = { '<': '\u2039', '>': '\u203A', '"': '\u201D', "'": '\u2019', '`': '\u2018', '\\': '\uFF3C' };
+        const __bersihTeks = (s) => {
+            if (!s) return s;
+            let t = s.replace(/[<>"'`\\]/g, (c) => __PETA_AMAN[c]);
+            t = t.replace(/&(?=#|[a-zA-Z][a-zA-Z0-9]*;)/g, '\uFF06');
+            const padat = t.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+            if (padat.startsWith('javascript:') || padat.startsWith('vbscript:')) t = t.replace(':', '\uFF1A');
+            return t;
+        };
+        const __bersihNilai = (v, dalam) => {
+            if (typeof v === 'string') return __bersihTeks(v);
+            if (!v || typeof v !== 'object' || dalam > 10) return v;
+            if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = __bersihNilai(v[i], dalam + 1); return v; }
+            const p = Object.getPrototypeOf(v);
+            if (p === Object.prototype || p === null) { for (const k of Object.keys(v)) v[k] = __bersihNilai(v[k], dalam + 1); }
+            return v; // Timestamp, GeoPoint, dll. tidak disentuh
+        };
+        try {
+            [__fsSemua.DocumentSnapshot, __fsSemua.QueryDocumentSnapshot].forEach((Kelas) => {
+                if (!Kelas || !Kelas.prototype || typeof Kelas.prototype.data !== 'function' || Kelas.prototype.__sudahDisaring) return;
+                const asli = Kelas.prototype.data;
+                Kelas.prototype.data = function (...a) { return __bersihNilai(asli.apply(this, a), 0); };
+                Kelas.prototype.__sudahDisaring = true;
+            });
+        } catch (e) { console.warn('Penyaring data tidak terpasang', e); }
+        // ==============================================================================
+
 
         const firebaseConfig = {
             apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -8357,6 +8393,8 @@
                     }
 
                     // Link foto menggunakan foto_bukti jika tersedia dari Storage
+                    // PENGAMAN: alamat foto ditulis rider, jadi hanya alamat https yang dipakai
+                    if (!/^https:\/\/[A-Za-z0-9.-]+\//.test(String(r.foto_bukti || ''))) r.foto_bukti = '';
                     const imgHtml = r.foto_bukti 
                         ? `<img src="${r.foto_bukti}" onclick="window.open('${r.foto_bukti}', '_blank')" class="w-full h-36 object-cover rounded-lg mb-2.5 border border-slate-200 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" alt="Bukti Tutup">` 
                         : `<div class="w-full h-24 bg-slate-100 rounded-lg mb-2.5 flex flex-col items-center justify-center border border-slate-200"><i class="fa-solid fa-image-slash text-slate-300 text-2xl mb-1"></i><span class="text-[9px] text-slate-400 font-bold">Tidak ada foto bukti</span></div>`;
@@ -15006,7 +15044,7 @@
             }
 
             // ---------- HAPUS PESERTA (rider keluar) — wajib mengetik nama rider ----------
-            const rapikanNama = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const rapikanNama = (v) => String(v || '').replace(/[\u2018\u2019\u201C\u201D"'`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
             function bukaHapus(uid) {
                 const p = tlPeserta.find(x => x.id === uid);
                 if (!p) return;
@@ -15221,6 +15259,196 @@
             }
         })();
         // ===================== AKHIR TABUNGAN LEBARAN (ADMIN) =====================
+
+        // ===================== ID CARD MITRA (ADMIN) =====================
+        // - kartu_mitra_kode/<UID>  : catatan admin per rider (kode QR, nama, tipe, aktif).
+        //                             Rider hanya boleh MEMBACA miliknya sendiri.
+        // - kartu_mitra/<KODE ACAK> : salinan kecil untuk halaman cek.html (dibuka siapa pun
+        //                             yang memindai QR). Isinya hanya uid, nama, tipe, aktif.
+        // - Kartu dibuat & diperbarui OTOMATIS dari daftar saldo rider + jadwal shift:
+        //   rider yang ada di daftar saldo = mitra aktif; shift "Part-time" = part time.
+        // - Rider yang dihapus dari daftar saldo, atau dinonaktifkan manual di halaman ini,
+        //   kartunya langsung tampil "BUKAN MITRA AKTIF" saat QR dipindai.
+        (function kartuMitraAdmin() {
+            const P = firebaseConfig.projectId;
+            const idxCol = () => collection(db, 'artifacts', P, 'public', 'data', 'kartu_mitra_kode');
+            const kartuRef = (kode) => doc(db, 'artifacts', P, 'public', 'data', 'kartu_mitra', kode);
+            const esc = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
+            const uidSah = (u) => /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(String(u || ''));
+            const kodeSah = (k) => /^[A-Za-z0-9]{24}$/.test(String(k || ''));
+            const ABJAD = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+            const kodeBaru = () => { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, x => ABJAD[x % ABJAD.length]).join(''); };
+
+            let km = [], kmSiap = false, kmMulaiSudah = false, kmSibuk = false, kmCari = '', kmGalat = '', kmTimer = null;
+
+            // Daftar mitra menurut data admin saat ini: UID -> { uid, nama, tipe }
+            const targetSekarang = () => {
+                const namaPeta = new Map();
+                getMergedRidersForDropdown().forEach(r => namaPeta.set(String(r.uid).trim().toUpperCase(), r.name));
+                const peta = new Map();
+                allRiderBalances.forEach(b => {
+                    const uid = String(b.id || '').trim().toUpperCase();
+                    if (!uidSah(uid)) return;
+                    peta.set(uid, { uid, nama: String(namaPeta.get(uid) || b.name || uid).slice(0, 60), tipe: adm4PartTime(uid) ? 'parttime' : 'fulltime' });
+                });
+                return peta;
+            };
+            const dataSiap = () => kmSiap && isBalancesLoaded && window._shiftSchedulesLoaded === true && allRiderBalances.length > 0;
+
+            // Tulis satu kartu. manual: undefined = jangan ubah pilihan admin, true/false = set nonaktif manual.
+            async function kmTulis(uid, t, manual) {
+                if (!uidSah(uid)) return;
+                const ref = doc(idxCol(), uid);
+                await runTransaction(db, async (tx) => {
+                    const s = await tx.get(ref);
+                    const d = s.exists() ? s.data() : null;
+                    const kode = d && kodeSah(d.kode) ? d.kode : kodeBaru();
+                    const nonaktif = manual === undefined ? !!(d && d.nonaktif_manual === true) : manual === true;
+                    const nama = t ? t.nama : String((d && d.nama) || uid).slice(0, 60);
+                    const tipe = t ? t.tipe : ((d && d.tipe) === 'parttime' ? 'parttime' : 'fulltime');
+                    const aktif = !!t && !nonaktif;
+                    const isi = { uid, kode, nama, tipe, aktif, nonaktif_manual: nonaktif, diperbarui_at: serverTimestamp() };
+                    if (!d) isi.dibuat_at = serverTimestamp();
+                    tx.set(ref, isi, { merge: true });
+                    tx.set(kartuRef(kode), { uid, nama, tipe, aktif, diperbarui_at: serverTimestamp() });
+                });
+            }
+
+            async function kmSinkron() {
+                if (kmSibuk || !dataSiap()) return;
+                kmSibuk = true;
+                try {
+                    const target = targetSekarang();
+                    const ada = new Map(km.map(k => [k.id, k]));
+                    const tugas = [];
+                    target.forEach((t, uid) => {
+                        const k = ada.get(uid);
+                        const aktif = !(k && k.nonaktif_manual === true);
+                        if (!k || !kodeSah(k.kode) || k.nama !== t.nama || k.tipe !== t.tipe || k.aktif !== aktif) tugas.push(uid);
+                    });
+                    ada.forEach((k, uid) => { if (!target.has(uid) && k.aktif !== false) tugas.push(uid); });
+                    for (const uid of tugas.slice(0, 80)) {
+                        try { await kmTulis(uid, target.get(uid) || null, undefined); }
+                        catch (e) { console.warn('[KM] gagal menulis kartu', uid, e); }
+                    }
+                } finally { kmSibuk = false; }
+            }
+            const kmJadwalkan = () => { clearTimeout(kmTimer); kmTimer = setTimeout(kmSinkron, 4000); };
+
+            function kmMulai() {
+                if (kmMulaiSudah) return;
+                kmMulaiSudah = true;
+                onSnapshot(idxCol(), (snap) => {
+                    km = snap.docs.filter(d => uidSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
+                    kmSiap = true; kmGalat = '';
+                    window.renderKartuMitra(); kmJadwalkan();
+                }, (e) => { console.error('[KM] baca kartu:', e); kmSiap = false; kmGalat = e.code || 'error'; window.renderKartuMitra(); });
+                setInterval(kmSinkron, 5 * 60 * 1000);
+            }
+            onAuthStateChanged(auth, (u) => { if (u && window.roleFromEmail(u.email)) kmMulai(); });
+
+            function ubahManual(uid, nonaktif) {
+                const k = km.find(x => x.id === uid);
+                if (!k) return;
+                window.showConfirm(nonaktif ? 'Nonaktifkan ID Card?' : 'Aktifkan lagi ID Card?',
+                    nonaktif ? `Kartu ${k.nama} akan tampil "BUKAN MITRA AKTIF" saat QR dipindai.` : `Kartu ${k.nama} berlaku lagi selama rider masih ada di daftar saldo.`,
+                    async () => {
+                        try { await kmTulis(uid, targetSekarang().get(uid) || null, nonaktif); }
+                        catch (e) { console.error('[KM] ubah status', e); window.showAlert('Gagal', 'Tidak bisa mengubah status kartu.', 'error'); }
+                    });
+            }
+
+            // ---------- HALAMAN & MENU ----------
+            (function pasangHalaman() {
+                const jangkar = document.getElementById('tl-tile') || document.querySelector('#page-lainnya button[onclick="switchPage(\'tabungan\')"]');
+                if (jangkar && !document.getElementById('km-tile')) {
+                    const b = document.createElement('button');
+                    b.id = 'km-tile';
+                    b.type = 'button';
+                    b.className = 'relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-orange-300 hover:shadow-md active:scale-95 transition-all group';
+                    b.innerHTML = '<i class="fa-solid fa-id-card text-3xl text-orange-500 group-hover:scale-110 transition-transform"></i><span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">ID Card<br>Mitra</span>';
+                    b.addEventListener('click', () => window.switchPage('kartu-mitra'));
+                    jangkar.insertAdjacentElement('afterend', b);
+                }
+                if (!document.getElementById('page-kartu-mitra')) {
+                    const m = document.createElement('main');
+                    m.id = 'page-kartu-mitra';
+                    m.className = 'hidden-page max-w-md mx-auto p-4 space-y-4';
+                    m.innerHTML = `
+                        <button type="button" onclick="switchPage('lainnya')" class="mb-1 bg-white border border-gray-200 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-sm flex items-center gap-1.5 w-max hover:bg-slate-50 active:scale-95 transition-all"><i class="fa-solid fa-arrow-left"></i> Kembali</button>
+                        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
+                            <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-id-card text-orange-500 mr-1.5"></i> ID Card Mitra</h2>
+                            <div id="km-ringkas"></div>
+                            <div class="relative">
+                                <i class="fa-solid fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                                <input type="text" id="km-cari" placeholder="Cari nama / ID rider..." class="w-full bg-slate-50 border border-gray-200 rounded-xl p-2.5 pl-9 text-xs font-bold text-black focus:outline-none focus:ring-2 focus:ring-orange-400">
+                            </div>
+                            <div id="km-daftar" class="space-y-2"></div>
+                        </section>`;
+                    const navBawah = document.querySelector('nav.fixed.bottom-0');
+                    if (navBawah) navBawah.insertAdjacentElement('beforebegin', m); else document.body.appendChild(m);
+                    m.querySelector('#km-cari').addEventListener('input', (e) => { kmCari = String(e.target.value || '').toLowerCase().trim(); window.renderKartuMitra(); });
+                    m.addEventListener('click', (e) => {
+                        const el = e.target.closest('[data-km]');
+                        if (!el) return;
+                        const uid = el.dataset.uid || '';
+                        if (!uidSah(uid)) return;
+                        if (el.dataset.km === 'nonaktif') ubahManual(uid, true);
+                        else if (el.dataset.km === 'aktif') ubahManual(uid, false);
+                    });
+                }
+            })();
+
+            const asliSwitchKm = window.switchPage;
+            window.switchPage = (page) => {
+                const hal = document.getElementById('page-kartu-mitra');
+                if (page === 'kartu-mitra') {
+                    asliSwitchKm('lainnya');
+                    document.getElementById('page-lainnya')?.classList.add('hidden-page');
+                    hal?.classList.remove('hidden-page');
+                    window.scrollTo(0, 0);
+                    window.renderKartuMitra(); kmSinkron();
+                    return;
+                }
+                if (hal) hal.classList.add('hidden-page');
+                return asliSwitchKm(page);
+            };
+
+            window.renderKartuMitra = () => {
+                const hal = document.getElementById('page-kartu-mitra');
+                if (!hal || hal.classList.contains('hidden-page')) return;
+                const ringkasEl = document.getElementById('km-ringkas');
+                const daftarEl = document.getElementById('km-daftar');
+                if (kmGalat && !kmSiap) {
+                    ringkasEl.innerHTML = `<p class="text-[10px] font-bold text-rose-600">Data tidak bisa dibaca (${esc(kmGalat)}).</p>`;
+                    daftarEl.innerHTML = '';
+                    return;
+                }
+                const target = dataSiap() ? targetSekarang() : null;
+                const nAktif = km.filter(k => k.aktif === true).length;
+                ringkasEl.innerHTML = `
+                    <p class="text-[9px] text-slate-500 leading-relaxed">Kartu dibuat otomatis untuk setiap rider di daftar saldo. Tipe mengikuti jadwal shift (Part-time = part time). QR di kartu membuka halaman cek yang menampilkan nama, ID, tipe, dan status mitra.</p>
+                    <p class="text-[10px] font-black text-slate-700 mt-2">${nAktif} kartu aktif · ${km.length - nAktif} tidak aktif${target ? '' : ' · <span class="text-amber-600">menunggu data rider…</span>'}</p>`;
+                const cocok = (k) => !kmCari || String(k.nama || '').toLowerCase().includes(kmCari) || String(k.id).toLowerCase().includes(kmCari);
+                const urut = [...km].filter(cocok).sort((a, b) => String(a.nama || '').localeCompare(String(b.nama || '')));
+                daftarEl.innerHTML = urut.map(k => {
+                    const diDaftar = target ? target.has(k.id) : true;
+                    const manual = k.nonaktif_manual === true;
+                    const aktif = k.aktif === true;
+                    const ket = aktif ? '' : (manual ? 'Dinonaktifkan admin' : (!diDaftar ? 'Tidak ada di daftar saldo rider' : 'Sedang diperbarui…'));
+                    return `<div class="p-3 rounded-xl border ${aktif ? 'bg-white border-gray-100' : 'bg-slate-50 border-slate-200'} shadow-sm flex justify-between items-center gap-2">
+                        <div class="min-w-0">
+                            <p class="text-[11px] font-black text-slate-800 uppercase truncate">${esc(k.nama || k.id)} <span class="text-slate-400 font-bold normal-case">(${esc(k.id)})</span></p>
+                            <p class="text-[9px] font-bold ${aktif ? 'text-emerald-700' : 'text-rose-600'}">${aktif ? 'MITRA AKTIF' : 'TIDAK AKTIF'} · ${k.tipe === 'parttime' ? 'Part time' : 'Fulltime'}${ket ? ' · ' + esc(ket) : ''}</p>
+                        </div>
+                        ${manual
+                            ? `<button type="button" data-km="aktif" data-uid="${esc(k.id)}" class="shrink-0 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-black uppercase">Aktifkan</button>`
+                            : `<button type="button" data-km="nonaktif" data-uid="${esc(k.id)}" class="shrink-0 px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 text-[9px] font-black uppercase">Nonaktifkan</button>`}
+                    </div>`;
+                }).join('') || '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada kartu. Kartu dibuat otomatis beberapa detik setelah data rider termuat.</p>';
+            };
+        })();
+        // ===================== AKHIR ID CARD MITRA (ADMIN) =====================
 
 </script>
 <!-- === MODAL PRATINJAU IMPOR ORDERAN === -->
