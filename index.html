@@ -9128,6 +9128,8 @@
                     } else {
                         console.log("Aplikasi kembali aktif. Ada order berjalan, abaikan restart listener.");
                     }
+                    // Order di layar bisa saja sudah ditarik admin selama aplikasi tertutup
+                    if (typeof window.pastikanOrderMasihMilikku === 'function') window.pastikanOrderMasihMilikku();
                 }
             }
         });
@@ -9141,6 +9143,8 @@
                 if (!window.currentActiveOrderId) {
                     window.startOrderListener(uid);
                 }
+                // Notifikasi "order ditarik/dibatalkan" diklik -> pastikan layar tidak menampilkan order lama
+                if (typeof window.pastikanOrderMasihMilikku === 'function') window.pastikanOrderMasihMilikku();
                 
                 // Beri getaran ringan sebagai tanda respon bahwa webview sudah bangun
                 try {
@@ -12673,7 +12677,7 @@
     <script type="module">
       import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
       import { getAuth, signInAnonymously, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, orderBy, limit as fsLimit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+      import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence, doc, setDoc, addDoc, getDocs, collection, serverTimestamp, onSnapshot, updateDoc, query, where, getDoc, getDocFromServer, runTransaction, orderBy, limit as fsLimit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
       import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js';
       import { getStorage, ref, uploadString, uploadBytes, uploadBytesResumable, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js'; // TAMBAHAN IMPORT STORAGE
 
@@ -13908,6 +13912,128 @@
               // Sekarang dicocokkan ke beberapa bentuk penulisan sekaligus (satu query).
               const variasiUid = [...new Set([cleanUid, cleanUid.toLowerCase(), String(uid).trim()])].slice(0, 10);
               const q = query(ordersRef, where('rider_uid', 'in', variasiUid));
+
+              // ================= PENGAMAN ORDER DITARIK / DIBATALKAN ADMIN =================
+              // Dulu layar baru dibersihkan setelah jeda 7 detik, dan TIDAK dibersihkan sama
+              // sekali bila rider masih punya order lain atau popup "order terlewat" masih
+              // terbuka. Selama itu tombol Terima masih bisa ditekan dan order lama tetap
+              // tampil. Sekarang kepemilikan order ditanyakan LANGSUNG ke server: begitu
+              // server bilang order ini bukan milik rider ini lagi, layarnya ditutup saat itu
+              // juga dan rider diberi peringatan yang harus ditekan.
+              const orderMilikku = (d) => !!d && variasiUid.includes(String(d.rider_uid || '').trim());
+
+              const tampilkanPeringatanDitarik = () => {
+                  if (document.getElementById('peringatan-order-ditarik')) return;
+                  const latar = document.createElement('div');
+                  latar.id = 'peringatan-order-ditarik';
+                  latar.style.cssText = 'position:fixed;inset:0;z-index:999999999;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:24px;';
+                  const kotak = document.createElement('div');
+                  kotak.style.cssText = 'background:#fff;color:#111;border-radius:20px;padding:24px;max-width:340px;width:100%;text-align:center;font-family:inherit;';
+                  const judul = document.createElement('div');
+                  judul.textContent = 'ORDERAN DITARIK ADMIN';
+                  judul.style.cssText = 'font-weight:900;font-size:17px;color:#e11d48;margin-bottom:10px;';
+                  const isi = document.createElement('div');
+                  isi.textContent = 'Orderan yang tadi tampil sudah BUKAN milikmu. Jangan dijalankan. Kamu dikembalikan ke antrean.';
+                  isi.style.cssText = 'font-size:14px;font-weight:600;line-height:1.5;margin-bottom:18px;';
+                  const tombol = document.createElement('button');
+                  tombol.type = 'button';
+                  tombol.textContent = 'MENGERTI';
+                  tombol.style.cssText = 'width:100%;padding:14px;border:0;border-radius:14px;background:#e11d48;color:#fff;font-weight:900;font-size:14px;';
+                  tombol.onclick = () => latar.remove();
+                  kotak.appendChild(judul); kotak.appendChild(isi); kotak.appendChild(tombol);
+                  latar.appendChild(kotak);
+                  document.body.appendChild(latar);
+              };
+
+              const lepasOrderBukanMilikku = (orderId) => {
+                  if (!orderId) return;
+                  let adaLayar = false;
+
+                  // a. Popup "Orderan Baru"
+                  if (window.currentIncomingOrderId === orderId) {
+                      const popup = document.getElementById('incoming-order-popup');
+                      if (popup) {
+                          if (!popup.classList.contains('hidden')) adaLayar = true;
+                          popup.classList.add('hidden');
+                          popup.classList.remove('flex');
+                          popup.style.display = 'none';
+                      }
+                      if (window.incomingOrderAudio) {
+                          window.incomingOrderAudio.pause();
+                          window.incomingOrderAudio.currentTime = 0;
+                      }
+                      if ("vibrate" in navigator) navigator.vibrate(0);
+                      if (window.vibrateInterval) { clearInterval(window.vibrateInterval); window.vibrateInterval = null; }
+                      window.currentIncomingOrderId = null;
+                  }
+                  if (window.orderDiterimaLokal === orderId) window.orderDiterimaLokal = null;
+
+                  // b. Layar "Tugas Berjalan"
+                  if (window.currentActiveOrderId === orderId) {
+                      const overlay = document.getElementById('active-order-overlay');
+                      if (overlay && !overlay.classList.contains('hidden')) adaLayar = true;
+                      if (typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay();
+                      window.currentActiveOrderId = null;
+                  }
+                  localStorage.removeItem(`order_start_${orderId}`);
+
+                  if (!adaLayar) return;
+                  if (cancelProcessTimeout) { clearTimeout(cancelProcessTimeout); cancelProcessTimeout = null; }
+
+                  try { playBeep(300, 0.4); } catch(e){}
+                  tampilkanPeringatanDitarik();
+
+                  if (window._hasActiveQueryOrder === true) {
+                      // Rider masih punya order lain yang sah -> tampilkan ulang order itu,
+                      // dan JANGAN daftarkan dia ke antrean.
+                      setTimeout(() => { if (typeof window.startOrderListener === 'function') window.startOrderListener(uid); }, 300);
+                      return;
+                  }
+
+                  if (typeof switchPage === 'function') switchPage('home');
+
+                  // Kembali ke antrean (aturannya sama persis dengan pembatalan yang lama)
+                  const currentUserUID = window.getRiderUid();
+                  const toggleEl = document.getElementById('onbid-toggle');
+                  const s = window.statusDariServer || {};
+                  const dimatikanAdmin = (s.is_online === false) || s.force_kill === true || s.is_manual_suspended === true;
+                  if (toggleEl && toggleEl.checked && currentUserUID && !dimatikanAdmin) {
+                      localStorage.setItem('rider_onbid_status', 'true');
+                      if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+                      const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
+                      updateDoc(statusRef, { is_available: true, in_main_queue: true }).catch(e=>{});
+                  }
+                  if (typeof window.manualRefresh === 'function') setTimeout(() => { window.manualRefresh(); }, 500);
+              };
+              window.lepasOrderBukanMilikku = lepasOrderBukanMilikku;
+
+              // Tanya server: order yang sedang tampil di layar ini masih milikku?
+              // Kalau HP sedang tidak ada sinyal, tidak memutuskan apa-apa (dicoba lagi nanti).
+              let sedangCekMilik = false;
+              window.pastikanOrderMasihMilikku = async () => {
+                  if (sedangCekMilik || window.isFinishingOrder === true) return;
+                  const daftarId = [...new Set([window.currentActiveOrderId, window.currentIncomingOrderId, window.orderDiterimaLokal].filter(Boolean))];
+                  if (daftarId.length === 0) return;
+                  sedangCekMilik = true;
+                  try {
+                      for (const idCek of daftarId) {
+                          let snapCek;
+                          try { snapCek = await getDocFromServer(doc(ordersRef, idCek)); }
+                          catch (e) { continue; }
+                          if (window.isFinishingOrder === true) return;
+                          if (!snapCek.exists() || !orderMilikku(snapCek.data())) lepasOrderBukanMilikku(idCek);
+                      }
+                  } finally { sedangCekMilik = false; }
+              };
+
+              // Jaring pengaman: selama ada order di layar, cek ulang tiap 2 menit
+              // (1 read per cek, hanya saat aplikasi sedang terbuka di layar).
+              if (!window._timerCekMilikOrder) {
+                  window._timerCekMilikOrder = setInterval(() => {
+                      if (!document.hidden && typeof window.pastikanOrderMasihMilikku === 'function') window.pastikanOrderMasihMilikku();
+                  }, 120000);
+              }
+              // ==============================================================================
               activeOrderUnsubscribeQuery = onSnapshot(q, (snapshot) => {
                   let hasValidActiveOrder = false;
                   
@@ -13918,6 +14044,8 @@
                           if (window.currentActiveOrderId === removedId || window.currentIncomingOrderId === removedId) {
                               console.log("Detect deleteDoc pada Query:", removedId);
                               handleCanceledOrderProcess();
+                              // Langsung pastikan ke server, tidak menunggu jeda 7 detik
+                              window.pastikanOrderMasihMilikku();
                           }
                       }
                   });
@@ -14143,16 +14271,46 @@
                     // Menggunakan IIFE (Immediately Invoked Function Expression) async
                     (async () => {
                         try {
-                            const { doc, updateDoc, setDoc, serverTimestamp, getFirestore } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                            const { doc, updateDoc, setDoc, serverTimestamp, getFirestore, runTransaction } = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
                             const db = getFirestore();
                             // Mengamankan pemanggilan variabel env
                             const appId = typeof __app_id !== 'undefined' ? __app_id : "onbid-2f87a";
                             
                             const orderRef = doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', docId);
-                            await updateDoc(orderRef, {
-                                status: 'processing',
-                                accepted_at: serverTimestamp()
-                            });
+                            // PENGAMAN: dulu status ditulis buta. Kalau admin sudah menarik order
+                            // ini ke Pending, tulisan itu membuat order muncul lagi di Pantauan
+                            // TANPA rider. Sekarang server dicek dulu: status hanya diubah bila
+                            // order ini MASIH milik rider ini dan masih menunggu diterima.
+                            const uidKu = String(currentUserUID || '').trim().toUpperCase();
+                            let hasilTerima = null;
+                            let percobaan = 0;
+                            while (hasilTerima === null && (window.currentActiveOrderId === docId || window.orderDiterimaLokal === docId)) {
+                                try {
+                                    hasilTerima = await runTransaction(db, async (trx) => {
+                                        const snapO = await trx.get(orderRef);
+                                        if (!snapO.exists()) return 'BUKAN_MILIKKU';
+                                        const dO = snapO.data();
+                                        if (String(dO.rider_uid || '').trim().toUpperCase() !== uidKu) return 'BUKAN_MILIKKU';
+                                        const stO = String(dO.status || '').trim().toLowerCase();
+                                        if (stO === 'processing') return 'OK';
+                                        if (stO !== 'assigned') return 'BUKAN_MILIKKU';
+                                        trx.update(orderRef, { status: 'processing', accepted_at: serverTimestamp() });
+                                        return 'OK';
+                                    });
+                                } catch (errTrx) {
+                                    // Sinyal putus: coba lagi selama layar order ini masih terbuka
+                                    percobaan++;
+                                    if (percobaan === 1 && typeof window.showCustomToast === 'function') {
+                                        window.showCustomToast("Koneksi tidak stabil. Sedang mensinkronkan order di latar belakang...");
+                                    }
+                                    await new Promise(r => setTimeout(r, percobaan < 10 ? 3000 : 10000));
+                                }
+                            }
+                            if (hasilTerima === 'BUKAN_MILIKKU') {
+                                if (typeof window.lepasOrderBukanMilikku === 'function') window.lepasOrderBukanMilikku(docId);
+                                return;
+                            }
+                            if (hasilTerima !== 'OK') return; // layar sudah ditutup lebih dulu
                             
                             // Set Rider jadi TIDAK TERSEDIA di antrean
                             if (currentUserUID) {
@@ -14237,7 +14395,20 @@
                       missed_by: currentUserUID,
                       missed_at: serverTimestamp()
                   };
-                  await updateDoc(orderRef, orderUpdateData);
+                  // PENGAMAN: hanya tandai "terlewat" bila order masih milik rider ini dan belum
+                  // diterima. Kalau sudah ditarik / dipindah admin, jangan sentuh order itu dan
+                  // jangan turunkan posisi antrean rider.
+                  const uidKuMissed = String(currentUserUID || '').trim().toUpperCase();
+                  const masihMilikku = await runTransaction(db, async (trx) => {
+                      const snapO = await trx.get(orderRef);
+                      if (!snapO.exists()) return false;
+                      const dO = snapO.data();
+                      if (String(dO.rider_uid || '').trim().toUpperCase() !== uidKuMissed) return false;
+                      if (String(dO.status || '').trim().toLowerCase() !== 'assigned') return false;
+                      trx.update(orderRef, orderUpdateData);
+                      return true;
+                  });
+                  if (!masihMilikku) return;
 
                   // 2. Lempar posisi rider ke paling bawah antrean (Update last_drop_time)
                   const statusRef = doc(db, '/status_rider_aktif', String(currentUserUID).trim());
@@ -14722,7 +14893,27 @@
                           ? Math.max(0, Math.min(100000000, parseInt(String(document.getElementById('payment-nominal-input')?.value || '').replace(/\./g, ''), 10) || 0))
                           : 0;
                   }
-                  await updateDoc(orderRef, dataSelesai);
+                  // PENGAMAN: order hanya boleh diselesaikan bila MASIH milik rider ini di server.
+                  // Mencegah rider menyelesaikan order yang sudah ditarik / dipindah admin.
+                  const idOrderSelesai = window.currentActiveOrderId;
+                  const uidKuSelesai = String(window.getRiderUid() || '').trim().toUpperCase();
+                  const bolehSelesai = await runTransaction(db, async (trx) => {
+                      const snapO = await trx.get(orderRef);
+                      if (!snapO.exists()) return false;
+                      const dO = snapO.data();
+                      if (String(dO.rider_uid || '').trim().toUpperCase() !== uidKuSelesai) return false;
+                      const stO = String(dO.status || '').trim().toLowerCase();
+                      if (stO === 'completed') return true; // sudah tercatat selesai (mis. tombol tertekan dua kali)
+                      if (stO !== 'processing' && stO !== 'assigned') return false;
+                      trx.update(orderRef, dataSelesai);
+                      return true;
+                  });
+                  if (!bolehSelesai) {
+                      const errDitarik = new Error('Order sudah ditarik admin');
+                      errDitarik.orderDitarik = true;
+                      errDitarik.idOrder = idOrderSelesai;
+                      throw errDitarik;
+                  }
                   
                   const toggleEl = document.getElementById('onbid-toggle');
                   const isToggleOn = toggleEl ? toggleEl.checked : false;
@@ -14814,7 +15005,12 @@
                   
               } catch (e) {
                   console.error("Error update status selesai:", e);
-                  alert("Gagal menyelesaikan order. Pastikan koneksi internet stabil.");
+                  if (e && e.orderDitarik) {
+                      window.isFinishingOrder = false;
+                      if (typeof window.lepasOrderBukanMilikku === 'function') window.lepasOrderBukanMilikku(e.idOrder);
+                  } else {
+                      alert("Gagal menyelesaikan order. Pastikan koneksi internet stabil.");
+                  }
                   if (btnMain) {
                       btnMain.disabled = false;
                       btnMain.innerHTML = originalHtmlMain;
