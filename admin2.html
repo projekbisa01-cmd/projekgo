@@ -9127,6 +9127,58 @@
             } catch(e) { window.showAlert('Gagal', 'Sistem error.', 'error'); }
         };
 
+        // ================= PENGINGAT OTOMATIS: ORDERAN BELUM SELESAI =================
+        // Menumpang jalur tombol "Up": orderan yang sudah diterima rider tetapi belum
+        // selesai setelah 60 menit dikirimi push (alarm) otomatis, lalu diulang tiap
+        // 30 menit selama belum selesai. Push inilah yang membangunkan HP rider yang
+        // sedang tidur; aplikasi rider sendiri menampilkan popup pertanyaannya.
+        // Tahap yang sudah dikirim dicatat di dokumen order lewat transaksi, sehingga
+        // dua HP/PC admin yang sama-sama terbuka tidak mengirim dobel.
+        const PS_AWAL_MS = 60 * 60 * 1000;
+        const PS_ULANG_MS = 30 * 60 * 1000;
+        let psSedangJalan = false;
+        window.pengingatSelesaiOtomatis = async () => {
+            if (psSedangJalan || !navigator.onLine) return;
+            psSedangJalan = true;
+            try {
+                for (const o of (allGlobalOrders || [])) {
+                    if (o.status !== 'processing' || !o.rider_uid) continue;
+                    const detikTerima = o.accepted_at && o.accepted_at.seconds;
+                    if (!detikTerima) continue;
+                    const umur = Date.now() - detikTerima * 1000;
+                    if (umur < PS_AWAL_MS) continue;
+                    const tahap = 1 + Math.floor((umur - PS_AWAL_MS) / PS_ULANG_MS);
+                    const sudah = (o.pengingat_selesai_untuk === detikTerima) ? (Number(o.pengingat_selesai_tahap) || 0) : 0;
+                    if (tahap <= sudah) continue;
+
+                    const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', o.id);
+                    let bolehKirim = false;
+                    try {
+                        bolehKirim = await runTransaction(db, async (tx) => {
+                            const snap = await tx.get(ref);
+                            if (!snap.exists()) return false;
+                            const d = snap.data();
+                            // Order sudah selesai / ditarik / pindah rider / diterima ulang -> batal
+                            if (d.status !== 'processing' || d.rider_uid !== o.rider_uid) return false;
+                            if (!d.accepted_at || d.accepted_at.seconds !== detikTerima) return false;
+                            const sudahServer = (d.pengingat_selesai_untuk === detikTerima) ? (Number(d.pengingat_selesai_tahap) || 0) : 0;
+                            if (sudahServer >= tahap) return false; // admin lain sudah mengirim
+                            tx.update(ref, { pengingat_selesai_tahap: tahap, pengingat_selesai_untuk: detikTerima, pengingat_selesai_at: serverTimestamp() });
+                            return true;
+                        });
+                    } catch (e) { console.warn('Pengingat selesai gagal dicatat:', e); continue; }
+
+                    if (bolehKirim) {
+                        sendPushNotification(o.rider_uid, "⏰ ORDERAN BELUM SELESAI ⏰", "Apakah orderan kamu sudah selesai? Jika sudah selesai, silakan selesaikan di aplikasi.", "ALARM_DARURAT");
+                    }
+                }
+            } finally { psSedangJalan = false; }
+        };
+        if (!window._timerPengingatSelesai) {
+            window._timerPengingatSelesai = setInterval(() => { window.pengingatSelesaiOtomatis(); }, 60 * 1000);
+        }
+        // ============================================================================
+
         window.completeOrderByAdmin = (id) => {
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;

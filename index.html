@@ -13785,6 +13785,118 @@
           
           window.isMissingOrder = false;
 
+          // ================= PENGINGAT ORDERAN BELUM SELESAI =================
+          // Orderan yang sudah diterima tetapi belum diselesaikan:
+          //   - lewat 60 menit  -> muncul pengingat pertama
+          //   - tiap 30 menit berikutnya -> muncul lagi, selama orderan belum selesai
+          // Jam dihitung dari accepted_at (waktu server saat rider menekan Terima).
+          // Admin ikut mengirim push (jalur yang sama dengan tombol "Up") supaya HP
+          // yang sedang tidur ikut bangun; tahap yang sudah dikirim admin dibaca dari
+          // field pengingat_selesai_tahap. Bagian ini TIDAK menulis apa pun ke server.
+          const PS_AWAL_MS = 60 * 60 * 1000;
+          const PS_ULANG_MS = 30 * 60 * 1000;
+          const PS_KUNCI = 'pengingat_selesai_';
+          window._pengingatOrder = {};
+
+          const psTutupPopup = () => {
+              const lama = document.getElementById('popup-pengingat-selesai');
+              if (lama) lama.remove();
+          };
+
+          const psTampilkanPopup = (orderId, info, menit) => {
+              const latar = document.createElement('div');
+              latar.id = 'popup-pengingat-selesai';
+              latar.dataset.orderId = orderId;
+              latar.style.cssText = 'position:fixed;inset:0;z-index:999999990;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:24px;';
+              const kotak = document.createElement('div');
+              kotak.style.cssText = 'background:#fff;color:#111;border-radius:20px;padding:24px;max-width:340px;width:100%;text-align:center;font-family:inherit;';
+              const judul = document.createElement('div');
+              judul.textContent = 'APAKAH ORDERAN KAMU SUDAH SELESAI?';
+              judul.style.cssText = 'font-weight:900;font-size:17px;color:#ea580c;margin-bottom:10px;line-height:1.3;';
+              const isi = document.createElement('div');
+              // textContent (bukan innerHTML): nama pelanggan diketik bebas oleh admin
+              isi.textContent = 'Orderan atas nama ' + (info.nama || 'Pelanggan') + ' sudah berjalan ' + menit + ' menit. Jika sudah selesai, silakan selesaikan sekarang.';
+              isi.style.cssText = 'font-size:14px;font-weight:600;line-height:1.5;margin-bottom:8px;';
+              const kecil = document.createElement('div');
+              kecil.textContent = 'Pengingat ini muncul lagi 30 menit lagi selama orderan belum diselesaikan.';
+              kecil.style.cssText = 'font-size:12px;color:#64748b;line-height:1.4;margin-bottom:18px;';
+              const tombolYa = document.createElement('button');
+              tombolYa.type = 'button';
+              tombolYa.textContent = 'SUDAH, SELESAIKAN SEKARANG';
+              tombolYa.style.cssText = 'width:100%;padding:14px;border:0;border-radius:14px;background:#ea580c;color:#fff;font-weight:900;font-size:14px;margin-bottom:10px;';
+              tombolYa.onclick = () => latar.remove();
+              const tombolBelum = document.createElement('button');
+              tombolBelum.type = 'button';
+              tombolBelum.textContent = 'BELUM SELESAI';
+              tombolBelum.style.cssText = 'width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:14px;background:#fff;color:#334155;font-weight:800;font-size:14px;';
+              tombolBelum.onclick = () => latar.remove();
+              kotak.appendChild(judul); kotak.appendChild(isi); kotak.appendChild(kecil);
+              kotak.appendChild(tombolYa); kotak.appendChild(tombolBelum);
+              latar.appendChild(kotak);
+              document.body.appendChild(latar);
+
+              try { playBeep(880, 0.5); } catch(e){}
+              try { if ("vibrate" in navigator) navigator.vibrate([400, 200, 400, 200, 400]); } catch(e){}
+              // Aplikasi sedang tidak di layar (tetapi masih hidup) -> pakai notifikasi HP
+              try {
+                  if (document.hidden && window.AndroidInterface && window.AndroidInterface.triggerOrderNotification) {
+                      window.AndroidInterface.triggerOrderNotification(
+                          "ORDERAN BELUM SELESAI ⏰",
+                          "Apakah orderan kamu sudah selesai? Jika sudah selesai, silakan selesaikan."
+                      );
+                  }
+              } catch(e){}
+          };
+
+          window.cekPengingatSelesai = () => {
+              try {
+                  const uidKu = String((typeof window.getRiderUid === 'function' && window.getRiderUid()) || '').trim().toUpperCase();
+                  const peta = window._pengingatOrder || {};
+
+                  // Popup milik orderan yang sudah selesai / ditarik / akun sudah keluar -> tutup
+                  const terbuka = document.getElementById('popup-pengingat-selesai');
+                  if (terbuka) {
+                      const pemilik = peta[terbuka.dataset.orderId];
+                      if (!uidKu || !pemilik || pemilik.uid !== uidKu) psTutupPopup();
+                  }
+
+                  // Bersihkan catatan orderan yang sudah tidak berjalan
+                  for (let i = localStorage.length - 1; i >= 0; i--) {
+                      const k = localStorage.key(i);
+                      if (k && k.indexOf(PS_KUNCI) === 0 && !peta[k.slice(PS_KUNCI.length)]) localStorage.removeItem(k);
+                  }
+
+                  if (!uidKu) return;
+                  // Jangan mengganggu saat foto bukti sedang diunggah; dicoba lagi 30 detik kemudian
+                  if (window.isFinishingOrder === true) return;
+                  if (document.getElementById('popup-pengingat-selesai')) return;
+
+                  for (const orderId of Object.keys(peta)) {
+                      const info = peta[orderId];
+                      if (!info || info.uid !== uidKu || !info.mulai) continue;
+                      const umur = Date.now() - info.mulai;
+                      const tahapJam = umur < PS_AWAL_MS ? 0 : 1 + Math.floor((umur - PS_AWAL_MS) / PS_ULANG_MS);
+                      const tahap = Math.max(tahapJam, info.tahapAdmin || 0);
+                      if (tahap < 1) continue;
+                      // Catatan tahap terikat ke waktu Terima, supaya orderan yang ditarik lalu
+                      // diberikan lagi mulai menghitung dari nol.
+                      let sudah = 0;
+                      const cat = String(localStorage.getItem(PS_KUNCI + orderId) || '').split('|');
+                      if (cat.length === 2 && cat[0] === String(info.mulai)) sudah = parseInt(cat[1], 10) || 0;
+                      if (tahap <= sudah) continue;
+                      localStorage.setItem(PS_KUNCI + orderId, info.mulai + '|' + tahap);
+                      psTampilkanPopup(orderId, info, Math.max(60, Math.floor(umur / 60000)));
+                      break; // satu popup dulu; orderan lain menyusul setelah yang ini ditutup
+                  }
+              } catch (e) { console.warn('Pengingat selesai error:', e); }
+          };
+
+          if (!window._timerPengingatSelesai) {
+              window._timerPengingatSelesai = setInterval(() => window.cekPengingatSelesai(), 30000);
+              document.addEventListener('visibilitychange', () => { if (!document.hidden) window.cekPengingatSelesai(); });
+          }
+          // ====================================================================
+
           window.startOrderListener = (uid) => {
               if (!uid || !isAuthReady) return;
               const cleanUid = String(uid).trim().toUpperCase();
@@ -14070,14 +14182,28 @@
                       }
                   });
                   
+                  const petaPengingat = {};
                   snapshot.forEach((docSnap) => {
                       const data = docSnap.data();
                       const status = String(data.status || '').trim().toLowerCase();
                       if (status === 'assigned' || status === 'processing') {
                           hasValidActiveOrder = true;
                       }
+                      // Bahan pengingat "orderan belum selesai" (hanya orderan yang sudah diterima)
+                      if (status === 'processing' && data.accepted_at && data.accepted_at.seconds) {
+                          const detikTerima = data.accepted_at.seconds;
+                          petaPengingat[docSnap.id] = {
+                              uid: cleanUid,
+                              mulai: detikTerima * 1000,
+                              nama: String(data.customer_name || 'Pelanggan').slice(0, 60),
+                              // tahap dari admin hanya berlaku untuk penerimaan yang sama
+                              tahapAdmin: (data.pengingat_selesai_untuk === detikTerima) ? (parseInt(data.pengingat_selesai_tahap, 10) || 0) : 0
+                          };
+                      }
                       handleOrderData(data, docSnap.id);
                   });
+                  window._pengingatOrder = petaPengingat;
+                  if (typeof window.cekPengingatSelesai === 'function') window.cekPengingatSelesai();
                   
                   window._hasActiveQueryOrder = hasValidActiveOrder;
                   if (hasValidActiveOrder) {
