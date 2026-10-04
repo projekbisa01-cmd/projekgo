@@ -14680,8 +14680,10 @@
         //   mulai pukul 06.00 WIB, SELAMA aplikasi admin terbuka di salah satu HP/komputer.
         //   Hari yang terlewat dikejar otomatis maksimal 7 hari ke belakang.
         // - Anti potong dobel: catatan riwayat_potongan ber-ID tetap tl_<tanggal>_<UID>.
-        // - Saldo hanya dipotong jika SISA SALDO tetap di atas Rp 0, supaya rider tidak
-        //   otomatis terblokir. Kalau saldo kurang -> GAGAL, dicoba ulang tiap 1 jam.
+        // - Potongan TETAP dijalankan walau saldo rider tidak cukup: saldo boleh jadi nol / minus
+        //   (keputusan pemilik, Okt 2026). Rider bersaldo nol/minus tetap dipaksa offline oleh
+        //   aturan saldo yang sudah ada sampai top up. GAGAL kini hanya untuk sebab lain
+        //   (dompet tidak ditemukan, nominal tidak sah, koneksi) dan dicoba ulang tiap 1 jam.
         // - TERPISAH TOTAL dari ADM 16%: tidak menyentuh order, adm_potong, rekap omset.
         //   Kartu "Pembanding Omset Admin" di Histori otomatis mengeluarkan tabungan ini
         //   dari hitungan, jadi tetap MATCH.
@@ -14702,6 +14704,7 @@
 
             const esc = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
             const rp = (n) => 'Rp ' + Math.round(Number(n) || 0).toLocaleString('id-ID');
+            const rpMinus = (n) => (Number(n) < 0 ? '-Rp ' : 'Rp ') + Math.abs(Math.round(Number(n) || 0)).toLocaleString('id-ID');
             const uidSah = (u) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(String(u || ''));
             const tglSah = (t) => /^\d{4}-\d{2}-\d{2}$/.test(String(t || ''));
             const nominalSah = (n) => Number.isInteger(n) && n >= TL_MIN && n <= TL_MAKS && n % TL_KELIPATAN === 0;
@@ -14771,7 +14774,8 @@
                         if (!nominalSah(nominal)) return { status: 'gagal', nominal: 0, pesan: 'Nominal tidak sah' };
                         if (!bal.exists()) return { status: 'gagal', nominal, pesan: 'Dompet saldo tidak ditemukan' };
                         const saldo = Number(bal.data().saldo) || 0;
-                        if (saldo - nominal <= 0) return { status: 'gagal', nominal, saldo_sebelum: saldo, pesan: `Saldo kurang (${rp(saldo)})` };
+                        // Saldo tidak cukup TIDAK lagi membatalkan potongan: saldo boleh jadi nol / minus.
+                        const sisa = saldo - nominal;
                         const nama = String(t.nama || t.uid).slice(0, 60); // nama dari daftar rider admin, bukan isian rider
                         const terakhirLama = String(ps.data().terakhir_potong || '');
                         tx.set(balRef, { saldo: increment(-nominal), updated_at: serverTimestamp() }, { merge: true });
@@ -14786,7 +14790,7 @@
                         });
                         // Dicatat agar kartu Pembanding Omset Admin di Histori tetap MATCH
                         tx.set(trackerRef(), { tl_potong: { [hariLokal]: increment(nominal) } }, { merge: true });
-                        return { status: 'ok', nominal, saldo_sebelum: saldo, saldo_sesudah: saldo - nominal, pesan: '' };
+                        return { status: 'ok', nominal, saldo_sebelum: saldo, saldo_sesudah: sisa, pesan: sisa < 0 ? `Saldo jadi minus (${rpMinus(sisa)})` : (sisa === 0 ? 'Saldo jadi Rp 0' : '') };
                     });
                 } catch (e) {
                     console.error('[TL] potong', t.uid, D, e);
@@ -15130,7 +15134,7 @@
                 const totalHari = jmlHari(TL_MULAI, TL_SELESAI);
                 const kotak = (judul, isi, warna) => `<div class="rounded-xl bg-${warna}-50 border border-${warna}-100 p-2.5 text-center"><p class="text-[8px] font-black text-${warna}-700 uppercase tracking-wider">${judul}</p><p class="text-[13px] font-black text-${warna}-700 leading-tight mt-0.5">${isi}</p></div>`;
                 ringkasEl.innerHTML = `
-                    <p class="text-[9px] text-slate-500 leading-relaxed">Periode <b>${esc(teksTgl(TL_MULAI))}</b> s/d <b>${esc(teksTgl(TL_SELESAI))}</b> (H-3). Dipotong otomatis tiap hari mulai pukul 06.00 WIB selama aplikasi admin ini terbuka. Saldo hanya dipotong kalau sisanya tetap di atas Rp 0. Tidak mengubah potongan ADM 16%.</p>
+                    <p class="text-[9px] text-slate-500 leading-relaxed">Periode <b>${esc(teksTgl(TL_MULAI))}</b> s/d <b>${esc(teksTgl(TL_SELESAI))}</b> (H-3). Dipotong otomatis tiap hari mulai pukul 06.00 WIB selama aplikasi admin ini terbuka. Potongan tetap dijalankan walau saldo rider tidak cukup (saldo bisa jadi minus). Tidak mengubah potongan ADM 16%.</p>
                     <p class="text-[10px] font-black text-emerald-700 mt-2">Hari ke-${hariKe} dari ${totalHari}${tlSibuk ? ' · <span class="text-amber-600">memotong saldo…</span>' : ''}</p>
                     <div class="grid grid-cols-2 gap-2 mt-2">
                         ${kotak('Peserta aktif', `${aktif.length} rider`, 'emerald')}
@@ -15180,7 +15184,7 @@
                         <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl"><p class="text-[9px] font-bold text-emerald-800 uppercase tracking-widest">Berhasil terpotong</p><p class="text-xl font-black text-emerald-700">${nOk}</p><p class="text-[8px] font-bold text-emerald-600 uppercase">Rider · ${esc(rp(totalOk))}</p></div>
                         <div class="${nGagal ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200'} border p-3 rounded-2xl"><p class="text-[9px] font-bold ${nGagal ? 'text-rose-800' : 'text-slate-500'} uppercase tracking-widest">Gagal terpotong</p><p class="text-xl font-black ${nGagal ? 'text-rose-700' : 'text-slate-600'}">${nGagal}</p><p class="text-[8px] font-bold ${nGagal ? 'text-rose-600' : 'text-slate-400'} uppercase">Rider${nBelum ? ` · ${nBelum} belum diproses` : ''}</p></div>
                     </div>
-                    ${nGagal ? '<p class="text-[9px] font-bold text-rose-600 mt-2">Yang gagal dicoba ulang otomatis tiap 1 jam (misalnya setelah rider top up).</p>' : ''}
+                    ${nGagal ? '<p class="text-[9px] font-bold text-rose-600 mt-2">Yang gagal dicoba ulang otomatis tiap 1 jam.</p>' : ''}
                     <div class="mt-2 bg-white rounded-lg">${daftarHtml || '<p class="text-[9px] text-slate-400 italic py-2 text-center">Belum ada data.</p>'}</div>
                     ${sudahWaktu && (nGagal || nBelum) && !tlSibuk ? '<button type="button" data-tl="proses" class="w-full mt-3 py-2.5 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase active:scale-95"><i class="fa-solid fa-rotate-right mr-1"></i>Proses / ulangi sekarang</button>' : ''}`;
 
