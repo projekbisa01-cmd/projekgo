@@ -8873,6 +8873,10 @@
                             if (status !== 'completed' && status !== 'selesai' && status !== '') {
                                 return;
                             }
+                            // Order yang belum selesai tidak masuk riwayat (lihat window.riwayatBolehTampil)
+                            if (typeof window.riwayatBolehTampil === 'function' && !window.riwayatBolehTampil(docSnap.id, data)) {
+                                return;
+                            }
 
                             // Parser Tanggal & Waktu yang Aman (Support format Timestamp Firebase)
                             let fDate = '';
@@ -13648,6 +13652,25 @@
           // NEW: SISTEM LISTENER RIWAYAT HARIAN (DAILY ORDERS)
           // -------------------------------------------------------------
           let dailyOrdersUnsubscribe = null;
+
+          // ============ RIWAYAT HARIAN: ORDER YANG BELUM SELESAI DITAHAN DULU ============
+          // Admin menandai riwayat order yang baru dibagikan dengan belum_selesai: true.
+          // Selama tanda itu masih ada, order TIDAK ditampilkan di Riwayat Harian dan tidak
+          // ikut dihitung di pendapatan. Tanda dibuka saat order benar-benar diselesaikan.
+          // Jadi kalau sinyal jelek dan order sudah di-pending / dibatalkan admin, data
+          // lama yang masih tersimpan di HP tidak pernah tampil sebagai riwayat.
+          // Jaring pengaman agar pendapatan tidak pernah hilang:
+          //   a) order-nya sudah berstatus selesai (dari pemantau order yang sudah jalan, 0 read)
+          //   b) umur riwayat sudah lewat 12 jam (order aktif tidak mungkin selama itu)
+          const RW_BATAS_TAHAN_MS = 12 * 60 * 60 * 1000;
+          window._dailySelesaiDariOrder = new Set();
+          window._olahUlangRiwayatHarian = null;
+          window.riwayatBolehTampil = (idDaily, data) => {
+              if (!data || data.belum_selesai !== true) return true;
+              if (window._dailySelesaiDariOrder && window._dailySelesaiDariOrder.has(idDaily)) return true;
+              const dibuat = (data.created_at && data.created_at.seconds) ? data.created_at.seconds * 1000 : Date.now();
+              return (Date.now() - dibuat) > RW_BATAS_TAHAN_MS;
+          };
           
           window.startDailyOrdersListener = async (uid) => {
               if (!uid || !isAuthReady) return;
@@ -13655,6 +13678,7 @@
                   dailyOrdersUnsubscribe();
                   dailyOrdersUnsubscribe = null;
               }
+              window._olahUlangRiwayatHarian = null;
 
               const cleanUid = String(uid).trim().toUpperCase();
               
@@ -13675,7 +13699,7 @@
                       limit(50)
                   );
                   
-                  dailyOrdersUnsubscribe = onSnapshot(qDaily, (snapshot) => {
+                  const olahRiwayatHarian = (snapshot) => {
                       const newFirebaseData = [];
                       
                       snapshot.forEach(docSnap => {
@@ -13685,6 +13709,10 @@
                           const status = String(data.status || data.Status || '').trim().toLowerCase();
                           if (status !== 'completed' && status !== 'selesai' && status !== '') {
                               return; 
+                          }
+                          // Order yang belum selesai ditahan dulu, belum masuk riwayat
+                          if (!window.riwayatBolehTampil(docSnap.id, data)) {
+                              return;
                           }
                           
                           // AKAR MASALAH 2: LOGIKA PARSING TANGGAL SUPER AMAN (Sama seperti Dompet)
@@ -13767,6 +13795,18 @@
                       if (typeof window.combineAndRenderData === 'function') {
                           window.combineAndRenderData();
                       }
+                  };
+
+                  // Data terakhir disimpan supaya bisa diolah ulang (tanpa read) saat sebuah
+                  // order berubah menjadi selesai.
+                  let snapRiwayatTerakhir = null;
+                  window._olahUlangRiwayatHarian = () => {
+                      const uidSekarang = String((typeof window.getRiderUid === 'function' && window.getRiderUid()) || '').trim().toUpperCase();
+                      if (snapRiwayatTerakhir && uidSekarang === cleanUid) olahRiwayatHarian(snapRiwayatTerakhir);
+                  };
+                  dailyOrdersUnsubscribe = onSnapshot(qDaily, (snapshot) => {
+                      snapRiwayatTerakhir = snapshot;
+                      olahRiwayatHarian(snapshot);
                   }, (error) => {
                       console.error("Error fetching completed active orders:", error);
                   });
@@ -13787,14 +13827,15 @@
 
           // ================= PENGINGAT ORDERAN BELUM SELESAI =================
           // Orderan yang sudah diterima tetapi belum diselesaikan:
-          //   - lewat 60 menit  -> muncul pengingat pertama
-          //   - tiap 30 menit berikutnya -> muncul lagi, selama orderan belum selesai
+          //   - lewat 40 menit  -> muncul pengingat pertama
+          //   - tiap 10 menit berikutnya -> muncul lagi, selama orderan belum selesai
           // Jam dihitung dari accepted_at (waktu server saat rider menekan Terima).
           // Admin ikut mengirim push (jalur yang sama dengan tombol "Up") supaya HP
           // yang sedang tidur ikut bangun; tahap yang sudah dikirim admin dibaca dari
-          // field pengingat_selesai_tahap. Bagian ini TIDAK menulis apa pun ke server.
-          const PS_AWAL_MS = 60 * 60 * 1000;
-          const PS_ULANG_MS = 30 * 60 * 1000;
+          // field pengingat_selesai_tahap. Yang ditulis ke server hanya "tanda terima"
+          // (pengingat_selesai_dilihat) saat popup muncul, supaya admin tahu Up-nya sampai.
+          const PS_AWAL_MS = 40 * 60 * 1000;
+          const PS_ULANG_MS = 10 * 60 * 1000;
           const PS_KUNCI = 'pengingat_selesai_';
           window._pengingatOrder = {};
 
@@ -13818,7 +13859,7 @@
               isi.textContent = 'Orderan atas nama ' + (info.nama || 'Pelanggan') + ' sudah berjalan ' + menit + ' menit. Jika sudah selesai, silakan selesaikan sekarang.';
               isi.style.cssText = 'font-size:14px;font-weight:600;line-height:1.5;margin-bottom:8px;';
               const kecil = document.createElement('div');
-              kecil.textContent = 'Pengingat ini muncul lagi 30 menit lagi selama orderan belum diselesaikan.';
+              kecil.textContent = 'Pengingat ini muncul lagi 10 menit lagi selama orderan belum diselesaikan.';
               kecil.style.cssText = 'font-size:12px;color:#64748b;line-height:1.4;margin-bottom:18px;';
               const tombolYa = document.createElement('button');
               tombolYa.type = 'button';
@@ -13885,7 +13926,16 @@
                       if (cat.length === 2 && cat[0] === String(info.mulai)) sudah = parseInt(cat[1], 10) || 0;
                       if (tahap <= sudah) continue;
                       localStorage.setItem(PS_KUNCI + orderId, info.mulai + '|' + tahap);
-                      psTampilkanPopup(orderId, info, Math.max(60, Math.floor(umur / 60000)));
+                      psTampilkanPopup(orderId, info, Math.max(40, Math.floor(umur / 60000)));
+                      // Tanda terima untuk admin (badge "Sudah Up" di Pantauan): 1 write, 0 read.
+                      try {
+                          if (/^[A-Za-z0-9_-]{1,128}$/.test(String(orderId))) {
+                              updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'active_orders', orderId), {
+                                  pengingat_selesai_dilihat: tahap,
+                                  pengingat_selesai_dilihat_untuk: Math.round(info.mulai / 1000)
+                              }).catch(() => {});
+                          }
+                      } catch (eTanda) { /* tanda terima tidak wajib */ }
                       break; // satu popup dulu; orderan lain menyusul setelah yang ini ditutup
                   }
               } catch (e) { console.warn('Pengingat selesai error:', e); }
@@ -14183,12 +14233,15 @@
                   });
                   
                   const petaPengingat = {};
+                  const dailySelesaiBaru = new Set();
                   snapshot.forEach((docSnap) => {
                       const data = docSnap.data();
                       const status = String(data.status || '').trim().toLowerCase();
                       if (status === 'assigned' || status === 'processing') {
                           hasValidActiveOrder = true;
                       }
+                      // Order selesai -> riwayat hariannya boleh tampil (lihat window.riwayatBolehTampil)
+                      if (status === 'completed' && data.daily_order_id) dailySelesaiBaru.add(String(data.daily_order_id));
                       // Bahan pengingat "orderan belum selesai" (hanya orderan yang sudah diterima)
                       if (status === 'processing' && data.accepted_at && data.accepted_at.seconds) {
                           const detikTerima = data.accepted_at.seconds;
@@ -14204,6 +14257,15 @@
                   });
                   window._pengingatOrder = petaPengingat;
                   if (typeof window.cekPengingatSelesai === 'function') window.cekPengingatSelesai();
+
+                  // Ada order yang baru tercatat selesai -> olah ulang Riwayat Harian (0 read)
+                  const dailySelesaiLama = window._dailySelesaiDariOrder || new Set();
+                  let adaSelesaiBaru = false;
+                  dailySelesaiBaru.forEach(idD => { if (!dailySelesaiLama.has(idD)) adaSelesaiBaru = true; });
+                  window._dailySelesaiDariOrder = dailySelesaiBaru;
+                  if (adaSelesaiBaru && typeof window._olahUlangRiwayatHarian === 'function') {
+                      try { window._olahUlangRiwayatHarian(); } catch (e) { console.warn('Olah ulang riwayat gagal:', e); }
+                  }
                   
                   window._hasActiveQueryOrder = hasValidActiveOrder;
                   if (hasValidActiveOrder) {
@@ -15043,11 +15105,13 @@
                   // Mencegah rider menyelesaikan order yang sudah ditarik / dipindah admin.
                   const idOrderSelesai = window.currentActiveOrderId;
                   const uidKuSelesai = String(window.getRiderUid() || '').trim().toUpperCase();
+                  let idDailySelesai = '';
                   const bolehSelesai = await runTransaction(db, async (trx) => {
                       const snapO = await trx.get(orderRef);
                       if (!snapO.exists()) return false;
                       const dO = snapO.data();
                       if (String(dO.rider_uid || '').trim().toUpperCase() !== uidKuSelesai) return false;
+                      idDailySelesai = String(dO.daily_order_id || '');
                       const stO = String(dO.status || '').trim().toLowerCase();
                       if (stO === 'completed') return true; // sudah tercatat selesai (mis. tombol tertekan dua kali)
                       if (stO !== 'processing' && stO !== 'assigned') return false;
@@ -15060,6 +15124,15 @@
                       errDitarik.idOrder = idOrderSelesai;
                       throw errDitarik;
                   }
+
+                  // Order sudah sah selesai di server -> baru sekarang riwayat hariannya dibuka.
+                  // 0 read; hanya menyentuh dokumen riwayat milik rider ini sendiri. Kalau gagal,
+                  // proses selesai TIDAK ikut gagal (ada jaring pengaman di window.riwayatBolehTampil).
+                  try {
+                      if (uidKuSelesai && /^[A-Za-z0-9_-]{1,128}$/.test(idDailySelesai)) {
+                          updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', uidKuSelesai, 'daily_orders', idDailySelesai), { belum_selesai: false }).catch(() => {});
+                      }
+                  } catch (eRiwayat) { console.warn('Tanda riwayat gagal dibuka:', eRiwayat); }
                   
                   const toggleEl = document.getElementById('onbid-toggle');
                   const isToggleOn = toggleEl ? toggleEl.checked : false;

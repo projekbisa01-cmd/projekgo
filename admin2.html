@@ -2726,6 +2726,7 @@
             }
         };
 
+        // Mengembalikan 'terkirim' | 'tanpa_token' | 'gagal' (dipakai badge "Sudah Up" di Pantauan).
         async function sendPushNotification(riderUid, title, body, actionType = "NORMAL_ORDER") {
             try {
                 const tokenRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_devices', String(riderUid).trim().toUpperCase());
@@ -2741,7 +2742,7 @@
                     const GAS_URL = "https://script.google.com/macros/s/AKfycbxEsbdtvEExp1BzyUVHzYLvmheLHcrwcZs0UADhIq5Q6qZLk4CCaClTRbcBn1rMwjWURQ/exec";
                     
                     const authTk = await window.tokenAdmin();
-                    fetch(GAS_URL, {
+                    await fetch(GAS_URL, {
                         method: 'POST',
                         mode: 'no-cors',
                         headers: { 'Content-Type': 'application/json' },
@@ -2756,10 +2757,12 @@
                             }
                         })
                     });
+                    return 'terkirim';
                 } else {
                     console.log(">> Gagal kirim notif: Token FCM tidak ditemukan untuk UID", riderUid);
+                    return 'tanpa_token';
                 }
-            } catch(err) { console.warn("Push Notif Error", err); }
+            } catch(err) { console.warn("Push Notif Error", err); return 'gagal'; }
         }
 
         // Menjadi true setelah sinkron jam shift pertama di sesi ini selesai tanpa error.
@@ -4834,6 +4837,7 @@
         const anHariIniStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
         let anCacheHariIni = { key: '', at: 0, data: null };
         const anPetakanLive = (arr) => arr.map(o => ({
+            id: o.id,
             rider_uid: o.rider_uid,
             rider_name: o.rider_name,
             fee: parseFloat(o.fee_real) || (parseFloat(o.Nominal_Kotor) || 0) * 1000,
@@ -4862,6 +4866,7 @@
             snap.forEach(d => {
                 const x = d.data();
                 data.push({
+                    id: d.id,
                     rider_uid: x.rider_uid,
                     rider_name: x.rider_name || x.rider_uid,
                     fee: parseFloat(x.fee) || 0,
@@ -4887,7 +4892,9 @@
                     const v = (document.getElementById(selId) || {}).value;
                     return v === 'today' || v === '7d' || v === '30d' || (v === 'custom' && (document.getElementById(tglId) || {}).value === hariIni);
                 };
-                if (terbuka('content-analisis-jam') && pilihHariIni('jam-timeframe', 'jam-date-custom')) window.renderAnalisisJam();
+                const jamTf = (document.getElementById('jam-timeframe') || {}).value;
+                const jamHariIni = jamTf === 'today' || (jamTf === 'custom' && (document.getElementById('jam-date-custom') || {}).value === hariIni);
+                if (terbuka('content-analisis-jam') && jamHariIni) window.renderAnalisisJam(true);
                 if (terbuka('content-analisis-rider') && pilihHariIni('rider-timeframe', 'rider-date-custom')) window.renderAnalisisRider();
             }, 1500);
         };
@@ -4966,11 +4973,165 @@
             }
         };
 
-        window.renderAnalisisJam = async () => {
+        // ================= JAM SIBUK: PER JAM 06.00–22.00 + RIWAYAT HARIAN =================
+        // - Hari ini: order selesai (listener histori yang sudah jalan) + order yang masih
+        //   berjalan (listener Pantauan) -> 0 read tambahan dan ikut berubah realtime.
+        // - Riwayat hari-hari sebelumnya: 1 dokumen ringkas per hari di koleksi
+        //   distribusi_jam (hanya angka per jam). Dibaca 7 dokumen sekali per sesi.
+        const DJ_JAM_AWAL = 6, DJ_JAM_AKHIR = 22; // tampil 06.00 s/d 22.00
+        const djPad = (n) => String(n).padStart(2, '0');
+        const djKeMs = (t) => {
+            if (!t) return 0;
+            if (typeof t.seconds === 'number') return t.seconds * 1000;
+            if (typeof t.toDate === 'function') return t.toDate().getTime();
+            const v = new Date(t).getTime();
+            return isFinite(v) ? v : 0;
+        };
+        const djHitung = (daftarMs) => {
+            const jam = {}; for (let h = 0; h < 24; h++) jam[djPad(h)] = 0;
+            let total = 0, tanpaJam = 0;
+            daftarMs.forEach(ms => {
+                if (!ms) { tanpaJam++; return; }
+                jam[djPad(new Date(ms).getHours())]++; total++;
+            });
+            return { jam, total, tanpaJam };
+        };
+        const djPuncak = (jam) => {
+            let h = -1, n = 0;
+            for (let i = DJ_JAM_AWAL; i < DJ_JAM_AKHIR; i++) { const v = Number(jam[djPad(i)]) || 0; if (v > n) { n = v; h = i; } }
+            return { h, n };
+        };
+        const djLuar = (jam) => {
+            let n = 0;
+            for (let i = 0; i < 24; i++) if (i < DJ_JAM_AWAL || i >= DJ_JAM_AKHIR) n += Number(jam[djPad(i)]) || 0;
+            return n;
+        };
+        // Order yang dibagikan hari ini tetapi belum selesai (dari listener Pantauan, 0 read)
+        const djOrderBerjalanHariIni = () => {
+            const awal = new Date(); awal.setHours(0, 0, 0, 0);
+            return (allGlobalOrders || []).filter(o => (o.status === 'assigned' || o.status === 'processing') && o.rider_uid && djKeMs(o.created_at) >= awal.getTime());
+        };
+        const djCol = () => collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'distribusi_jam');
+
+        // Simpan ringkasan hari ini (1 write, hanya kalau angkanya berubah). Tidak membaca apa pun:
+        // kalau data hari ini belum ada di memori, penyimpanan dilewati.
+        let djTandaTersimpan = '';
+        window._djIzinDitolak = false;
+        window.djSimpanHariIni = async () => {
+            try {
+                if (!navigator.onLine) return;
+                const hariIni = anHariIniStr();
+                if (window._todayHistoryDateKey !== hariIni || !Array.isArray(window._todayHistoryLiveOrders)) return;
+                const selesai = window._todayHistoryLiveOrders;
+                const idSelesai = new Set(selesai.map(o => o.id));
+                const waktu = selesai.map(o => djKeMs(o.admin_created_at))
+                    .concat(djOrderBerjalanHariIni().filter(o => !idSelesai.has(o.id)).map(o => djKeMs(o.created_at)));
+                const h = djHitung(waktu);
+                if (h.total === 0) return;
+                const tanda = hariIni + '|' + JSON.stringify(h.jam);
+                let tandaHp = '';
+                try { tandaHp = localStorage.getItem('dj_tersimpan') || ''; } catch (e) {}
+                if (tanda === djTandaTersimpan || tanda === tandaHp) { djTandaTersimpan = tanda; return; }
+                await setDoc(doc(djCol(), hariIni), { tanggal: hariIni, jam: h.jam, total: h.total, updated_at: serverTimestamp() });
+                djTandaTersimpan = tanda;
+                window._djIzinDitolak = false;
+                try { localStorage.setItem('dj_tersimpan', tanda); } catch (e) {}
+            } catch (e) {
+                console.warn('Riwayat jam sibuk gagal disimpan:', e);
+                if (e && e.code === 'permission-denied') window._djIzinDitolak = true;
+            }
+        };
+        if (!window._timerDjSimpan) window._timerDjSimpan = setInterval(() => { window.djSimpanHariIni(); }, 15 * 60 * 1000);
+
+        // Riwayat hari-hari sebelumnya (disimpan di memori selama halaman terbuka)
+        let djRiwayat = { kunci: '', data: [], habis: false, gagal: '', memuat: false };
+        const djBersihkanDok = (d) => {
+            const x = d.data() || {};
+            const tgl = String(x.tanggal || d.id || '');
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return null;
+            const jam = {};
+            for (let h = 0; h < 24; h++) { const v = parseInt((x.jam || {})[djPad(h)], 10); jam[djPad(h)] = (v > 0 && v < 100000) ? v : 0; }
+            let total = 0; Object.values(jam).forEach(v => total += v);
+            return { tanggal: tgl, jam, total };
+        };
+        window.djMuatRiwayat = async (lebihLama) => {
+            const hariIni = anHariIniStr();
+            if (djRiwayat.memuat) return;
+            if (djRiwayat.kunci !== hariIni) djRiwayat = { kunci: hariIni, data: [], habis: false, gagal: '', memuat: false };
+            else if (!lebihLama && (djRiwayat.data.length > 0 || djRiwayat.habis)) { djGambarRiwayat(); return; }
+            if (djRiwayat.habis) { djGambarRiwayat(); return; }
+            djRiwayat.memuat = true; djGambarRiwayat();
+            try {
+                const sebelum = djRiwayat.data.length ? djRiwayat.data[djRiwayat.data.length - 1].tanggal : hariIni;
+                const snap = await getDocs(query(djCol(), where('tanggal', '<', sebelum), orderBy('tanggal', 'desc'), limit(7)));
+                snap.forEach(d => { const r = djBersihkanDok(d); if (r) djRiwayat.data.push(r); });
+                if (snap.size < 7) djRiwayat.habis = true;
+                djRiwayat.gagal = '';
+            } catch (e) {
+                console.warn('Riwayat jam sibuk gagal dimuat:', e);
+                djRiwayat.gagal = (e && e.code === 'permission-denied') ? 'izin' : 'koneksi';
+            } finally { djRiwayat.memuat = false; djGambarRiwayat(); }
+        };
+        const djKartuHari = (r) => {
+            const b = r.tanggal.split('-').map(n => parseInt(n, 10));
+            const namaHari = new Date(b[0], b[1] - 1, b[2]).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+            const p = djPuncak(r.jam);
+            let kolom = '', label = '';
+            for (let h = DJ_JAM_AWAL; h < DJ_JAM_AKHIR; h++) {
+                const n = r.jam[djPad(h)] || 0;
+                const tinggi = p.n > 0 && n > 0 ? Math.max(2, Math.round((n / p.n) * 38)) : 0;
+                const puncak = (h === p.h);
+                kolom += `<div class="flex-1 flex flex-col items-center justify-end" title="${djPad(h)}.00 - ${djPad(h + 1)}.00: ${n} order"><span class="text-[7px] font-black leading-none mb-0.5 ${puncak ? 'text-indigo-700' : 'text-slate-500'}">${n || ''}</span><div class="w-full rounded-t ${puncak ? 'bg-indigo-500' : 'bg-slate-300'}" style="height:${tinggi}px"></div></div>`;
+                label += `<span class="flex-1 text-center text-[7px] font-bold ${puncak ? 'text-indigo-700' : 'text-slate-400'}">${djPad(h)}</span>`;
+            }
+            const luar = djLuar(r.jam);
+            return `
+                <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm mb-2">
+                    <div class="flex justify-between items-baseline gap-2">
+                        <p class="text-[10px] font-black text-slate-700">${escDx(namaHari)}</p>
+                        <p class="text-[9px] font-bold text-slate-500 shrink-0">${r.total} order${p.h >= 0 ? ` · puncak ${djPad(p.h)}.00 (${p.n})` : ''}</p>
+                    </div>
+                    <div class="flex items-end gap-[2px] mt-2 border-b border-slate-200" style="height:52px">${kolom}</div>
+                    <div class="flex gap-[2px] mt-0.5">${label}</div>
+                    ${luar ? `<p class="text-[8px] text-slate-400 italic mt-1">${luar} order di luar jam ${djPad(DJ_JAM_AWAL)}.00–${djPad(DJ_JAM_AKHIR)}.00.</p>` : ''}
+                </div>`;
+        };
+        function djGambarRiwayat() {
+            const el = document.getElementById('dj-riwayat');
+            if (!el) return;
+            let isi = '';
+            if (djRiwayat.data.length) isi += djRiwayat.data.map(djKartuHari).join('');
+            if (djRiwayat.memuat) isi += '<p class="text-[9px] text-slate-400 italic text-center py-3">Memuat riwayat...</p>';
+            else if (djRiwayat.gagal === 'izin' || window._djIzinDitolak) isi += '<p class="text-[9px] font-bold text-rose-600 text-center py-3 bg-rose-50 border border-rose-200 rounded-xl">Riwayat belum bisa dipakai: Firestore Rules belum mengizinkan koleksi distribusi_jam untuk admin.</p>';
+            else if (djRiwayat.gagal) isi += '<p class="text-[9px] font-bold text-rose-600 text-center py-3">Gagal memuat riwayat. Periksa koneksi lalu buka ulang tab ini.</p>';
+            else if (!djRiwayat.data.length) isi += '<p class="text-[9px] text-slate-400 italic text-center py-3 border border-dashed border-slate-200 rounded-xl">Belum ada riwayat. Mulai tersimpan otomatis sejak hari ini, jadi besok hari ini sudah muncul di sini.</p>';
+            else if (!djRiwayat.habis) isi += '<button type="button" onclick="window.djMuatRiwayat(true)" class="w-full py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[9px] font-black rounded-xl uppercase border border-slate-200">Muat 7 hari sebelumnya</button>';
+            el.innerHTML = `
+                <p class="text-[10px] font-black text-slate-700 uppercase mt-4 mb-2 px-1"><i class="fa-solid fa-clock-rotate-left text-indigo-500 mr-1"></i> Riwayat Hari Sebelumnya</p>
+                ${isi}`;
+        }
+
+        // Dipanggil listener Pantauan. Hanya menggambar ulang bila tab Jam Sibuk sedang
+        // terbuka pada "Hari Ini" (datanya sudah di memori -> 0 read).
+        let djTimerSegar = null;
+        window.djSegarkanJikaTerbuka = () => {
+            clearTimeout(djTimerSegar);
+            djTimerSegar = setTimeout(() => {
+                const hal = document.getElementById('page-analisis');
+                const tab = document.getElementById('content-analisis-jam');
+                if (!hal || hal.classList.contains('hidden-page') || !tab || tab.classList.contains('hidden')) return;
+                const tf = (document.getElementById('jam-timeframe') || {}).value;
+                const hariIni = tf === 'today' || (tf === 'custom' && (document.getElementById('jam-date-custom') || {}).value === anHariIniStr());
+                if (hariIni) window.renderAnalisisJam(true);
+            }, 2000);
+        };
+
+        window.renderAnalisisJam = async (diam) => {
             const container = document.getElementById('jam-container-results');
             const tfSelect = document.getElementById('jam-timeframe');
             const dateInput = document.getElementById('jam-date-custom');
             if(!container || !tfSelect) return;
+            diam = (diam === true) && !!document.getElementById('dj-riwayat'); // segar otomatis: tanpa layar "memuat"
 
             let customDateVal = dateInput.value;
             if (tfSelect.value === 'custom' && !customDateVal) {
@@ -4979,108 +5140,89 @@
                 dateInput.value = customDateVal;
             }
 
-            container.innerHTML = `
+            if (!diam) container.innerHTML = `
                 <div class="flex flex-col items-center justify-center py-8 border border-dashed border-indigo-200 rounded-xl bg-indigo-50/30">
                     <div class="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-2"></div>
                     <p class="text-[9px] font-bold text-slate-500">Menganalisis Jam Sibuk...</p>
                 </div>`;
 
-            // MENGGUNAKAN getAnalyticsData YANG SUDAH DI-UPGRADE (0 READ & LIMIT 150)
             const fetched = await window.getAnalyticsData(tfSelect.value, customDateVal);
             const dataOrder = fetched.dataOrder;
             const displayDate = fetched.displayDate;
-
-            if(dataOrder.length === 0) {
-                container.innerHTML = `
-                    <div class="bg-indigo-50 rounded-xl p-4 border border-dashed border-indigo-200 text-center mt-2 shadow-sm">
-                        <i class="fa-solid fa-clock text-indigo-300 text-2xl mb-2"></i>
-                        <p class="text-[10px] font-bold text-indigo-500">${fetched.gagal ? 'Gagal memuat data. Periksa koneksi lalu buka ulang tab ini.' : 'Tidak ada data order untuk dianalisis.'}</p>
-                    </div>`;
-                return;
-            }
-
-            // Definisikan rentang waktu custom dalam format menit sejak 00:00 (H * 60 + M)
-            const timeRanges = [
-                { label: '06:30 - 10:00', count: 0, startMins: 6 * 60 + 30, endMins: 10 * 60 + 0 },
-                { label: '10:01 - 11:00', count: 0, startMins: 10 * 60 + 1, endMins: 11 * 60 + 0 },
-                { label: '11:01 - 13:00', count: 0, startMins: 11 * 60 + 1, endMins: 13 * 60 + 0 },
-                { label: '13:01 - 16:00', count: 0, startMins: 13 * 60 + 1, endMins: 16 * 60 + 0 },
-                { label: '16:01 - 20:00', count: 0, startMins: 16 * 60 + 1, endMins: 20 * 60 + 0 },
-                { label: '20:01 - 21:00', count: 0, startMins: 20 * 60 + 1, endMins: 21 * 60 + 0 }
-            ];
-            let diLuarRentang = 0, tanpaJam = 0;
+            const hariIniDipilih = displayDate === 'Hari Ini';
 
             // Dihitung dari JAM ADMIN MEMBAGIKAN ORDER, bukan jam order selesai.
             // - Data hari ini: admin_created_at (= created_at order aktif saat dibagikan).
             // - Data hari lain (langsung dari active_orders): created_at = jam dibagikan.
-            const keMs = (t) => {
-                if (!t) return 0;
-                if (typeof t.seconds === 'number') return t.seconds * 1000;
-                if (typeof t.toDate === 'function') return t.toDate().getTime();
-                const v = new Date(t).getTime();
-                return isFinite(v) ? v : 0;
-            };
-            dataOrder.forEach(o => {
-                const ts = ('admin_created_at' in o) ? keMs(o.admin_created_at) : keMs(o.created_at);
-                if (!ts) { tanpaJam++; return; }
-                const d = new Date(ts);
-                const minsSinceMidnight = d.getHours() * 60 + d.getMinutes();
-                const rentang = timeRanges.find(r => minsSinceMidnight >= r.startMins && minsSinceMidnight <= r.endMins);
-                if (rentang) rentang.count++; else diLuarRentang++;
-            });
-
-            // Cari rentang jam dengan orderan terbanyak
-            let maxOrders = 0;
-            let peakIndex = -1;
-            
-            for (let i = 0; i < timeRanges.length; i++) {
-                if (timeRanges[i].count > maxOrders) {
-                    maxOrders = timeRanges[i].count;
-                    peakIndex = i;
-                }
+            const waktu = dataOrder.map(o => ('admin_created_at' in o) ? djKeMs(o.admin_created_at) : djKeMs(o.created_at));
+            // Hari ini: order yang masih berjalan ikut dihitung (0 read, dari listener Pantauan)
+            let jumlahBerjalan = 0;
+            if (hariIniDipilih && !fetched.gagal) {
+                const idSelesai = new Set(dataOrder.map(o => o.id).filter(Boolean));
+                djOrderBerjalanHariIni().forEach(o => { if (!idSelesai.has(o.id)) { waktu.push(djKeMs(o.created_at)); jumlahBerjalan++; } });
             }
 
-            const peakLabel = peakIndex !== -1 ? timeRanges[peakIndex].label : 'Tidak Terdeteksi';
+            const wadahRiwayat = '<div id="dj-riwayat"></div>';
+            if (waktu.length === 0) {
+                container.innerHTML = `
+                    <div class="bg-indigo-50 rounded-xl p-4 border border-dashed border-indigo-200 text-center mt-2 shadow-sm">
+                        <i class="fa-solid fa-clock text-indigo-300 text-2xl mb-2"></i>
+                        <p class="text-[10px] font-bold text-indigo-500">${fetched.gagal ? 'Gagal memuat data. Periksa koneksi lalu buka ulang tab ini.' : 'Tidak ada data order untuk dianalisis.'}</p>
+                    </div>` + wadahRiwayat;
+                window.djMuatRiwayat();
+                return;
+            }
+
+            const hasil = djHitung(waktu);
+            const puncak = djPuncak(hasil.jam);
+            const labelJam = (h) => `${djPad(h)}.00 - ${djPad(h + 1)}.00`;
+            const peakLabel = puncak.h >= 0 ? labelJam(puncak.h) : 'Tidak Terdeteksi';
 
             let listHtml = '';
-            timeRanges.forEach((range, i) => {
-                const isPeak = (i === peakIndex && maxOrders > 0);
-                const barWidth = maxOrders > 0 ? Math.max(5, Math.round((range.count / maxOrders) * 100)) : 0;
-                
+            for (let h = DJ_JAM_AWAL; h < DJ_JAM_AKHIR; h++) {
+                const n = hasil.jam[djPad(h)];
+                const isPeak = (h === puncak.h && puncak.n > 0);
+                const barWidth = puncak.n > 0 && n > 0 ? Math.max(5, Math.round((n / puncak.n) * 100)) : 0;
                 const bgBar = isPeak ? 'bg-indigo-500' : 'bg-slate-300';
                 const textLabel = isPeak ? 'text-indigo-700 font-black' : 'text-slate-600 font-bold';
-                
                 listHtml += `
                     <div class="flex items-center gap-2 mb-1.5">
-                        <span class="text-[9px] w-[75px] shrink-0 ${textLabel}">${range.label}</span>
+                        <span class="text-[9px] w-[75px] shrink-0 ${textLabel}">${labelJam(h)}</span>
                         <div class="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
                             <div class="${bgBar} h-3 rounded-full" style="width: ${barWidth}%"></div>
                         </div>
-                        <span class="text-[9px] w-10 text-right ${textLabel}">${range.count} <i class="fa-solid fa-box text-[8px]"></i></span>
+                        <span class="text-[9px] w-10 text-right ${textLabel}">${n} <i class="fa-solid fa-box text-[8px]"></i></span>
                     </div>
                 `;
-            });
+            }
 
-            let infoLimit = fetched.lengkap ? '' : '<p class="text-[8px] text-rose-500 text-center mt-2 italic">*Menggunakan maksimal 150 sampel data terbaru untuk menghemat kuota sistem.</p>';
+            const diLuarRentang = djLuar(hasil.jam);
+            let infoLimit = (fetched.lengkap || !dataOrder.length) ? '' : '<p class="text-[8px] text-rose-500 text-center mt-2 italic">*Menggunakan maksimal 150 sampel data terbaru untuk menghemat kuota sistem.</p>';
             const infoTambahan = [
-                diLuarRentang ? `${diLuarRentang} order dibagikan di luar jam 06:30–21:00.` : '',
-                tanpaJam ? `${tanpaJam} order tanpa catatan jam dibagikan.` : ''
+                diLuarRentang ? `${diLuarRentang} order dibagikan di luar jam ${djPad(DJ_JAM_AWAL)}.00–${djPad(DJ_JAM_AKHIR)}.00.` : '',
+                hasil.tanpaJam ? `${hasil.tanpaJam} order tanpa catatan jam dibagikan.` : ''
             ].filter(Boolean).join(' ');
             if (infoTambahan) infoLimit = `<p class="text-[8px] text-slate-500 text-center mt-2 italic">${infoTambahan}</p>` + infoLimit;
+            const rincian = hariIniDipilih
+                ? `${waktu.length} order: ${waktu.length - jumlahBerjalan} selesai + ${jumlahBerjalan} sedang berjalan`
+                : `${waktu.length} order`;
 
             container.innerHTML = `
                 <div class="bg-indigo-50 rounded-xl p-3 border border-indigo-100 shadow-sm mb-3">
                     <p class="text-[9px] font-black text-indigo-800 uppercase tracking-widest mb-0.5">Puncak Jam Sibuk</p>
                     <p class="text-xl font-black text-indigo-600">${peakLabel}</p>
-                    <p class="text-[9px] font-bold text-indigo-500 mt-0.5">Terdapat ${maxOrders} orderan dibagikan pada rentang waktu ini.</p>
+                    <p class="text-[9px] font-bold text-indigo-500 mt-0.5">Terdapat ${puncak.n} orderan dibagikan pada jam ini.</p>
                 </div>
                 <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                    <p class="text-[10px] font-black text-slate-700 uppercase border-b border-slate-100 pb-1.5">Distribusi Order: ${displayDate}</p>
-                    <p class="text-[8px] font-bold text-slate-400 mt-1 mb-3">Berdasarkan jam admin membagikan order (${dataOrder.length} order).</p>
+                    <p class="text-[10px] font-black text-slate-700 uppercase border-b border-slate-100 pb-1.5">Distribusi Order Per Jam: ${escDx(displayDate)}</p>
+                    <p class="text-[8px] font-bold text-slate-400 mt-1 mb-3">Berdasarkan jam admin membagikan order (${rincian}).</p>
                     ${listHtml}
                 </div>
                 ${infoLimit}
+                ${wadahRiwayat}
             `;
+            window.djMuatRiwayat();
+            if (hariIniDipilih && fetched.lengkap) window.djSimpanHariIni();
         };
 
         window.handleJamTimeframeChange = () => {
@@ -5312,15 +5454,59 @@
             }
         };
 
+        // ===== SUARA: ORDER BELUM DIRESPON RIDER > 2 MENIT =====
+        // Murni dari data listener Pantauan yang sudah ada (0 read, 0 write).
+        // Bunyi saat sebuah order melewati 2 menit tanpa di-ACC, lalu diulang tiap
+        // 30 detik selama masih ada order seperti itu. Berhenti sendiri begitu order
+        // di-ACC rider / ditarik ke Pending / dialihkan / dibatalkan.
+        const AB_ULANG_MS = 30 * 1000;
+        const abSudahBunyi = new Set();
+        let abTerakhirBunyi = 0;
+        let abCtx = null;
+        const abSiapkanAudio = () => {
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return null;
+                if (!abCtx || abCtx.state === 'closed') abCtx = new Ctx();
+                if (abCtx.state === 'suspended') abCtx.resume().catch(() => {});
+                return abCtx;
+            } catch (e) { return null; }
+        };
+        // Browser baru mengizinkan suara setelah layar pernah disentuh/diklik
+        ['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, abSiapkanAudio, { passive: true }));
+        const abBunyiBelumRespon = () => {
+            const ctx = abSiapkanAudio();
+            if (!ctx || ctx.state !== 'running') return;
+            try {
+                [[740, 0], [988, 0.22], [740, 0.44], [988, 0.66]].forEach(([hz, t]) => {
+                    const o = ctx.createOscillator(), g = ctx.createGain();
+                    o.type = 'square'; o.frequency.value = hz;
+                    g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+                    g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + t + 0.02);
+                    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.19);
+                    o.connect(g); g.connect(ctx.destination);
+                    o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
+                });
+            } catch (e) { /* abaikan */ }
+        };
+
         function startLiveTimers() {
+            setInterval(aoPerbaruiDurasi, 15000); // badge lama proses di kartu Pantauan
             setInterval(() => {
                 const now = Date.now();
+                let abAdaTelat = false, abAdaBaru = false;
+                const abMasihMenunggu = new Set();
                 allGlobalOrders.forEach(order => {
                     if (order.status === 'assigned' && order.created_at && order.created_at.seconds) {
                         const assignedMs = order.created_at.seconds * 1000;
                         const elapsed = Math.floor((now - assignedMs) / 1000);
                         const statusWaitEl = document.getElementById(`status-wait-${order.id}`);
                         const cardEl = document.getElementById(`card-order-${order.id}`);
+                        abMasihMenunggu.add(order.id);
+                        if (elapsed >= 120) {
+                            abAdaTelat = true;
+                            if (!abSudahBunyi.has(order.id)) { abSudahBunyi.add(order.id); abAdaBaru = true; }
+                        }
                         
                         if (elapsed >= 120) {
                             if (statusWaitEl && statusWaitEl.innerText.indexOf('> 2 Menit') === -1) {
@@ -5340,6 +5526,11 @@
                         // Ping ke rider sekarang murni manual lewat tombol "Up" (window.pingOrder).
                     }
                 });
+                [...abSudahBunyi].forEach(id => { if (!abMasihMenunggu.has(id)) abSudahBunyi.delete(id); });
+                if (abAdaTelat && (abAdaBaru || now - abTerakhirBunyi >= AB_ULANG_MS)) {
+                    abTerakhirBunyi = now;
+                    abBunyiBelumRespon();
+                }
             }, 1000);
         }
 
@@ -6816,7 +7007,7 @@
                         transaction.set(newDailyOrderRef, {
                             UID: selectedUid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                             Nama_Pelanggan: orderDoc.data().customer_name || '-', Nominal_Kotor: (orderDoc.data().fee || 0) / 1000,
-                            Tambahan: (orderDoc.data().tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
+                            Tambahan: (orderDoc.data().tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan, belum_selesai: true,
                             created_at: serverTimestamp(),
                             payment_type: orderDoc.data().payment_type || 'Tunai',
                             payment_nominal: orderDoc.data().payment_nominal || 0
@@ -6908,7 +7099,7 @@
                     transaction.set(newDailyOrderRef, {
                         UID: nextRider.uid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                         Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
-                        Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
+                        Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan, belum_selesai: true,
                         created_at: serverTimestamp(),
                         payment_type: currentData.payment_type || 'Tunai',
                         payment_nominal: currentData.payment_nominal || 0
@@ -7106,7 +7297,7 @@
                         transaction.set(newDailyOrderRef, {
                             UID: nextRider.uid, Nama_Rider: nextRiderName, Tanggal: Tanggal, Jam: Jam,
                             Nama_Pelanggan: currentData.customer_name || '-', Nominal_Kotor: (currentData.fee || 0) / 1000,
-                            Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan,
+                            Tambahan: (currentData.tambahan || 0) / 1000, Status: "Selesai", Keterangan: detailKeterangan, belum_selesai: true,
                             created_at: serverTimestamp(),
                             payment_type: currentData.payment_type || 'Tunai',
                             payment_nominal: currentData.payment_nominal || 0
@@ -7216,6 +7407,8 @@
 
                 // Rider baru dapat order -> jam pertama hari ini ikut tercatat otomatis (±1 read per rider per hari)
                 if (typeof window.jadwalkanSyncShift === 'function') window.jadwalkanSyncShift(3000);
+                // Tab Jam Sibuk "Hari Ini" ikut bergerak saat ada order baru dibagikan (0 read)
+                if (typeof window.djSegarkanJikaTerbuka === 'function') window.djSegarkanJikaTerbuka();
             });
         }
 
@@ -7314,6 +7507,50 @@
             renderActiveOrders();
         };
 
+        // Lama proses sejak order dibagikan (created_at order = jam dibagikan ke rider).
+        const aoTeksDurasi = (ms) => {
+            const menit = Math.max(0, Math.floor(ms / 60000));
+            if (menit < 60) return menit + ' mnt';
+            return Math.floor(menit / 60) + ' j ' + String(menit % 60).padStart(2, '0') + ' mnt';
+        };
+        const aoKelasDurasi = (ms) => {
+            const menit = ms / 60000;
+            if (menit >= 60) return 'bg-rose-100 text-rose-700 border-rose-300';
+            if (menit >= 40) return 'bg-amber-100 text-amber-700 border-amber-300';
+            return 'bg-slate-50 text-slate-600 border-slate-200';
+        };
+        const AO_DURASI_DASAR = 'flex items-center gap-1 px-1.5 py-0.5 rounded border ';
+        function aoPerbaruiDurasi() {
+            const now = Date.now();
+            allGlobalOrders.forEach(o => {
+                if (!o.created_at || !o.created_at.seconds) return;
+                const el = document.getElementById('durasi-order-' + o.id);
+                if (!el) return;
+                const ms = now - o.created_at.seconds * 1000;
+                const teks = el.querySelector('span');
+                if (teks) teks.textContent = aoTeksDurasi(ms);
+                el.className = AO_DURASI_DASAR + aoKelasDurasi(ms);
+            });
+        }
+        // Status pengingat otomatis ("Up") untuk satu order. null = belum pernah di-up.
+        const aoStatusUp = (order) => {
+            const detikTerima = order.accepted_at && order.accepted_at.seconds;
+            if (order.status !== 'processing' || !detikTerima) return null;
+            const tahap = (order.pengingat_selesai_untuk === detikTerima) ? (parseInt(order.pengingat_selesai_tahap, 10) || 0) : 0;
+            if (tahap < 1) return null;
+            let jam = '';
+            if (order.pengingat_selesai_at && order.pengingat_selesai_at.seconds) jam = new Date(order.pengingat_selesai_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+            const gagal = (parseInt(order.pengingat_selesai_gagal, 10) || 0) === tahap;
+            const dilihat = order.pengingat_selesai_dilihat_untuk === detikTerima && (parseInt(order.pengingat_selesai_dilihat, 10) || 0) >= tahap;
+            const ke = 'ke-' + tahap + (jam ? ' · ' + jam : '');
+            if (dilihat) return { kelas: 'bg-emerald-50 text-emerald-700 border-emerald-300', ikon: 'fa-check-double', pendek: 'Sudah Up · tampil di HP rider', panjang: 'Up otomatis ' + ke + ': pengingat SUDAH MUNCUL di HP rider.' };
+            if (gagal) {
+                const tanpaToken = order.pengingat_selesai_gagal_ket === 'tanpa_token';
+                return { kelas: 'bg-rose-100 text-rose-700 border-rose-300', ikon: 'fa-triangle-exclamation', pendek: 'Up GAGAL', panjang: 'Up otomatis ' + ke + ' GAGAL: ' + (tanpaToken ? 'HP rider tidak punya token notifikasi (cek menu Izin Login).' : 'notifikasi tidak terkirim (cek koneksi admin).') + ' Hubungi rider lewat cara lain.' };
+            }
+            return { kelas: 'bg-sky-50 text-sky-700 border-sky-300', ikon: 'fa-bell', pendek: 'Sudah Up ke rider', panjang: 'Up otomatis ' + ke + ': notifikasi terkirim, menunggu tanda terima dari HP rider.' };
+        };
+
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
             // Keluarkan unassigned dari pantauan aktif agar hanya muncul di tab Pending
@@ -7378,6 +7615,16 @@
                 let timeAssignedStr = '--:--';
                 if (order.created_at && order.created_at.seconds) timeAssignedStr = new Date(order.created_at.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
+                // Badge lama proses sejak dibagikan + badge hasil Up otomatis (semua teks buatan sistem, bukan ketikan)
+                let durasiBadge = '';
+                if (order.created_at && order.created_at.seconds) {
+                    const msProses = Date.now() - order.created_at.seconds * 1000;
+                    durasiBadge = `<span id="durasi-order-${order.id}" class="${AO_DURASI_DASAR}${aoKelasDurasi(msProses)}" title="Lama proses sejak order dibagikan"><i class="fa-solid fa-hourglass-half text-[8px]"></i><span class="text-[9px] font-black">${escDx(aoTeksDurasi(msProses))}</span></span>`;
+                }
+                const infoUp = aoStatusUp(order);
+                const upBadge = infoUp ? `<span class="flex items-center gap-1 px-1.5 py-0.5 rounded border ${infoUp.kelas}" title="${escDx(infoUp.panjang)}"><i class="fa-solid ${infoUp.ikon} text-[8px]"></i><span class="text-[9px] font-black">${escDx(infoUp.pendek)}</span></span>` : '';
+                const upBaris = infoUp ? `<p class="text-[9px] font-bold px-2 py-1.5 rounded-lg border ml-1 ${infoUp.kelas}"><i class="fa-solid ${infoUp.ikon} mr-1"></i>${escDx(infoUp.panjang)}</p>` : '';
+
                 html += `
                     <div id="card-order-${order.id}" class="rounded-2xl border ${cardBaseClass} relative overflow-hidden transition-all duration-500">
                         <div class="absolute left-0 top-0 bottom-0 w-1 ${borderLeft}"></div>
@@ -7387,6 +7634,8 @@
                                     <span class="text-[8px] font-black ${statusColor} px-1.5 py-0.5 rounded border uppercase tracking-wider">${statusPendek}</span>
                                     <span class="text-[9px] font-black text-black"><i class="fa-regular fa-clock text-[8px] text-slate-400 mr-0.5"></i>${escDx(timeAssignedStr)}</span>
                                     ${isWaitingAcc ? `<span id="status-wait-${order.id}" class="flex items-center gap-1 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200 transition-colors" title="Waktu Menunggu Konfirmasi"><i class="fa-solid fa-stopwatch text-[8px] animate-pulse"></i><span class="text-[9px] font-black">Menunggu...</span></span>` : ''}
+                                    ${durasiBadge}
+                                    ${upBadge}
                                 </div>
                                 <p class="text-[11px] font-black text-black truncate mt-1"><i class="fa-solid fa-motorcycle text-[9px] text-slate-400 mr-1"></i>${riderNama}</p>
                                 <p class="text-[9px] font-bold text-slate-500 truncate">${ringkasItem}</p>
@@ -7400,6 +7649,7 @@
                             <div class="pl-1">
                                 <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>
                             </div>
+                            ${upBaris}
                             <p class="text-xs font-black text-black leading-none pl-1">WA: ${escDx(order.customer_phone || '-')}${custNameStr}</p>
                             <div class="p-2 bg-slate-50 rounded-lg border border-slate-100 ml-1">
                                 <p class="text-[9px] text-black font-bold mb-0.5 uppercase tracking-tight">Penerima Tugas Terakhir:</p>
@@ -8983,7 +9233,7 @@
 
                     batch.set(dailyOrdersRef, {
                         UID: riderUid, Nama_Rider: riderName, Tanggal: Tanggal, Jam: Jam, Nama_Pelanggan: custName,
-                        Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, created_at: serverTimestamp(),
+                        Nominal_Kotor: feeParsed.saved, Tambahan: tamParsed.saved, Status: "Selesai", Keterangan: details, belum_selesai: true, created_at: serverTimestamp(),
                         pesanan_text: pesanan_text
                     });
                     
@@ -9129,13 +9379,16 @@
 
         // ================= PENGINGAT OTOMATIS: ORDERAN BELUM SELESAI =================
         // Menumpang jalur tombol "Up": orderan yang sudah diterima rider tetapi belum
-        // selesai setelah 60 menit dikirimi push (alarm) otomatis, lalu diulang tiap
-        // 30 menit selama belum selesai. Push inilah yang membangunkan HP rider yang
+        // selesai setelah 40 menit dikirimi push (alarm) otomatis, lalu diulang tiap
+        // 10 menit selama belum selesai. Push inilah yang membangunkan HP rider yang
         // sedang tidur; aplikasi rider sendiri menampilkan popup pertanyaannya.
         // Tahap yang sudah dikirim dicatat di dokumen order lewat transaksi, sehingga
         // dua HP/PC admin yang sama-sama terbuka tidak mengirim dobel.
-        const PS_AWAL_MS = 60 * 60 * 1000;
-        const PS_ULANG_MS = 30 * 60 * 1000;
+        // Hasil kirimnya tampil sebagai badge "Sudah Up" di kartu Pantauan:
+        //   - push gagal (HP rider tanpa token / jaringan) -> dicatat di pengingat_selesai_gagal
+        //   - popup benar-benar muncul di HP rider -> aplikasi rider mengisi pengingat_selesai_dilihat
+        const PS_AWAL_MS = 40 * 60 * 1000;
+        const PS_ULANG_MS = 10 * 60 * 1000;
         let psSedangJalan = false;
         window.pengingatSelesaiOtomatis = async () => {
             if (psSedangJalan || !navigator.onLine) return;
@@ -9169,7 +9422,11 @@
                     } catch (e) { console.warn('Pengingat selesai gagal dicatat:', e); continue; }
 
                     if (bolehKirim) {
-                        sendPushNotification(o.rider_uid, "⏰ ORDERAN BELUM SELESAI ⏰", "Apakah orderan kamu sudah selesai? Jika sudah selesai, silakan selesaikan di aplikasi.", "ALARM_DARURAT");
+                        const hasilUp = await sendPushNotification(o.rider_uid, "⏰ ORDERAN BELUM SELESAI ⏰", "Apakah orderan kamu sudah selesai? Jika sudah selesai, silakan selesaikan di aplikasi.", "ALARM_DARURAT");
+                        if (hasilUp !== 'terkirim') {
+                            // Ditulis hanya saat gagal (hemat write). Badge di Pantauan jadi merah.
+                            updateDoc(ref, { pengingat_selesai_gagal: tahap, pengingat_selesai_gagal_ket: hasilUp === 'tanpa_token' ? 'tanpa_token' : 'gagal' }).catch(() => {});
+                        }
                     }
                 }
             } finally { psSedangJalan = false; }
@@ -9210,6 +9467,11 @@
                     }
 
                     await batch.commit();
+                    // Order selesai -> baru sekarang dimunculkan di Riwayat Harian rider
+                    // (selama belum selesai, riwayatnya ditahan lewat tanda belum_selesai).
+                    if (order.rider_uid && order.daily_order_id) {
+                        updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'users', order.rider_uid, 'daily_orders', order.daily_order_id), { belum_selesai: false }).catch(() => {});
+                    }
                     if (order.rider_uid) sendPushNotification(order.rider_uid, "✅ ORDERAN SELESAI ✅", "Orderan telah diselesaikan oleh Admin. Kamu kembali ke antrean radar.");
                     
                     window.showAlert('Berhasil', 'Orderan berhasil diselesaikan dan masuk ke Histori.', 'success');
