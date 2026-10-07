@@ -5358,7 +5358,7 @@
                 "UID155": 2, "UID164": 2, "UID174": 2, "UID183": 2, "UID292": 2,
                 "UID196": 3, "UID203": 3, "UID214": 3, "UID226": 3, "UID232": 3,
                 "UID247": 3, "UID256": 3, "UID267": 3, "UID275": 3, "UID303": 3,
-                "UID315": 3,
+                "UID315": 3,"UID442": 3,
                 "UID326": 4, "UID339": 4, "UID347": 4, "UID328": 4, "UID337": 4,
                 "UID348": 4
             };
@@ -6679,6 +6679,7 @@
             'UID357': 'https://bit.ly/riderekofathullah',
             'UID371': 'https://bit.ly/riderirvan',
             'UID559': 'https://bit.ly/riderarisjanuarianto',
+			'UID442': 'https://bit.ly/ridermaryanto',
             'UID364': 'https://bit.ly/riderchoirul'
         };
 
@@ -14286,7 +14287,7 @@
             const customerNameEl = document.getElementById('incoming-customer-name');
 
             if (customerNameEl) {
-                customerNameEl.innerHTML = `<i class="fa-solid fa-user"></i> ${data.customer_name || data.Customer_Name || 'Pelanggan'}`;
+                customerNameEl.innerHTML = `<i class="fa-solid fa-user"></i> ${window.escapeHtmlPesanan(data.customer_name || data.Customer_Name || 'Pelanggan')}`;
             }
 
             // Hitung ongkir lengkap (tambahkan fallback huruf besar/kecil untuk antisipasi database admin)
@@ -14324,7 +14325,7 @@
                             return `<div class="h-2"></div>`;
                         }
                         
-                        return `<div class="text-white font-bold text-[15px] leading-snug">${cleanName}</div>`;
+                        return `<div class="text-white font-bold text-[15px] leading-snug">${window.escapeHtmlPesanan(cleanName)}</div>`;
                     }).join('');
                 } else {
                     itemsListEl.innerHTML = `<div class="text-gray-400 italic text-[15px]">- Pesanan dari admin (tanpa rincian item)</div>`;
@@ -19347,5 +19348,742 @@ window.PembuatQR = PembuatQR;
     document.addEventListener('pointerdown', sekali, true);
 })();
 </script>
+<!-- ================= PERINGAN APLIKASI RIDER (7 Okt 2026) =================
+     Tempel SELURUH blok ini tepat SEBELUM </body> (paling bawah file, setelah
+     blok "KONFIRMASI KELUAR"). Tidak ada kode lama yang dihapus/diubah.
+     Cara membatalkan: hapus blok ini, aplikasi kembali persis seperti semula.
+     Semua pemantau realtime (order, antrean, saldo, status) TIDAK disentuh. -->
+<script>
+(function () {
+    'use strict';
+
+    // Saklar per bagian. Ubah ke false bila salah satu bagian ingin dimatikan.
+    var PAKAI_HEMAT_HITUNG   = true;  // A+B: hitung ulang riwayat/pendapatan hanya bila datanya memang berubah
+    var PAKAI_HEMAT_PEMANTAU = true;  // C+D: jangan pasang ulang pemantau & muat ulang profil di setiap perubahan
+    var PAKAI_SELESAI_CEPAT  = true;  // E: foto bukti diunggah lebih awal, tombol Selesai tidak menunggu lama
+    var PAKAI_ORDER_CEPAT    = true;  // F: saat aplikasi dibuka lagi, order yang menunggu langsung ditanyakan ke server
+    var PAKAI_SEGARKAN_SAMBUNGAN = true; // F: sambungan realtime disambung ulang bila terbukti tertinggal
+
+    var PROYEK = 'onbid-2f87a';
+    var APP_ID = (typeof __app_id !== 'undefined') ? __app_id : PROYEK;
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var URL_ST = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
+    var ID_SAH = /^[A-Za-z0-9_-]{1,128}$/;
+    var SPIN = '<i class="fa-solid fa-spinner animate-spin"></i>';
+
+    // =====================================================================
+    // A. PENGUBAH TANGGAL DIINGAT
+    // parseSheetDate dipanggil puluhan ribu kali setiap pendapatan dihitung
+    // ulang, dan tiap panggilan memakai Intl (lambat di HP). Hasil untuk teks
+    // tanggal yang sama selalu sama, jadi cukup dihitung sekali lalu diingat.
+    // =====================================================================
+    if (PAKAI_HEMAT_HITUNG && typeof window.parseSheetDate === 'function') {
+        var parseAsli = window.parseSheetDate;
+        var ingatTgl = new Map();
+        window.parseSheetDate = function (x) {
+            if (typeof x !== 'string') return parseAsli(x);
+            var c = ingatTgl.get(x);
+            if (c !== undefined) return c;
+            c = parseAsli(x);
+            if (ingatTgl.size > 5000) ingatTgl.clear();
+            ingatTgl.set(x, c);
+            return c;
+        };
+    }
+
+    // =====================================================================
+    // B. PENGGABUNG DATA RIWAYAT (pengganti combineAndRenderData)
+    // Dulu: setiap kiriman realtime (walau isinya SAMA) memicu urut ulang 800
+    // order, menulis ~ratusan KB ke memori HP, lalu menghitung ulang semuanya.
+    // Saat terima/selesai order ini terjadi 3-4 kali berturut-turut.
+    // Sekarang: kalau isinya sama -> dilewati. Kalau berubah -> diproses saat
+    // itu juga (tidak ditunda), hanya penyimpanan ke memori HP yang digeser
+    // 1,5 detik ke belakang supaya layar tidak tersendat.
+    // =====================================================================
+    var tandaTerakhir = null, riwayatTerakhir = null, rafMenunggu = false;
+    var timerSimpan = null, perluSimpan = false;
+
+    function simpanRiwayatSekarang() {
+        clearTimeout(timerSimpan); timerSimpan = null;
+        if (!perluSimpan) return;
+        perluSimpan = false;
+        try {
+            // Hanya disimpan bila akun yang login memang pemilik data ini
+            var uidToken = (typeof window.getRiderUid === 'function') ? window.getRiderUid() : null;
+            if (!uidToken || !currentUserUID) return;
+            if (String(uidToken).trim().toUpperCase() !== String(currentUserUID).trim().toUpperCase()) return;
+            localStorage.setItem('rider_data_' + currentUserUID, JSON.stringify(rawData));
+        } catch (e) { console.warn('Simpan riwayat ke HP gagal:', e && e.name); }
+    }
+    document.addEventListener('visibilitychange', function () { if (document.hidden) simpanRiwayatSekarang(); });
+    window.addEventListener('pagehide', simpanRiwayatSekarang);
+
+    function kunciUrut(it) {
+        var p = String(parseSheetDate(it.Tanggal) || '').split('-'); // MM-DD-YYYY
+        var tgl = p.length === 3 ? (Number(p[2]) * 10000 + Number(p[0]) * 100 + Number(p[1])) : 0;
+        var m = /^(\d{1,2})\D(\d{2})/.exec(String(parseSheetTime(it.Jam) || ''));
+        var jam = m ? (Number(m[1]) * 100 + Number(m[2])) : 0;
+        return (tgl || 0) * 10000 + jam;
+    }
+
+    function gabungRingan() {
+        var todayStr = getJakartaDateString();
+        var liveData = window.firebaseData || [];
+        var riwayat = window.appsScriptData || [];
+
+        var tanda = '';
+        try { tanda = todayStr + '|' + JSON.stringify(liveData); } catch (e) { tanda = ''; }
+        if (tanda && tanda === tandaTerakhir && riwayat === riwayatTerakhir) {
+            // Data sama persis dengan yang sudah tampil -> tidak perlu kerja apa-apa
+            if (typeof window.tampilkanBeranda === 'function') window.tampilkanBeranda();
+            var ik = document.getElementById('refresh-icon');
+            if (ik) ik.classList.remove('refreshing');
+            return;
+        }
+
+        var filterDate = new Date(2026, 3, 21);
+        var finalData = [];
+        riwayat.forEach(function (item) {
+            var s = parseSheetDate(item.Tanggal);
+            var d = new Date();
+            if (s) { var p = s.split('-'); if (p.length === 3) d = new Date(p[2], p[0] - 1, p[1]); }
+            if (d >= filterDate && s !== todayStr) {
+                finalData.push(Object.assign({}, item, { is_sheet: false, is_realtime: false }));
+            }
+        });
+        liveData.forEach(function (fb) {
+            if (parseSheetDate(fb.Tanggal) === todayStr) {
+                finalData.push(Object.assign({}, fb, { is_sheet: false, is_realtime: true }));
+            }
+        });
+
+        // Urut terbaru di atas. Kunci urut dihitung SEKALI per order (dulu dihitung
+        // ulang di setiap perbandingan, ribuan kali).
+        var berkunci = finalData.map(function (it) { return { it: it, k: kunciUrut(it) }; });
+        berkunci.sort(function (a, b) { return b.k - a.k; });
+
+        var unik = new Map();
+        berkunci.forEach(function (o) {
+            var item = o.it;
+            var key = item.id || (item.Tanggal + '_' + item.Jam + '_' + item.Nominal_Kotor + '_' + item.Nama_Pelanggan);
+            if (!unik.has(key) || item.is_realtime) unik.set(key, item);
+        });
+        rawData = Array.from(unik.values());
+
+        try { localStorage.setItem('rider_uid', currentUserUID); } catch (e) {}
+        perluSimpan = true;
+        clearTimeout(timerSimpan);
+        timerSimpan = setTimeout(simpanRiwayatSekarang, 1500);
+
+        tandaTerakhir = tanda;
+        riwayatTerakhir = riwayat;
+
+        if (rafMenunggu) return; // sudah ada gambar ulang yang antre; ia akan memakai data terbaru
+        rafMenunggu = true;
+        requestAnimationFrame(function () {
+            rafMenunggu = false;
+            try {
+                updateUI();
+                var validEntry = rawData.find(function (i) { return i.Nama_Rider; }) || rawData[0];
+                if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
+            } catch (e) {
+                console.error('Gambar ulang riwayat gagal:', e);
+                tandaTerakhir = null; // paksa dicoba lagi pada kiriman berikutnya
+            }
+            if (typeof window.tampilkanBeranda === 'function') window.tampilkanBeranda();
+            var ikon = document.getElementById('refresh-icon');
+            if (ikon) ikon.classList.remove('refreshing');
+            setTimeout(showWelcomePopup, 500);
+        });
+    }
+    if (PAKAI_HEMAT_HITUNG && typeof window.combineAndRenderData === 'function') {
+        window._combineAndRenderDataAsli = window.combineAndRenderData;
+        window.combineAndRenderData = gabungRingan;
+    }
+
+    // =====================================================================
+    // C. updateUI TIDAK LAGI MEMASANG ULANG SEMUANYA
+    // Dulu, setiap riwayat berubah, updateUI ikut: memutus & memasang ulang
+    // pemantau order + pemantau suspend, dan mengunduh ulang profil (termasuk
+    // foto profil yang besar) 2x. Itu yang paling terasa "berat" & boros read.
+    // Sekarang panggilan DARI updateUI dibatasi (5-10 menit sekali). Panggilan
+    // dari tempat lain (login, aplikasi dibuka lagi, notifikasi diklik, simpan
+    // rekening) tetap jalan seperti biasa, jadi realtime tidak berubah.
+    // =====================================================================
+    var dalamUpdateUI = false;
+    if (PAKAI_HEMAT_PEMANTAU && typeof window.updateUI === 'function') {
+        var updateUIAsli = window.updateUI;
+        window.updateUI = function () {
+            dalamUpdateUI = true;
+            try { return updateUIAsli.apply(this, arguments); }
+            finally { dalamUpdateUI = false; }
+        };
+    }
+    function bungkusHemat(nama, jedaMs) {
+        var asli = window[nama];
+        if (!PAKAI_HEMAT_PEMANTAU || typeof asli !== 'function' || asli._hemat) return;
+        var terakhir = {};
+        var f = function (uid) {
+            var k = String(uid || '').trim().toUpperCase();
+            if (window.isFirebaseReady) {
+                var now = Date.now();
+                if (dalamUpdateUI && terakhir[k] && (now - terakhir[k]) < jedaMs) return;
+                terakhir[k] = now;
+            }
+            return asli.apply(this, arguments);
+        };
+        f._hemat = true;
+        window[nama] = f;
+    }
+    // Fungsi profil (sudah ada sejak awal halaman)
+    bungkusHemat('loadFotoProfilRider', 10 * 60 * 1000);
+    bungkusHemat('checkRiderBankInfo', 10 * 60 * 1000);
+    bungkusHemat('checkHealthService', 10 * 60 * 1000);
+
+    // =====================================================================
+    // D. LAYAR "TUGAS BERJALAN" TIDAK DIGAMBAR ULANG BILA ISINYA SAMA
+    // =====================================================================
+    var tandaOverlay = null;
+    function pasangPenjagaOverlay() {
+        var tampilAsli = window.showActiveOrderOverlay;
+        var sembunyiAsli = window.hideActiveOrderOverlay;
+        if (typeof tampilAsli === 'function' && !tampilAsli._hemat && PAKAI_HEMAT_PEMANTAU) {
+            var f = function (data, docId) {
+                if (window.isFinishingOrder === true || !data) return tampilAsli.apply(this, arguments);
+                var t = '';
+                try {
+                    t = docId + '|' + JSON.stringify([
+                        data.customer_name, data.customer_phone,
+                        data.fee, data.Fee, data.nominal_kotor, data.Nominal_Kotor,
+                        data.tambahan, data.Tambahan, data.extra, data.Extra,
+                        data.pesanan_text, data.items_string, data.List_Pesanan, data.items,
+                        data.accepted_at ? data.accepted_at.seconds : 0
+                    ]);
+                } catch (e) { t = ''; }
+                var ov = document.getElementById('active-order-overlay');
+                var terlihat = ov && !ov.classList.contains('hidden');
+                if (t && t === tandaOverlay && terlihat && window.currentActiveOrderId === docId) return;
+                var h = tampilAsli.apply(this, arguments);
+                ov = document.getElementById('active-order-overlay');
+                tandaOverlay = (t && ov && !ov.classList.contains('hidden') && window.currentActiveOrderId === docId) ? t : null;
+                return h;
+            };
+            f._hemat = true;
+            window.showActiveOrderOverlay = f;
+        }
+        if (typeof sembunyiAsli === 'function' && !sembunyiAsli._hemat) {
+            var g = function () {
+                tandaOverlay = null;
+                praUnggah = null; // foto order ini sudah tidak dipakai
+                return sembunyiAsli.apply(this, arguments);
+            };
+            g._hemat = true;
+            window.hideActiveOrderOverlay = g;
+        }
+    }
+
+    // =====================================================================
+    // E. SELESAIKAN ORDER LEBIH CEPAT
+    // Dulu urutannya: tekan OK -> perkecil foto -> unggah -> ambil link ->
+    // cek kepemilikan order -> TUNGGU status rider tersimpan -> baru selesai.
+    // Semua ditunggu satu per satu, jadi "loading terus".
+    // Sekarang:
+    //  1) Foto mulai diunggah begitu foto dipilih (selagi rider mengetik
+    //     keterangan & memilih metode bayar). Saat OK ditekan biasanya sudah beres.
+    //  2) Pengecekan kepemilikan order ke server TETAP ada (pengaman order ditarik).
+    //  3) Penulisan status rider tetap dikirim detik itu juga, tapi layar tidak
+    //     lagi menunggu balasannya.
+    // =====================================================================
+    var praUnggah = null;
+
+    function base64KeBlob(dataUrl) {
+        var bagian = String(dataUrl).split(',');
+        var tipe = (/data:([^;]+)/.exec(bagian[0]) || [])[1] || 'image/jpeg';
+        var biner = atob(bagian[1]);
+        var buf = new Uint8Array(biner.length);
+        for (var i = 0; i < biner.length; i++) buf[i] = biner.charCodeAt(i);
+        return new Blob([buf], { type: tipe });
+    }
+    function kecilkanFoto(dataUrl, lebarMaks, mutu) {
+        return new Promise(function (selesai) {
+            try {
+                var img = new Image();
+                img.onload = function () {
+                    try {
+                        var w = img.width, h = img.height;
+                        if (w > lebarMaks) { h = Math.round(h * (lebarMaks / w)); w = lebarMaks; }
+                        var c = document.createElement('canvas');
+                        c.width = w; c.height = h;
+                        c.getContext('2d').drawImage(img, 0, 0, w, h);
+                        selesai(c.toDataURL('image/jpeg', mutu));
+                    } catch (e) { selesai(dataUrl); }
+                };
+                img.onerror = function () { selesai(dataUrl); };
+                img.src = dataUrl;
+            } catch (e) { selesai(dataUrl); }
+        });
+    }
+    function unggahBlob(st, imageRef, blob, lapor) {
+        return new Promise(function (selesai, gagal) {
+            var tugas = st.uploadBytesResumable(imageRef, blob, { contentType: 'image/jpeg', cacheControl: 'public,max-age=31536000' });
+            var batas = function () { try { tugas.cancel(); } catch (e) {} gagal(new Error('Unggahan terlalu lama')); };
+            var pengawas = setTimeout(batas, 90000);
+            tugas.on('state_changed', function (snap) {
+                clearTimeout(pengawas);
+                pengawas = setTimeout(batas, 90000);
+                if (snap.totalBytes > 0) lapor(Math.round((snap.bytesTransferred / snap.totalBytes) * 100));
+            }, function (err) { clearTimeout(pengawas); gagal(err); },
+               function () { clearTimeout(pengawas); selesai(); });
+        });
+    }
+    function buatUnggah(dataUrl, orderId) {
+        var p = { sumber: dataUrl, orderId: orderId, persen: 0, gagal: false, padaProgres: null, janji: null };
+        p.janji = (async function () {
+            var st = await import(URL_ST);
+            var storage = st.getStorage();
+            var foto = await kecilkanFoto(dataUrl, 720, 0.6);
+            var blob = base64KeBlob(foto);
+            var lapor = function (n) {
+                p.persen = n;
+                if (typeof p.padaProgres === 'function') { try { p.padaProgres(n); } catch (e) {} }
+            };
+            var jalur = 'artifacts/' + APP_ID + '/public/data/order_proofs/' + orderId + '_' + Date.now() + '.jpg';
+            var r = st.ref(storage, jalur);
+            try {
+                await unggahBlob(st, r, blob, lapor);
+            } catch (e1) {
+                console.warn('Unggahan pertama gagal, mencoba ulang:', e1);
+                await new Promise(function (ok) { setTimeout(ok, 1500); });
+                r = st.ref(storage, jalur.replace('.jpg', '_r.jpg'));
+                await unggahBlob(st, r, blob, lapor);
+            }
+            return await st.getDownloadURL(r);
+        })();
+        p.janji.catch(function () { p.gagal = true; });
+        return p;
+    }
+    function siapkanUnggahBukti() {
+        if (!PAKAI_SELESAI_CEPAT) return;
+        try {
+            var d = window.finishPhotoBase64, id = window.currentActiveOrderId;
+            if (!d || !id || !navigator.onLine || !window.isFirebaseReady) return;
+            if (!ID_SAH.test(String(id))) return;
+            if (praUnggah && praUnggah.sumber === d && praUnggah.orderId === id && !praUnggah.gagal) return;
+            praUnggah = buatUnggah(d, id);
+        } catch (e) { console.warn('Unggah awal foto dilewati:', e); }
+    }
+
+    // Mulai unggah begitu foto dipilih (kamera Android maupun galeri)
+    if (typeof window.receiveCompressedPhotoFromAndroid === 'function') {
+        var terimaAsli = window.receiveCompressedPhotoFromAndroid;
+        window.receiveCompressedPhotoFromAndroid = function () {
+            var h = terimaAsli.apply(this, arguments);
+            siapkanUnggahBukti();
+            return h;
+        };
+    }
+    if (typeof window.previewFinishPhoto === 'function') {
+        var pratinjauAsli = window.previewFinishPhoto;
+        window.previewFinishPhoto = async function () {
+            var h = await pratinjauAsli.apply(this, arguments);
+            siapkanUnggahBukti();
+            return h;
+        };
+    }
+    if (typeof window.removeFinishPhoto === 'function') {
+        var hapusFotoAsli = window.removeFinishPhoto;
+        window.removeFinishPhoto = function () {
+            praUnggah = null;
+            return hapusFotoAsli.apply(this, arguments);
+        };
+    }
+
+    var sedangSelesai = false;
+    async function selesaikanOrderRingan() {
+        if (sedangSelesai) return; // cegah tertekan dua kali
+        var idOrder = window.currentActiveOrderId;
+        var fotoSumber = window.finishPhotoBase64;
+        if (!idOrder || !fotoSumber) { alert('Foto bukti belum ada. Ambil foto dulu lalu coba lagi.'); return; }
+        sedangSelesai = true;
+
+        var uidRider = window.getRiderUid();
+        var descEl = document.getElementById('finish-photo-desc');
+        var desc = descEl ? descEl.value.trim() : '';
+        var btnMain = document.getElementById('btn-finish-order');
+        var btnRest = document.getElementById('btn-finish-and-rest');
+        var isResting = window.isRestingAfterFinish === true;
+        var htmlMain = btnMain ? btnMain.innerHTML : '';
+        var htmlRest = btnRest ? btnRest.innerHTML : '';
+        var setTeks = function (teks) {
+            if (btnMain) btnMain.innerHTML = SPIN + ' ' + teks;
+            if (isResting && btnRest) btnRest.innerHTML = SPIN + ' ' + teks;
+        };
+        var pulihkanTombol = function () {
+            if (btnMain) { btnMain.disabled = false; btnMain.innerHTML = htmlMain; }
+            if (btnRest) { btnRest.disabled = false; btnRest.innerHTML = htmlRest; }
+        };
+
+        if (btnMain) btnMain.disabled = true;
+        if (btnRest) btnRest.disabled = true;
+        setTeks('Menyelesaikan...');
+        window.isFinishingOrder = true;
+
+        try {
+            // ---------- 1. FOTO BUKTI (pakai unggahan awal bila ada) ----------
+            setTeks('Mengunggah Foto...');
+            var proofImageUrl = '';
+            try {
+                var progres = function (n) { setTeks('Mengunggah Foto ' + n + '%'); };
+                var cocok = !!(praUnggah && praUnggah.sumber === fotoSumber && praUnggah.orderId === idOrder && !praUnggah.gagal);
+                var p = cocok ? praUnggah : (praUnggah = buatUnggah(fotoSumber, idOrder));
+                p.padaProgres = progres;
+                if (p.persen > 0) progres(p.persen);
+                try {
+                    proofImageUrl = await p.janji;
+                } catch (eAwal) {
+                    if (!cocok) throw eAwal;
+                    // unggahan awal gagal (sinyal) -> unggah ulang dari nol sekali lagi
+                    setTeks('Sinyal lemah, mencoba lagi...');
+                    p = praUnggah = buatUnggah(fotoSumber, idOrder);
+                    p.padaProgres = progres;
+                    proofImageUrl = await p.janji;
+                }
+            } catch (uploadErr) {
+                console.error('Gagal mengunggah ke Firebase Storage:', uploadErr);
+                praUnggah = null;
+                alert('Gagal mengunggah foto! Pastikan koneksi internet stabil, lalu coba lagi.');
+                pulihkanTombol();
+                return;
+            }
+
+            // ---------- 2. TANDAI SELESAI DI SERVER (dengan pengaman kepemilikan) ----------
+            setTeks('Memproses Data...');
+            var fs = await import(URL_FS);
+            var db = fs.getFirestore();
+            var orderRef = fs.doc(db, 'artifacts', APP_ID, 'public', 'data', 'active_orders', idOrder);
+
+            var elMetode = document.querySelector('input[name="payment_method"]:checked');
+            var metode = elMetode ? elMetode.value : '';
+            var elNominal = document.getElementById('payment-nominal-input');
+            var nominalTransfer = parseInt(String(elNominal ? elNominal.value : '').replace(/\./g, ''), 10) || 0;
+
+            var dataSelesai = {
+                status: 'completed',
+                finished_at: fs.serverTimestamp(),
+                proof_desc: desc,
+                proof_image: proofImageUrl
+            };
+            if (metode === 'Tunai' || metode === 'Transfer') {
+                dataSelesai.payment_method = metode;
+                dataSelesai.payment_nominal = metode === 'Transfer' ? Math.max(0, Math.min(100000000, nominalTransfer)) : 0;
+            }
+
+            var uidKu = String(uidRider || '').trim().toUpperCase();
+            var idDaily = '';
+            var bolehSelesai = await fs.runTransaction(db, async function (trx) {
+                var snapO = await trx.get(orderRef);
+                if (!snapO.exists()) return false;
+                var dO = snapO.data();
+                if (String(dO.rider_uid || '').trim().toUpperCase() !== uidKu) return false;
+                idDaily = String(dO.daily_order_id || '');
+                var stO = String(dO.status || '').trim().toLowerCase();
+                if (stO === 'completed') return true;
+                if (stO !== 'processing' && stO !== 'assigned') return false;
+                trx.update(orderRef, dataSelesai);
+                return true;
+            });
+            if (!bolehSelesai) {
+                var errDitarik = new Error('Order sudah ditarik admin');
+                errDitarik.orderDitarik = true;
+                errDitarik.idOrder = idOrder;
+                throw errDitarik;
+            }
+
+            // ===== Mulai dari sini order SUDAH sah selesai di server. =====
+            // Langkah di bawah tidak boleh membuat rider melihat pesan "gagal".
+
+            // Buka tanda riwayat harian (0 read)
+            try {
+                if (uidKu && ID_SAH.test(idDaily)) {
+                    fs.updateDoc(fs.doc(db, 'artifacts', PROYEK, 'users', uidKu, 'daily_orders', idDaily), { belum_selesai: false }).catch(function () {});
+                }
+            } catch (eRiwayat) { console.warn('Tanda riwayat gagal dibuka:', eRiwayat); }
+
+            var toggleEl = document.getElementById('onbid-toggle');
+            var statusOnbidBaru = toggleEl ? toggleEl.checked : false;
+            try {
+                if (isResting) {
+                    statusOnbidBaru = false;
+                    if (toggleEl) toggleEl.checked = false;
+                    if (typeof updateOnbidUI === 'function') updateOnbidUI(false);
+                    localStorage.setItem('rider_onbid_status', 'false');
+                    if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(false);
+                    window.isRestingAfterFinish = false;
+                }
+            } catch (eIstirahat) { console.warn(eIstirahat); }
+
+            // Status rider: dikirim SEKARANG juga, tapi layar tidak menunggu balasannya.
+            if (uidRider) {
+                var statusRef = fs.doc(db, '/status_rider_aktif', String(uidRider).trim());
+                var isiStatus = {
+                    is_available: statusOnbidBaru,
+                    is_online: statusOnbidBaru,
+                    in_main_queue: statusOnbidBaru,
+                    last_drop_time: fs.serverTimestamp(),
+                    last_drop_desc: desc,
+                    proof_desc: desc,
+                    last_drop_image: proofImageUrl,
+                    last_order_id: idOrder
+                };
+                var kirimStatus = function () { return fs.setDoc(statusRef, isiStatus, { merge: true }); };
+                kirimStatus().catch(function (e1) {
+                    console.warn('Status rider gagal tersimpan, dicoba lagi:', e1 && e1.code);
+                    setTimeout(function () {
+                        kirimStatus().catch(function (e2) {
+                            console.error('Status rider tetap gagal tersimpan:', e2 && e2.code);
+                            if (typeof window.showCustomToast === 'function') {
+                                window.showCustomToast('Order selesai, tapi status antrean belum tersimpan. Matikan lalu nyalakan lagi ON-BID.');
+                            }
+                        });
+                    }, 3000);
+                });
+            }
+
+            // Catatan pembayaran di HP (untuk menu Cek Transfer)
+            try {
+                var elIdKunci = document.getElementById('payment-hidden-order-id');
+                var elNamaKunci = document.getElementById('payment-hidden-customer-name');
+                var idKunci = elIdKunci ? elIdKunci.value : '';
+                var namaKunci = elNamaKunci ? elNamaKunci.value : '';
+                if (metode && uidRider) {
+                    var dateStr = getJakartaDateString();
+                    var timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+                    var totalKotor = (window.currentActiveOrderBaseFee || 0) * 1000;
+                    var namaAman = (namaKunci || 'Orderan').replace(/['"\\]/g, '');
+                    var kunciBayar = idKunci
+                        ? ('pay_' + uidRider + '_' + idKunci)
+                        : ('pay_' + uidRider + '_' + dateStr.replace(/-/g, '') + '_' + timeStr.replace(/:/g, '') + '_' + totalKotor);
+                    localStorage.setItem(kunciBayar, JSON.stringify({
+                        type: metode,
+                        nominal: metode === 'Transfer' ? nominalTransfer : 0,
+                        timestamp: Date.now(),
+                        orderName: namaAman,
+                        dateStr: dateStr,
+                        timeStr: timeStr,
+                        orderId: idKunci || idOrder || ''
+                    }));
+                    if (typeof window.cleanupOldPayments === 'function') window.cleanupOldPayments();
+                    if (typeof window.renderTransferHistory === 'function') window.renderTransferHistory();
+                }
+            } catch (eBayar) { console.warn('Catatan pembayaran lokal gagal disimpan:', eBayar); }
+
+            try { if (typeof window.hideActiveOrderOverlay === 'function') window.hideActiveOrderOverlay(); } catch (eTutup) { console.warn(eTutup); }
+
+            try {
+                if (statusOnbidBaru) {
+                    localStorage.setItem('rider_onbid_status', 'true');
+                    if (window.AndroidInterface) window.AndroidInterface.updateOnBidStatus(true);
+                }
+            } catch (eOn) { console.warn(eOn); }
+
+            var lama = Date.now() - (window.currentOrderAcceptedTime || Date.now());
+            if (lama < 600000 && typeof window.showFastCompletionWarning === 'function') {
+                window.showFastCompletionWarning();
+            } else if (typeof window.showOrderSuccessPopup === 'function') {
+                window.showOrderSuccessPopup();
+            } else {
+                alert('Order Selesai! Cek menu Riwayat Hari Ini.');
+            }
+
+        } catch (e) {
+            console.error('Error update status selesai:', e);
+            if (e && e.orderDitarik) {
+                window.isFinishingOrder = false;
+                if (typeof window.lepasOrderBukanMilikku === 'function') window.lepasOrderBukanMilikku(e.idOrder);
+            } else {
+                alert('Gagal menyelesaikan order. Pastikan koneksi internet stabil.');
+            }
+            pulihkanTombol();
+        } finally {
+            window.isFinishingOrder = false;
+            sedangSelesai = false;
+        }
+    }
+
+    // =====================================================================
+    // F. JALUR CEPAT ORDER MASUK
+    // Masalah: HP sudah bunyi (notifikasi), tapi layar "Terima Orderan" telat.
+    // Sebabnya: selama aplikasi di belakang layar, sambungan realtime ke server
+    // ikut tertidur. Saat aplikasi dibuka lagi, sambungan itu butuh waktu untuk
+    // sadar dan menyambung ulang, dan layar order baru muncul setelahnya.
+    // Sekarang: begitu aplikasi kembali ke layar, order yang menunggu ditanyakan
+    // LANGSUNG ke server lewat jalur terpisah (tidak menunggu sambungan realtime),
+    // lalu layar "Terima Orderan" ditampilkan saat itu juga. Sambungan realtime
+    // sekaligus disegarkan supaya langsung normal kembali.
+    // Biaya: 1 read setiap aplikasi dibuka kembali ke layar.
+    // =====================================================================
+    var URL_APP  = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    var URL_LITE = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-lite.js';
+    var liteJanji = null;
+    function muatLite() {
+        if (!liteJanji) {
+            liteJanji = Promise.all([import(URL_APP), import(URL_LITE)]).then(function (m) {
+                return { L: m[1], db: m[1].getFirestore(m[0].getApp()) };
+            });
+            liteJanji.catch(function () { liteJanji = null; });
+        }
+        return liteJanji;
+    }
+    var hurufBesar = function (x) { return String(x || '').trim().toUpperCase(); };
+    var cekBerjalan = false, cekTerakhir = 0, pakaiSaringStatus = true, segarTerakhir = 0;
+
+    function bolehCekOrder() {
+        if (!PAKAI_ORDER_CEPAT || document.hidden || !navigator.onLine || !window.isFirebaseReady) return null;
+        if (typeof window.getRiderUid !== 'function' || typeof window.showIncomingOrderPopup !== 'function') return null;
+        var uidToken = window.getRiderUid();
+        if (!uidToken) return null;
+        var U = hurufBesar(uidToken);
+        // Hanya setelah rider benar-benar masuk (lolos gerbang izin perangkat):
+        if (!currentUserUID || hurufBesar(currentUserUID) !== U) return null;
+        if (window.riderSudahMasuk === false) return null;
+        var app = document.getElementById('main-app');
+        var login = document.getElementById('login-page');
+        if (!app || app.classList.contains('hidden')) return null;
+        if (login && login.style.display === 'flex') return null;
+        // Sedang mengerjakan order -> pemantau biasa yang mengurus (sama seperti aturan lama)
+        if (window.currentActiveOrderId || window.isFinishingOrder === true) return null;
+        return { U: U, variasi: Array.from(new Set([U, U.toLowerCase(), String(uidToken).trim()])) };
+    }
+
+    async function segarkanSambungan() {
+        if (!PAKAI_SEGARKAN_SAMBUNGAN) return;
+        var now = Date.now();
+        if (now - segarTerakhir < 30000) return;
+        segarTerakhir = now;
+        try {
+            var fs = await import(URL_FS);
+            var db = fs.getFirestore();
+            try { await fs.disableNetwork(db); }
+            finally { await fs.enableNetwork(db); } // apa pun yang terjadi, jaringan dinyalakan lagi
+        } catch (e) { console.warn('Segarkan sambungan gagal:', e && e.code); }
+    }
+
+    // Selama pemantau realtime belum menyusul, order yang ditampilkan lewat jalur
+    // cepat dicek ulang ke server tiap 5 detik (maks 4x). Kalau ternyata sudah
+    // bukan milik rider ini -> layarnya ditutup (memakai pengaman yang sudah ada).
+    function jagaOrder(id, variasi) {
+        var n = 0;
+        var t = setInterval(async function () {
+            n++;
+            var masihDipakai = window.currentIncomingOrderId === id || window.orderDiterimaLokal === id || window.currentActiveOrderId === id;
+            if (n > 4 || !masihDipakai) { clearInterval(t); return; }
+            try {
+                var o = await muatLite();
+                var s = await o.L.getDoc(o.L.doc(o.db, 'artifacts', APP_ID, 'public', 'data', 'active_orders', id));
+                var d = s.exists() ? s.data() : null;
+                var st = d ? String(d.status || '').trim().toLowerCase() : '';
+                var milikku = !!d && variasi.indexOf(String(d.rider_uid || '').trim()) !== -1;
+                if (milikku && (st === 'assigned' || st === 'processing')) {
+                    window._hasActiveQueryOrder = true;
+                } else {
+                    clearInterval(t);
+                    if (!milikku && window.isFinishingOrder !== true && typeof window.lepasOrderBukanMilikku === 'function') {
+                        window.lepasOrderBukanMilikku(id);
+                    }
+                }
+            } catch (e) { /* sinyal putus: tidak memutuskan apa-apa */ }
+        }, 5000);
+    }
+
+    async function cekOrderCepat() {
+        var izin = bolehCekOrder();
+        if (!izin || cekBerjalan) return;
+        var now = Date.now();
+        if (now - cekTerakhir < 3000) return;
+        cekBerjalan = true; cekTerakhir = now;
+        try {
+            var o = await muatLite();
+            var L = o.L;
+            var kol = L.collection(o.db, 'artifacts', APP_ID, 'public', 'data', 'active_orders');
+            var snap = null;
+            if (pakaiSaringStatus) {
+                try {
+                    snap = await L.getDocs(L.query(kol, L.where('rider_uid', 'in', izin.variasi), L.where('status', '==', 'assigned')));
+                } catch (eSaring) {
+                    var kode = (eSaring && eSaring.code) || '';
+                    if (kode !== 'permission-denied' && kode !== 'failed-precondition') throw eSaring;
+                    pakaiSaringStatus = false; // server menolak bentuk pertanyaan ini -> pakai bentuk yang sama dengan pemantau lama
+                }
+            }
+            if (!snap) snap = await L.getDocs(L.query(kol, L.where('rider_uid', 'in', izin.variasi)));
+
+            // Keadaan bisa berubah selama menunggu jawaban server -> periksa lagi
+            var izin2 = bolehCekOrder();
+            if (!izin2 || izin2.U !== izin.U) return;
+
+            var sudah = false;
+            snap.forEach(function (d) {
+                if (sudah) return;
+                var data = d.data() || {};
+                if (!ID_SAH.test(String(d.id))) return;
+                if (String(data.status || '').trim().toLowerCase() !== 'assigned') return;
+                if (izin.variasi.indexOf(String(data.rider_uid || '').trim()) === -1) return;
+                if (window.orderDiterimaLokal === d.id) return;
+                sudah = true;
+                var popup = document.getElementById('incoming-order-popup');
+                var sudahTampil = window.currentIncomingOrderId === d.id && popup && !popup.classList.contains('hidden');
+                if (sudahTampil) return; // pemantau realtime sudah lebih dulu menampilkannya
+                window._hasActiveQueryOrder = true;
+                window.showIncomingOrderPopup(data, d.id);
+                jagaOrder(d.id, izin.variasi);
+                segarkanSambungan(); // pemantau realtime jelas tertinggal -> sambung ulang sekarang
+            });
+        } catch (e) {
+            console.warn('Cek order cepat gagal:', e && (e.code || e.message));
+        } finally {
+            cekBerjalan = false;
+        }
+    }
+
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) cekOrderCepat(); });
+    window.addEventListener('focus', cekOrderCepat);
+    window.addEventListener('pageshow', cekOrderCepat);
+    window.addEventListener('online', cekOrderCepat);
+    if (typeof window.forceWakeUpFromAndroid === 'function') {
+        var bangunAsli = window.forceWakeUpFromAndroid;
+        window.forceWakeUpFromAndroid = function () {
+            var h = bangunAsli.apply(this, arguments);
+            cekTerakhir = 0; // notifikasi diklik -> langsung cek, tanpa jeda
+            cekOrderCepat();
+            return h;
+        };
+    }
+    // Sekali setelah aplikasi baru dibuka (begitu beranda tampil)
+    (function () {
+        var coba = 0;
+        var t = setInterval(function () {
+            coba++;
+            if (bolehCekOrder()) { clearInterval(t); cekOrderCepat(); }
+            else if (coba > 60) clearInterval(t);
+        }, 1000);
+    })();
+    if (PAKAI_ORDER_CEPAT) setTimeout(function () { muatLite().catch(function () {}); }, 4000); // siapkan lebih awal
+
+    // ---------- Pemasangan bagian yang menunggu modul Firebase siap ----------
+    function pasangSetelahModul() {
+        bungkusHemat('startSuspensionListener', 5 * 60 * 1000);
+        bungkusHemat('startOrderListener', 5 * 60 * 1000);
+        pasangPenjagaOverlay();
+        if (PAKAI_SELESAI_CEPAT && typeof window.executeFinishOrder === 'function' && window.executeFinishOrder !== selesaikanOrderRingan) {
+            window._executeFinishOrderAsli = window.executeFinishOrder;
+            window.executeFinishOrder = selesaikanOrderRingan;
+        }
+    }
+    document.addEventListener('DOMContentLoaded', pasangSetelahModul);
+    window.addEventListener('load', pasangSetelahModul);
+    if (document.readyState !== 'loading') pasangSetelahModul();
+})();
+</script>
+<!-- ================= AKHIR PERINGAN APLIKASI RIDER ================= -->
 </body>
 </html>
