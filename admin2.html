@@ -12989,6 +12989,7 @@
                 // Hanya kirim base64 jika admin mengganti fotonya
                 if (photoBase64) {
                     profileData.foto_base64 = photoBase64;
+                    if (typeof window.lbFotoLupakan === 'function') window.lbFotoLupakan(uid); // foto kecil leaderboard dibuat ulang
                 }
                 
                 batch.set(refProfile, profileData, { merge: true });
@@ -14181,6 +14182,77 @@
 
         // PEMBARUAN: Menyimpan ke bulan spesifik (YYYY-MM) dan membersihkan cache agar update langsung terlihat
         // FITUR BARU: HYBRID HEMAT READ (Hanya baca active_orders untuk Juli 2026 ke bawah, Agustus 2026 dst 0 Read)
+        // =====================================================================================
+        // FOTO KECIL UNTUK LEADERBOARD APLIKASI RIDER (HEMAT READ)
+        // Foto profil tiap rider dikecilkan jadi 96x96 lalu ikut disimpan di dokumen leaderboard
+        // yang sama, jadi aplikasi rider tidak perlu read tambahan sama sekali.
+        // Di sisi admin: 1 read per rider, lalu hasilnya disimpan di perangkat admin selama
+        // 14 hari (atau sampai fotonya diganti lewat Edit Rider), jadi tidak dibaca ulang
+        // setiap kali peringkat diterbitkan.
+        // =====================================================================================
+        const LB_FOTO_KUNCI = 'lb_foto_kecil_v1';
+        const LB_FOTO_UMUR_MS = 14 * 24 * 60 * 60 * 1000;
+        const lbFotoBacaCache = () => {
+            try { const c = JSON.parse(localStorage.getItem(LB_FOTO_KUNCI) || '{}'); return (c && typeof c === 'object' && !Array.isArray(c)) ? c : {}; }
+            catch (e) { return {}; }
+        };
+        const lbFotoSimpanCache = (c) => { try { localStorage.setItem(LB_FOTO_KUNCI, JSON.stringify(c)); } catch (e) {} };
+        // Dipanggil saat foto rider diganti, supaya foto barunya ikut di penerbitan berikutnya
+        window.lbFotoLupakan = (uid) => {
+            try { const c = lbFotoBacaCache(); delete c[String(uid || '').trim().toUpperCase()]; lbFotoSimpanCache(c); } catch (e) {}
+        };
+        // Mengecilkan foto lewat canvas. Hasilnya selalu JPEG baru, jadi apa pun isi file aslinya tidak ikut terbawa.
+        const lbKecilkanFoto = (sumber) => new Promise((resolve) => {
+            try {
+                const teks = String(sumber || '');
+                if (!teks) return resolve('');
+                const img = new Image();
+                const batas = setTimeout(() => resolve(''), 5000);
+                img.onload = () => {
+                    clearTimeout(batas);
+                    try {
+                        const S = 96;
+                        const sisi = Math.min(img.naturalWidth, img.naturalHeight);
+                        if (!sisi) return resolve('');
+                        const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+                        const ctx = cv.getContext('2d');
+                        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, S, S);
+                        // potong tengah supaya wajah tetap di tengah lingkaran avatar
+                        ctx.drawImage(img, (img.naturalWidth - sisi) / 2, (img.naturalHeight - sisi) / 2, sisi, sisi, 0, 0, S, S);
+                        let hasil = cv.toDataURL('image/jpeg', 0.7);
+                        if (hasil.length > 12000) hasil = cv.toDataURL('image/jpeg', 0.5);
+                        resolve((hasil.length <= 20000 && hasil.indexOf('data:image/jpeg;base64,') === 0) ? hasil : '');
+                    } catch (e) { resolve(''); }
+                };
+                img.onerror = () => { clearTimeout(batas); resolve(''); };
+                img.src = teks.indexOf('data:image') === 0 ? teks : 'data:image/jpeg;base64,' + teks;
+            } catch (e) { resolve(''); }
+        });
+        const lbLengkapiFoto = async (rankings) => {
+            const MAKS_RIDER = 100;      // foto hanya untuk 100 peringkat teratas
+            const MAKS_TOTAL = 500000;   // total foto dijaga jauh di bawah batas dokumen Firestore (1 MB)
+            const cache = lbFotoBacaCache();
+            const kini = Date.now();
+            let berubah = false, total = 0;
+            for (let i = 0; i < rankings.length && i < MAKS_RIDER; i++) {
+                const key = String(rankings[i].uid || '').trim().toUpperCase();
+                if (!key || key.indexOf('/') !== -1) continue;
+                let e = cache[key];
+                const masihBaru = e && (kini - Number(e.t) < LB_FOTO_UMUR_MS);
+                if (!masihBaru) {
+                    try {
+                        const snap = await getDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_profiles', key));
+                        const mentah = (snap.exists() && snap.data().foto_base64) ? snap.data().foto_base64 : '';
+                        e = { f: mentah ? await lbKecilkanFoto(mentah) : '', t: kini };
+                        cache[key] = e; berubah = true;
+                    } catch (err) { /* gagal baca: pakai simpanan lama bila ada */ }
+                }
+                if (e && typeof e.f === 'string' && e.f && (total + e.f.length) <= MAKS_TOTAL) { rankings[i].foto = e.f; total += e.f.length; }
+            }
+            if (berubah) lbFotoSimpanCache(cache);
+            return rankings;
+        };
+
         window.updateMonthlyLeaderboard = async (isSilent = false) => {
             const processUpdate = async () => {
                 let loader;
@@ -14277,6 +14349,9 @@
                         name: r.name,
                         orders: r.orders
                     }));
+                    // Sertakan foto kecil tiap rider untuk avatar di aplikasi rider.
+                    // Kalau bagian ini gagal, peringkat tetap diterbitkan tanpa foto.
+                    try { rankings = await lbLengkapiFoto(rankings); } catch (e) { console.warn('Foto leaderboard dilewati:', e); }
 
                     const leaderboardRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'leaderboard', monthVal);
                     await setDoc(leaderboardRef, {
