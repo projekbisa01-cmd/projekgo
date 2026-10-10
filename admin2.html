@@ -6633,11 +6633,39 @@
         }
         const dxRupiahRingkas = (v) => 'Rp ' + Math.round(Number(v) || 0).toLocaleString('id-ID');
 
+        // ===== RIDER BARU SELESAI ORDER: JANGAN MUNCUL DULU DI ANTREAN =====
+        // Begitu order selesai, rider tidak lagi "sibuk", tetapi aplikasi rider belum sempat menulis
+        // jam antre barunya. Selama jeda itu ia sempat tampil di nomor 1 (abu-abu, tidak bisa dipilih)
+        // sebelum pindah ke urutan paling bawah. Di sini ia disembunyikan sampai datanya diperbarui.
+        // Tanpa read/write tambahan: hanya memakai data yang sudah ada di memori.
+        const DX_TRANSISI_MAKS_MS = 60 * 1000; // pengaman: paling lama 60 detik, setelah itu tampil lagi apa adanya
+        const _dxBaruSelesai = new Map();      // uid -> { drop: jam antre lama (ms), t: waktu ditandai }
+        function dxRiderAktif(r) {
+            return (r.is_online === true || r.is_online === 'true') && (r.is_available === true || r.is_available === 'true');
+        }
+        function dxTandaiBaruSelesai(uid) {
+            const r = allRiders.find(x => x.uid === uid);
+            if (!r) return;
+            _dxBaruSelesai.set(uid, { drop: getTimestampMs(r.last_drop_time) || 0, t: Date.now() });
+            // Kalau sampai batas waktu datanya tidak berubah, gambar ulang supaya rider tampil lagi
+            setTimeout(() => { if (_dxBaruSelesai.has(uid)) { try { updateMainQueueUI(); } catch (e) {} } }, DX_TRANSISI_MAKS_MS + 500);
+        }
+        function dxMasihTransisiSelesai(r) {
+            const c = _dxBaruSelesai.get(r.uid);
+            if (!c) return false;
+            const dropKini = getTimestampMs(r.last_drop_time) || 0;
+            // Tampil lagi bila: rider sudah aktif & bisa dipilih, ATAU jam antrenya sudah berubah, ATAU sudah lewat batas waktu
+            if (dxRiderAktif(r) || dropKini !== c.drop || Date.now() - c.t > DX_TRANSISI_MAKS_MS) { _dxBaruSelesai.delete(r.uid); return false; }
+            return true;
+        }
+
         function updateMainQueueUI() {
             const container = document.getElementById('rider-queue-list');
             const countEl = document.getElementById('stat-online-riders');
             const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             let availableMainQueue = mainQueueRiders.filter(r => !busyUids.has(r.uid));
+            // Rider yang baru selesai order & belum diperbarui aplikasinya: tahan dulu (lihat catatan di atas)
+            availableMainQueue = availableMainQueue.filter(r => !dxMasihTransisiSelesai(r));
 
             const infoMainEl = document.getElementById('info-count-main');
             if (infoMainEl) infoMainEl.innerText = availableMainQueue.length;
@@ -7843,6 +7871,8 @@
                         // Kemungkinan besar orderan tersebut statusnya menjadi 'completed'
                         if (orderData.status === 'processing' || orderData.status === 'assigned') {
                             if (orderData.rider_uid) {
+                                // Tandai: rider ini baru selesai order -> ditahan dari daftar antrean sampai datanya diperbarui
+                                dxTandaiBaruSelesai(orderData.rider_uid);
                                 // PENGAMAN 3 LAPIS (Zero-Read Idempotent Retry)
                                 // Lapis 1: Eksekusi kilat untuk rider dengan sinyal normal (0.5 Detik)
                                 setTimeout(() => { window.autoCorrectRiderQueueAfterOrder(orderData.rider_uid); }, 500); 
