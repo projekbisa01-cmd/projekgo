@@ -40,6 +40,8 @@
   textarea { width: 100%; min-height: 92px; margin-top: 12px; border: 1px solid var(--ln); background: var(--bg); color: var(--ink); border-radius: 14px; padding: 12px; font: inherit; font-size: 14px; resize: vertical; outline: none; }
   textarea:focus { border-color: var(--acc); }
   .count { font-size: 11px; color: var(--mu); text-align: right; margin-top: 4px; }
+  .ord { display: table; margin: 8px auto 0; background: var(--bg); border: 1px solid var(--ln); color: var(--mu); font-size: 12px; font-weight: 700; padding: 5px 11px; border-radius: 99px; }
+  .warn .ic { background: #FEF3C7; color: #B45309; }
   .q { display: block; font-size: 13px; font-weight: 800; margin-top: 16px; }
   .q span { font-weight: 600; color: var(--mu); }
   .q + textarea { margin-top: 6px; }
@@ -66,6 +68,7 @@
       <div id="v-form" hidden>
         <div class="av" id="av">?</div>
         <h1>Bagaimana pelayanan <span id="nama">rider</span>?</h1>
+        <div class="ord" id="ord" hidden></div>
         <p class="sub">Penilaian Kakak membantu kami menjaga kualitas pengantaran.</p>
         <div class="stars" id="stars" role="radiogroup" aria-label="Pilih bintang"></div>
         <div class="lbl" id="lbl"></div>
@@ -78,13 +81,25 @@
         <div class="count"><span id="hit-pg">0</span>/300 · hanya dibaca tim PROJEKGO, tidak terlihat oleh rider</div>
         <button class="btn" id="kirim" type="button" disabled>Kirim penilaian</button>
         <div class="msg" id="msg" role="alert"></div>
-        <p class="note">Tidak perlu login. Nama dan nomor Kakak tidak ikut dikirim.</p>
+        <p class="note">Tidak perlu login. Nama dan nomor Kakak tidak ikut dikirim. Satu link hanya untuk satu pesanan dan hanya bisa dipakai sekali.</p>
       </div>
 
       <div id="v-ok" class="state ok" hidden>
         <div class="ic">✓</div>
         <h1>Terima kasih, Kak!</h1>
         <p class="sub">Penilaian Kakak sudah kami terima dan akan dibaca oleh rider serta tim PROJEKGO.</p>
+      </div>
+
+      <div id="v-sudah" class="state ok" hidden>
+        <div class="ic">✓</div>
+        <h1>Pesanan ini sudah dinilai</h1>
+        <p class="sub">Terima kasih, penilaian untuk pesanan ini sudah kami terima. Setiap pesanan hanya bisa dinilai satu kali.</p>
+      </div>
+
+      <div id="v-habis" class="state warn" hidden>
+        <div class="ic">⏰</div>
+        <h1>Waktu penilaian sudah habis</h1>
+        <p class="sub">Link penilaian berlaku 24 jam setelah pesanan selesai. Kalau ada keluhan, silakan hubungi Admin PROJEKGO.</p>
       </div>
 
       <div id="v-bad" class="state bad" hidden>
@@ -98,7 +113,7 @@
 
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-  import { getFirestore, doc, getDoc, collection, writeBatch, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-lite.js';
+  import { getFirestore, doc, getDoc, writeBatch, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-lite.js';
 
   const firebaseConfig = {
     apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -110,14 +125,18 @@
   };
   const db = getFirestore(initializeApp(firebaseConfig));
   const P = firebaseConfig.projectId;
+  const D = (...seg) => doc(db, 'artifacts', P, 'public', 'data', ...seg);
   const $ = (id) => document.getElementById(id);
-  const tampil = (id) => ['v-muat', 'v-form', 'v-ok', 'v-bad'].forEach(v => { $(v).hidden = v !== id; });
+  const tampil = (id) => ['v-muat', 'v-form', 'v-ok', 'v-sudah', 'v-habis', 'v-bad'].forEach(v => { $(v).hidden = v !== id; });
   const gagal = (judul, isi) => { if (judul) $('bad-judul').textContent = judul; if (isi) $('bad-isi').textContent = isi; tampil('v-bad'); };
 
-  const kode = new URLSearchParams(location.search).get('k') || '';
-  const JEDA_MS = 10 * 60 * 1000;   // cegah kirim berulang dari HP yang sama
-  const kunciKirim = 'ulasan_terkirim_' + kode;
-  let link = null, bintang = 0;
+  // Link sekali pakai per order: ?k=<kode rider>&o=<kode order>
+  const qs = new URLSearchParams(location.search);
+  const kode = qs.get('k') || '';
+  const kodeOrder = qs.get('o') || '';
+  const BATAS_TAMPIL_MS = 30 * 60 * 60 * 1000;   // perkiraan di layar; batas pasti (24 jam setelah selesai) dicek server
+  const kunciLokal = 'ulasan_order_' + kodeOrder;
+  let link = null, token = null, bintang = 0;
   const pilihanChip = new Set();
   const LABEL = ['', 'Sangat kurang', 'Kurang', 'Cukup', 'Baik', 'Sangat baik!'];
   const CHIP_BAIK = ['Ramah', 'Cepat sampai', 'Barang aman', 'Komunikatif', 'Rapi & sopan'];
@@ -147,26 +166,37 @@
       box.appendChild(c);
     });
   }
+  const msDari = (t) => (t && typeof t.toMillis === 'function') ? t.toMillis() : 0;
 
   async function mulai() {
     if (!/^[A-Za-z0-9]{10,32}$/.test(kode)) return gagal();
+    if (!/^[A-Za-z0-9]{12,32}$/.test(kodeOrder)) {
+      return gagal('Link ini sudah tidak dipakai', 'Penilaian sekarang memakai link khusus untuk setiap pesanan. Silakan pakai link dari pesan rider setelah pesanan selesai.');
+    }
     try {
-      const s = await getDoc(doc(db, 'artifacts', P, 'public', 'data', 'ulasan_link', kode));
-      if (!s.exists() || s.data().aktif !== true) return gagal();
-      link = s.data();
+      const [sl, st] = await Promise.all([getDoc(D('ulasan_link', kode)), getDoc(D('ulasan_token', kodeOrder))]);
+      if (!sl.exists() || sl.data().aktif !== true || !st.exists()) return gagal();
+      link = sl.data(); token = st.data();
     } catch (e) {
       return gagal('Belum bisa dibuka', 'Periksa koneksi internet lalu muat ulang halaman ini.');
     }
-    let terakhir = 0; try { terakhir = Number(localStorage.getItem(kunciKirim)) || 0; } catch (e) {}
-    if (Date.now() - terakhir < JEDA_MS) { tampil('v-ok'); return; }
+    if (token.terpakai === true) return tampil('v-sudah');
+    const dibuat = msDari(token.dibuat_at);
+    if (dibuat && Date.now() - dibuat > BATAS_TAMPIL_MS) return tampil('v-habis');
     const nama = String(link.nama || 'rider').slice(0, 60);
     $('nama').textContent = nama;
     $('av').textContent = nama.trim().split(/\s+/).slice(0, 2).map(x => x[0] || '').join('').toUpperCase() || '?';
-    // Foto kecil rider (disalin admin ke link ini). Hanya gambar JPEG base64 yang diterima.
+    // Foto kecil rider (disalin admin ke link rider). Hanya gambar JPEG base64 yang diterima.
     const foto = typeof link.foto === 'string' ? link.foto : '';
     if (foto.length <= 20000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(foto)) {
       const im = document.createElement('img'); im.src = foto; im.alt = 'Foto ' + nama;
       $('av').textContent = ''; $('av').appendChild(im); $('av').classList.add('foto');
+    }
+    if (dibuat) {
+      const d = new Date(dibuat), kini = new Date();
+      const hari = d.toDateString() === kini.toDateString() ? 'hari ini' : d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+      $('ord').textContent = `🧾 Pesanan ${hari}, ${d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
+      $('ord').hidden = false;
     }
     renderBintang();
     tampil('v-form');
@@ -175,22 +205,26 @@
   $('komentar').addEventListener('input', () => { $('hit').textContent = String($('komentar').value.length); });
   $('masukan-pg').addEventListener('input', () => { $('hit-pg').textContent = String($('masukan-pg').value.length); });
   $('kirim').addEventListener('click', async () => {
-    if (!link || bintang < 1 || bintang > 5) return;
+    if (!link || !token || bintang < 1 || bintang > 5) return;
     const btn = $('kirim'); btn.disabled = true; btn.textContent = 'Mengirim…'; $('msg').textContent = '';
     const bebas = $('komentar').value.replace(/\s+/g, ' ').trim();
     const komentar = [Array.from(pilihanChip).join(', '), bebas].filter(Boolean).join('. ').slice(0, 300);
     const masukanPg = $('masukan-pg').value.replace(/\s+/g, ' ').trim().slice(0, 300);
-    const dasar = { kode, uid: String(link.uid || ''), nama_rider: String(link.nama || '').slice(0, 60), bintang };
+    const dasar = { kode, order_kode: kodeOrder, uid: String(link.uid || ''), nama_rider: String(link.nama || '').slice(0, 60), bintang };
     try {
-      // Ulasan untuk rider dan masukan untuk PROJEKGO dikirim bersamaan (berhasil semua atau gagal semua).
-      // Masukan PROJEKGO disimpan terpisah supaya rider tidak bisa membacanya.
+      // Satu kiriman (berhasil semua / gagal semua): ulasan + tanda kode order terpakai (+ masukan PROJEKGO).
+      // Nomor dokumen ulasan = kode order, jadi satu pesanan hanya bisa punya satu ulasan.
       const b = writeBatch(db);
-      b.set(doc(collection(db, 'artifacts', P, 'public', 'data', 'ulasan_rider')), Object.assign({}, dasar, { komentar, dibuat_at: serverTimestamp() }));
-      if (masukanPg) b.set(doc(collection(db, 'artifacts', P, 'public', 'data', 'masukan_pelanggan')), Object.assign({}, dasar, { masukan: masukanPg, dibuat_at: serverTimestamp() }));
+      b.set(D('ulasan_rider', kodeOrder), Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() }));
+      b.update(D('ulasan_token', kodeOrder), { terpakai: true, dipakai_at: serverTimestamp() });
+      if (masukanPg) b.set(D('masukan_pelanggan', kodeOrder), Object.assign({}, dasar, { masukan: masukanPg, dibuat_at: serverTimestamp() }));
       await b.commit();
-      try { localStorage.setItem(kunciKirim, String(Date.now())); } catch (e) {}
+      try { localStorage.setItem(kunciLokal, String(Date.now())); } catch (e) {}
       tampil('v-ok');
     } catch (e) {
+      // Ditolak server: cek apakah sudah dinilai, atau waktunya habis
+      try { const st = await getDoc(D('ulasan_token', kodeOrder)); if (st.exists() && st.data().terpakai === true) return tampil('v-sudah'); } catch (e2) {}
+      if (e && e.code === 'permission-denied') return tampil('v-habis');
       btn.disabled = false; btn.textContent = 'Kirim penilaian';
       $('msg').textContent = 'Gagal mengirim. Periksa koneksi internet lalu coba lagi.';
     }
