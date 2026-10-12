@@ -16684,7 +16684,7 @@
                             <label class="kr-btn g sm" style="width:auto"><i class="fa-solid fa-camera"></i> ${edit ? 'Ganti foto' : 'Pilih foto'}<input id="kr-f-foto" type="file" accept="image/*" style="display:none"></label></div>
                         ${edit ? '' : '<p class="kr-sub">UID dipakai untuk login: akun Firebase-nya <b>uid…@projekgo.id</b>. UID tidak bisa diubah setelah disimpan.</p>'}
                     </div></div></div>
-                    <div class="kr-card"><div class="kr-step"><span class="kr-num">2</span><div style="flex:1;min-width:0">
+                    <div class="kr-card" id="kr-f-dok"><div class="kr-step"><span class="kr-num">2</span><div style="flex:1;min-width:0">
                         <p class="kr-h">Dokumen</p>
                         <div class="kr-two">
                             <div class="kr-fld"><label>Motor</label><input id="kr-f-motor" class="kr-in" value="${esc(dok.motor || '')}" placeholder="Honda Beat" maxlength="40"></div>
@@ -16754,6 +16754,24 @@
                 });
             }
 
+            // ---------- FOTO KECIL UNTUK HALAMAN ULASAN ----------
+            // Halaman u/ dibuka pelanggan tanpa login, jadi foto profil asli (rider_profiles) tidak bisa
+            // dibaca di sana. Admin menyalin foto KECIL (96x96, ±5 KB) ke dokumen link ulasan.
+            // Memakai pengecil & simpanan foto leaderboard yang sudah ada, jadi hemat read.
+            const FOTO_KECIL_SAH = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+            const simpanCacheFoto = (uid, f) => { try { const c = lbFotoBacaCache(); c[uid] = { f: f || '', t: Date.now() }; lbFotoSimpanCache(c); } catch (e) {} };
+            async function fotoKecilRider(uid) {   // '' = rider belum punya foto, null = gagal dibaca
+                try { const e = lbFotoBacaCache()[uid]; if (e && typeof e.f === 'string' && e.f && (Date.now() - Number(e.t)) < LB_FOTO_UMUR_MS) return e.f; } catch (e) {}
+                try {
+                    const s = await getDoc(pd('rider_profiles', uid));
+                    const mentah = s.exists() ? String(s.data().foto_base64 || '') : '';
+                    const f = mentah ? await lbKecilkanFoto(mentah) : '';
+                    simpanCacheFoto(uid, f);
+                    return f;
+                } catch (e) { return null; }
+            }
+            const fotoSah = (f) => typeof f === 'string' && f.length <= 20000 && FOTO_KECIL_SAH.test(f);
+
             async function simpanForm() {
                 const edit = !!v.uid;
                 const uid = edit ? v.uid : String(document.getElementById('kr-f-uid').value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
@@ -16784,8 +16802,12 @@
 
                 loader(true);
                 try {
-                    const b = writeBatch(db);
                     const m = (edit && master[uid]) || {};
+                    let fotoLink = '';
+                    if (fotoBaru) fotoLink = await lbKecilkanFoto(fotoBaru);
+                    else if (edit && m.foto_link !== true) fotoLink = (await fotoKecilRider(uid)) || '';
+                    if (!fotoSah(fotoLink)) fotoLink = '';
+                    const b = writeBatch(db);
                     const kode = kodeSah(m.ulasan_kode) ? m.ulasan_kode : kodeBaru();
                     const hariIni = tglHariIni();
                     const entri = {
@@ -16794,6 +16816,7 @@
                         diperbarui_oleh: emailSaya(), diperbarui_ms: Date.now()
                     };
                     if (m.ulasan_lama) entri.ulasan_lama = m.ulasan_lama;
+                    if (fotoLink) entri.foto_link = true;
 
                     if (!edit) {
                         b.set(doc(db, 'status_rider_aktif', uid), {
@@ -16819,14 +16842,14 @@
                     } else if (edit && shiftDoc(uid)) {
                         b.set(pd('rider_shifts', shiftDocId(uid)), { name: nama }, { merge: true });
                     }
-                    b.set(pd('ulasan_link', kode), { uid, nama, aktif: true, diperbarui_at: serverTimestamp() }, { merge: true });
+                    b.set(pd('ulasan_link', kode), Object.assign({ uid, nama, aktif: true, diperbarui_at: serverTimestamp() }, fotoLink ? { foto: fotoLink } : {}), { merge: true });
                     b.set(masterRef(), { riders: { [uid]: entri }, diperbarui_at: serverTimestamp() }, { merge: true });
                     const qBaru = { rider: { [uid]: qk }, diperbarui_at: serverTimestamp() };
                     if (!qris) { qBaru.gambar = QRIS_LAMA.gambar; qBaru.posisi = QRIS_LAMA.posisi; }
                     b.set(qrisRef(), qBaru, { merge: true });
 
                     await b.commit();
-                    if (fotoBaru && typeof window.lbFotoLupakan === 'function') window.lbFotoLupakan(uid);
+                    if (fotoBaru) simpanCacheFoto(uid, fotoLink);
                     fotoBaru = null;
                     v = Object.assign(v, { hal: 'detail', uid, prefill: null });
                     render();
@@ -16875,7 +16898,7 @@
                             <span>BPJS</span><span>${esc(tglTampil(d.bpjs))}</span>
                         </div>
                         ${ds.length ? `<div class="kr-tags" style="margin-top:8px">${ds.map(s => `<span class="kr-tg ${s.c}">${esc(s.t)}</span>`).join('')}</div>` : ''}
-                        ${!keluar ? `<button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="dokgas" data-uid="${esc(uid)}"><i class="fa-solid fa-file-import"></i> Ambil dokumen dari GAS lama</button>` : ''}
+                        ${!keluar ? `<div class="kr-row" style="margin-top:8px"><button type="button" class="kr-btn p sm" data-kr="editdok" data-uid="${esc(uid)}"><i class="fa-solid fa-pen"></i> Edit dokumen</button><button type="button" class="kr-btn g sm" data-kr="dokgas" data-uid="${esc(uid)}"><i class="fa-solid fa-file-import"></i> Ambil dari GAS lama</button></div>` : ''}
                     </div>
                     ${!keluar ? `<div class="kr-card"><p class="kr-h"><i class="fa-solid fa-qrcode"></i> QRIS</p>
                         <div class="kr-kv"><span>Dipakai</span><span>${esc(qLabel(qk))}</span></div>
@@ -16916,9 +16939,10 @@
                     loader(true);
                     try {
                         const kode = kodeBaru();
+                        const foto = await fotoKecilRider(uid);
                         const b = writeBatch(db);
                         if (kodeSah(m.ulasan_kode)) b.set(pd('ulasan_link', m.ulasan_kode), { aktif: false, diperbarui_at: serverTimestamp() }, { merge: true });
-                        b.set(pd('ulasan_link', kode), { uid, nama, aktif: true, diperbarui_at: serverTimestamp() });
+                        b.set(pd('ulasan_link', kode), Object.assign({ uid, nama, aktif: true, diperbarui_at: serverTimestamp() }, fotoSah(foto) ? { foto } : {}));
                         b.set(pd('rider_profiles', uid), { ulasan_kode: kode, updated_at: serverTimestamp() }, { merge: true });
                         b.set(masterRef(), { riders: { [uid]: { ulasan_kode: kode, diperbarui_ms: Date.now() } } }, { merge: true });
                         await b.commit();
@@ -17182,44 +17206,85 @@
             };
             const waktuTampil = (ms) => ms ? new Date(ms).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
             // Menerjemahkan satu baris Google Form (judul kolom = kalimat pertanyaan) berdasarkan kata kunci
+            // Bintang dari isian form: angka 5, "5", "5 - Sangat puas", "5.0", atau "★★★★★"
+            const angkaBintang = (val) => {
+                if (typeof val === 'number') return (val >= 1 && val <= 5) ? Math.round(val) : 0;
+                const t = String(val || '').trim();
+                const m = /^([1-5])(?:[.,]0+)?(?![0-9])/.exec(t);
+                if (m) return Number(m[1]);
+                const bintang = (t.match(/[★⭐]/g) || []).length;
+                return (bintang >= 1 && bintang <= 5) ? bintang : 0;
+            };
+            // Menerjemahkan satu baris Google Form berdasarkan kata kunci judul kolom (spasi & tanda baca diabaikan,
+            // jadi "PROJEKGO", "PROJEK GO", "Projek-Go" sama saja).
+            let gasKolom = [];   // contoh judul kolom dari GAS, ditampilkan kalau ada yang tidak terbaca
             const terjemahGas = (baris) => {
                 const h = { nama: '', bintang: 0, masukanRider: '', masukanPg: '', ms: 0 };
                 if (!baris || typeof baris !== 'object') return h;
                 Object.keys(baris).forEach(kunci => {
                     const k = String(kunci).toLowerCase();
+                    const kk = k.replace(/[^a-z0-9]/g, '');
                     const val = baris[kunci];
                     if (val === undefined || val === null || val === '') return;
-                    if (k.includes('projekgo') && (k.includes('masukan') || k.includes('saran'))) h.masukanPg = String(val).slice(0, 1000);
-                    else if (k.includes('masukan') || k.includes('saran') || k.includes('komentar') || k.includes('memperbaiki')) h.masukanRider = String(val).slice(0, 1000);
-                    else if (k.includes('nama')) h.nama = String(val).slice(0, 80);
-                    else if (k.includes('nilai') || k.includes('rating') || k.includes('bintang') || k.includes('sampai 5')) h.bintang = Number(val) || 0;
-                    else if (k.includes('timestamp') || k.includes('tanggal') || k.includes('waktu')) h.ms = msDari(val);
+                    if (kk.includes('timestamp') || kk.includes('tanggal') || kk.includes('waktu') || kk === 'date') { if (!h.ms) h.ms = msDari(val); }
+                    else if (kk.includes('projek')) h.masukanPg = String(val).slice(0, 1000);
+                    else if (kk.includes('nama')) { if (!h.nama) h.nama = String(val).slice(0, 80); }
+                    else if (!h.bintang && (kk.includes('nilai') || kk.includes('rating') || kk.includes('bintang') || kk.includes('sampai5') || kk.includes('skor') || kk.includes('score')) && angkaBintang(val)) h.bintang = angkaBintang(val);
+                    else if (kk.includes('masukan') || kk.includes('saran') || kk.includes('komentar') || kk.includes('memperbaiki') || kk.includes('kritik') || kk.includes('ulasan')) { if (!h.masukanRider) h.masukanRider = String(val).slice(0, 1000); }
                 });
+                // Cadangan seperti aplikasi rider: kolom mana pun yang isinya angka 1-5 pendek
+                if (!h.bintang) for (const kunci of Object.keys(baris)) { const v = baris[kunci]; if (String(v).length <= 3) { const n = angkaBintang(v); if (n) { h.bintang = n; break; } } }
                 return h;
             };
             let gasMentah = 0;
-            const gasPerRider = {};   // uid -> baris ulasan lama rider itu (cache per sesi)
+            const gasPerRider = {};   // uid -> baris ulasan lama rider itu
             const urlRating = (uid, nama) => `${RATING_GAS_URL}?uid=${encodeURIComponent(uid || '')}&nama=${encodeURIComponent(nama || '')}&t=${Date.now()}`;
             const barisGas = (j) => { const arr = Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : null); if (!arr) throw new Error('format jawaban GAS tidak dikenal'); return arr; };
             const kunciBaris = (x) => [x.ms, samakanNama(x.nama), x.bintang, x.masukanRider, x.masukanPg].join('|');
+            const namaMirip = (a, b) => { const x = samakanNama(a), y = samakanNama(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
+
+            // SIMPANAN DI HP ADMIN: ulasan form lama jarang berubah, jadi disimpan 6 jam.
+            // Tombol "Muat ulang" selalu menarik ulang dari GAS.
+            const GAS_SIMPAN_KUNCI = 'kr_ulasan_lama_v2', GAS_SIMPAN_UMUR = 6 * 60 * 60 * 1000;
+            let gasSimpanTs = 0;
+            const gasBacaSimpanan = () => {
+                try {
+                    const c = JSON.parse(localStorage.getItem(GAS_SIMPAN_KUNCI) || 'null');
+                    if (!c || !Array.isArray(c.rows) || (Date.now() - Number(c.ts)) > GAS_SIMPAN_UMUR) return false;
+                    gasCache = c.rows.filter(x => x && typeof x === 'object').map(x => ({
+                        uid: String(x.uid || ''), nama: String(x.nama || '').slice(0, 80), bintang: angkaBintang(x.bintang),
+                        masukanRider: String(x.masukanRider || '').slice(0, 1000), masukanPg: String(x.masukanPg || '').slice(0, 1000), ms: Number(x.ms) || 0 }));
+                    gasMentah = Number(c.mentah) || 0; gasKolom = Array.isArray(c.kolom) ? c.kolom.map(String).slice(0, 12) : []; gasSimpanTs = Number(c.ts) || 0;
+                    Object.keys(gasPerRider).forEach(k => delete gasPerRider[k]);
+                    if (c.perUid) gasCache.forEach(x => { if (x.uid) (gasPerRider[x.uid] = gasPerRider[x.uid] || []).push(x); });
+                    return true;
+                } catch (e) { return false; }
+            };
+            const gasSimpan = (perUid) => {
+                gasSimpanTs = Date.now();
+                try { localStorage.setItem(GAS_SIMPAN_KUNCI, JSON.stringify({ ts: gasSimpanTs, mentah: gasMentah, kolom: gasKolom, perUid: !!perUid, rows: gasCache || [] })); } catch (e) {}
+            };
+
             // GAS ulasan hanya mengirim ulasan milik rider yang diminta (uid + nama, sama seperti
             // aplikasi rider). Karena itu admin meminta per rider, 6 sekaligus, lalu digabung.
             // Kalau ternyata GAS mengirim semua baris sekaligus, cukup 1 permintaan.
             async function muatGasRider(uid, nama) {
                 if (gasPerRider[uid]) return gasPerRider[uid];
                 const arr = barisGas(await ambilJsonGas(urlRating(uid, nama)));
-                const hasil = arr.map(terjemahGas).map(x => Object.assign(x, { nama: x.nama || nama }));
+                if (arr.length && !gasKolom.length && arr[0] && typeof arr[0] === 'object') gasKolom = Object.keys(arr[0]).map(k => String(k).slice(0, 60)).slice(0, 12);
+                const hasil = arr.map(terjemahGas).map(x => Object.assign(x, { nama: x.nama || nama, uid }));
                 gasMentah += arr.length;
                 gasPerRider[uid] = hasil;
                 return hasil;
             }
-            async function muatGas() {
-                if (gasCache) return gasCache;
+            async function muatGas(paksa) {
+                if (!paksa && gasCache) return gasCache;
+                if (!paksa && gasBacaSimpanan()) return gasCache;
                 const daftar = daftarAktif().map(x => ({ uid: x.uid, nama: x.name }))
                     .concat(Object.keys(master).filter(u => master[u] && master[u].status === 'keluar').map(u => ({ uid: u, nama: master[u].nama || u })));
                 if (!daftar.length) { gasCache = []; return gasCache; }
-                gasMentah = 0; Object.keys(gasPerRider).forEach(k => delete gasPerRider[k]);
-                const semua = []; let gagal = 0, galatAkhir = '';
+                gasMentah = 0; gasKolom = []; Object.keys(gasPerRider).forEach(k => delete gasPerRider[k]);
+                const semua = []; let gagal = 0, galatAkhir = '', perUid = true;
                 try {
                     const pertama = await muatGasRider(daftar[0].uid, daftar[0].nama);
                     semua.push(...pertama);
@@ -17233,12 +17298,25 @@
                             }
                         };
                         await Promise.all([kerja(), kerja(), kerja(), kerja(), kerja(), kerja()]);
+                    } else {
+                        // GAS mengirim semua baris sekaligus: kelompokkan per rider berdasarkan nama
+                        perUid = false;
+                        Object.keys(gasPerRider).forEach(k => delete gasPerRider[k]);
+                        semua.forEach(x => { const r = daftar.find(d => namaMirip(d.nama, x.nama)); x.uid = r ? r.uid : ''; });
                     }
                     const lihat = new Set();
                     gasCache = semua.filter(x => (x.bintang >= 1 || x.masukanRider || x.masukanPg) && !lihat.has(kunciBaris(x)) && lihat.add(kunciBaris(x)));
                     gasGalat = gagal ? `${gagal} rider gagal dimuat: ${galatAkhir}` : '';
+                    if (!gagal) gasSimpan(perUid);
                 } catch (e) { gasGalat = String(e && e.message || e); gasCache = null; }
                 return gasCache;
+            }
+            // Ulasan lama satu rider: pakai simpanan kalau ada, kalau tidak minta 1x ke GAS
+            async function gasUntukRider(uid, nama) {
+                if (!gasCache) gasBacaSimpanan();
+                if (gasPerRider[uid]) return gasPerRider[uid];
+                if (gasCache) { const dariSimpanan = gasCache.filter(x => x.uid === uid || (!x.uid && namaMirip(x.nama, nama))); if (dariSimpanan.length) return dariSimpanan; }
+                return await muatGasRider(uid, nama);
             }
 
             const bintangTeks = (n) => { const b = Math.min(5, Math.max(0, Math.round(Number(n) || 0))); return b ? '★'.repeat(b) + '☆'.repeat(5 - b) : ''; };
@@ -17291,10 +17369,12 @@
                     isi = `<p class="kr-sub">${tab === 'ulasan'
                             ? 'Bintang dan masukan pelanggan <b>untuk rider</b>. Ulasan ini juga terlihat oleh rider yang bersangkutan.'
                             : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
-                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
-                        <p class="kr-sub">Form lama diambil per rider dari GAS, bisa butuh ±30 detik.</p>
+                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang (tarik ulang form lama dari GAS)' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
+                        <p class="kr-sub">Form lama diambil per rider dari GAS (±30 detik), lalu disimpan di HP ini 6 jam supaya berikutnya langsung tampil.</p>
                         ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru. Coba tekan "Muat ulang".</div>` : ''}
-                        ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet.</p>` : ''}
+                        ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet${gasSimpanTs ? ' · disimpan di HP ini, diperbarui ' + esc(waktuTampil(gasSimpanTs)) : ''}.</p>` : ''}
+                        ${sudah && gasCache && gasCache.length && (!gasCache.some(x => x.bintang >= 1) || (tab === 'masukan' && !gasCache.some(x => x.masukanPg))) && gasKolom.length
+                            ? `<div class="kr-banner w" style="margin-top:6px">Sebagian kolom form lama belum terbaca. Kirim daftar kolom ini ke pengembang: <b>${gasKolom.map(esc).join(' | ')}</b></div>` : ''}
                         ${sudah ? `<div style="margin-top:8px">${ringkasan(arr)}</div>` : ''}
                         <div class="kr-list" style="margin-top:8px;max-height:55vh">${sudah ? (tampil.map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada data.</p>') : ''}</div>
                         ${arr.length > tampil.length ? `<p class="kr-sub">Menampilkan 150 terbaru dari ${arr.length}. Pakai kolom cari untuk menyaring.</p>` : ''}`;
@@ -17316,12 +17396,12 @@
                 loader(true);
                 const tab = v.ultab === 'masukan' ? 'masukan' : 'ulasan';
                 let galatFb = '';
-                if (ulang === true) gasCache = null;   // tombol "Muat ulang": tarik ulang form lama juga
+                const paksaGas = ulang === true;   // tombol "Muat ulang": tarik ulang form lama dari GAS
                 const [fb] = await Promise.all([
                     getDocs(query(tab === 'masukan' ? masukanCol() : ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)))
                         .then(s => { const a = []; s.forEach(d => a.push(Object.assign({ id: d.id }, d.data()))); return a; })
                         .catch(e => { galatFb = String(e && (e.code || e.message) || e); return []; }),
-                    muatGas()
+                    muatGas(paksaGas)
                 ]);
                 if (tab === 'masukan') masukanCache = fb; else ulasanCache = fb;
                 loader(false);
@@ -17341,9 +17421,8 @@
                     s.forEach(d => { const u = d.data(); arr.push({ id: d.id, nama: u.nama_rider || uid, bintang: Number(u.bintang) || 0, teks: u.komentar || '', ms: msDari(u.dibuat_at), lama: false, jenis: 'ulasan' }); });
                 } catch (e) { galat = String(e && (e.code || e.message)); }
                 let g = null;
-                try { g = gasCache || await muatGasRider(uid, nama); } catch (e) { galat = (galat ? galat + '; ' : '') + 'form lama: ' + String(e && e.message || e); }
-                const nm = samakanNama(nama);
-                if (g && nm) g.filter(x => samakanNama(x.nama) === nm && (x.bintang >= 1 || x.masukanRider)).forEach(x => arr.push({ nama: x.nama, bintang: x.bintang, teks: x.masukanRider, ms: x.ms, lama: true, jenis: 'ulasan' }));
+                try { g = await gasUntukRider(uid, nama); } catch (e) { galat = (galat ? galat + '; ' : '') + 'form lama: ' + String(e && e.message || e); }
+                if (g) g.filter(x => x.bintang >= 1 || x.masukanRider).forEach(x => arr.push({ nama: x.nama || nama, bintang: x.bintang, teks: x.masukanRider, ms: x.ms, lama: true, jenis: 'ulasan' }));
                 arr.sort((a, b) => b.ms - a.ms);
                 const box2 = document.getElementById('kr-ulasan-rider');
                 if (!box2) return;
@@ -17469,6 +17548,11 @@
                     // hanya rider yang dokumennya masih kosong yang diambil dari GAS
                     const perluDok = aktif.filter(x => !dokAdaIsi((master[x.uid] || {}).dok)).map(x => x.uid);
                     try { gasPeta = await ambilDokumenGas(perluDok); } catch (e) { gasGagal = String(e && e.message || e); }
+                    // foto kecil untuk halaman ulasan (hanya rider yang belum pernah diproses; 4 sekaligus)
+                    const perluFoto = aktif.filter(x => (master[x.uid] || {}).foto_link !== true).map(x => x.uid);
+                    const fotoPeta = {}; let iF = 0, nFoto = 0;
+                    const kerjaFoto = async () => { while (iF < perluFoto.length) { const u = perluFoto[iF++]; fotoPeta[u] = await fotoKecilRider(u); } };
+                    await Promise.all([kerjaFoto(), kerjaFoto(), kerjaFoto(), kerjaFoto()]);
                     try {
                         const ops = [];   // [ref, data]
                         const hariIni = tglHariIni();
@@ -17490,8 +17574,13 @@
                             };
                             const lama = m.ulasan_lama || BITLY_LAMA[x.uid];
                             if (lama) entri.ulasan_lama = lama;
+                            const foto = Object.prototype.hasOwnProperty.call(fotoPeta, x.uid) ? fotoPeta[x.uid] : null;
+                            if (foto !== null) entri.foto_link = true;          // sudah dicoba (punya foto atau memang belum ada)
+                            const fotoIsi = fotoSah(foto) ? { foto } : {};
+                            if (fotoSah(foto)) nFoto++;
                             mPeta[x.uid] = entri;
-                            if (!kodeAda) ops.push([pd('ulasan_link', kode), { uid: x.uid, nama: entri.nama, aktif: true, diperbarui_at: serverTimestamp() }]);
+                            if (!kodeAda) ops.push([pd('ulasan_link', kode), Object.assign({ uid: x.uid, nama: entri.nama, aktif: true, diperbarui_at: serverTimestamp() }, fotoIsi)]);
+                            else if (fotoSah(foto)) ops.push([pd('ulasan_link', kode), { foto, diperbarui_at: serverTimestamp() }]);
                             const prof = { ulasan_kode: kode, status: 'aktif', updated_at: serverTimestamp() };
                             if (!dokLama && dokGas) prof.dokumen = dokGas;
                             ops.push([pd('rider_profiles', x.uid), prof]);
@@ -17507,7 +17596,7 @@
                             ops.slice(i, i + 400).forEach(([ref, data]) => b.set(ref, data, { merge: true }));
                             await b.commit();
                         }
-                        alertAman('Sinkron Selesai', `${aktif.length} rider sudah ada di sistem baru (${nBaru} baru). Dokumen dari GAS tersalin untuk ${nDok} rider.` +
+                        alertAman('Sinkron Selesai', `${aktif.length} rider sudah ada di sistem baru (${nBaru} baru). Dokumen dari GAS tersalin untuk ${nDok} rider. Foto di halaman ulasan: ${nFoto} rider diperbarui.` +
                             (!gasGagal && perluDok.length > nDok ? `<br><br>${perluDok.length - nDok} rider tidak punya data dokumen di Google Sheet GAS — isi lewat "Edit data" di detail rider.` : '') +
                             (gasGagal ? `<br><br><b>Catatan:</b> dokumen GAS gagal diambil (${esc(gasGagal)}). Tekan sinkron lagi nanti, data lain sudah aman.` : ''), gasGagal ? 'warning' : 'success');
                     } catch (e) {
@@ -17558,6 +17647,7 @@
                 else if (aksi === 'hapusmasukan') hapusUlasan(t.dataset.id, 'masukan');
                 else if (aksi === 'ultab') { v.ultab = ['ulasan', 'masukan', 'link'].includes(t.dataset.tab) ? t.dataset.tab : 'ulasan'; v.cari = ''; render(); if ((v.ultab === 'ulasan' && ulasanCache === null) || (v.ultab === 'masukan' && masukanCache === null)) muatUlasan(); }
                 else if (aksi === 'dokgas' && uidSah(uid)) ambilDokRider(uid);
+                else if (aksi === 'editdok' && uidSah(uid)) { v = Object.assign(v, { hal: 'form', uid, prefill: null }); render(); const el = document.getElementById('kr-f-dok'); if (el) { el.scrollIntoView({ block: 'start' }); const m1 = document.getElementById('kr-f-motor'); if (m1) m1.focus({ preventScroll: true }); } }
                 else if (aksi === 'salin') {
                     const isi = String(t.dataset.teks || '');
                     const ok = () => { try { if (typeof window.showCustomToast === 'function') window.showCustomToast('Link disalin'); else alertAman('Disalin', 'Link sudah disalin.', 'success'); } catch (x) {} };
