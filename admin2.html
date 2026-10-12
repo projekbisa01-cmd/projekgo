@@ -16640,7 +16640,8 @@
                         <button type="button" class="kr-tab ${v.tab === 'aktif' ? 'on' : ''}" data-kr="tab" data-tab="aktif">Aktif (${aktif.length})</button>
                         <button type="button" class="kr-tab ${v.tab === 'keluar' ? 'on' : ''}" data-kr="tab" data-tab="keluar">Keluar (${keluar.length})</button>
                     </div>
-                    <div class="kr-list">${isi}</div>`;
+                    <div class="kr-list">${isi}</div>
+                    ${!belumSinkron ? `<button type="button" class="kr-btn g sm" data-kr="sinkron"><i class="fa-solid fa-rotate"></i> Sinkronkan ulang (isi dokumen yang masih kosong dari GAS)</button>` : ''}`;
                 const cari = document.getElementById('kr-cari');
                 if (cari) cari.oninput = () => { v.cari = cari.value.slice(0, 40); const pos = cari.selectionStart; renderList(r); const c2 = document.getElementById('kr-cari'); if (c2) { c2.focus(); try { c2.setSelectionRange(pos, pos); } catch (e) {} } };
             }
@@ -16874,6 +16875,7 @@
                             <span>BPJS</span><span>${esc(tglTampil(d.bpjs))}</span>
                         </div>
                         ${ds.length ? `<div class="kr-tags" style="margin-top:8px">${ds.map(s => `<span class="kr-tg ${s.c}">${esc(s.t)}</span>`).join('')}</div>` : ''}
+                        ${!keluar ? `<button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="dokgas" data-uid="${esc(uid)}"><i class="fa-solid fa-file-import"></i> Ambil dokumen dari GAS lama</button>` : ''}
                     </div>
                     ${!keluar ? `<div class="kr-card"><p class="kr-h"><i class="fa-solid fa-qrcode"></i> QRIS</p>
                         <div class="kr-kv"><span>Dipakai</span><span>${esc(qLabel(qk))}</span></div>
@@ -17195,17 +17197,17 @@
                 });
                 return h;
             };
+            let gasMentah = 0;
             async function muatGas() {
                 if (gasCache) return gasCache;
-                const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 25000);
                 try {
-                    const res = await fetch(`${RATING_GAS_URL}?t=${Date.now()}`, { signal: ctrl.signal, cache: 'no-store' });
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    const j = await res.json();
-                    gasCache = (Array.isArray(j) ? j : []).map(terjemahGas).filter(x => x.bintang >= 1 || x.masukanRider || x.masukanPg);
+                    const j = await ambilJsonGas(`${RATING_GAS_URL}?t=${Date.now()}`);
+                    const arr = Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : null);
+                    if (!arr) throw new Error('format jawaban GAS tidak dikenal');
+                    gasMentah = arr.length;
+                    gasCache = arr.map(terjemahGas).filter(x => x.bintang >= 1 || x.masukanRider || x.masukanPg);
                     gasGalat = '';
-                } catch (e) { gasGalat = String(e && (e.name === 'AbortError' ? 'batas waktu habis' : e.message)); gasCache = null; }
-                finally { clearTimeout(t); }
+                } catch (e) { gasGalat = String(e && e.message || e); gasCache = null; }
                 return gasCache;
             }
 
@@ -17260,7 +17262,8 @@
                             ? 'Bintang dan masukan pelanggan <b>untuk rider</b>. Ulasan ini juga terlihat oleh rider yang bersangkutan.'
                             : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
                         <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
-                        ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru.</div>` : ''}
+                        ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru. Coba tekan "Muat ulang".</div>` : ''}
+                        ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet.</p>` : ''}
                         ${sudah ? `<div style="margin-top:8px">${ringkasan(arr)}</div>` : ''}
                         <div class="kr-list" style="margin-top:8px;max-height:55vh">${sudah ? (tampil.map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada data.</p>') : ''}</div>
                         ${arr.length > tampil.length ? `<p class="kr-sub">Menampilkan 150 terbaru dari ${arr.length}. Pakai kolom cari untuk menyaring.</p>` : ''}`;
@@ -17278,11 +17281,11 @@
                 if (cari) cari.oninput = () => { v.cari = cari.value.slice(0, 40); const pos = cari.selectionStart; renderUlasan(r); const c2 = document.getElementById('kr-cari'); if (c2) { c2.focus(); try { c2.setSelectionRange(pos, pos); } catch (e) {} } };
             }
 
-            async function muatUlasan() {
+            async function muatUlasan(ulang) {
                 loader(true);
                 const tab = v.ultab === 'masukan' ? 'masukan' : 'ulasan';
                 let galatFb = '';
-                gasCache = null;   // tarik ulang form lama juga
+                if (ulang === true) gasCache = null;   // tombol "Muat ulang": tarik ulang form lama juga
                 const [fb] = await Promise.all([
                     getDocs(query(tab === 'masukan' ? masukanCol() : ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)))
                         .then(s => { const a = []; s.forEach(d => a.push(Object.assign({ id: d.id }, d.data()))); return a; })
@@ -17348,30 +17351,80 @@
                 }
                 return '';
             };
-            async function ambilDokumenGas() {
-                const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 25000);
-                try {
-                    const res = await fetch(`${PROFILE_DOCS_URL}?action=get_profile&uid=ALL&t=${Date.now()}`, { signal: ctrl.signal, cache: 'no-store' });
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    const j = await res.json();
-                    const arr = Array.isArray(j) ? j : [];
-                    const peta = {};
-                    arr.forEach(item => {
-                        if (!item || typeof item !== 'object') return;
-                        const n = {}; for (const k in item) n[k.toLowerCase().replace(/[\s_\.]/g, '')] = item[k];
-                        const id = String(n.uid || n.id || n.userid || n.noid || n.user || n.nomorid || '').trim().toUpperCase().replace(/[\s_\.]/g, '');
-                        if (!uidSah(id)) return;
-                        const ambil = (keys) => { for (const k of keys) if (n[k] !== undefined && n[k] !== '') return n[k]; return ''; };
-                        peta[id] = {
-                            motor: teks(ambil(['jenismotor', 'motor', 'kendaraan', 'typemotor', 'tipekendaraan', 'merk']), 40),
-                            plat: teks(ambil(['platnomor', 'plat', 'nopolisi', 'nopol', 'platno', 'nomorpolisi']), 15).toUpperCase(),
-                            sim: keTgl(ambil(['masaberlakusimc', 'masaberlakusim', 'berlakusim', 'expsim', 'sim', 'tanggalsim'])),
-                            stnk: keTgl(ambil(['masaberlakustnk', 'berlakustnk', 'expstnk', 'stnk', 'tanggalstnk'])),
-                            bpjs: keTgl(ambil(['updatebpjsbpuketenagakerjaan', 'updatebpjsbpu', 'masaberlakubpjs', 'berlakubpjs', 'expbpjs', 'bpjs', 'updatebpjs']))
-                        };
-                    });
-                    return peta;
-                } finally { clearTimeout(t); }
+            // Ambil JSON dari Apps Script: batas waktu 25 dtk, coba ulang 1x, pesan galat yang jelas.
+            async function ambilJsonGas(url) {
+                const tarik = async () => {
+                    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 25000);
+                    try {
+                        const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        const teksRes = await res.text();
+                        try { return JSON.parse(teksRes); }
+                        catch (e) { throw new Error('jawaban GAS bukan data (' + teksRes.replace(/\s+/g, ' ').slice(0, 60) + '…)'); }
+                    } catch (e) { throw (e && e.name === 'AbortError') ? new Error('batas waktu habis') : e; }
+                    finally { clearTimeout(t); }
+                };
+                try { return await tarik(); } catch (e) { await new Promise(r => setTimeout(r, 1500)); return await tarik(); }
+            }
+            // Ubah jawaban GAS dokumen (array semua rider / 1 objek) jadi peta UID -> dokumen
+            function petaDokumen(j, uidPaksa) {
+                const daftar = Array.isArray(j) ? j : ((j && typeof j === 'object' && !j.error) ? [j] : []);
+                const peta = {};
+                daftar.forEach(item => {
+                    if (!item || typeof item !== 'object') return;
+                    const n = {}; for (const k in item) n[k.toLowerCase().replace(/[\s_\.]/g, '')] = item[k];
+                    let id = String(n.uid || n.id || n.userid || n.noid || n.user || n.nomorid || '').trim().toUpperCase().replace(/[\s_\.]/g, '');
+                    if (!id && uidPaksa && daftar.length === 1) id = uidPaksa;   // GAS hanya mengirim data rider yang diminta
+                    if (!uidSah(id)) return;
+                    const ambil = (keys) => { for (const k of keys) if (n[k] !== undefined && n[k] !== '') return n[k]; return ''; };
+                    peta[id] = {
+                        motor: teks(ambil(['jenismotor', 'motor', 'kendaraan', 'typemotor', 'tipekendaraan', 'merk']), 40),
+                        plat: teks(ambil(['platnomor', 'plat', 'nopolisi', 'nopol', 'platno', 'nomorpolisi']), 15).toUpperCase(),
+                        sim: keTgl(ambil(['masaberlakusimc', 'masaberlakusim', 'berlakusim', 'expsim', 'sim', 'tanggalsim'])),
+                        stnk: keTgl(ambil(['masaberlakustnk', 'berlakustnk', 'expstnk', 'stnk', 'tanggalstnk'])),
+                        bpjs: keTgl(ambil(['updatebpjsbpuketenagakerjaan', 'updatebpjsbpu', 'masaberlakubpjs', 'berlakubpjs', 'expbpjs', 'bpjs', 'updatebpjs']))
+                    };
+                });
+                return peta;
+            }
+            const urlDok = (uid) => `${PROFILE_DOCS_URL}?action=get_profile&uid=${encodeURIComponent(uid)}&t=${Date.now()}`;
+            // Persis seperti aplikasi rider: minta per UID. Kalau GAS ternyata mengirim semua rider
+            // sekaligus, cukup 1 permintaan. Kalau GAS menyaring per UID, diminta satu per satu (4 sekaligus).
+            async function ambilDokumenGas(uids) {
+                if (!uids.length) return {};
+                const peta = petaDokumen(await ambilJsonGas(urlDok(uids[0])), uids[0]);
+                if (Object.keys(peta).length > 1) return peta;
+                let i = 0;
+                const kerja = async () => {
+                    while (i < uids.length) {
+                        const u = uids[i++];
+                        if (peta[u]) continue;
+                        try { Object.assign(peta, petaDokumen(await ambilJsonGas(urlDok(u)), u)); } catch (e) { /* lewati rider ini */ }
+                    }
+                };
+                await Promise.all([kerja(), kerja(), kerja(), kerja()]);
+                return peta;
+            }
+            const dokAdaIsi = (d) => !!(d && (d.motor || d.plat || d.sim || d.stnk || d.bpjs));
+
+            // Ambil ulang dokumen 1 rider dari GAS (menimpa dokumen di sistem baru, setelah dikonfirmasi)
+            async function ambilDokRider(uid) {
+                loader(true);
+                let d = null, galat = '';
+                try { d = petaDokumen(await ambilJsonGas(urlDok(uid)), uid)[uid] || null; } catch (e) { galat = String(e && e.message || e); }
+                loader(false);
+                if (galat) return alertAman('Gagal Mengambil', 'Dokumen dari GAS gagal diambil: ' + esc(galat), 'error');
+                if (!dokAdaIsi(d)) return alertAman('Tidak Ditemukan', `Data dokumen untuk <b>${esc(uid)}</b> tidak ada di Google Sheet GAS. Isi lewat tombol "Edit data".`, 'warning');
+                window.showConfirm('Pakai dokumen dari GAS?', `Motor: ${d.motor || '-'} · Plat: ${d.plat || '-'} · SIM: ${tglTampil(d.sim)} · STNK: ${tglTampil(d.stnk)} · BPJS: ${tglTampil(d.bpjs)}. Dokumen rider ini di sistem baru akan diganti dengan data ini.`, async () => {
+                    loader(true);
+                    try {
+                        const b = writeBatch(db);
+                        b.set(pd('rider_profiles', uid), { dokumen: d, updated_at: serverTimestamp() }, { merge: true });
+                        b.set(masterRef(), { riders: { [uid]: { dok: d, diperbarui_oleh: emailSaya(), diperbarui_ms: Date.now() } }, diperbarui_at: serverTimestamp() }, { merge: true });
+                        await b.commit();
+                        alertAman('Tersimpan', 'Dokumen rider sudah diperbarui dari GAS.', 'success');
+                    } catch (e) { alertAman('Gagal', esc(e && (e.code || e.message)), 'error'); } finally { loader(false); }
+                });
             }
 
             async function sinkron() {
@@ -17381,7 +17434,9 @@
                 window.showConfirm('Sinkronkan data lama?', `${aktif.length} rider akan disalin ke sistem baru (QRIS, link bit.ly lama, dokumen GAS) dan dibuatkan link ulasan baru. Tidak ada data yang dihapus. Aman diulang.`, async () => {
                     loader(true);
                     let gasPeta = {}, gasGagal = '';
-                    try { gasPeta = await ambilDokumenGas(); } catch (e) { gasGagal = String(e && (e.name === 'AbortError' ? 'batas waktu habis' : e.message)); }
+                    // hanya rider yang dokumennya masih kosong yang diambil dari GAS
+                    const perluDok = aktif.filter(x => !dokAdaIsi((master[x.uid] || {}).dok)).map(x => x.uid);
+                    try { gasPeta = await ambilDokumenGas(perluDok); } catch (e) { gasGagal = String(e && e.message || e); }
                     try {
                         const ops = [];   // [ref, data]
                         const hariIni = tglHariIni();
@@ -17391,7 +17446,7 @@
                             const m = master[x.uid] || {};
                             const kodeAda = kodeSah(m.ulasan_kode);
                             const kode = kodeAda ? m.ulasan_kode : kodeBaru();
-                            const dokLama = m.dok && (m.dok.motor || m.dok.plat || m.dok.sim || m.dok.stnk || m.dok.bpjs);
+                            const dokLama = dokAdaIsi(m.dok);
                             const dokGas = gasPeta[x.uid];
                             const dok = dokLama ? m.dok : (dokGas || { motor: '', plat: '', sim: '', stnk: '', bpjs: '' });
                             if (!dokLama && dokGas) nDok++;
@@ -17421,6 +17476,7 @@
                             await b.commit();
                         }
                         alertAman('Sinkron Selesai', `${aktif.length} rider sudah ada di sistem baru (${nBaru} baru). Dokumen dari GAS tersalin untuk ${nDok} rider.` +
+                            (!gasGagal && perluDok.length > nDok ? `<br><br>${perluDok.length - nDok} rider tidak punya data dokumen di Google Sheet GAS — isi lewat "Edit data" di detail rider.` : '') +
                             (gasGagal ? `<br><br><b>Catatan:</b> dokumen GAS gagal diambil (${esc(gasGagal)}). Tekan sinkron lagi nanti, data lain sudah aman.` : ''), gasGagal ? 'warning' : 'success');
                     } catch (e) {
                         console.error('[KR] sinkron', e);
@@ -17456,7 +17512,7 @@
                 else if (aksi === 'detail' && uidSah(uid)) { v = Object.assign(v, { hal: 'detail', uid }); render(); window.scrollTo(0, 0); }
                 else if (aksi === 'edit' && uidSah(uid)) { v = Object.assign(v, { hal: 'form', uid, prefill: null }); render(); window.scrollTo(0, 0); }
                 else if (aksi === 'qris') { v = Object.assign(v, { hal: 'qris', cari: '' }); render(); window.scrollTo(0, 0); }
-                else if (aksi === 'ulasan') { v = Object.assign(v, { hal: 'ulasan', cari: '' }); render(); window.scrollTo(0, 0); }
+                else if (aksi === 'ulasan') { v = Object.assign(v, { hal: 'ulasan', cari: '' }); render(); window.scrollTo(0, 0); if (ulasanCache === null && (v.ultab || 'ulasan') === 'ulasan') muatUlasan(); }
                 else if (aksi === 'simpan') simpanForm();
                 else if (aksi === 'simpanqris') simpanQris();
                 else if (aksi === 'sinkron') sinkron();
@@ -17465,10 +17521,11 @@
                 else if (aksi === 'gantilink' && uidSah(uid)) gantiLink(uid);
                 else if (aksi === 'ceklogin' && uidSah(uid)) { t.disabled = true; cekLogin(uid); }
                 else if (aksi === 'ulasanrider' && uidSah(uid)) muatUlasanRider(uid);
-                else if (aksi === 'muatulasan') muatUlasan();
+                else if (aksi === 'muatulasan') muatUlasan(true);
                 else if (aksi === 'hapusulasan') hapusUlasan(t.dataset.id, 'ulasan');
                 else if (aksi === 'hapusmasukan') hapusUlasan(t.dataset.id, 'masukan');
-                else if (aksi === 'ultab') { v.ultab = ['ulasan', 'masukan', 'link'].includes(t.dataset.tab) ? t.dataset.tab : 'ulasan'; v.cari = ''; render(); }
+                else if (aksi === 'ultab') { v.ultab = ['ulasan', 'masukan', 'link'].includes(t.dataset.tab) ? t.dataset.tab : 'ulasan'; v.cari = ''; render(); if ((v.ultab === 'ulasan' && ulasanCache === null) || (v.ultab === 'masukan' && masukanCache === null)) muatUlasan(); }
+                else if (aksi === 'dokgas' && uidSah(uid)) ambilDokRider(uid);
                 else if (aksi === 'salin') {
                     const isi = String(t.dataset.teks || '');
                     const ok = () => { try { if (typeof window.showCustomToast === 'function') window.showCustomToast('Link disalin'); else alertAman('Disalin', 'Link sudah disalin.', 'success'); } catch (x) {} };
