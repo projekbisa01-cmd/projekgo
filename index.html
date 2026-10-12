@@ -9998,20 +9998,68 @@
         }
 
         // Ulasan dari link baru (halaman rider.projekgo.id/u/) tersimpan di Firestore ulasan_rider.
-        // Dibaca bersama ulasan lama dari GAS, maks 50 ulasan terbaru, ikut cache 30 menit.
         // HEMAT READ: ulasan link baru disimpan di HP. Pengecekan berikutnya hanya meminta ulasan yang
         // LEBIH BARU dari yang sudah tersimpan (biasanya 0-1 dokumen = 1 read). Sekali sehari ditarik penuh
         // supaya ulasan yang dihapus admin ikut hilang. Butuh indeks gabungan (uid + dibuat_at); kalau
         // indeksnya belum dibuat, otomatis kembali ke cara lama (maks 50 read) tanpa error.
+        // REALTIME (13 Okt 2026): setelah pengambilan pertama, dipasang pendengar yang HANYA mengawasi ulasan
+        // yang lebih baru. Biaya: 1 read saat dipasang + 1 read per ulasan baru. Ulasan pelanggan langsung
+        // muncul (beserta pop-up & badge) tanpa menunggu cache 30 menit.
+        const uidUlasan = () => String((typeof window.getRiderUid === 'function' && window.getRiderUid()) || currentUserUID || '').trim().toUpperCase();
+        const hariIniUlasan = () => { const d0 = new Date(); return `${d0.getFullYear()}-${d0.getMonth() + 1}-${d0.getDate()}`; };
+        const KUNCI_IDX_ULASAN = 'rb_idx_ulasan_gagal';
+        const indeksUlasanGagal = () => localStorage.getItem(KUNCI_IDX_ULASAN) === hariIniUlasan();
+        const keBentukUlasan = (items, namaRider) => (Array.isArray(items) ? items : []).map(x => ({ Nama_Rider: namaRider, Rating: x.Rating, Komentar: x.Komentar, Tanggal: x.Tanggal, _ms: x._ms }));
+        let _pendengarUlasan = null;   // { uid, stop }
+        const pendengarUlasanAktif = () => !!(_pendengarUlasan && _pendengarUlasan.uid === uidUlasan());
+
+        function pasangPendengarUlasan(m, col, uid, kunci, ubah, simpan) {
+            if (_pendengarUlasan && _pendengarUlasan.uid === uid) return;
+            if (_pendengarUlasan) { try { _pendengarUlasan.stop(); } catch (e) {} _pendengarUlasan = null; }
+            if (indeksUlasanGagal() || typeof m.onSnapshot !== 'function') return;
+            let lama = null;
+            try { lama = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
+            const daftar = (lama && Array.isArray(lama.items)) ? lama.items : [];
+            const mulai = Math.max(0, ...daftar.map(x => Number(x._ms) || 0));
+            const info = { uid, stop: () => {} };
+            _pendengarUlasan = info;
+            try {
+                info.stop = m.onSnapshot(
+                    m.query(col, m.where('uid', '==', uid), m.where('dibuat_at', '>', m.Timestamp.fromMillis(mulai)), m.limit(50)),
+                    (snap) => {
+                        if (_pendengarUlasan !== info) return;
+                        const ubahan = snap.docChanges();
+                        if (!ubahan.length) return;
+                        let c = null;
+                        try { c = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
+                        const peta = new Map(((c && Array.isArray(c.items)) ? c.items : []).filter(x => x && x.id).map(x => [x.id, x]));
+                        ubahan.forEach(ch => {
+                            if (ch.type === 'removed') { peta.delete(ch.doc.id); return; }
+                            const x = ubah(ch.doc);
+                            if (x) peta.set(x.id, x); else peta.delete(ch.doc.id);
+                        });
+                        const items = simpan(c ? (Number(c.full) || 0) : 0, Array.from(peta.values()));
+                        try { localStorage.setItem('rb_ulasan_fb_ts_' + uid, String(Date.now())); } catch (e) {}
+                        tampilkanUlasanGabungan(null, items);
+                    },
+                    (err) => {
+                        if (err && err.code === 'failed-precondition') { try { localStorage.setItem(KUNCI_IDX_ULASAN, hariIniUlasan()); } catch (e2) {} }
+                        console.warn('Pendengar ulasan berhenti:', err && err.code);
+                        if (_pendengarUlasan === info) _pendengarUlasan = null;
+                    }
+                );
+            } catch (e) {
+                if (_pendengarUlasan === info) _pendengarUlasan = null;
+            }
+        }
+
         async function ambilUlasanFirebase(namaRider) {
-            const uid = String((typeof window.getRiderUid === 'function' && window.getRiderUid()) || currentUserUID || '').trim().toUpperCase();
+            const uid = uidUlasan();
             if (!uid) return [];
             const m = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
             const pid = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId) || 'onbid-2f87a';
             const col = m.collection(m.getFirestore(), 'artifacts', pid, 'public', 'data', 'ulasan_rider');
             const kunci = 'rb_ulasan_fb_v1_' + uid;
-            const kunciIdx = 'rb_idx_ulasan_gagal';
-            const d0 = new Date(); const hariIni = `${d0.getFullYear()}-${d0.getMonth() + 1}-${d0.getDate()}`;
             const ubah = (d) => {
                 const x = d.data() || {};
                 const b = Number(x.bintang);
@@ -10028,7 +10076,7 @@
             let lama = null;
             try { lama = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
             let items = null;
-            const bolehBertahap = lama && Array.isArray(lama.items) && (Date.now() - Number(lama.full)) < 86400000 && localStorage.getItem(kunciIdx) !== hariIni;
+            const bolehBertahap = lama && Array.isArray(lama.items) && (Date.now() - Number(lama.full)) < 86400000 && !indeksUlasanGagal();
             if (bolehBertahap) {
                 try {
                     const terakhir = Math.max(0, ...lama.items.map(x => Number(x._ms) || 0));
@@ -10037,7 +10085,7 @@
                     snap.forEach(d => { const x = ubah(d); if (x) peta.set(x.id, x); });
                     items = simpan(Number(lama.full), Array.from(peta.values()));
                 } catch (e) {
-                    if (e && e.code === 'failed-precondition') { try { localStorage.setItem(kunciIdx, hariIni); } catch (e2) {} }
+                    if (e && e.code === 'failed-precondition') { try { localStorage.setItem(KUNCI_IDX_ULASAN, hariIniUlasan()); } catch (e2) {} }
                     items = null;
                 }
             }
@@ -10046,46 +10094,81 @@
                 const arr = []; snap.forEach(d => { const x = ubah(d); if (x) arr.push(x); });
                 items = simpan(Date.now(), arr);
             }
-            return items.map(x => ({ Nama_Rider: namaRider, Rating: x.Rating, Komentar: x.Komentar, Tanggal: x.Tanggal, _ms: x._ms }));
+            try { localStorage.setItem('rb_ulasan_fb_ts_' + uid, String(Date.now())); } catch (e) {}
+            pasangPendengarUlasan(m, col, uid, kunci, ubah, simpan);
+            return keBentukUlasan(items, namaRider);
+        }
+
+        // Bagian GAS yang tersimpan di HP (tidak perlu bertanya ke GAS lagi selama masih segar)
+        function bacaGasTersimpan(kunciGas, cache) {
+            try { const c = JSON.parse(localStorage.getItem(kunciGas) || 'null'); if (Array.isArray(c)) return c; } catch (e) {}
+            try { const c = JSON.parse(cache || '[]'); if (Array.isArray(c)) return c.filter(i => !(Number(i._ms) > 0)); } catch (e) {}
+            return [];
+        }
+
+        // Dipanggil pendengar realtime: gabungkan ulasan GAS tersimpan + ulasan Firebase terbaru, lalu tampilkan.
+        function tampilkanUlasanGabungan(namaRider, itemsFirebase) {
+            const nama = namaRider || namaUntukUlasan();
+            if (!nama) return;
+            const kunciData = `rider_rating_${currentUserUID}`;
+            const kunciGas = `rider_rating_gas_${currentUserUID}`;
+            const gabungan = bacaGasTersimpan(kunciGas, localStorage.getItem(kunciData)).concat(keBentukUlasan(itemsFirebase, nama));
+            try { localStorage.setItem(kunciData, JSON.stringify(gabungan)); } catch (e) {}
+            renderRatingUI(gabungan);
         }
 
         async function muatRatingRider(namaRider, paksa = false) {
             if (!namaRider) return;
             const kunciData = `rider_rating_${currentUserUID}`;
             const kunciTs = `rider_rating_ts_${currentUserUID}`;
+            const kunciGas = `rider_rating_gas_${currentUserUID}`;   // bagian GAS saja, cadangan kalau GAS gagal
             const cache = localStorage.getItem(kunciData);
             if (cache) { try { renderRatingUI(JSON.parse(cache)); } catch (e) {} }
-            if (!paksa && cache && umurCache(kunciTs) < ULASAN_BASI_MS) return;   // cache masih segar, tidak perlu ke GAS
+            // PERBAIKAN (13 Okt 2026): dulu cache 30 menit ini juga menahan pengecekan Firebase, sehingga ulasan
+            // pelanggan dari link baru baru muncul setelah 30 menit. Sekarang cache 30 menit HANYA untuk GAS.
+            const gasSegar = !!(!paksa && cache && umurCache(kunciTs) < ULASAN_BASI_MS);
+            if (gasSegar) {
+                if (pendengarUlasanAktif()) return;   // pendengar realtime sudah jalan: ulasan baru masuk sendiri
+                // Tanpa indeks gabungan, tiap cek bisa sampai 50 read, jadi tetap dibatasi 30 menit.
+                if (indeksUlasanGagal() && umurCache('rb_ulasan_fb_ts_' + uidUlasan()) < ULASAN_BASI_MS) return;
+            }
             if (_janjiUlasan) return _janjiUlasan;                                // sudah ada permintaan berjalan
             if (!cache || paksa) tampilStatusUlasan('memuat');
             _janjiUlasan = (async () => {
-                const kunciGas = `rider_rating_gas_${currentUserUID}`;   // bagian GAS saja, cadangan kalau GAS gagal
                 try {
                     // 1) Ulasan form lama dari GAS (uid & nama ikut dikirim, GAS menyaring per rider)
                     let dariGas = null, gasOk = false;
-                    try {
-                        const url = `${RATING_SCRIPT_URL}?uid=${encodeURIComponent(currentUserUID || '')}&nama=${encodeURIComponent(namaRider)}&t=${Date.now()}`;
-                        const mentah = await ambilJsonGas(url);
-                        if (!Array.isArray(mentah)) throw new Error('Format ulasan tidak dikenal');
-                        const semua = mentah.map(terjemahkanBarisRating);
-                        const namaCari = samakanNama(namaRider);
-                        dariGas = semua.filter(i => i.Nama_Rider && samakanNama(i.Nama_Rider) === namaCari);
-                        if (dariGas.length === 0 && semua.length > 0) console.warn('Ulasan ditemukan', semua.length, 'baris, tapi tidak ada yang cocok dengan nama:', namaCari);
-                        gasOk = true;
-                        try { localStorage.setItem(kunciGas, JSON.stringify(dariGas)); } catch (e) {}
-                    } catch (eGas) {
-                        console.warn('Gagal memuat ulasan GAS:', eGas && (eGas.name === 'AbortError' ? 'batas waktu habis' : eGas.message));
-                        try { const c = JSON.parse(localStorage.getItem(kunciGas) || 'null'); if (Array.isArray(c)) dariGas = c; } catch (e) {}
+                    if (gasSegar) {
+                        dariGas = bacaGasTersimpan(kunciGas, cache);
+                    } else {
+                        try {
+                            const url = `${RATING_SCRIPT_URL}?uid=${encodeURIComponent(currentUserUID || '')}&nama=${encodeURIComponent(namaRider)}&t=${Date.now()}`;
+                            const mentah = await ambilJsonGas(url);
+                            if (!Array.isArray(mentah)) throw new Error('Format ulasan tidak dikenal');
+                            const semua = mentah.map(terjemahkanBarisRating);
+                            const namaCari = samakanNama(namaRider);
+                            dariGas = semua.filter(i => i.Nama_Rider && samakanNama(i.Nama_Rider) === namaCari);
+                            if (dariGas.length === 0 && semua.length > 0) console.warn('Ulasan ditemukan', semua.length, 'baris, tapi tidak ada yang cocok dengan nama:', namaCari);
+                            gasOk = true;
+                            try { localStorage.setItem(kunciGas, JSON.stringify(dariGas)); } catch (e) {}
+                        } catch (eGas) {
+                            console.warn('Gagal memuat ulasan GAS:', eGas && (eGas.name === 'AbortError' ? 'batas waktu habis' : eGas.message));
+                            try { const c = JSON.parse(localStorage.getItem(kunciGas) || 'null'); if (Array.isArray(c)) dariGas = c; } catch (e) {}
+                        }
                     }
-                    // 2) Ulasan dari link baru (Firebase) selalu diambil segar
+                    // 2) Ulasan dari link baru (Firebase) selalu diambil segar (bertahap, biasanya 1 read)
                     let dariFirebase = [], fbOk = false;
                     try { dariFirebase = await ambilUlasanFirebase(namaRider); fbOk = true; } catch (eFb) { console.warn('Ulasan Firebase gagal dimuat:', eFb && eFb.message); }
+                    if (gasSegar && !fbOk) return;      // tampilan dari cache sudah benar, cukup coba lagi nanti
                     if (dariGas === null && !fbOk) {   // dua-duanya gagal
                         if (cache) { try { renderRatingUI(JSON.parse(cache)); } catch (e2) {} } else tampilStatusUlasan('gagal');
                         return;
                     }
                     if (dariGas === null && cache) {   // GAS gagal & belum ada cadangan bagian GAS: ambil dari tampilan lama, buang ulasan Firebase lama
                         try { dariGas = JSON.parse(cache).filter(i => !(Number(i._ms) > 0)); } catch (e) { dariGas = []; }
+                    }
+                    if (!fbOk && cache) {              // Firebase gagal: pertahankan ulasan Firebase yang sudah tampil
+                        try { dariFirebase = JSON.parse(cache).filter(i => Number(i._ms) > 0); } catch (e) {}
                     }
                     const gabungan = (dariGas || []).concat(dariFirebase);
                     try {
@@ -10097,6 +10180,14 @@
             })();
             return _janjiUlasan;
         }
+
+        // Saat aplikasi dibuka lagi dari latar belakang: kalau pendengar realtime tidak jalan
+        // (misalnya indeks belum dibuat atau koneksi sempat putus), cek ulasan baru dengan cara hemat.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden || pendengarUlasanAktif()) return;
+            const nama = namaUntukUlasan();
+            if (nama && currentUserUID) setTimeout(() => { muatRatingRider(nama).catch(() => {}); }, 2000);
+        });
 
         // ---------- INFORMASI & DOKUMEN ----------
         let _janjiDokumen = null;
