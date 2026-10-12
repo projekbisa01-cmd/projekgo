@@ -10125,13 +10125,13 @@
             const kunciTs = `rider_docs_ts_${currentUserUID}`;
             const cache = localStorage.getItem(kunciData);
             if (cache) { try { updateDocsUI(JSON.parse(cache)); } catch (e) {} }
-            if (!paksa && cache && umurCache(kunciTs) < DOKUMEN_BASI_MS) return;
             if (_janjiDokumen) return _janjiDokumen;
-            if (!cache || paksa) tampilStatusDokumen('memuat');
             _janjiDokumen = (async () => {
-                // 1) Dokumen yang diisi admin di menu Kelola Rider (ikut terbaca bersama profil, tanpa GAS)
+                // 1) Dokumen yang diisi admin di menu Kelola Rider. SELALU dicek lebih dulu (PERBAIKAN:
+                //    dulu simpanan 6 jam dari Google Sheet dicek duluan, sehingga perubahan dari admin
+                //    tidak pernah terbaca). Tidak menambah read: profil sudah dibaca sekali saat aplikasi dibuka.
                 try {
-                    const sp = await window.snapProfilRider(uid);
+                    const sp = await window.snapProfilRider(uid, paksa === true);
                     const dk = sp && sp.exists() ? sp.data().dokumen : null;
                     if (dk && typeof dk === 'object' && (dk.motor || dk.plat || dk.sim || dk.stnk || dk.bpjs)) {
                         const riderDocData = {
@@ -10145,6 +10145,10 @@
                         return;
                     }
                 } catch (e) { /* lanjut ke GAS lama */ }
+                // Data dari admin belum ada: pakai simpanan Google Sheet kalau masih segar (6 jam)
+                let cacheGas = null; try { cacheGas = JSON.parse(cache || 'null'); } catch (e) {}
+                if (!paksa && cacheGas && cacheGas.sumber !== 'firebase' && umurCache(kunciTs) < DOKUMEN_BASI_MS) { _janjiDokumen = null; return; }
+                if (!cache || paksa) tampilStatusDokumen('memuat');
                 // 2) Cadangan selama transisi: GAS lama
                 try {
                     const url = `${PROFILE_DOCS_URL}?action=get_profile&uid=${encodeURIComponent(String(uid).trim().toUpperCase())}&t=${Date.now()}`;
