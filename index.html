@@ -9873,6 +9873,27 @@
         };
         window.muatUlangUlasan = function () { muatRatingRider(namaUntukUlasan(), true); };
 
+        // Waktu ulasan dalam milidetik. Mendukung: waktu Firebase (_ms), "2026-10-12", "2026-10-12T03:00:00Z",
+        // "12/10/2026 08:15:00" (hari/bulan/tahun, sama seperti Google Sheet Indonesia).
+        function msTanggalUlasan(item) {
+            if (item && Number(item._ms) > 0) return Number(item._ms);
+            const t = item ? item.Tanggal : '';
+            if (!t) return 0;
+            if (typeof t === 'number') return t > 100000000000 ? t : (t - 25569) * 86400000;   // angka tanggal Sheet
+            const s = String(t).trim();
+            if (/^\d{4}-\d{2}-\d{2}T/.test(s)) { const d = Date.parse(s); return isNaN(d) ? 0 : d; }
+            let m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/.exec(s);
+            if (m) return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)).getTime();
+            m = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:[ ,]+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?)?/.exec(s);
+            if (m) {
+                let d = +m[1], mo = +m[2], y = +m[3];
+                if (y < 100) y += 2000;
+                if (mo > 12 && d <= 12) { const x = d; d = mo; mo = x; }
+                return new Date(y, mo - 1, d, +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+            }
+            const d = Date.parse(s); return isNaN(d) ? 0 : d;
+        }
+
         // Ulasan dari link baru (halaman rider.projekgo.id/u/) tersimpan di Firestore ulasan_rider.
         // Dibaca bersama ulasan lama dari GAS, maks 50 ulasan terbaru, ikut cache 30 menit.
         async function ambilUlasanFirebase(namaRider) {
@@ -9887,9 +9908,9 @@
                 const x = d.data() || {};
                 const b = Number(x.bintang);
                 if (!(b >= 1 && b <= 5)) return;
-                let tgl = '';
-                try { if (x.dibuat_at && typeof x.dibuat_at.toDate === 'function') { const t = x.dibuat_at.toDate(); tgl = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; } } catch (e) {}
-                out.push({ Nama_Rider: namaRider, Rating: b, Komentar: String(x.komentar || '').slice(0, 500), Tanggal: tgl });
+                let tgl = '', ms = 0;
+                try { if (x.dibuat_at && typeof x.dibuat_at.toDate === 'function') { const t = x.dibuat_at.toDate(); ms = t.getTime(); tgl = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; } } catch (e) {}
+                out.push({ Nama_Rider: namaRider, Rating: b, Komentar: String(x.komentar || '').slice(0, 500), Tanggal: tgl, _ms: ms });
             });
             return out;
         }
@@ -9904,32 +9925,40 @@
             if (_janjiUlasan) return _janjiUlasan;                                // sudah ada permintaan berjalan
             if (!cache || paksa) tampilStatusUlasan('memuat');
             _janjiUlasan = (async () => {
+                const kunciGas = `rider_rating_gas_${currentUserUID}`;   // bagian GAS saja, cadangan kalau GAS gagal
                 try {
-                    // uid & nama ikut dikirim: diabaikan GAS versi sekarang, siap dipakai kalau GAS nanti menyaring di server
-                    const url = `${RATING_SCRIPT_URL}?uid=${encodeURIComponent(currentUserUID || '')}&nama=${encodeURIComponent(namaRider)}&t=${Date.now()}`;
-                    const mentah = await ambilJsonGas(url);
-                    if (!Array.isArray(mentah)) throw new Error('Format ulasan tidak dikenal');
-                    const semua = mentah.map(terjemahkanBarisRating);
-                    const namaCari = samakanNama(namaRider);
-                    const filtered = semua.filter(i => i.Nama_Rider && samakanNama(i.Nama_Rider) === namaCari);
-                    if (filtered.length === 0 && semua.length > 0) {
-                        console.warn('Ulasan ditemukan', semua.length, 'baris, tapi tidak ada yang cocok dengan nama:', namaCari);
+                    // 1) Ulasan form lama dari GAS (uid & nama ikut dikirim, GAS menyaring per rider)
+                    let dariGas = null, gasOk = false;
+                    try {
+                        const url = `${RATING_SCRIPT_URL}?uid=${encodeURIComponent(currentUserUID || '')}&nama=${encodeURIComponent(namaRider)}&t=${Date.now()}`;
+                        const mentah = await ambilJsonGas(url);
+                        if (!Array.isArray(mentah)) throw new Error('Format ulasan tidak dikenal');
+                        const semua = mentah.map(terjemahkanBarisRating);
+                        const namaCari = samakanNama(namaRider);
+                        dariGas = semua.filter(i => i.Nama_Rider && samakanNama(i.Nama_Rider) === namaCari);
+                        if (dariGas.length === 0 && semua.length > 0) console.warn('Ulasan ditemukan', semua.length, 'baris, tapi tidak ada yang cocok dengan nama:', namaCari);
+                        gasOk = true;
+                        try { localStorage.setItem(kunciGas, JSON.stringify(dariGas)); } catch (e) {}
+                    } catch (eGas) {
+                        console.warn('Gagal memuat ulasan GAS:', eGas && (eGas.name === 'AbortError' ? 'batas waktu habis' : eGas.message));
+                        try { const c = JSON.parse(localStorage.getItem(kunciGas) || 'null'); if (Array.isArray(c)) dariGas = c; } catch (e) {}
                     }
-                    let dariFirebase = [];
-                    try { dariFirebase = await ambilUlasanFirebase(namaRider); } catch (eFb) { console.warn('Ulasan Firebase gagal dimuat:', eFb && eFb.message); }
-                    const gabungan = filtered.concat(dariFirebase);
+                    // 2) Ulasan dari link baru (Firebase) selalu diambil segar
+                    let dariFirebase = [], fbOk = false;
+                    try { dariFirebase = await ambilUlasanFirebase(namaRider); fbOk = true; } catch (eFb) { console.warn('Ulasan Firebase gagal dimuat:', eFb && eFb.message); }
+                    if (dariGas === null && !fbOk) {   // dua-duanya gagal
+                        if (cache) { try { renderRatingUI(JSON.parse(cache)); } catch (e2) {} } else tampilStatusUlasan('gagal');
+                        return;
+                    }
+                    if (dariGas === null && cache) {   // GAS gagal & belum ada cadangan bagian GAS: ambil dari tampilan lama, buang ulasan Firebase lama
+                        try { dariGas = JSON.parse(cache).filter(i => !(Number(i._ms) > 0)); } catch (e) { dariGas = []; }
+                    }
+                    const gabungan = (dariGas || []).concat(dariFirebase);
                     try {
                         localStorage.setItem(kunciData, JSON.stringify(gabungan));
-                        localStorage.setItem(kunciTs, String(Date.now()));
+                        if (gasOk) localStorage.setItem(kunciTs, String(Date.now()));   // kalau GAS gagal, coba lagi di pembukaan berikutnya
                     } catch (e) {}
                     renderRatingUI(gabungan);
-                } catch (e) {
-                    console.warn('Gagal memuat ulasan:', e && (e.name === 'AbortError' ? 'batas waktu habis' : e.message));
-                    let dariFirebase = [];
-                    if (!cache) { try { dariFirebase = await ambilUlasanFirebase(namaRider); } catch (eFb) {} }
-                    if (cache) { try { renderRatingUI(JSON.parse(cache)); } catch (e2) {} }   // tetap tampilkan data lama
-                    else if (dariFirebase.length) renderRatingUI(dariFirebase);
-                    else tampilStatusUlasan('gagal');
                 } finally { _janjiUlasan = null; }
             })();
             return _janjiUlasan;
@@ -10266,10 +10295,11 @@
             const urut = validReviews
                 .map((item, idx) => ({ item, idx }))
                 .sort((a, b) => {
-                    const dateA = new Date(parseSheetDate(a.item.Tanggal).split('-').reverse().join('-'));
-                    const dateB = new Date(parseSheetDate(b.item.Tanggal).split('-').reverse().join('-'));
-                    const diff = dateB.getTime() - dateA.getTime();
-                    if (!isNaN(diff) && diff !== 0) return diff;
+                    // PERBAIKAN: dulu tanggal "BB-HH-TTTT" dibalik jadi "TTTT-HH-BB" (bulan & hari tertukar),
+                    // sehingga tanggal 13-31 tidak terbaca dan urutan acak -> ulasan terbaru bisa terpotong
+                    // (hanya 20 per tab yang ditampilkan). Sekarang pakai waktu yang benar.
+                    const diff = msTanggalUlasan(b.item) - msTanggalUlasan(a.item);
+                    if (diff !== 0) return diff;
                     return b.idx - a.idx;
                 })
                 .map(x => x.item);
