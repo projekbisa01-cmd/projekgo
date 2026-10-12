@@ -17198,15 +17198,45 @@
                 return h;
             };
             let gasMentah = 0;
+            const gasPerRider = {};   // uid -> baris ulasan lama rider itu (cache per sesi)
+            const urlRating = (uid, nama) => `${RATING_GAS_URL}?uid=${encodeURIComponent(uid || '')}&nama=${encodeURIComponent(nama || '')}&t=${Date.now()}`;
+            const barisGas = (j) => { const arr = Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : null); if (!arr) throw new Error('format jawaban GAS tidak dikenal'); return arr; };
+            const kunciBaris = (x) => [x.ms, samakanNama(x.nama), x.bintang, x.masukanRider, x.masukanPg].join('|');
+            // GAS ulasan hanya mengirim ulasan milik rider yang diminta (uid + nama, sama seperti
+            // aplikasi rider). Karena itu admin meminta per rider, 6 sekaligus, lalu digabung.
+            // Kalau ternyata GAS mengirim semua baris sekaligus, cukup 1 permintaan.
+            async function muatGasRider(uid, nama) {
+                if (gasPerRider[uid]) return gasPerRider[uid];
+                const arr = barisGas(await ambilJsonGas(urlRating(uid, nama)));
+                const hasil = arr.map(terjemahGas).map(x => Object.assign(x, { nama: x.nama || nama }));
+                gasMentah += arr.length;
+                gasPerRider[uid] = hasil;
+                return hasil;
+            }
             async function muatGas() {
                 if (gasCache) return gasCache;
+                const daftar = daftarAktif().map(x => ({ uid: x.uid, nama: x.name }))
+                    .concat(Object.keys(master).filter(u => master[u] && master[u].status === 'keluar').map(u => ({ uid: u, nama: master[u].nama || u })));
+                if (!daftar.length) { gasCache = []; return gasCache; }
+                gasMentah = 0; Object.keys(gasPerRider).forEach(k => delete gasPerRider[k]);
+                const semua = []; let gagal = 0, galatAkhir = '';
                 try {
-                    const j = await ambilJsonGas(`${RATING_GAS_URL}?t=${Date.now()}`);
-                    const arr = Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : null);
-                    if (!arr) throw new Error('format jawaban GAS tidak dikenal');
-                    gasMentah = arr.length;
-                    gasCache = arr.map(terjemahGas).filter(x => x.bintang >= 1 || x.masukanRider || x.masukanPg);
-                    gasGalat = '';
+                    const pertama = await muatGasRider(daftar[0].uid, daftar[0].nama);
+                    semua.push(...pertama);
+                    const namaBeda = new Set(pertama.map(x => samakanNama(x.nama)).filter(Boolean));
+                    if (namaBeda.size <= 1) {
+                        let i = 1;
+                        const kerja = async () => {
+                            while (i < daftar.length) {
+                                const r = daftar[i++];
+                                try { semua.push(...await muatGasRider(r.uid, r.nama)); } catch (e) { gagal++; galatAkhir = String(e && e.message || e); }
+                            }
+                        };
+                        await Promise.all([kerja(), kerja(), kerja(), kerja(), kerja(), kerja()]);
+                    }
+                    const lihat = new Set();
+                    gasCache = semua.filter(x => (x.bintang >= 1 || x.masukanRider || x.masukanPg) && !lihat.has(kunciBaris(x)) && lihat.add(kunciBaris(x)));
+                    gasGalat = gagal ? `${gagal} rider gagal dimuat: ${galatAkhir}` : '';
                 } catch (e) { gasGalat = String(e && e.message || e); gasCache = null; }
                 return gasCache;
             }
@@ -17262,6 +17292,7 @@
                             ? 'Bintang dan masukan pelanggan <b>untuk rider</b>. Ulasan ini juga terlihat oleh rider yang bersangkutan.'
                             : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
                         <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
+                        <p class="kr-sub">Form lama diambil per rider dari GAS, bisa butuh ±30 detik.</p>
                         ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru. Coba tekan "Muat ulang".</div>` : ''}
                         ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet.</p>` : ''}
                         ${sudah ? `<div style="margin-top:8px">${ringkasan(arr)}</div>` : ''}
@@ -17309,14 +17340,15 @@
                     const s = await getDocs(query(ulasanCol(), where('uid', '==', uid), limit(30)));
                     s.forEach(d => { const u = d.data(); arr.push({ id: d.id, nama: u.nama_rider || uid, bintang: Number(u.bintang) || 0, teks: u.komentar || '', ms: msDari(u.dibuat_at), lama: false, jenis: 'ulasan' }); });
                 } catch (e) { galat = String(e && (e.code || e.message)); }
-                const g = await muatGas();
+                let g = null;
+                try { g = gasCache || await muatGasRider(uid, nama); } catch (e) { galat = (galat ? galat + '; ' : '') + 'form lama: ' + String(e && e.message || e); }
                 const nm = samakanNama(nama);
                 if (g && nm) g.filter(x => samakanNama(x.nama) === nm && (x.bintang >= 1 || x.masukanRider)).forEach(x => arr.push({ nama: x.nama, bintang: x.bintang, teks: x.masukanRider, ms: x.ms, lama: true, jenis: 'ulasan' }));
                 arr.sort((a, b) => b.ms - a.ms);
                 const box2 = document.getElementById('kr-ulasan-rider');
                 if (!box2) return;
                 box2.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
-                    ${galat ? `<p class="kr-sub">Ulasan link baru gagal dimuat (${esc(galat)}).</p>` : ''}
+                    ${galat ? `<p class="kr-sub">Sebagian ulasan gagal dimuat (${esc(galat)}).</p>` : ''}
                     ${arr.length ? ringkasan(arr) : ''}
                     ${arr.slice(0, 40).map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada ulasan.</p>'}</div>`;
             }
