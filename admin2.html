@@ -16908,6 +16908,8 @@
                         ${link ? `<div class="kr-link" style="margin-top:8px"><i class="fa-solid fa-link"></i>${esc(link)}</div>
                         ${!keluar ? `<div class="kr-row" style="margin-top:8px"><button type="button" class="kr-btn g sm" data-kr="salin" data-teks="${esc(link)}"><i class="fa-regular fa-copy"></i> Salin</button><button type="button" class="kr-btn g sm" data-kr="gantilink" data-uid="${esc(uid)}"><i class="fa-solid fa-arrows-rotate"></i> Ganti link</button></div>` : '<p class="kr-sub">Link tidak aktif karena rider sudah keluar.</p>'}`
                         : '<p class="kr-sub">Belum ada link baru.</p>'}
+                        ${link && !keluar ? `<div class="kr-row" style="margin-top:8px;align-items:center"><span class="kr-tg ${m.foto_link === true ? 'ok' : 'w'}" style="white-space:normal">${m.foto_link === true ? 'Foto sudah dipasang di halaman ulasan' : 'Foto belum dipasang di halaman ulasan'}</span>
+                            <button type="button" class="kr-btn g sm" style="width:auto;margin-left:auto" data-kr="fotolink" data-uid="${esc(uid)}"><i class="fa-solid fa-image"></i> Pasang foto</button></div>` : ''}
                         ${m.ulasan_lama ? `<p class="kr-sub">Link lama: ${esc(m.ulasan_lama)} (masih bisa dipakai pelanggan, ulasannya tetap tampil di aplikasi rider)</p>` : ''}
                         <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="ulasanrider" data-uid="${esc(uid)}"><i class="fa-solid fa-comments"></i> Lihat ulasan rider ini</button>
                         <div id="kr-ulasan-rider"></div>
@@ -16949,6 +16951,24 @@
                         alertAman('Berhasil', 'Link ulasan baru sudah aktif. Aplikasi rider memakai link baru setelah dibuka ulang.', 'success');
                     } catch (e) { alertAman('Gagal', esc(e && (e.code || e.message)), 'error'); } finally { loader(false); }
                 });
+            }
+
+            // Pasang / perbarui foto kecil rider di link ulasannya (1 read profil, 1 tulis)
+            async function pasangFotoLink(uid) {
+                const m = master[uid] || {};
+                if (!kodeSah(m.ulasan_kode)) return alertAman('Belum Ada Link', 'Rider ini belum punya link ulasan baru. Tekan "Sinkronkan ulang" dulu.', 'warning');
+                loader(true);
+                try {
+                    try { const c = lbFotoBacaCache(); delete c[uid]; lbFotoSimpanCache(c); } catch (e) {}   // selalu ambil foto terbaru
+                    const foto = await fotoKecilRider(uid);
+                    if (foto === null) throw new Error('foto profil gagal dibaca');
+                    if (!fotoSah(foto)) { loader(false); return alertAman('Foto Belum Ada', 'Rider ini belum punya foto profil. Tambahkan lewat "Edit data" → Ganti foto, lalu simpan.', 'warning'); }
+                    const b = writeBatch(db);
+                    b.set(pd('ulasan_link', m.ulasan_kode), { foto, diperbarui_at: serverTimestamp() }, { merge: true });
+                    b.set(masterRef(), { riders: { [uid]: { foto_link: true, diperbarui_ms: Date.now() } } }, { merge: true });
+                    await b.commit();
+                    alertAman('Foto Terpasang', 'Foto rider sudah tampil di halaman ulasan. Kalau di HP pelanggan belum berubah, minta buka ulang linknya.', 'success');
+                } catch (e) { alertAman('Gagal', esc(e && (e.code || e.message)), 'error'); } finally { loader(false); }
             }
 
             async function cekLogin(uid) {
@@ -17373,8 +17393,10 @@
                         <p class="kr-sub">Form lama diambil per rider dari GAS (±30 detik), lalu disimpan di HP ini 6 jam supaya berikutnya langsung tampil.</p>
                         ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru. Coba tekan "Muat ulang".</div>` : ''}
                         ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet${gasSimpanTs ? ' · disimpan di HP ini, diperbarui ' + esc(waktuTampil(gasSimpanTs)) : ''}.</p>` : ''}
-                        ${sudah && gasCache && gasCache.length && (!gasCache.some(x => x.bintang >= 1) || (tab === 'masukan' && !gasCache.some(x => x.masukanPg))) && gasKolom.length
-                            ? `<div class="kr-banner w" style="margin-top:6px">Sebagian kolom form lama belum terbaca. Kirim daftar kolom ini ke pengembang: <b>${gasKolom.map(esc).join(' | ')}</b></div>` : ''}
+                        ${sudah && gasCache && gasCache.length && tab === 'masukan' && !gasCache.some(x => x.masukanPg)
+                            ? `<div class="kr-banner w" style="margin-top:6px">GAS ulasan lama hanya mengirim kolom <b>${gasKolom.length ? gasKolom.map(esc).join(', ') : 'Tanggal, Nama_Rider, Rating, Komentar'}</b>. Kolom "Masukan untuk PROJEKGO" tidak ikut dikirim GAS, jadi masukan lama belum bisa tampil di sini. Masukan dari link baru tetap tampil.</div>` : ''}
+                        ${sudah && gasCache && gasCache.length && !gasCache.some(x => x.bintang >= 1) && gasKolom.length
+                            ? `<div class="kr-banner w" style="margin-top:6px">Bintang form lama belum terbaca. Kolom dari GAS: <b>${gasKolom.map(esc).join(' | ')}</b></div>` : ''}
                         ${sudah ? `<div style="margin-top:8px">${ringkasan(arr)}</div>` : ''}
                         <div class="kr-list" style="margin-top:8px;max-height:55vh">${sudah ? (tampil.map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada data.</p>') : ''}</div>
                         ${arr.length > tampil.length ? `<p class="kr-sub">Menampilkan 150 terbaru dari ${arr.length}. Pakai kolom cari untuk menyaring.</p>` : ''}`;
@@ -17647,6 +17669,7 @@
                 else if (aksi === 'hapusmasukan') hapusUlasan(t.dataset.id, 'masukan');
                 else if (aksi === 'ultab') { v.ultab = ['ulasan', 'masukan', 'link'].includes(t.dataset.tab) ? t.dataset.tab : 'ulasan'; v.cari = ''; render(); if ((v.ultab === 'ulasan' && ulasanCache === null) || (v.ultab === 'masukan' && masukanCache === null)) muatUlasan(); }
                 else if (aksi === 'dokgas' && uidSah(uid)) ambilDokRider(uid);
+                else if (aksi === 'fotolink' && uidSah(uid)) pasangFotoLink(uid);
                 else if (aksi === 'editdok' && uidSah(uid)) { v = Object.assign(v, { hal: 'form', uid, prefill: null }); render(); const el = document.getElementById('kr-f-dok'); if (el) { el.scrollIntoView({ block: 'start' }); const m1 = document.getElementById('kr-f-motor'); if (m1) m1.focus({ preventScroll: true }); } }
                 else if (aksi === 'salin') {
                     const isi = String(t.dataset.teks || '');
