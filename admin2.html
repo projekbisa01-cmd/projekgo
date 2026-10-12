@@ -16634,7 +16634,7 @@
                         <button type="button" class="kr-btn p" data-kr="baru"><i class="fa-solid fa-user-plus"></i> Rider baru</button>
                         <button type="button" class="kr-btn g" data-kr="qris"><i class="fa-solid fa-qrcode"></i> Atur QRIS</button>
                     </div>
-                    <button type="button" class="kr-btn g" data-kr="ulasan"><i class="fa-solid fa-star"></i> Link & ulasan pelanggan</button>
+                    <button type="button" class="kr-btn g" data-kr="ulasan"><i class="fa-solid fa-star"></i> Ulasan & masukan pelanggan</button>
                     <div class="kr-search"><i class="fa-solid fa-search"></i><input id="kr-cari" class="kr-in" type="search" placeholder="Cari nama atau UID…" value="${esc(v.cari)}" autocomplete="off"></div>
                     <div class="kr-tabs">
                         <button type="button" class="kr-tab ${v.tab === 'aktif' ? 'on' : ''}" data-kr="tab" data-tab="aktif">Aktif (${aktif.length})</button>
@@ -16884,7 +16884,7 @@
                         ${!keluar ? `<div class="kr-row" style="margin-top:8px"><button type="button" class="kr-btn g sm" data-kr="salin" data-teks="${esc(link)}"><i class="fa-regular fa-copy"></i> Salin</button><button type="button" class="kr-btn g sm" data-kr="gantilink" data-uid="${esc(uid)}"><i class="fa-solid fa-arrows-rotate"></i> Ganti link</button></div>` : '<p class="kr-sub">Link tidak aktif karena rider sudah keluar.</p>'}`
                         : '<p class="kr-sub">Belum ada link baru.</p>'}
                         ${m.ulasan_lama ? `<p class="kr-sub">Link lama: ${esc(m.ulasan_lama)} (masih bisa dipakai pelanggan, ulasannya tetap tampil di aplikasi rider)</p>` : ''}
-                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="ulasanrider" data-uid="${esc(uid)}"><i class="fa-solid fa-comments"></i> Lihat ulasan dari link baru</button>
+                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="ulasanrider" data-uid="${esc(uid)}"><i class="fa-solid fa-comments"></i> Lihat ulasan rider ini</button>
                         <div id="kr-ulasan-rider"></div>
                     </div>
                     ${keluar
@@ -17158,67 +17158,174 @@
             }
 
             // ---------- LINK & ULASAN ----------
-            function barisUlasan(u, bisaHapus) {
-                const b = Math.min(5, Math.max(1, Math.round(Number(u.bintang) || 0)));
-                const t = u.dibuat_at && typeof u.dibuat_at.toDate === 'function' ? u.dibuat_at.toDate().toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-                return `<div class="kr-ulasan"><div style="display:flex;justify-content:space-between;gap:6px;align-items:center">
-                    <span><b>${esc(u.nama_rider || u.uid)}</b> <span class="kr-bintang">${'★'.repeat(b)}${'☆'.repeat(5 - b)}</span></span>
-                    <span class="kr-u">${esc(t)}</span></div>
-                    <p style="margin:4px 0 0">${u.komentar ? '“' + esc(u.komentar) + '”' : '<i style="color:var(--ad-mu)">Tanpa komentar</i>'}</p>
-                    ${bisaHapus ? `<div style="margin-top:6px;display:flex;justify-content:flex-end"><button type="button" class="kr-btn g sm" style="width:auto" data-kr="hapusulasan" data-id="${esc(u.id)}"><i class="fa-solid fa-trash"></i> Hapus (spam)</button></div>` : ''}</div>`;
+            // Sumber ulasan:
+            // - BARU  : ulasan_rider (bintang + masukan untuk rider) & masukan_pelanggan (masukan untuk PROJEKGO),
+            //           dari halaman rider.projekgo.id/u/. Dibaca maks 50 terbaru, hanya saat tombol ditekan.
+            // - LAMA  : Google Form / Sheet lewat GAS ulasan (tidak memakai kuota Firebase).
+            const RATING_GAS_URL = 'https://script.google.com/macros/s/AKfycbwkJO8a7SuS24kkDsMFam_ey-T8pvYC8DKSzEiXLV2Yc6OUrClx7KD6M-Dbuo-s8CKa/exec';
+            const masukanCol = () => collection(db, 'artifacts', P, 'public', 'data', 'masukan_pelanggan');
+            let masukanCache = null;       // masukan untuk PROJEKGO (Firebase)
+            let gasCache = null;           // baris ulasan lama dari Google Sheet (sudah diterjemahkan)
+            let gasGalat = '';
+            const samakanNama = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+            const msDari = (t) => {
+                if (!t) return 0;
+                if (typeof t === 'object' && typeof t.toMillis === 'function') return t.toMillis();
+                if (typeof t === 'object' && t.seconds) return t.seconds * 1000;
+                const s = String(t).trim();
+                if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const d = Date.parse(s); return isNaN(d) ? 0 : d; }
+                const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
+                if (m) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) { const x = d; d = mo; mo = x; } return new Date(+m[3], mo - 1, d, +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime(); }
+                const d = Date.parse(s); return isNaN(d) ? 0 : d;
+            };
+            const waktuTampil = (ms) => ms ? new Date(ms).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+            // Menerjemahkan satu baris Google Form (judul kolom = kalimat pertanyaan) berdasarkan kata kunci
+            const terjemahGas = (baris) => {
+                const h = { nama: '', bintang: 0, masukanRider: '', masukanPg: '', ms: 0 };
+                if (!baris || typeof baris !== 'object') return h;
+                Object.keys(baris).forEach(kunci => {
+                    const k = String(kunci).toLowerCase();
+                    const val = baris[kunci];
+                    if (val === undefined || val === null || val === '') return;
+                    if (k.includes('projekgo') && (k.includes('masukan') || k.includes('saran'))) h.masukanPg = String(val).slice(0, 1000);
+                    else if (k.includes('masukan') || k.includes('saran') || k.includes('komentar') || k.includes('memperbaiki')) h.masukanRider = String(val).slice(0, 1000);
+                    else if (k.includes('nama')) h.nama = String(val).slice(0, 80);
+                    else if (k.includes('nilai') || k.includes('rating') || k.includes('bintang') || k.includes('sampai 5')) h.bintang = Number(val) || 0;
+                    else if (k.includes('timestamp') || k.includes('tanggal') || k.includes('waktu')) h.ms = msDari(val);
+                });
+                return h;
+            };
+            async function muatGas() {
+                if (gasCache) return gasCache;
+                const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 25000);
+                try {
+                    const res = await fetch(`${RATING_GAS_URL}?t=${Date.now()}`, { signal: ctrl.signal, cache: 'no-store' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const j = await res.json();
+                    gasCache = (Array.isArray(j) ? j : []).map(terjemahGas).filter(x => x.bintang >= 1 || x.masukanRider || x.masukanPg);
+                    gasGalat = '';
+                } catch (e) { gasGalat = String(e && (e.name === 'AbortError' ? 'batas waktu habis' : e.message)); gasCache = null; }
+                finally { clearTimeout(t); }
+                return gasCache;
+            }
+
+            const bintangTeks = (n) => { const b = Math.min(5, Math.max(0, Math.round(Number(n) || 0))); return b ? '★'.repeat(b) + '☆'.repeat(5 - b) : ''; };
+            const lencana = (lama) => lama ? '<span class="kr-tg">Form lama</span>' : '<span class="kr-tg a">Link baru</span>';
+            // Satu kartu ulasan. x = { id?, nama, bintang, teks, ms, lama, jenis: 'ulasan'|'masukan' }
+            function kartuUlasan(x) {
+                const hapus = (!x.lama && x.id) ? `<div style="margin-top:6px;display:flex;justify-content:flex-end"><button type="button" class="kr-btn g sm" style="width:auto" data-kr="${x.jenis === 'masukan' ? 'hapusmasukan' : 'hapusulasan'}" data-id="${esc(x.id)}"><i class="fa-solid fa-trash"></i> Hapus (spam)</button></div>` : '';
+                return `<div class="kr-ulasan"><div style="display:flex;justify-content:space-between;gap:6px;align-items:center;flex-wrap:wrap">
+                    <span><b>${esc(x.nama || '-')}</b> ${x.bintang ? `<span class="kr-bintang">${bintangTeks(x.bintang)}</span>` : ''}</span>
+                    <span class="kr-u">${lencana(x.lama)} ${esc(waktuTampil(x.ms))}</span></div>
+                    <p style="margin:4px 0 0">${x.teks ? '“' + esc(x.teks) + '”' : '<i style="color:var(--ad-mu)">Tanpa komentar</i>'}</p>${hapus}</div>`;
+            }
+            const ringkasan = (arr) => {
+                const b = arr.filter(x => x.bintang >= 1);
+                const rata = b.length ? (b.reduce((a, x) => a + x.bintang, 0) / b.length).toFixed(1) : '-';
+                return `<div class="kr-stats" style="grid-template-columns:repeat(3,1fr)">
+                    <div class="kr-st"><b>${arr.length}</b><span>Tampil</span></div>
+                    <div class="kr-st"><b>${rata}</b><span>Rata-rata ★</span></div>
+                    <div class="kr-st ${b.filter(x => x.bintang <= 3).length ? 'w' : ''}"><b>${b.filter(x => x.bintang <= 3).length}</b><span>Bintang ≤3</span></div></div>`;
+            };
+            // Gabungan ulasan untuk rider (baru + lama), terbaru di atas
+            function daftarUlasanRider() {
+                const baru = (ulasanCache || []).map(u => ({ id: u.id, nama: u.nama_rider || u.uid, uid: u.uid, bintang: Number(u.bintang) || 0, teks: u.komentar || '', ms: msDari(u.dibuat_at), lama: false, jenis: 'ulasan' }));
+                const lama = (gasCache || []).filter(g => g.bintang >= 1 || g.masukanRider).map(g => ({ nama: g.nama, bintang: g.bintang, teks: g.masukanRider, ms: g.ms, lama: true, jenis: 'ulasan' }));
+                return baru.concat(lama).sort((a, b) => b.ms - a.ms);
+            }
+            function daftarMasukanPg() {
+                const baru = (masukanCache || []).map(u => ({ id: u.id, nama: u.nama_rider || u.uid, bintang: Number(u.bintang) || 0, teks: u.masukan || '', ms: msDari(u.dibuat_at), lama: false, jenis: 'masukan' }));
+                const lama = (gasCache || []).filter(g => g.masukanPg).map(g => ({ nama: g.nama, bintang: g.bintang, teks: g.masukanPg, ms: g.ms, lama: true, jenis: 'masukan' }));
+                return baru.concat(lama).sort((a, b) => b.ms - a.ms);
             }
 
             function renderUlasan(r) {
-                const aktif = daftarAktif();
-                const q = v.cari.toLowerCase();
-                const links = aktif.filter(x => !q || x.uid.toLowerCase().includes(q) || String(x.name).toLowerCase().includes(q)).map(x => {
-                    const l = linkUlasan(master[x.uid]);
-                    return `<div class="kr-assign" style="flex-wrap:wrap"><span style="min-width:0">${esc(x.name)} <span class="kr-u">${esc(x.uid)}</span><br><span class="kr-u" style="color:var(--ad-acc);word-break:break-all">${esc(l || 'Belum ada link — sinkronkan dulu')}</span></span>
-                        ${l ? `<button type="button" class="kr-btn g sm" style="width:auto" data-kr="salin" data-teks="${esc(l)}"><i class="fa-regular fa-copy"></i></button>` : ''}</div>`;
-                }).join('') || '<p class="kr-kosong">Tidak ada rider.</p>';
+                const tab = ['ulasan', 'masukan', 'link'].includes(v.ultab) ? v.ultab : 'ulasan';
+                const q = samakanNama(v.cari);
+                const cocok = (x) => !q || samakanNama(x.nama).includes(q) || samakanNama(x.teks).includes(q);
+                let isi = '';
+                if (tab === 'link') {
+                    const aktif = daftarAktif();
+                    isi = `<p class="kr-sub">Link ini otomatis dipakai aplikasi rider di pesan WhatsApp ke pelanggan.</p>
+                    <div class="kr-list" style="margin-top:8px;max-height:55vh">${aktif.filter(x => !q || x.uid.toLowerCase().includes(q) || samakanNama(x.name).includes(q)).map(x => {
+                        const l = linkUlasan(master[x.uid]);
+                        return `<div class="kr-assign" style="flex-wrap:wrap"><span style="min-width:0">${esc(x.name)} <span class="kr-u">${esc(x.uid)}</span><br><span class="kr-u" style="color:var(--ad-acc);word-break:break-all">${esc(l || 'Belum ada link — sinkronkan dulu')}</span></span>
+                            ${l ? `<button type="button" class="kr-btn g sm" style="width:auto" data-kr="salin" data-teks="${esc(l)}" aria-label="Salin link"><i class="fa-regular fa-copy"></i></button>` : ''}</div>`;
+                    }).join('') || '<p class="kr-kosong">Tidak ada rider.</p>'}</div>`;
+                } else {
+                    const sudah = tab === 'ulasan' ? (ulasanCache !== null) : (masukanCache !== null);
+                    const arr = (tab === 'ulasan' ? daftarUlasanRider() : daftarMasukanPg()).filter(cocok);
+                    const tampil = arr.slice(0, 150);
+                    isi = `<p class="kr-sub">${tab === 'ulasan'
+                            ? 'Bintang dan masukan pelanggan <b>untuk rider</b>. Ulasan ini juga terlihat oleh rider yang bersangkutan.'
+                            : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
+                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
+                        ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru.</div>` : ''}
+                        ${sudah ? `<div style="margin-top:8px">${ringkasan(arr)}</div>` : ''}
+                        <div class="kr-list" style="margin-top:8px;max-height:55vh">${sudah ? (tampil.map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada data.</p>') : ''}</div>
+                        ${arr.length > tampil.length ? `<p class="kr-sub">Menampilkan 150 terbaru dari ${arr.length}. Pakai kolom cari untuk menyaring.</p>` : ''}`;
+                }
                 r.innerHTML = `
                     <button type="button" class="kr-btn g kr-back" data-kr="list"><i class="fa-solid fa-arrow-left"></i> Kelola Rider</button>
-                    <div class="kr-card"><p class="kr-h"><i class="fa-solid fa-comments"></i> Ulasan terbaru (link baru)</p>
-                        <p class="kr-sub">Ulasan dari link lama (bit.ly / Google Form) tetap di Google Sheet. Dimuat hanya saat tombol ditekan supaya hemat.</p>
-                        <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${ulasanCache ? 'Muat ulang' : 'Muat 50 ulasan terbaru'}</button>
-                        <div class="kr-list" style="margin-top:8px;max-height:50vh">${ulasanCache ? (ulasanCache.map(u => barisUlasan(u, true)).join('') || '<p class="kr-kosong">Belum ada ulasan dari link baru.</p>') : ''}</div>
+                    <div class="kr-tabs">
+                        <button type="button" class="kr-tab ${tab === 'ulasan' ? 'on' : ''}" data-kr="ultab" data-tab="ulasan">Ulasan rider</button>
+                        <button type="button" class="kr-tab ${tab === 'masukan' ? 'on' : ''}" data-kr="ultab" data-tab="masukan">Masukan PROJEKGO</button>
+                        <button type="button" class="kr-tab ${tab === 'link' ? 'on' : ''}" data-kr="ultab" data-tab="link">Link</button>
                     </div>
-                    <div class="kr-card"><p class="kr-h"><i class="fa-solid fa-link"></i> Daftar link ulasan rider</p>
-                        <div class="kr-search" style="margin-top:8px"><i class="fa-solid fa-search"></i><input id="kr-cari" class="kr-in" type="search" placeholder="Cari rider…" value="${esc(v.cari)}" autocomplete="off"></div>
-                        <div class="kr-list" style="margin-top:8px;max-height:50vh">${links}</div>
-                    </div>`;
+                    <div class="kr-search"><i class="fa-solid fa-search"></i><input id="kr-cari" class="kr-in" type="search" placeholder="${tab === 'link' ? 'Cari rider…' : 'Cari nama rider atau isi masukan…'}" value="${esc(v.cari)}" autocomplete="off"></div>
+                    <div class="kr-card">${isi}</div>`;
                 const cari = document.getElementById('kr-cari');
                 if (cari) cari.oninput = () => { v.cari = cari.value.slice(0, 40); const pos = cari.selectionStart; renderUlasan(r); const c2 = document.getElementById('kr-cari'); if (c2) { c2.focus(); try { c2.setSelectionRange(pos, pos); } catch (e) {} } };
             }
 
             async function muatUlasan() {
                 loader(true);
-                try {
-                    const s = await getDocs(query(ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)));
-                    ulasanCache = [];
-                    s.forEach(d => ulasanCache.push(Object.assign({ id: d.id }, d.data())));
-                    render();
-                } catch (e) { alertAman('Gagal Memuat', esc(e && (e.code || e.message)) + '<br>Pastikan rules Firestore terbaru sudah dipublish.', 'error'); } finally { loader(false); }
+                const tab = v.ultab === 'masukan' ? 'masukan' : 'ulasan';
+                let galatFb = '';
+                gasCache = null;   // tarik ulang form lama juga
+                const [fb] = await Promise.all([
+                    getDocs(query(tab === 'masukan' ? masukanCol() : ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)))
+                        .then(s => { const a = []; s.forEach(d => a.push(Object.assign({ id: d.id }, d.data()))); return a; })
+                        .catch(e => { galatFb = String(e && (e.code || e.message) || e); return []; }),
+                    muatGas()
+                ]);
+                if (tab === 'masukan') masukanCache = fb; else ulasanCache = fb;
+                loader(false);
+                render();
+                if (galatFb) alertAman('Sebagian Gagal Dimuat', 'Ulasan dari link baru gagal dimuat (' + esc(galatFb) + '). Pastikan rules Firestore terbaru sudah dipublish.', 'warning');
             }
 
             async function muatUlasanRider(uid) {
                 const box = document.getElementById('kr-ulasan-rider');
                 if (!box) return;
                 box.innerHTML = '<p class="kr-kosong" style="margin-top:8px">Memuat…</p>';
+                const m = master[uid] || {};
+                const nama = (daftarAktif().find(x => x.uid === uid) || {}).name || m.nama || '';
+                let arr = [], galat = '';
                 try {
                     const s = await getDocs(query(ulasanCol(), where('uid', '==', uid), limit(30)));
-                    const arr = []; s.forEach(d => arr.push(Object.assign({ id: d.id }, d.data())));
-                    arr.sort((a, b) => ((b.dibuat_at && b.dibuat_at.seconds) || 0) - ((a.dibuat_at && a.dibuat_at.seconds) || 0));
-                    box.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${arr.map(u => barisUlasan(u, true)).join('') || '<p class="kr-kosong">Belum ada ulasan dari link baru.</p>'}</div>`;
-                } catch (e) { box.innerHTML = `<p class="kr-kosong" style="margin-top:8px">Gagal memuat (${esc(e && (e.code || e.message))}).</p>`; }
+                    s.forEach(d => { const u = d.data(); arr.push({ id: d.id, nama: u.nama_rider || uid, bintang: Number(u.bintang) || 0, teks: u.komentar || '', ms: msDari(u.dibuat_at), lama: false, jenis: 'ulasan' }); });
+                } catch (e) { galat = String(e && (e.code || e.message)); }
+                const g = await muatGas();
+                const nm = samakanNama(nama);
+                if (g && nm) g.filter(x => samakanNama(x.nama) === nm && (x.bintang >= 1 || x.masukanRider)).forEach(x => arr.push({ nama: x.nama, bintang: x.bintang, teks: x.masukanRider, ms: x.ms, lama: true, jenis: 'ulasan' }));
+                arr.sort((a, b) => b.ms - a.ms);
+                const box2 = document.getElementById('kr-ulasan-rider');
+                if (!box2) return;
+                box2.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+                    ${galat ? `<p class="kr-sub">Ulasan link baru gagal dimuat (${esc(galat)}).</p>` : ''}
+                    ${arr.length ? ringkasan(arr) : ''}
+                    ${arr.slice(0, 40).map(kartuUlasan).join('') || '<p class="kr-kosong">Belum ada ulasan.</p>'}</div>`;
             }
 
-            function hapusUlasan(id) {
+            function hapusUlasan(id, jenis) {
                 if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(id || ''))) return;
-                window.showConfirm('Hapus ulasan?', 'Ulasan ini dihapus permanen (untuk ulasan spam / iseng).', async () => {
+                const masukan = jenis === 'masukan';
+                window.showConfirm(masukan ? 'Hapus masukan?' : 'Hapus ulasan?', 'Dihapus permanen (untuk isian spam / iseng).', async () => {
                     try {
-                        await deleteDoc(doc(ulasanCol(), id));
-                        if (ulasanCache) ulasanCache = ulasanCache.filter(u => u.id !== id);
+                        await deleteDoc(doc(masukan ? masukanCol() : ulasanCol(), id));
+                        if (masukan && masukanCache) masukanCache = masukanCache.filter(u => u.id !== id);
+                        if (!masukan && ulasanCache) ulasanCache = ulasanCache.filter(u => u.id !== id);
                         render();
                         if (v.hal === 'detail' && v.uid) muatUlasanRider(v.uid);
                     } catch (e) { alertAman('Gagal', esc(e && (e.code || e.message)), 'error'); }
@@ -17359,7 +17466,9 @@
                 else if (aksi === 'ceklogin' && uidSah(uid)) { t.disabled = true; cekLogin(uid); }
                 else if (aksi === 'ulasanrider' && uidSah(uid)) muatUlasanRider(uid);
                 else if (aksi === 'muatulasan') muatUlasan();
-                else if (aksi === 'hapusulasan') hapusUlasan(t.dataset.id);
+                else if (aksi === 'hapusulasan') hapusUlasan(t.dataset.id, 'ulasan');
+                else if (aksi === 'hapusmasukan') hapusUlasan(t.dataset.id, 'masukan');
+                else if (aksi === 'ultab') { v.ultab = ['ulasan', 'masukan', 'link'].includes(t.dataset.tab) ? t.dataset.tab : 'ulasan'; v.cari = ''; render(); }
                 else if (aksi === 'salin') {
                     const isi = String(t.dataset.teks || '');
                     const ok = () => { try { if (typeof window.showCustomToast === 'function') window.showCustomToast('Link disalin'); else alertAman('Disalin', 'Link sudah disalin.', 'success'); } catch (x) {} };
