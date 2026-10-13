@@ -10260,7 +10260,9 @@
             const gasSegar = !!(!paksa && cache && umurCache(kunciTs) < ULASAN_BASI_MS);
             const pakaiCacheGas = gasSegar || tanpaNama;   // tanpa nama: ulasan GAS diambil dari simpanan HP saja
             if (gasSegar) {
-                if (pendengarUlasanAktif()) return;   // pendengar realtime sudah jalan: ulasan baru masuk sendiri
+                // Pendengar realtime jalan: cukup cek ulang hemat (biasanya 1 read) paling sering tiap 1 menit,
+                // berjaga-jaga kalau salah satu jalur tidak mengirim apa-apa (mis. rules/halaman ulasan belum terbaru).
+                if (pendengarUlasanAktif() && umurCache('rb_ulasan_fb_ts_' + uidUlasan()) < 60000) return;
                 // Tanpa indeks gabungan, tiap cek bisa sampai 50 read, jadi tetap dibatasi 30 menit.
                 if (indeksUlasanGagal() && umurCache('rb_ulasan_fb_ts_' + uidUlasan()) < ULASAN_BASI_MS) return;
             }
@@ -10316,7 +10318,8 @@
         // Saat aplikasi dibuka lagi dari latar belakang: kalau pendengar realtime tidak jalan
         // (misalnya indeks belum dibuat atau koneksi sempat putus), cek ulasan baru dengan cara hemat.
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden || pendengarUlasanAktif()) return;
+            if (document.hidden) return;
+            if (pendengarUlasanAktif() && umurCache('rb_ulasan_fb_ts_' + uidUlasan()) < 60000) return;
             const nama = namaUntukUlasan();
             if (currentUserUID) setTimeout(() => { muatRatingRider(nama).catch(() => {}); }, 2000);
         });

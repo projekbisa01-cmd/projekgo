@@ -18564,7 +18564,8 @@
                             : tab === 'cek' ? 'Ulasan yang masuk <b>sebelum order diselesaikan</b> atau <b>kurang dari 2 menit setelahnya</b> (dari 50 ulasan terbaru). Ulasan tetap tampil di rider; pilih "Wajar" kalau tidak ada masalah, atau "Hapus" kalau curang.'
                             : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
                         <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang (tarik ulang form lama dari GAS)' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
-                        <p class="kr-sub">Form lama diambil per rider dari GAS (±30 detik), lalu disimpan di HP ini 6 jam supaya berikutnya langsung tampil.</p>
+                        <p class="kr-sub">Ulasan dari link baru masuk otomatis tanpa refresh. Form lama diambil per rider dari GAS (±30 detik), lalu disimpan di HP ini 6 jam.</p>
+                        ${tab !== 'masukan' ? `<button type="button" class="kr-btn g sm" style="margin-top:6px" data-kr="diagulasan"><i class="fa-solid fa-stethoscope"></i> Cek sistem ulasan (kenapa ulasan tidak masuk ke rider?)</button><div id="kr-diag-ulasan"></div>` : ''}
                         ${gasGalat ? `<div class="kr-banner w" style="margin-top:8px">Ulasan form lama gagal dimuat (${esc(gasGalat)}). Yang tampil hanya dari link baru. Coba tekan "Muat ulang".</div>` : ''}
                         ${sudah && gasCache ? `<p class="kr-sub">Form lama: ${gasCache.length} isian terbaca dari ${gasMentah} baris Google Sheet${gasSimpanTs ? ' · disimpan di HP ini, diperbarui ' + esc(waktuTampil(gasSimpanTs)) : ''}.</p>` : ''}
                         ${sudah && tab === 'masukan' && gasPgGalat
@@ -18589,22 +18590,87 @@
                 if (cari) cari.oninput = () => { v.cari = cari.value.slice(0, 40); const pos = cari.selectionStart; renderUlasan(r); const c2 = document.getElementById('kr-cari'); if (c2) { c2.focus(); try { c2.setSelectionRange(pos, pos); } catch (e) {} } };
             }
 
+            // REALTIME (13 Okt 2026): ulasan dari link dipantau langsung (50 terbaru), tidak perlu refresh.
+            // Biaya: 50 read saat pertama dibuka (sama seperti tombol Muat dulu) + 1 read tiap ulasan baru.
+            let pendengarUlasanAdm = null;
+            function pantauUlasanAdmin() {
+                if (pendengarUlasanAdm) return pendengarUlasanAdm.siap;
+                let pertama = true, selesaiPertama;
+                const info = { siap: new Promise(r => { selesaiPertama = r; }) };
+                pendengarUlasanAdm = info;
+                try {
+                    info.stop = onSnapshot(query(ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)), async (snap) => {
+                        const a = []; snap.forEach(d => a.push(Object.assign({ id: d.id }, d.data())));
+                        const lamaId = new Set((ulasanCache || []).map(x => x.id));
+                        const baru = pertama ? [] : a.filter(x => !lamaId.has(x.id));
+                        ulasanCache = a;
+                        if (pertama) { pertama = false; selesaiPertama({ data: a }); return; }
+                        try { await lengkapiOrder(a); } catch (e) {}
+                        render();
+                        if (baru.length && typeof window.abToast === 'function') {
+                            const u = baru[0];
+                            window.abToast('Ulasan baru masuk', `${String(u.nama_rider || u.uid || 'Rider').slice(0, 40)} · ${'★'.repeat(Math.max(0, Math.min(5, Number(u.bintang) || 0)))}`);
+                        }
+                    }, (e) => {
+                        pendengarUlasanAdm = null;
+                        if (pertama) selesaiPertama({ galat: String(e && (e.code || e.message) || e) });
+                        console.warn('[KR] pantau ulasan', e);
+                    });
+                } catch (e) { pendengarUlasanAdm = null; selesaiPertama({ galat: String(e && e.message || e) }); }
+                return info.siap;
+            }
+
             async function muatUlasan(ulang) {
                 loader(true);
                 const tab = v.ultab === 'masukan' ? 'masukan' : 'ulasan';   // tab "Perlu dicek" memakai data ulasan
                 let galatFb = '';
                 const paksaGas = ulang === true;   // tombol "Muat ulang": tarik ulang form lama dari GAS
-                const [fb] = await Promise.all([
-                    getDocs(query(tab === 'masukan' ? masukanCol() : ulasanCol(), orderBy('dibuat_at', 'desc'), limit(50)))
+                const ambilFb = tab === 'masukan'
+                    ? getDocs(query(masukanCol(), orderBy('dibuat_at', 'desc'), limit(50)))
                         .then(s => { const a = []; s.forEach(d => a.push(Object.assign({ id: d.id }, d.data()))); return a; })
-                        .catch(e => { galatFb = String(e && (e.code || e.message) || e); return []; }),
-                    muatGas(paksaGas)
-                ]);
+                        .catch(e => { galatFb = String(e && (e.code || e.message) || e); return []; })
+                    : pantauUlasanAdmin().then(h => { if (h && h.galat) galatFb = h.galat; return ulasanCache || (h && h.data) || []; });
+                const [fb] = await Promise.all([ambilFb, muatGas(paksaGas)]);
                 if (tab === 'masukan') masukanCache = fb; else ulasanCache = fb;
                 if (tab !== 'masukan') { try { await lengkapiOrder(fb); } catch (e) {} }
                 loader(false);
                 render();
                 if (galatFb) alertAman('Sebagian Gagal Dimuat', 'Ulasan dari link baru gagal dimuat (' + esc(galatFb) + '). Pastikan rules Firestore terbaru sudah dipublish.', 'warning');
+            }
+
+            // Pemeriksaan sistem ulasan (3 read): salinan kotak masuk rider, medali, dan indeks gabungan
+            async function diagnosaUlasan() {
+                const box = document.getElementById('kr-diag-ulasan');
+                if (!box) return;
+                box.innerHTML = '<p class="kr-sub">Memeriksa…</p>';
+                const baris = [];
+                const ok = (t) => baris.push(`<div class="kr-tg ok" style="white-space:normal;display:block;margin-top:5px;text-transform:none;font-size:10px">✓ ${t}</div>`);
+                const salah = (t) => baris.push(`<div class="kr-tg b" style="white-space:normal;display:block;margin-top:5px;text-transform:none;font-size:10px">✗ ${t}</div>`);
+                const u = (ulasanCache || []).slice().sort((a, b) => msDari(b.dibuat_at) - msDari(a.dibuat_at))[0];
+                if (!u) { box.innerHTML = '<p class="kr-sub">Belum ada ulasan dari link baru untuk diperiksa. Kirim satu ulasan percobaan dulu.</p>'; return; }
+                const uidU = String(u.uid || '').trim().toUpperCase();
+                ok(`Ulasan terbaru: <b>${esc(u.nama_rider || uidU)}</b> (${esc(uidU)}) · ${'★'.repeat(Math.max(0, Math.min(5, Number(u.bintang) || 0)))} · ${esc(waktuTampil(msDari(u.dibuat_at)))}`);
+                if (Number(u.bintang) === 5) {
+                    if (Array.isArray(u.medali) && u.medali.length) ok(`Medali tersimpan: ${medaliSah(u.medali, 5).map(k => esc(MEDALI_PELANGGAN[k][0])).join(', ') || '-'}`);
+                    else salah('Ulasan bintang 5 ini <b>tanpa medali</b>. Kalau pelanggan memilih medali, berarti <b>rules v3 belum dipublish</b> atau halaman ulasan (u/index.html) masih versi lama.');
+                }
+                if (uidSah(uidU)) {
+                    try {
+                        const m = await getDoc(pd('ulasan_masuk', uidU, 'items', u.id));
+                        if (m.exists()) ok('Salinan ke kotak masuk rider <b>ada</b> (jalur realtime baru jalan).');
+                        else salah('Salinan ke kotak masuk rider <b>tidak ada</b>. Penyebab: <b>rules v2/v3 belum dipublish</b> atau <b>u/index.html belum versi terbaru</b>. Rider tetap bisa menerima lewat jalur lama kalau indeks di bawah ada.');
+                    } catch (e) { salah('Tidak bisa memeriksa kotak masuk (' + esc(e && (e.code || e.message)) + ').'); }
+                    try {
+                        await getDocs(query(ulasanCol(), where('uid', '==', uidU), where('dibuat_at', '>', new Date(0)), limit(1)));
+                        ok('Indeks gabungan ulasan (uid + dibuat_at) <b>ada</b> (jalur lama jalan).');
+                    } catch (e) {
+                        const pesan = String(e && e.message || '');
+                        const cocok = pesan.match(/https:\/\/console\.firebase\.google\.com\/[^\s"'<>`]+/);
+                        if (e && e.code === 'failed-precondition') salah('Indeks gabungan ulasan <b>belum ada</b>. ' + (cocok ? `<a href="${esc(cocok[0])}" target="_blank" rel="noopener noreferrer" style="color:var(--ad-acc);text-decoration:underline">Buat indeks di sini</a> (sekali klik, tunggu ±5 menit sampai statusnya Enabled).` : 'Buat di Firebase Console → Firestore → Indexes: koleksi ulasan_rider, field uid (Ascending) + dibuat_at (Ascending).'));
+                        else salah('Tidak bisa memeriksa indeks (' + esc(e && (e.code || e.message)) + ').');
+                    }
+                }
+                box.innerHTML = baris.join('');
             }
 
             async function muatUlasanRider(uid) {
@@ -18870,6 +18936,7 @@
                 else if (aksi === 'ceklogin' && uidSah(uid)) { t.disabled = true; cekLogin(uid); }
                 else if (aksi === 'ulasanrider' && uidSah(uid)) muatUlasanRider(uid);
                 else if (aksi === 'muatulasan') muatUlasan(true);
+                else if (aksi === 'diagulasan') { t.disabled = true; diagnosaUlasan().finally(() => { t.disabled = false; }); }
                 else if (aksi === 'hapusulasan') hapusUlasan(t.dataset.id, 'ulasan');
                 else if (aksi === 'hapusmasukan') hapusUlasan(t.dataset.id, 'masukan');
                 else if (aksi === 'ulbintang') { const nb = Number(t.dataset.b); v.ulbintang = [1, 2, 3, 4, 5].includes(nb) ? nb : 0; render(); }
