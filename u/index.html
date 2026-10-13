@@ -7,6 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#F26B1D">
 <title>Nilai Rider PROJEKGO</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" referrerpolicy="no-referrer" crossorigin="anonymous">
 <style>
   :root {
     --bg: #FFF7F1; --sf: #FFFFFF; --ink: #2A1B10; --mu: #7A6556; --ln: #F1DCCB;
@@ -55,6 +56,18 @@
   .msg { font-size: 12px; color: var(--bad); text-align: center; margin-top: 10px; min-height: 16px; }
   .spin { width: 28px; height: 28px; border: 3px solid var(--soft); border-top-color: var(--acc); border-radius: 50%; animation: s 1s linear infinite; margin: 24px auto; }
   @keyframes s { to { transform: rotate(360deg); } }
+  /* Medali dari Pelanggan (hanya bintang 5): lencana segi enam + pita */
+  .pilihmd { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px 6px; margin-top: 8px; }
+  .pm { position: relative; border: 1.5px solid var(--ln); background: var(--sf); color: var(--ink); border-radius: 14px; padding: 10px 4px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; font: inherit; }
+  .pm span { font-size: 11px; font-weight: 700; line-height: 1.2; }
+  .pm.on { border-color: var(--acc); background: var(--soft); }
+  .pm.on::after { content: "\2713"; position: absolute; top: 5px; right: 6px; width: 17px; height: 17px; border-radius: 50%; background: var(--acc); color: #fff; font-size: 11px; font-weight: 900; display: grid; place-items: center; }
+  .pm:disabled { opacity: .4; cursor: not-allowed; }
+  .mdl { position: relative; width: 40px; height: 46px; flex: none; }
+  .mdl .pita { position: absolute; bottom: 0; width: 11px; height: 17px; background: var(--w); filter: brightness(.78); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%); }
+  .mdl .pita.k { left: 9px; transform: rotate(14deg); } .mdl .pita.n { right: 9px; transform: rotate(-14deg); }
+  .mdl .hex { position: absolute; top: 0; left: 0; width: 40px; height: 40px; clip-path: polygon(50% 0, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%); background: linear-gradient(160deg, rgba(255,255,255,.42), rgba(255,255,255,0) 58%), var(--w); display: grid; place-items: center; color: #fff; font-size: 16px; }
+  .md-info { font-size: 11px; color: var(--mu); text-align: center; margin-top: 6px; }
   [hidden] { display: none !important; }
   footer { text-align: center; font-size: 11px; color: var(--mu); margin-top: 18px; }
 </style>
@@ -73,11 +86,16 @@
         <div class="stars" id="stars" role="radiogroup" aria-label="Pilih bintang"></div>
         <div class="lbl" id="lbl"></div>
         <div class="chips" id="chips" hidden></div>
+        <div id="medali-box" hidden>
+          <label class="q">Beri medali untuk rider <span>(pilih maks. 3)</span></label>
+          <div class="pilihmd" id="pilihmd"></div>
+          <div class="md-info" id="md-info"></div>
+        </div>
         <label class="q" for="komentar">Masukan untuk rider <span>(opsional)</span></label>
-        <textarea id="komentar" maxlength="300" placeholder="Jika pelayanan belum memuaskan, tulis masukan agar rider bisa memperbaiki pelayanannya"></textarea>
+        <textarea id="komentar" maxlength="300" placeholder="Tulis di sini, boleh singkat…"></textarea>
         <div class="count"><span id="hit">0</span>/300</div>
         <label class="q" for="masukan-pg">Masukan untuk PROJEKGO <span>(opsional)</span></label>
-        <textarea id="masukan-pg" maxlength="300" placeholder="Saran untuk layanan PROJEKGO secara umum"></textarea>
+        <textarea id="masukan-pg" maxlength="300" placeholder="Tulis saran di sini…"></textarea>
         <div class="count"><span id="hit-pg">0</span>/300 · hanya dibaca tim PROJEKGO, tidak terlihat oleh rider</div>
         <button class="btn" id="kirim" type="button" disabled>Kirim penilaian</button>
         <div class="msg" id="msg" role="alert"></div>
@@ -138,6 +156,18 @@
   const kunciLokal = 'ulasan_order_' + kodeOrder;
   let link = null, token = null, bintang = 0;
   const pilihanChip = new Set();
+  const pilihanMedali = new Set();
+  // Medali dari Pelanggan: id harus sama dengan daftar di rules Firestore & aplikasi rider/admin
+  const MEDALI = [
+    ['ramah', 'Ramah & Sopan', 'fa-face-smile-beam', '#F76707'], ['motor', 'Motornya Keren', 'fa-motorcycle', '#1C7ED6'],
+    ['layanan', 'Pelayanan Bagus & Mantap', 'fa-thumbs-up', '#E03131'], ['jalan', 'Abangnya Tahu Jalan Banget', 'fa-map-location-dot', '#2B8A3E'],
+    ['cepat', 'Pelayanan Cepat & Tepat', 'fa-bolt', '#F59F00'], ['atribut', 'Atribut Lengkap & Bersih', 'fa-helmet-safety', '#4263EB'],
+    ['bantu', 'Pengemudi Sangat Membantu', 'fa-hand-holding-heart', '#D6336C'], ['komunikasi', 'Komunikasi Bagus', 'fa-comments', '#7048E8'],
+    ['aman', 'Barang Sampai Aman', 'fa-box', '#099268'], ['rapi', 'Rapi & Wangi', 'fa-shirt', '#1098AD'],
+    ['sabar', 'Sabar Menunggu', 'fa-hourglass-half', '#A0522D'], ['jujur', 'Jujur & Amanah', 'fa-handshake', '#C2410C'],
+    ['hati', 'Hati-hati di Jalan', 'fa-road', '#495057'], ['senyum', 'Murah Senyum', 'fa-face-grin-stars', '#F08C00']
+  ];
+  const MAKS_MEDALI = 3;
   const LABEL = ['', 'Sangat kurang', 'Kurang', 'Cukup', 'Baik', 'Sangat baik!'];
   const CHIP_BAIK = ['Ramah', 'Cepat sampai', 'Barang aman', 'Komunikatif', 'Rapi & sopan'];
   const CHIP_KURANG = ['Terlambat', 'Kurang ramah', 'Susah dihubungi', 'Barang kurang rapi', 'Salah alamat'];
@@ -150,13 +180,33 @@
       b.type = 'button'; b.innerHTML = STAR; b.setAttribute('role', 'radio');
       b.setAttribute('aria-label', i + ' bintang'); b.setAttribute('aria-checked', String(i === bintang));
       if (i <= bintang) b.className = 'on';
-      b.onclick = () => { bintang = i; pilihanChip.clear(); renderBintang(); renderChip(); $('kirim').disabled = false; };
+      b.onclick = () => { bintang = i; pilihanChip.clear(); pilihanMedali.clear(); renderBintang(); renderChip(); $('kirim').disabled = false; };
       box.appendChild(b);
     }
     $('lbl').textContent = LABEL[bintang] || '';
   }
+  function renderMedali() {
+    const box = $('pilihmd'); box.innerHTML = '';
+    MEDALI.forEach(([id, nama, ikon, warna]) => {
+      const pilih = pilihanMedali.has(id);
+      const c = document.createElement('button');
+      c.type = 'button'; c.className = 'pm' + (pilih ? ' on' : '');
+      c.setAttribute('aria-pressed', String(pilih));
+      c.disabled = !pilih && pilihanMedali.size >= MAKS_MEDALI;
+      const m = document.createElement('span'); m.className = 'mdl'; m.style.setProperty('--w', warna);
+      m.innerHTML = '<span class="pita k"></span><span class="pita n"></span><span class="hex"><i class="fa-solid ' + ikon + '" aria-hidden="true"></i></span>';
+      const t = document.createElement('span'); t.textContent = nama;
+      c.append(m, t);
+      c.onclick = () => { if (pilihanMedali.has(id)) pilihanMedali.delete(id); else if (pilihanMedali.size < MAKS_MEDALI) pilihanMedali.add(id); renderMedali(); };
+      box.appendChild(c);
+    });
+    $('md-info').textContent = pilihanMedali.size + '/' + MAKS_MEDALI + ' medali dipilih · tampil di profil rider';
+  }
   function renderChip() {
     const box = $('chips'); box.innerHTML = '';
+    // Bintang 5: pilih medali. Bintang 4: pujian teks. Bintang 1-3: pilihan "kurang".
+    $('medali-box').hidden = bintang !== 5;
+    if (bintang === 5) { box.hidden = true; renderMedali(); return; }
     if (!bintang) { box.hidden = true; return; }
     box.hidden = false;
     (bintang >= 4 ? CHIP_BAIK : CHIP_KURANG).forEach(t => {
@@ -217,8 +267,11 @@
       // Salinan ke "kotak masuk" rider (ulasan_masuk/<UID>/items) supaya aplikasi rider bisa memantau ulasan baru
       // secara realtime tanpa indeks gabungan. Isinya HARUS sama persis dengan dokumen ulasan (dicek rules).
       const uidRider = String(link.uid || '');
-      const isiUlasan = Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() });
-      const kirim = async (pakaiSalinan) => {
+      const ID_MEDALI = MEDALI.map(m => m[0]);
+      const medali = bintang === 5 ? Array.from(pilihanMedali).filter(x => ID_MEDALI.includes(x)).slice(0, MAKS_MEDALI) : [];
+      const kirim = async (pakaiSalinan, pakaiMedali) => {
+        const isiUlasan = Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() });
+        if (pakaiMedali && medali.length) isiUlasan.medali = medali;
         const b = writeBatch(db);
         b.set(D('ulasan_rider', kodeOrder), isiUlasan);
         if (pakaiSalinan) b.set(D('ulasan_masuk', uidRider, 'items', kodeOrder), isiUlasan);
@@ -227,11 +280,16 @@
         await b.commit();
       };
       const salinanSah = /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(uidRider);
-      try { await kirim(salinanSah); }
-      catch (e1) {
-        // Rules lama belum mengenal kotak masuk: kirim lagi tanpa salinan (ulasan tetap tersimpan seperti biasa)
-        if (salinanSah && e1 && e1.code === 'permission-denied') await kirim(false); else throw e1;
+      // Kalau rules lama belum mengenal medali / kotak masuk, kirim ulang dengan bentuk lebih sederhana
+      // supaya ulasan tetap tersimpan (bintang & komentar tidak hilang).
+      const cara = [[salinanSah, true], [salinanSah, false], [false, false]]
+        .filter((c, i, a) => (c[1] === false || medali.length) && a.findIndex(x => x[0] === c[0] && x[1] === c[1]) === i);
+      let galatAkhir = null, terkirim = false;
+      for (const [sal, md] of cara) {
+        try { await kirim(sal, md); terkirim = true; break; }
+        catch (e1) { galatAkhir = e1; if (!(e1 && e1.code === 'permission-denied')) break; }
       }
+      if (!terkirim) throw galatAkhir;
       try { localStorage.setItem(kunciLokal, String(Date.now())); } catch (e) {}
       tampil('v-ok');
     } catch (e) {
