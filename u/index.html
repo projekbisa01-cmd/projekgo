@@ -74,10 +74,10 @@
         <div class="lbl" id="lbl"></div>
         <div class="chips" id="chips" hidden></div>
         <label class="q" for="komentar">Masukan untuk rider <span>(opsional)</span></label>
-        <textarea id="komentar" maxlength="300" placeholder="tulis disini"></textarea>
+        <textarea id="komentar" maxlength="300" placeholder="Jika pelayanan belum memuaskan, tulis masukan agar rider bisa memperbaiki pelayanannya"></textarea>
         <div class="count"><span id="hit">0</span>/300</div>
         <label class="q" for="masukan-pg">Masukan untuk PROJEKGO <span>(opsional)</span></label>
-        <textarea id="masukan-pg" maxlength="300" placeholder="tulis Saran untuk layanan PROJEKGO disini"></textarea>
+        <textarea id="masukan-pg" maxlength="300" placeholder="Saran untuk layanan PROJEKGO secara umum"></textarea>
         <div class="count"><span id="hit-pg">0</span>/300 · hanya dibaca tim PROJEKGO, tidak terlihat oleh rider</div>
         <button class="btn" id="kirim" type="button" disabled>Kirim penilaian</button>
         <div class="msg" id="msg" role="alert"></div>
@@ -214,11 +214,24 @@
     try {
       // Satu kiriman (berhasil semua / gagal semua): ulasan + tanda kode order terpakai (+ masukan PROJEKGO).
       // Nomor dokumen ulasan = kode order, jadi satu pesanan hanya bisa punya satu ulasan.
-      const b = writeBatch(db);
-      b.set(D('ulasan_rider', kodeOrder), Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() }));
-      b.update(D('ulasan_token', kodeOrder), { terpakai: true, dipakai_at: serverTimestamp() });
-      if (masukanPg) b.set(D('masukan_pelanggan', kodeOrder), Object.assign({}, dasar, { masukan: masukanPg, dibuat_at: serverTimestamp() }));
-      await b.commit();
+      // Salinan ke "kotak masuk" rider (ulasan_masuk/<UID>/items) supaya aplikasi rider bisa memantau ulasan baru
+      // secara realtime tanpa indeks gabungan. Isinya HARUS sama persis dengan dokumen ulasan (dicek rules).
+      const uidRider = String(link.uid || '');
+      const isiUlasan = Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() });
+      const kirim = async (pakaiSalinan) => {
+        const b = writeBatch(db);
+        b.set(D('ulasan_rider', kodeOrder), isiUlasan);
+        if (pakaiSalinan) b.set(D('ulasan_masuk', uidRider, 'items', kodeOrder), isiUlasan);
+        b.update(D('ulasan_token', kodeOrder), { terpakai: true, dipakai_at: serverTimestamp() });
+        if (masukanPg) b.set(D('masukan_pelanggan', kodeOrder), Object.assign({}, dasar, { masukan: masukanPg, dibuat_at: serverTimestamp() }));
+        await b.commit();
+      };
+      const salinanSah = /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(uidRider);
+      try { await kirim(salinanSah); }
+      catch (e1) {
+        // Rules lama belum mengenal kotak masuk: kirim lagi tanpa salinan (ulasan tetap tersimpan seperti biasa)
+        if (salinanSah && e1 && e1.code === 'permission-denied') await kirim(false); else throw e1;
+      }
       try { localStorage.setItem(kunciLokal, String(Date.now())); } catch (e) {}
       tampil('v-ok');
     } catch (e) {
