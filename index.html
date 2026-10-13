@@ -1727,6 +1727,7 @@
     window.snapProfilRider = function (uid, paksa) {
       var u = String(uid || '').trim().toUpperCase();
       if (!u) return Promise.reject(new Error('uid kosong'));
+      if (c.live && c.janji && c.uid === u) return c.janji;   // sedang dipantau realtime: selalu data terbaru, 0 read
       if (!paksa && c.janji && c.uid === u && (Date.now() - c.ts) < UMUR) return c.janji;
       c.uid = u; c.ts = Date.now();
       var j = (async function () {
@@ -1744,7 +1745,41 @@
       j.catch(function () { if (c.janji === j) c.janji = null; });
       return j;
     };
-    window.lupakanProfilRider = function () { c.janji = null; };
+    window.lupakanProfilRider = function () { if (!c.live) c.janji = null; };
+
+    // REALTIME (13 Okt 2026): pantau dokumen profil rider sendiri. Perubahan dari admin (SIM, STNK, BPJS,
+    // motor, plat, link ulasan) langsung masuk tanpa membuka ulang aplikasi. Biaya: 1 read saat mulai +
+    // 1 read tiap admin menyimpan perubahan (lebih hemat dari membaca ulang tiap 30 menit).
+    var pantau = { uid: null, stop: null, dok: null };
+    window.pantauProfilRider = function (uid) {
+      var u = String(uid || '').trim().toUpperCase();
+      if (!/^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(u)) return;
+      if (pantau.uid === u && pantau.stop) return;
+      if (pantau.stop) { try { pantau.stop(); } catch (e) {} pantau.stop = null; c.live = false; }
+      pantau.uid = u; pantau.dok = null;
+      import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js').then(function (m) {
+        if (pantau.uid !== u) return;
+        var pid = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId) || 'onbid-2f87a';
+        pantau.stop = m.onSnapshot(m.doc(m.getFirestore(), 'artifacts', pid, 'public', 'data', 'rider_profiles', u), function (s) {
+          if (pantau.uid !== u) return;
+          var d = s.exists() ? s.data() : null;
+          c.uid = u; c.ts = Date.now(); c.live = true; c.janji = Promise.resolve(s);
+          window._profilRiderData = d;
+          try { if (d && typeof d.ulasan_kode === 'string' && /^[A-Za-z0-9]{10,32}$/.test(d.ulasan_kode)) localStorage.setItem('rider_ulasan_kode_' + u, d.ulasan_kode); } catch (e) {}
+          var dokBaru = '';
+          try { dokBaru = JSON.stringify((d && d.dokumen) || null); } catch (e) {}
+          var berubah = pantau.dok !== null && dokBaru !== pantau.dok;
+          pantau.dok = dokBaru;
+          // Dokumen berubah (atau pertama kali terbaca): tampilkan ulang SIM/STNK/BPJS & peringatannya
+          if (berubah || (d && d.dokumen)) {
+            try { if (typeof fetchVehicleAndDocsData === 'function') fetchVehicleAndDocsData(u); } catch (e) {}
+          }
+        }, function (err) {
+          console.warn('Pantau profil berhenti:', err && err.code);
+          c.live = false; pantau.stop = null;
+        });
+      }).catch(function () {});
+    };
   })();
 </script>
     <!-- CSS Tailwind hasil build (pengganti cdn.tailwindcss.com) -->
@@ -9990,6 +10025,7 @@
             else if (keadaan === 'gagal') list.innerHTML = '<p class="pf-kosong">Ulasan gagal dimuat. Periksa koneksi internet.</p><div class="flex justify-center"><button type="button" onclick="window.muatUlangUlasan()" class="text-[11px] font-bold text-orange-600 bg-orange-50 border border-orange-200 px-4 py-2 rounded-full active:scale-95">Coba lagi</button></div>';
         };
         window.muatUlangUlasan = function () { muatRatingRider(namaUntukUlasan(), true); };
+        window.muatUlasanSegera = function () { return muatRatingRider(namaUntukUlasan()).catch(() => {}); };
 
         // Waktu ulasan dalam milidetik. Mendukung: waktu Firebase (_ms), "2026-10-12", "2026-10-12T03:00:00Z",
         // "12/10/2026 08:15:00" (hari/bulan/tahun, sama seperti Google Sheet Indonesia).
@@ -10023,15 +10059,23 @@
         const uidUlasan = () => String((typeof window.getRiderUid === 'function' && window.getRiderUid()) || currentUserUID || '').trim().toUpperCase();
         const hariIniUlasan = () => { const d0 = new Date(); return `${d0.getFullYear()}-${d0.getMonth() + 1}-${d0.getDate()}`; };
         const KUNCI_IDX_ULASAN = 'rb_idx_ulasan_gagal';
-        const indeksUlasanGagal = () => localStorage.getItem(KUNCI_IDX_ULASAN) === hariIniUlasan();
+        // Tanda "indeks gabungan belum ada" hanya berlaku 1 jam (dulu seharian penuh), supaya setelah indeks
+        // dibuat aplikasi segera memakai cara hemat lagi. Nilai lama (teks tanggal) otomatis dianggap kedaluwarsa.
+        const indeksUlasanGagal = () => { const t = Number(localStorage.getItem(KUNCI_IDX_ULASAN)); return Number.isFinite(t) && t > 0 && (Date.now() - t) < 3600000; };
+        const tandaiIndeksGagal = () => { try { localStorage.setItem(KUNCI_IDX_ULASAN, String(Date.now())); } catch (e) {} };
         const keBentukUlasan = (items, namaRider) => (Array.isArray(items) ? items : []).map(x => ({ Nama_Rider: namaRider, Rating: x.Rating, Komentar: x.Komentar, Tanggal: x.Tanggal, _ms: x._ms }));
         let _pendengarUlasan = null;   // { uid, stop }
         const pendengarUlasanAktif = () => !!(_pendengarUlasan && _pendengarUlasan.uid === uidUlasan());
 
-        function pasangPendengarUlasan(m, col, uid, kunci, ubah, simpan) {
+        // PERBAIKAN (13 Okt 2026): pendengar sekarang memantau "kotak masuk" rider sendiri
+        // (ulasan_masuk/<UID>/items, salinan yang ditulis halaman ulasan). Cukup indeks bawaan Firestore,
+        // jadi TIDAK lagi bergantung pada indeks gabungan (dulu: kalau indeks belum ada, ulasan telat / tidak masuk).
+        function pasangPendengarUlasan(m, colUtama, uid, kunci, ubah, simpan) {
             if (_pendengarUlasan && _pendengarUlasan.uid === uid) return;
             if (_pendengarUlasan) { try { _pendengarUlasan.stop(); } catch (e) {} _pendengarUlasan = null; }
-            if (indeksUlasanGagal() || typeof m.onSnapshot !== 'function') return;
+            if (typeof m.onSnapshot !== 'function' || !/^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(uid)) return;
+            const pid = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId) || 'onbid-2f87a';
+            const col = m.collection(m.getFirestore(), 'artifacts', pid, 'public', 'data', 'ulasan_masuk', uid, 'items');
             let lama = null;
             try { lama = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
             const daftar = (lama && Array.isArray(lama.items)) ? lama.items : [];
@@ -10040,7 +10084,7 @@
             _pendengarUlasan = info;
             try {
                 info.stop = m.onSnapshot(
-                    m.query(col, m.where('uid', '==', uid), m.where('dibuat_at', '>', m.Timestamp.fromMillis(mulai)), m.limit(50)),
+                    m.query(col, m.where('dibuat_at', '>', m.Timestamp.fromMillis(mulai)), m.limit(50)),
                     (snap) => {
                         if (_pendengarUlasan !== info) return;
                         const ubahan = snap.docChanges();
@@ -10058,7 +10102,6 @@
                         tampilkanUlasanGabungan(null, items);
                     },
                     (err) => {
-                        if (err && err.code === 'failed-precondition') { try { localStorage.setItem(KUNCI_IDX_ULASAN, hariIniUlasan()); } catch (e2) {} }
                         console.warn('Pendengar ulasan berhenti:', err && err.code);
                         if (_pendengarUlasan === info) _pendengarUlasan = null;
                     }
@@ -10100,7 +10143,7 @@
                     snap.forEach(d => { const x = ubah(d); if (x) peta.set(x.id, x); });
                     items = simpan(Number(lama.full), Array.from(peta.values()));
                 } catch (e) {
-                    if (e && e.code === 'failed-precondition') { try { localStorage.setItem(KUNCI_IDX_ULASAN, hariIniUlasan()); } catch (e2) {} }
+                    if (e && e.code === 'failed-precondition') tandaiIndeksGagal();
                     items = null;
                 }
             }
@@ -10123,8 +10166,7 @@
 
         // Dipanggil pendengar realtime: gabungkan ulasan GAS tersimpan + ulasan Firebase terbaru, lalu tampilkan.
         function tampilkanUlasanGabungan(namaRider, itemsFirebase) {
-            const nama = namaRider || namaUntukUlasan();
-            if (!nama) return;
+            const nama = namaRider || namaUntukUlasan() || '';   // PERBAIKAN: dulu berhenti kalau nama kosong, ulasan baru tidak tampil
             const kunciData = `rider_rating_${currentUserUID}`;
             const kunciGas = `rider_rating_gas_${currentUserUID}`;
             const gabungan = bacaGasTersimpan(kunciGas, localStorage.getItem(kunciData)).concat(keBentukUlasan(itemsFirebase, nama));
@@ -14680,6 +14722,11 @@
                   if (typeof window.startPendingOrderListener === 'function') {
                       window.startPendingOrderListener();
                   }
+                  // Realtime (13 Okt 2026): dokumen dari admin (SIM/STNK/BPJS dll.) & ulasan pelanggan langsung masuk
+                  setTimeout(() => {
+                      if (typeof window.pantauProfilRider === 'function') window.pantauProfilRider(window.getRiderUid());
+                      if (typeof window.muatUlasanSegera === 'function') window.muatUlasanSegera();
+                  }, 1500);
 
                   // Cek notifikasi setelah login berhasil
                   if (typeof window.checkUnreadAdminInfo === 'function') window.checkUnreadAdminInfo();
