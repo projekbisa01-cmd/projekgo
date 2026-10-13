@@ -10119,48 +10119,65 @@
         let _pendengarUlasan = null;   // { uid, stop }
         const pendengarUlasanAktif = () => !!(_pendengarUlasan && _pendengarUlasan.uid === uidUlasan());
 
-        // PERBAIKAN (13 Okt 2026): pendengar sekarang memantau "kotak masuk" rider sendiri
-        // (ulasan_masuk/<UID>/items, salinan yang ditulis halaman ulasan). Cukup indeks bawaan Firestore,
-        // jadi TIDAK lagi bergantung pada indeks gabungan (dulu: kalau indeks belum ada, ulasan telat / tidak masuk).
+        // PERBAIKAN (13 Okt 2026, revisi 2): DUA pendengar sekaligus supaya ulasan dari link selalu langsung masuk:
+        //  1) "kotak masuk" rider (ulasan_masuk/<UID>/items) — salinan yang ditulis halaman ulasan; cukup indeks bawaan.
+        //  2) koleksi ulasan utama (uid == UID, dibuat_at > terakhir) — cara lama yang sudah terbukti jalan
+        //     (memakai indeks gabungan yang sudah ada). Kalau indeks belum ada, pendengar ini saja yang berhenti.
+        // Ulasan yang sama dari dua jalur digabung per nomor dokumen, jadi tidak dobel. Biaya: 1-2 read per ulasan baru.
         function pasangPendengarUlasan(m, colUtama, uid, kunci, ubah, simpan) {
             if (_pendengarUlasan && _pendengarUlasan.uid === uid) return;
             if (_pendengarUlasan) { try { _pendengarUlasan.stop(); } catch (e) {} _pendengarUlasan = null; }
             if (typeof m.onSnapshot !== 'function' || !/^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(uid)) return;
             const pid = (typeof firebaseConfig !== 'undefined' && firebaseConfig.projectId) || 'onbid-2f87a';
-            const col = m.collection(m.getFirestore(), 'artifacts', pid, 'public', 'data', 'ulasan_masuk', uid, 'items');
+            const colMasuk = m.collection(m.getFirestore(), 'artifacts', pid, 'public', 'data', 'ulasan_masuk', uid, 'items');
             let lama = null;
             try { lama = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
             const daftar = (lama && Array.isArray(lama.items)) ? lama.items : [];
             const mulai = Math.max(0, ...daftar.map(x => Number(x._ms) || 0));
-            const info = { uid, stop: () => {} };
+            const batas = m.Timestamp.fromMillis(mulai);
+            const info = { uid, hidup: 0, stops: [], stop: () => { info.stops.forEach(f => { try { f(); } catch (e) {} }); info.stops = []; info.hidup = 0; } };
             _pendengarUlasan = info;
-            try {
-                info.stop = m.onSnapshot(
-                    m.query(col, m.where('dibuat_at', '>', m.Timestamp.fromMillis(mulai)), m.limit(50)),
-                    (snap) => {
-                        if (_pendengarUlasan !== info) return;
-                        const ubahan = snap.docChanges();
-                        if (!ubahan.length) return;
-                        let c = null;
-                        try { c = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
-                        const peta = new Map(((c && Array.isArray(c.items)) ? c.items : []).filter(x => x && x.id).map(x => [x.id, x]));
-                        ubahan.forEach(ch => {
-                            if (ch.type === 'removed') { peta.delete(ch.doc.id); return; }
-                            const x = ubah(ch.doc);
-                            if (x) peta.set(x.id, x); else peta.delete(ch.doc.id);
-                        });
-                        const items = simpan(c ? (Number(c.full) || 0) : 0, Array.from(peta.values()));
-                        try { localStorage.setItem('rb_ulasan_fb_ts_' + uid, String(Date.now())); } catch (e) {}
-                        tampilkanUlasanGabungan(null, items);
-                    },
-                    (err) => {
-                        console.warn('Pendengar ulasan berhenti:', err && err.code);
-                        if (_pendengarUlasan === info) _pendengarUlasan = null;
-                    }
-                );
-            } catch (e) {
-                if (_pendengarUlasan === info) _pendengarUlasan = null;
-            }
+            const terapkan = (snap, nama) => {
+                if (_pendengarUlasan !== info) return;
+                const semua = snap.docChanges();
+                // Kotak masuk: "removed" = ulasan dihapus admin (spam). Jalur utama: abaikan "removed".
+                const hapus = nama === 'kotak masuk' ? semua.filter(ch => ch.type === 'removed').map(ch => ch.doc.id) : [];
+                const ubahan = semua.filter(ch => ch.type !== 'removed');
+                if (!ubahan.length && !hapus.length) return;
+                let c = null;
+                try { c = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
+                const peta = new Map(((c && Array.isArray(c.items)) ? c.items : []).filter(x => x && x.id).map(x => [x.id, x]));
+                let baru = false;
+                hapus.forEach(id => { if (peta.delete(id)) baru = true; });
+                ubahan.forEach(ch => {
+                    const x = ubah(ch.doc);
+                    if (!x) return;
+                    const sebelum = peta.get(x.id);
+                    if (!sebelum || JSON.stringify(sebelum) !== JSON.stringify(x)) { peta.set(x.id, x); baru = true; }
+                });
+                if (!baru) return;   // sudah masuk lewat jalur lain
+                const items = simpan(c ? (Number(c.full) || 0) : 0, Array.from(peta.values()));
+                try { localStorage.setItem('rb_ulasan_fb_ts_' + uid, String(Date.now())); } catch (e) {}
+                tampilkanUlasanGabungan(null, items);
+            };
+            const pasang = (q, nama) => {
+                try {
+                    let hidup = true;
+                    info.hidup++;
+                    const stop = m.onSnapshot(q, (snap) => terapkan(snap, nama), (err) => {
+                        console.warn('Pendengar ulasan (' + nama + ') berhenti:', err && err.code);
+                        if (nama === 'utama' && err && err.code === 'failed-precondition') tandaiIndeksGagal();
+                        if (hidup) { hidup = false; info.hidup--; }
+                        if (_pendengarUlasan === info && info.hidup <= 0) _pendengarUlasan = null;
+                    });
+                    info.stops.push(stop);
+                } catch (e) {
+                    info.hidup--;
+                }
+            };
+            pasang(m.query(colMasuk, m.where('dibuat_at', '>', batas), m.limit(50)), 'kotak masuk');
+            if (colUtama && !indeksUlasanGagal()) pasang(m.query(colUtama, m.where('uid', '==', uid), m.where('dibuat_at', '>', batas), m.limit(50)), 'utama');
+            if (info.hidup <= 0 && _pendengarUlasan === info) _pendengarUlasan = null;
         }
 
         async function ambilUlasanFirebase(namaRider) {
@@ -10343,7 +10360,7 @@
                         const riderDocData = {
                             jenismotor: String(dk.motor || ''), platnomor: String(dk.plat || ''),
                             masaberlakusim: String(dk.sim || ''), masaberlakustnk: String(dk.stnk || ''),
-                            updatebpjs: String(dk.bpjs || ''), sumber: 'firebase'
+                            updatebpjs: String(dk.bpjs || ''), sumber: 'firebase', bpjs_update: true
                         };
                         try { localStorage.setItem(kunciData, JSON.stringify(riderDocData)); localStorage.setItem(kunciTs, String(Date.now())); } catch (e) {}
                         updateDocsUI(riderDocData);
@@ -10401,7 +10418,11 @@
                 
                 checkDocumentStatus(simDate, 'profile-sim', 'sim-status-icon', 'sim-warning');
                 checkDocumentStatus(stnkDate, 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
-                checkDocumentStatus(getVal(['updatebpjsbpuketenagakerjaan','updatebpjsbpu','masaberlakubpjs','berlakubpjs','expbpjs','bpjs','updatebpjs']), 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning');
+                // PERBAIKAN (13 Okt 2026): dari admin (Kelola Rider) BPJS diisi "tanggal update terakhir", bukan tanggal habis.
+                // Dulu tanggal itu dianggap tanggal habis, jadi sehari setelah admin update sudah tampil merah/"akan diperbaharui".
+                // Sekarang dianggap berlaku 1 bulan (31 hari) sejak tanggal update — sama dengan aturan "BPJS habis" di admin.
+                const bpjsVal = getVal(['updatebpjsbpuketenagakerjaan','updatebpjsbpu','masaberlakubpjs','berlakubpjs','expbpjs','bpjs','updatebpjs']);
+                checkDocumentStatus(bpjsVal, 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning', data.bpjs_update === true ? 31 : 0);
 
                 // CEK DOKUMEN MATI UNTUK BANNER PERINGATAN GLOBAL
                 const expiredDocs = [];
@@ -11140,11 +11161,16 @@
             const rt = document.getElementById('profile-avg-rating'), rt2 = document.getElementById('profile-info-rating');
             if (rt && rt2) rt2.innerText = rt.innerText;
         };
-        function checkDocumentStatus(dateStr, targetElId, iconElId, warningElId) {
+        function checkDocumentStatus(dateStr, targetElId, iconElId, warningElId, berlakuHari = 0) {
             const parsed = parseSheetDate(dateStr); const targetEl = document.getElementById(targetElId); const iconEl = document.getElementById(iconElId); const warningEl = document.getElementById(warningElId);
             if (!parsed || parsed === "") { targetEl.innerText = "Data Kosong"; iconEl.innerHTML = '<i class="fa-solid fa-circle-question text-gray-300"></i>'; warningEl.classList.add('hidden'); return; }
             const today = new Date(); today.setHours(0,0,0,0); const [m, d, y] = parsed.split('-').map(Number); const docDate = new Date(y, m-1, d); docDate.setHours(0,0,0,0);
             targetEl.innerText = docDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+            if (berlakuHari > 0) {   // tanggal update terakhir: tampilkan tanggal update + masa berlakunya
+                const sampai = new Date(docDate); sampai.setDate(sampai.getDate() + berlakuHari);
+                targetEl.innerText = 'Update ' + docDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) + ' · berlaku s/d ' + sampai.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+                docDate.setTime(sampai.getTime());
+            }
             if (docDate >= today) { iconEl.innerHTML = '<i class="fa-solid fa-circle-check text-green-500"></i>'; warningEl.classList.add('hidden'); }
             else { iconEl.innerHTML = '<i class="fa-solid fa-circle-xmark text-red-500"></i>'; warningEl.classList.remove('hidden'); }
             if (typeof window.segarkanTandaDokumen === 'function') window.segarkanTandaDokumen();
