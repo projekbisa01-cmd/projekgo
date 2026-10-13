@@ -752,6 +752,9 @@
         .pf-bintang i { font-size: 15px; margin-right: 2px; }
         .pf-bintang .on { color: #f97316; }
         .pf-bintang .off { color: #e5e7eb; }
+        .pf-bintang { display: flex; align-items: center; }
+        .pf-bintang-n { margin-left: 4px; font-size: 13px; font-weight: 800; color: #9a3412; }
+        body.dark-mode .pf-bintang-n { color: #fdba74; }
         .pf-ulasan-tgl { font-size: 10px; color: #9ca3af; font-weight: 600; }
         .pf-ulasan-lbl { font-size: 10px; color: #9ca3af; margin-top: 8px; position: relative; z-index: 1; }
         .pf-ulasan-teks { font-size: 12px; font-weight: 700; color: #374151; line-height: 1.5; margin-top: 2px; position: relative; z-index: 1; overflow-wrap: anywhere; }
@@ -9805,7 +9808,7 @@
                 updateUI(); 
                 
                 const validEntry = rawData.find(item => item.Nama_Rider) || rawData[0];
-                if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
+                muatRatingRider(validEntry && validEntry.Nama_Rider ? validEntry.Nama_Rider : '');   // ulasan Firebase tetap dimuat walau belum ada nama
                 
                 window.tampilkanBeranda();
                 const ikon = document.getElementById('refresh-icon');
@@ -10130,7 +10133,12 @@
         }
 
         async function muatRatingRider(namaRider, paksa = false) {
-            if (!namaRider) return;
+            // PERBAIKAN (13 Okt 2026): dulu kalau nama rider belum diketahui (mis. belum ada data order di HP),
+            // ulasan sama sekali tidak dimuat. Nama hanya dibutuhkan untuk ulasan lama (GAS, disaring per nama);
+            // ulasan link baru (Firebase) disaring per UID, jadi tetap dimuat walau nama kosong.
+            namaRider = String(namaRider || namaUntukUlasan() || '').trim();
+            if (!currentUserUID && !uidUlasan()) return;
+            const tanpaNama = !namaRider;
             const kunciData = `rider_rating_${currentUserUID}`;
             const kunciTs = `rider_rating_ts_${currentUserUID}`;
             const kunciGas = `rider_rating_gas_${currentUserUID}`;   // bagian GAS saja, cadangan kalau GAS gagal
@@ -10139,6 +10147,7 @@
             // PERBAIKAN (13 Okt 2026): dulu cache 30 menit ini juga menahan pengecekan Firebase, sehingga ulasan
             // pelanggan dari link baru baru muncul setelah 30 menit. Sekarang cache 30 menit HANYA untuk GAS.
             const gasSegar = !!(!paksa && cache && umurCache(kunciTs) < ULASAN_BASI_MS);
+            const pakaiCacheGas = gasSegar || tanpaNama;   // tanpa nama: ulasan GAS diambil dari simpanan HP saja
             if (gasSegar) {
                 if (pendengarUlasanAktif()) return;   // pendengar realtime sudah jalan: ulasan baru masuk sendiri
                 // Tanpa indeks gabungan, tiap cek bisa sampai 50 read, jadi tetap dibatasi 30 menit.
@@ -10150,7 +10159,7 @@
                 try {
                     // 1) Ulasan form lama dari GAS (uid & nama ikut dikirim, GAS menyaring per rider)
                     let dariGas = null, gasOk = false;
-                    if (gasSegar) {
+                    if (pakaiCacheGas) {
                         dariGas = bacaGasTersimpan(kunciGas, cache);
                     } else {
                         try {
@@ -10171,7 +10180,7 @@
                     // 2) Ulasan dari link baru (Firebase) selalu diambil segar (bertahap, biasanya 1 read)
                     let dariFirebase = [], fbOk = false;
                     try { dariFirebase = await ambilUlasanFirebase(namaRider); fbOk = true; } catch (eFb) { console.warn('Ulasan Firebase gagal dimuat:', eFb && eFb.message); }
-                    if (gasSegar && !fbOk) return;      // tampilan dari cache sudah benar, cukup coba lagi nanti
+                    if (pakaiCacheGas && !fbOk) { if (!cache) tampilStatusUlasan('gagal'); return; }   // cukup coba lagi nanti
                     if (dariGas === null && !fbOk) {   // dua-duanya gagal
                         if (cache) { try { renderRatingUI(JSON.parse(cache)); } catch (e2) {} } else tampilStatusUlasan('gagal');
                         return;
@@ -10198,7 +10207,7 @@
         document.addEventListener('visibilitychange', () => {
             if (document.hidden || pendengarUlasanAktif()) return;
             const nama = namaUntukUlasan();
-            if (nama && currentUserUID) setTimeout(() => { muatRatingRider(nama).catch(() => {}); }, 2000);
+            if (currentUserUID) setTimeout(() => { muatRatingRider(nama).catch(() => {}); }, 2000);
         });
 
         // ---------- INFORMASI & DOKUMEN ----------
@@ -10541,7 +10550,7 @@
                 const top = rbEl('div', 'rb-pop-top');
                 top.appendChild(rbEl('div', 'rb-ikon', bagus ? '🎉' : '💬'));
                 top.appendChild(rbEl('h2', '', bagus ? 'KAMU DAPAT ULASAN BARU!' : 'ADA MASUKAN DARI PELANGGAN'));
-                top.appendChild(rbEl('div', 'rb-bintang', '★'.repeat(b) + '☆'.repeat(5 - b)));
+                top.appendChild(rbEl('div', 'rb-bintang', '★'.repeat(b) + '☆'.repeat(5 - b) + ' (' + b + ')'));
                 top.appendChild(rbEl('p', '', bagus ? 'Pelanggan puas dengan pelayananmu. Pertahankan ya!' : 'Jadikan bahan perbaikan supaya pelanggan makin puas.'));
                 pop.appendChild(top);
                 const isi = rbEl('div', 'rb-pop-isi');
@@ -10824,7 +10833,7 @@
                 html += `
                 <div class="pf-ulasan${rating === 1 ? ' bintang1' : ''}">
                     <div class="pf-ulasan-atas">
-                        <div class="pf-bintang" aria-label="${rating} bintang">${stars}</div>
+                        <div class="pf-bintang" aria-label="${rating} bintang">${stars}<span class="pf-bintang-n">(${rating})</span></div>
                         <span class="pf-ulasan-tgl">${escUlasan(tanggalUlasan(item.Tanggal))}</span>
                     </div>
                     <p class="pf-ulasan-lbl">Komentar</p>
@@ -20859,7 +20868,7 @@ window.PembuatQR = PembuatQR;
             try {
                 updateUI();
                 var validEntry = rawData.find(function (i) { return i.Nama_Rider; }) || rawData[0];
-                if (validEntry && validEntry.Nama_Rider) muatRatingRider(validEntry.Nama_Rider);
+                muatRatingRider(validEntry && validEntry.Nama_Rider ? validEntry.Nama_Rider : '');
             } catch (e) {
                 console.error('Gambar ulang riwayat gagal:', e);
                 tandaTerakhir = null; // paksa dicoba lagi pada kiriman berikutnya
