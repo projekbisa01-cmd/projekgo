@@ -132,6 +132,7 @@
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
   import { getFirestore, doc, getDoc, writeBatch, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-lite.js';
+  import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
 
   const firebaseConfig = {
     apiKey: "AIzaSyBCp2PBN1ASET6QjuQ3PWdC1gysQv0z_OY",
@@ -141,7 +142,31 @@
     messagingSenderId: "223888282484",
     appId: "1:223888282484:web:2fc05ed67ca1fab39e1221"
   };
-  const db = getFirestore(initializeApp(firebaseConfig));
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  // Tanda "Diisi dari HP rider" (13 Okt 2026): halaman ini TIDAK meminta login. Tapi kalau browser ini
+  // kebetulan sedang login aplikasi rider/admin (domain yang sama), sesi itu ikut terbaca dan dicatat.
+  // Rules Firebase mewajibkan pencatatan itu, jadi tidak bisa dihapus lewat kode halaman.
+  let auth = null;
+  try { auth = getAuth(app); } catch (e) { auth = null; }
+  const sesiLogin = () => new Promise((selesai) => {
+    if (!auth) return selesai(null);
+    let beres = false;
+    const akhiri = (u) => { if (!beres) { beres = true; selesai(u || null); } };
+    try { const henti = onAuthStateChanged(auth, (u) => { akhiri(u); try { henti && henti(); } catch (e) {} }); } catch (e) { akhiri(null); }
+    setTimeout(() => akhiri(auth.currentUser || null), 3000);
+  });
+  const idPenilai = (u) => !u ? '' : (u.email ? String(u.email).split('@')[0].toUpperCase() : String(u.uid || '')).slice(0, 128);
+  // ID perangkat aplikasi rider dikirim sebagai sidik SHA-256 (bukan ID aslinya), supaya ID perangkat
+  // rider tidak ikut terbaca orang lain. Admin mencocokkan sidik ini dengan daftar perangkat rider.
+  const idPerangkatRider = async () => {
+    try {
+      const v = localStorage.getItem('projekgo_device_id') || '';
+      if (!/^[A-Za-z0-9_-]{6,64}$/.test(v) || !(window.crypto && crypto.subtle)) return '';
+      const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v));
+      return Array.from(new Uint8Array(h), b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) { return ''; }
+  };
   const P = firebaseConfig.projectId;
   const D = (...seg) => doc(db, 'artifacts', P, 'public', 'data', ...seg);
   const $ = (id) => document.getElementById(id);
@@ -269,9 +294,13 @@
       const uidRider = String(link.uid || '');
       const ID_MEDALI = MEDALI.map(m => m[0]);
       const medali = bintang === 5 ? Array.from(pilihanMedali).filter(x => ID_MEDALI.includes(x)).slice(0, MAKS_MEDALI) : [];
-      const kirim = async (pakaiSalinan, pakaiMedali) => {
+      const penilai = idPenilai(await sesiLogin());
+      const perangkat = await idPerangkatRider();
+      const kirim = async (pakaiSalinan, pakaiMedali, pakaiTanda) => {
         const isiUlasan = Object.assign({}, dasar, { order_id: String(token.order_id || ''), komentar, dibuat_at: serverTimestamp() });
         if (pakaiMedali && medali.length) isiUlasan.medali = medali;
+        if (pakaiTanda && penilai) isiUlasan.penilai_login = penilai;
+        if (pakaiTanda && perangkat) isiUlasan.perangkat_rider = perangkat;
         const b = writeBatch(db);
         b.set(D('ulasan_rider', kodeOrder), isiUlasan);
         if (pakaiSalinan) b.set(D('ulasan_masuk', uidRider, 'items', kodeOrder), isiUlasan);
@@ -282,11 +311,15 @@
       const salinanSah = /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(uidRider);
       // Kalau rules lama belum mengenal medali / kotak masuk, kirim ulang dengan bentuk lebih sederhana
       // supaya ulasan tetap tersimpan (bintang & komentar tidak hilang).
-      const cara = [[salinanSah, true], [salinanSah, false], [false, false]]
-        .filter((c, i, a) => (c[1] === false || medali.length) && a.findIndex(x => x[0] === c[0] && x[1] === c[1]) === i);
+      const adaTanda = !!(penilai || perangkat);
+      // Urutan percobaan: lengkap dulu; kalau rules lama menolak, bentuk yang lebih sederhana (ulasan tetap tersimpan)
+      const dasarCara = [[salinanSah, true], [salinanSah, false], [false, false]];
+      const cara = (adaTanda ? dasarCara.map(c => c.concat(true)) : []).concat(dasarCara.map(c => c.concat(false)))
+        .filter(c => c[1] === false || medali.length)
+        .filter((c, i, a) => a.findIndex(x => x[0] === c[0] && x[1] === c[1] && x[2] === c[2]) === i);
       let galatAkhir = null, terkirim = false;
-      for (const [sal, md] of cara) {
-        try { await kirim(sal, md); terkirim = true; break; }
+      for (const [sal, md, tanda] of cara) {
+        try { await kirim(sal, md, tanda); terkirim = true; break; }
         catch (e1) { galatAkhir = e1; if (!(e1 && e1.code === 'permission-denied')) break; }
       }
       if (!terkirim) throw galatAkhir;
