@@ -1092,12 +1092,30 @@
             #page-dispatch .ab-form #cust-name.ab-otomatis { padding-right: 132px; }
         }
 
+        /* ===== HALAMAN 3: PENDING (15 Okt 2026) =====
+           Isi halaman Pending (node yang sama, id tetap) dipindah ke sini selama Beranda tampil di HP. */
+        .ab-geser > #view-pending-geser { flex: 0 0 100%; min-width: 0; padding: 0 14px; scroll-snap-align: start; scroll-snap-stop: always; min-height: 0; background: none; }
+        body.ab-hal3 #page-dispatch .dx-actionbar { display: none; }
+        body.ab-hal3 #page-dispatch { padding-bottom: 90px; }
+
+        /* ===== STRIP ATAS: semua kotak sama besar (angka di atas, label di bawah) ===== */
+        .ad-strip { grid-template-columns: repeat(4, minmax(0, 1fr)) 46px; }
+        body.ab-hal1 .ad-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        body.ab-hal2 .ad-strip, body.ab-hal3 .ad-strip { grid-template-columns: repeat(3, minmax(0, 1fr)) 52px; }
+        body.ab-hal3 .ad-strip > .ab-pantau { display: none; }
+        .ad-strip > button:not(.ab-spk) { height: 54px; flex-direction: column; gap: 2px; padding: 0 4px; }
+        .ad-strip > button:not(.ab-spk):not(.ab-pantau) b { order: -1; font-size: 18px; line-height: 22px; }
+        .ad-strip > button:not(.ab-spk):not(.ab-pantau) span { max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ad-strip > .ab-pantau .ab-pantau-ik { font-size: 18px; height: 22px; display: flex; align-items: center; }
+        .ad-strip > .ab-pantau small { font-size: 10.5px; line-height: 1.2; }
+
         /* Layar lebar: kembali berdampingan, tanpa geser, tanpa penanda halaman */
         @media (min-width: 900px) {
             .ab-titik { display: none; }
             .ab-geser { display: contents; }
             .ab-geser > #view-form-order, .ab-geser > #view-antrean-rider { padding: 0; }
             .ab-geser > .ab-pasif { max-height: none; overflow: visible; }
+            .ab-geser > #view-pending-geser { display: none; }
         }
     </style>
 <style id="kelola-menu-baru-css">
@@ -1255,7 +1273,7 @@
         <div class="ad-strip" aria-label="Ringkasan antrean">
             <button type="button" onclick="window.dxScrollKeAntrean()" title="Lihat antrean rider"><span>Rider antre</span><b id="stat-online-riders">0</b></button>
             <button type="button" onclick="window.adBukaBaruMasuk()" title="Lihat rider baru masuk shift"><span>Baru masuk</span><b id="ad-stat-baru">0</b></button>
-            <button type="button" onclick="switchPage('pending')" title="Buka order pending"><span>Order pending</span><b id="ad-stat-pending">0</b></button>
+            <button type="button" onclick="if (!(window.abKeHalaman && window.abKeHalaman(2))) switchPage('pending')" title="Buka order pending"><span>Order pending</span><b id="ad-stat-pending">0</b></button>
             <button type="button" id="ab-pantau" class="ab-pantau" onclick="switchPage('active')" title="Buka Pantauan order aktif"><span class="ab-pantau-ik"><i class="fa-solid fa-map-location-dot" aria-hidden="true"></i><em id="ab-pantau-n" hidden>0</em></span><small>Pantauan</small></button>
             <button type="button" id="ab-spk" class="ab-spk" title="Suara rider baru masuk: ON" aria-label="Suara rider baru masuk shift" aria-pressed="true"><i class="fa-solid fa-volume-high" aria-hidden="true"></i></button>
         </div>
@@ -1264,6 +1282,7 @@
         <div class="ab-titik" id="ab-titik" role="tablist" aria-label="Halaman beranda">
             <button type="button" data-ab-hal="0" class="on" role="tab" aria-selected="true"><i aria-hidden="true"></i>Input</button>
             <button type="button" data-ab-hal="1" role="tab" aria-selected="false"><i aria-hidden="true"></i>Antrean</button>
+            <button type="button" data-ab-hal="2" role="tab" aria-selected="false"><i aria-hidden="true"></i>Pending</button>
         </div>
 
         <div id="ab-geser" class="ab-geser">
@@ -1279,7 +1298,7 @@
             </div>
 
             <!-- Order pending yang belum dibagikan -->
-            <div id="pending-order-prompt" class="hidden dx-pending" onclick="switchPage('pending')" role="button" tabindex="0">
+            <div id="pending-order-prompt" class="hidden dx-pending" onclick="if (!(window.abKeHalaman && window.abKeHalaman(2))) switchPage('pending')" role="button" tabindex="0">
                 <span>Ada order pending yang belum dibagikan</span>
                 <i class="fa-solid fa-chevron-right"></i>
             </div>
@@ -1397,6 +1416,9 @@
                 </div>
             </section>
         </div>
+
+        <!-- HALAMAN 3 (HP): isi halaman Pending dipindah ke sini oleh JS selama Beranda tampil -->
+        <div id="view-pending-geser" class="dx-stack ad-skin"></div>
 
         </div><!-- /ab-geser -->
 
@@ -6802,7 +6824,11 @@
                     let inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
                     resetRiderOrderDateIfOutdated(uid, data);
-                    const hasOrderToday = checkRiderOrderDate(data);
+                    // Saat order baru dibagikan, "tanggal_order_pertama" masih serverTimestamp yang belum
+                    // dikonfirmasi server, sehingga terbaca kosong sesaat. Rider yang sudah ditandai
+                    // masuk antrean utama lewat tulisan yang sama (hasPendingWrites) tetap dianggap
+                    // punya order hari ini, supaya tidak sempat "terlempar" ke antrean shift baru.
+                    const hasOrderToday = checkRiderOrderDate(data) || (docSnap.metadata && docSnap.metadata.hasPendingWrites === true && inMainQueue);
 
                     const isNowActive = isOnline && isAvailable;
 
@@ -8506,13 +8532,35 @@
                 if (!dikenal.size || (cbUlang && !cbUlang.checked) || ulangKe >= 3) return;
                 ulangTimer = setTimeout(() => { if (dikenal.size) { ulangKe++; umumkan(); jadwalUlang(); } }, 2 * 60 * 1000);
             }
+            // Suara pengumuman lain (berhasil dibagikan / di pending). Dipanggil dari bagian lain halaman.
+            window.abUcap = (teks) => {
+                try { siapAudio(); } catch (e) {}
+                setTimeout(() => ucap(String(teks || '')), 150);
+            };
+            // Pengumuman rider baru baru dibunyikan kalau rider itu BERTAHAN di daftar ±3 detik.
+            // Saat order dibagikan, data rider dan data order tiba bergantian; sesaat rider tampak
+            // "baru masuk shift" padahal sebenarnya tidak. Jeda ini membuang kedipan sesaat itu.
+            const menunggu = new Map();
+            let uidTerbaru = new Set();
             window.abRiderBaruMasuk = (list) => {
                 const daftar = Array.isArray(list) ? list.filter(x => x && x.uid) : [];
                 const uids = new Set(daftar.map(x => x.uid));
+                uidTerbaru = uids;
                 let adaBaru = false;
-                uids.forEach(u => { if (!dikenal.has(u)) { dikenal.add(u); adaBaru = true; } });
+                uids.forEach(u => {
+                    if (dikenal.has(u) || menunggu.has(u)) return;
+                    menunggu.set(u, setTimeout(() => {
+                        menunggu.delete(u);
+                        if (!uidTerbaru.has(u) || dikenal.has(u)) return;
+                        dikenal.add(u);
+                        const bn = $('dx-baru-banner');
+                        if (bn) { bn.classList.remove('ab-goyang'); void bn.offsetWidth; bn.classList.add('ab-goyang'); }
+                        ulangKe = 0; umumkan(); jadwalUlang();
+                    }, 3000));
+                });
                 // Yang sudah diverifikasi / keluar dilupakan, supaya kalau masuk shift lagi diumumkan lagi
                 Array.from(dikenal).forEach(u => { if (!uids.has(u)) dikenal.delete(u); });
+                Array.from(menunggu.keys()).forEach(u => { if (!uids.has(u)) { clearTimeout(menunggu.get(u)); menunggu.delete(u); } });
 
                 const bnr = $('dx-baru-banner');
                 if (bnr) {
@@ -8528,17 +8576,31 @@
 
             // ---------- Beranda 2 halaman (HP): 1 = input, 2 = antrean + menu bawah ----------
             const geser = $('ab-geser'), hal1 = $('view-form-order'), hal2 = $('view-antrean-rider'), titik = $('ab-titik');
+            const hal3 = $('view-pending-geser'), pagePendingEl = $('page-pending');
+            const isiPending = pagePendingEl ? pagePendingEl.querySelector(':scope > section') : null;
             const mqLebar = window.matchMedia ? window.matchMedia('(min-width: 900px)') : { matches: false };
             let halAktif = 0;
-            const posisiScroll = [0, 0];   // posisi gulir atas-bawah tiap halaman, supaya kembali ke tempat semula
+            const JML_HAL = hal3 && isiPending ? 3 : 2;
+            const batasHal = (i) => Math.max(0, Math.min(JML_HAL - 1, Math.round(Number(i) || 0)));
+            const posisiScroll = [0, 0, 0];   // posisi gulir atas-bawah tiap halaman, supaya kembali ke tempat semula
+            // Isi halaman Pending (node yang sama, semua id tetap) ikut ke halaman 3 Beranda selama Beranda
+            // tampil di HP; saat halaman Pending dibuka lewat menu / layar lebar, dikembalikan ke tempat asal.
+            const tempatkanPending = (diBeranda) => {
+                if (!hal3 || !isiPending || !pagePendingEl) return;
+                const tujuan = diBeranda ? hal3 : pagePendingEl;
+                if (isiPending.parentNode !== tujuan) tujuan.appendChild(isiPending);
+            };
             const terapkanHal = () => {
                 const page = $('page-dispatch');
                 const tampil = !!page && !page.classList.contains('hidden-page');
                 const duaHal = !mqLebar.matches;
+                tempatkanPending(tampil && duaHal);
                 document.body.classList.toggle('ab-hal1', tampil && duaHal && halAktif === 0);
                 document.body.classList.toggle('ab-hal2', tampil && duaHal && halAktif === 1);
+                document.body.classList.toggle('ab-hal3', tampil && duaHal && halAktif === 2);
                 if (hal1) hal1.classList.toggle('ab-pasif', duaHal && halAktif !== 0);
                 if (hal2) hal2.classList.toggle('ab-pasif', duaHal && halAktif !== 1);
+                if (hal3) hal3.classList.toggle('ab-pasif', duaHal && halAktif !== 2);
                 if (titik) titik.querySelectorAll('button[data-ab-hal]').forEach(b => { const on = Number(b.dataset.abHal) === halAktif; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
             };
             const gantiHal = (i) => {
@@ -8551,9 +8613,11 @@
             // true = sudah ditangani (mode 2 halaman). Di layar lebar mengembalikan false.
             window.abKeHalaman = (i) => {
                 if (!geser || mqLebar.matches) return false;
-                const ke = i === 1 ? 1 : 0;
+                const pg = $('page-dispatch');
+                if (!pg || pg.classList.contains('hidden-page')) return false;
+                const ke = batasHal(i);
                 const aktif = document.activeElement;
-                if (ke === 1 && aktif && hal1 && hal1.contains(aktif) && typeof aktif.blur === 'function') aktif.blur();
+                if (ke !== 0 && aktif && hal1 && hal1.contains(aktif) && typeof aktif.blur === 'function') aktif.blur();
                 geser.scrollTo({ left: ke * geser.clientWidth, behavior: 'smooth' });
                 gantiHal(ke);
                 return true;
@@ -8564,9 +8628,9 @@
                     clearTimeout(tGeser);
                     tGeser = setTimeout(() => {
                         if (mqLebar.matches || !geser.clientWidth) return;
-                        const i = Math.round(geser.scrollLeft / geser.clientWidth) === 1 ? 1 : 0;
+                        const i = batasHal(geser.scrollLeft / geser.clientWidth);
                         if (i !== halAktif) {
-                            if (i === 1) { const a = document.activeElement; if (a && hal1 && hal1.contains(a) && typeof a.blur === 'function') a.blur(); }
+                            if (i !== 0) { const a = document.activeElement; if (a && hal1 && hal1.contains(a) && typeof a.blur === 'function') a.blur(); }
                             gantiHal(i);
                         }
                     }, 90);
@@ -8582,7 +8646,7 @@
                 let tadiTampil = !pageDispatch.classList.contains('hidden-page');
                 new MutationObserver(() => {
                     const tampil = !pageDispatch.classList.contains('hidden-page');
-                    if (tampil && !tadiTampil && halAktif !== 0) { halAktif = 0; posisiScroll[1] = 0; if (geser) geser.scrollLeft = 0; }
+                    if (tampil && !tadiTampil && halAktif !== 0) { halAktif = 0; posisiScroll[1] = 0; posisiScroll[2] = 0; if (geser) geser.scrollLeft = 0; }
                     tadiTampil = tampil;
                     terapkanHal();
                 }).observe(pageDispatch, { attributes: true, attributeFilter: ['class'] });
@@ -8728,7 +8792,8 @@
                     }, 300);
                     
                     window.showAlert('Berhasil', `Orderan berhasil dikirim manual ke ${nextRiderName}`, 'success');
-                    window.switchPage('dispatch'); 
+                    if (typeof window.abUcap === 'function') window.abUcap('Berhasil dibagikan ke rider ' + nextRiderName);
+                    window.switchPage('dispatch');
                     window.clearSelection(); 
 
                 } catch(e) { 
@@ -9013,7 +9078,8 @@
                     });
                     
                     window.showAlert('Berhasil', `Orderan dialihkan ke ${nextRiderName}.`, 'success');
-                    
+                    if (typeof window.abUcap === 'function') window.abUcap('Berhasil dibagikan ke rider ' + nextRiderName);
+
                     // PERBAIKAN LANGKAH 2: Jeda 300ms memastikan Firestore komit selesai sebelum ditembak FCM
                     setTimeout(() => {
                         sendPushNotification(nextRider.uid, "🔥 ORDERAN DIALIHKAN 🔥", "Kamu mendapat lemparan orderan baru!");
@@ -10998,6 +11064,9 @@
                     // Pemberitahuan singkat yang hilang sendiri (dulu pop-up yang harus ditutup tiap order)
                     if (typeof window.abToast === 'function') window.abToast(`Terkirim ke ${riderName}`, `${rupiahDx(feeParsed.real + tamParsed.real)}${custName ? ' · ' + custName : ''} · masuk riwayat harian rider`);
                     else window.showAlert('Berhasil!', `Dikirim ke HP ${escDx(riderName)}. Data riwayat harian rider otomatis bertambah.`, 'success');
+                    if (typeof window.abUcap === 'function') window.abUcap('Berhasil dibagikan ke rider ' + riderName);
+                } else if (typeof window.abUcap === 'function') {
+                    window.abUcap('Di pending');
                 }
 
                 // Catat ongkir ke histori nomor ini (terpisah dari order; kalau gagal, order tetap aman)
@@ -11072,6 +11141,7 @@
                 }
 
                 await batch.commit();
+                if (typeof window.abUcap === 'function') window.abUcap('Di pending');
 
                 // Catat ongkir ke histori nomor ini (terpisah dari order; kalau gagal, order tetap aman)
                 window.catatOngkirPelangganDx(phone, feeParsed.real, custName);
@@ -11377,6 +11447,7 @@
                     if (order.rider_uid) sendPushNotification(order.rider_uid, "⚠️ ORDERAN DITARIK ADMIN ⚠️", "Orderan ditarik Admin. Kamu dikembalikan ke antrean paling atas karena suatu kendala. (Saldo dikembalikan)", "ORDER_BATAL");
                     
                     window.showAlert('Berhasil', 'Orderan dipindahkan ke Pending. Rider dikembalikan ke antrean paling atas dan potongan di-refund.', 'success');
+                    if (typeof window.abUcap === 'function') window.abUcap('Di pending');
                 } catch(e) { window.showAlert('Gagal', 'Terjadi kesalahan saat memindahkan ke pending.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
@@ -18633,8 +18704,10 @@
                 let alasan = '';
                 if (o.hilang) alasan = 'Order sudah dihapus admin';
                 else if (o.riderUid && x.uid && o.riderUid !== String(x.uid).toUpperCase()) alasan = 'Order ini milik rider lain';
-                else if (o.status !== 'completed' || !o.selesai || x.ms < o.selesai) alasan = 'Ulasan masuk sebelum order diselesaikan rider';
-                else if (x.ms - o.selesai < BATAS_CEPAT_MS) alasan = `Ulasan masuk ${Math.max(1, Math.round((x.ms - o.selesai) / 1000))} detik setelah order selesai`;
+                // Link ulasan kini dikirim rider di chat awal, jadi ulasan SEBELUM order selesai atau tepat
+                // setelahnya adalah hal wajar. Yang mencurigakan hanya ulasan yang masuk kurang dari 2 menit
+                // setelah order dikirim ke rider (belum mungkin ada pelayanan yang dinilai).
+                else if (o.dibuat && x.ms < o.dibuat + BATAS_CEPAT_MS) alasan = `Ulasan masuk ${Math.max(1, Math.round((x.ms - o.dibuat) / 1000))} detik setelah order dikirim ke rider`;
                 const semua = [alasanHp, alasan].filter(Boolean).join(' · ');
                 return { perlu: !!semua && x.dicek !== 'wajar', alasan: semua, o, hp: !!alasanHp };
             }
@@ -18707,7 +18780,7 @@
                     const filterBintang = sudah ? `<div class="kr-fbintang" role="group" aria-label="Saring bintang" style="margin-top:8px">${[0, 5, 4, 3, 2, 1].map(k => `<button type="button" class="${fb === k ? 'on' : ''}" data-kr="ulbintang" data-b="${k}" aria-pressed="${fb === k}">${k ? `<i class="fa-solid fa-star"></i> ${k}` : 'Semua'} <em>${nBintang(k)}</em></button>`).join('')}</div>` : '';
                     isi = `<p class="kr-sub">${tab === 'ulasan'
                             ? 'Bintang dan masukan pelanggan <b>untuk rider</b>. Ulasan ini juga terlihat oleh rider yang bersangkutan.'
-                            : tab === 'cek' ? 'Ulasan yang masuk <b>sebelum order diselesaikan</b> atau <b>kurang dari 2 menit setelahnya</b> (dari 50 ulasan terbaru). Ulasan tetap tampil di rider; pilih "Wajar" kalau tidak ada masalah, atau "Hapus" kalau curang.'
+                            : tab === 'cek' ? 'Ulasan yang masuk <b>kurang dari 2 menit setelah order dikirim ke rider</b>, atau yang diisi dari HP rider (dari 50 ulasan terbaru). Ulasan tetap tampil di rider; pilih "Wajar" kalau tidak ada masalah, atau "Hapus" kalau curang.'
                             : 'Masukan pelanggan <b>untuk PROJEKGO</b>. Hanya terlihat di admin — rider tidak bisa melihatnya.'}</p>
                         <button type="button" class="kr-btn g sm" style="margin-top:8px" data-kr="muatulasan"><i class="fa-solid fa-rotate"></i> ${sudah ? 'Muat ulang (tarik ulang form lama dari GAS)' : 'Muat (50 terbaru dari link baru + form lama)'}</button>
                         <p class="kr-sub">Ulasan dari link baru masuk otomatis tanpa refresh. Form lama diambil per rider dari GAS (±30 detik), lalu disimpan di HP ini 6 jam.</p>
