@@ -1092,6 +1092,17 @@
             #page-dispatch .ab-form #cust-name.ab-otomatis { padding-right: 132px; }
         }
 
+        /* ===== BADGE BPJS HABIS (15 Okt 2026) ===== */
+        .ad-bpjs { width: 100%; display: flex; align-items: center; gap: 10px; margin: 0 0 20px; padding: 8px 12px; border: 1px solid var(--ad-badln); border-radius: 12px; background: var(--ad-badbg); color: var(--ad-ink); text-align: left; font-family: inherit; cursor: pointer; }
+        .ad-bpjs[hidden] { display: none; }
+        .ad-bpjs-ik { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--ad-bad-solid); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .ad-bpjs-tx { flex: 1; min-width: 0; line-height: 1.25; }
+        .ad-bpjs-tx b { display: block; font-size: 13px; font-weight: 800; color: var(--ad-bad); }
+        .ad-bpjs-tx small { display: block; font-size: 11px; font-weight: 600; color: var(--ad-mu); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ad-bpjs-cek { flex: none; font-size: 12px; font-weight: 800; color: var(--ad-bad); }
+        .ad-bpjs:active { transform: scale(.99); }
+        @media (min-width: 900px) { #page-dispatch > .ad-bpjs { grid-column: 1 / -1; } }
+
         /* ===== HALAMAN 3: PENDING (15 Okt 2026) =====
            Isi halaman Pending (node yang sama, id tetap) dipindah ke sini selama Beranda tampil di HP. */
         .ab-geser > #view-pending-geser { flex: 0 0 100%; min-width: 0; padding: 0 14px; scroll-snap-align: start; scroll-snap-stop: always; min-height: 0; background: none; }
@@ -1268,6 +1279,14 @@
     <main id="page-dispatch" class="max-w-md mx-auto dx-page">
         <input type="hidden" id="selected-rider-uid">
         <input type="hidden" id="selected-rider-name">
+
+        <!-- BADGE BPJS HABIS (15 Okt 2026): jumlah rider aktif yang BPJS-nya habis / belum diisi.
+             Data dari admin_config/rider_master (1 read saat admin masuk). Klik = Kelola Rider filter BPJS. -->
+        <button type="button" id="ad-bpjs-bnr" class="ad-bpjs" hidden onclick="window.krBukaBpjs && window.krBukaBpjs()">
+            <span class="ad-bpjs-ik" aria-hidden="true"><i class="fa-solid fa-shield-heart"></i></span>
+            <span class="ad-bpjs-tx"><b id="ad-bpjs-n">0 rider BPJS tidak aktif</b><small>Silakan admin memperbaharui BPJS</small></span>
+            <span class="ad-bpjs-cek">Cek <i class="fa-solid fa-chevron-right" aria-hidden="true"></i></span>
+        </button>
 
         <!-- Ringkasan cepat (angka diambil dari data yang sudah tampil, tanpa read tambahan) -->
         <div class="ad-strip" aria-label="Ringkasan antrean">
@@ -3520,6 +3539,10 @@
                 startOnbidListener(); // jam ON awal & lama onbid hari ini
                 if (typeof window.mulaiPendaftaran === 'function') window.mulaiPendaftaran(); // badge pendaftar rider baru
                 if (typeof window.mulaiAdmTambahan === 'function') window.mulaiAdmTambahan(); // ADM tambahan 4% (Senin 06.50)
+                // Badge BPJS habis di Beranda (15 Okt 2026): 1 read data rider, lalu dihitung ulang tanpa read
+                setTimeout(() => { if (typeof window.krCekBpjs === 'function') window.krCekBpjs(); }, 4000);
+                setTimeout(() => { if (typeof window.krTampilBadgeBpjs === 'function') window.krTampilBadgeBpjs(); }, 15000);
+                if (!window.__bpjsInterval) window.__bpjsInterval = setInterval(() => { if (typeof window.krTampilBadgeBpjs === 'function') window.krTampilBadgeBpjs(); }, 10 * 60 * 1000);
 
                 setInterval(checkOfflineRiders, 60 * 1000); 
                 setTimeout(autoCleanUpOldData, 15000);
@@ -7552,6 +7575,18 @@
             });
         };
 
+        // Rider baru masuk shift yang diverifikasi selalu masuk di EKOR antrean utama.
+        // Dulu memakai jam absen (last_updated) sebagai last_drop_time, sehingga rider baru langsung
+        // naik ke ATAS (antrean diurutkan dari last_drop_time paling lama). Sekarang: waktu antrean
+        // = setelah rider terakhir di antrean (minimal jam sekarang), selisih 1 detik per rider,
+        // dengan urutan sesuai jam absen masuk shift.
+        const waktuEkorAntrean = (jumlah) => {
+            let maks = 0;
+            mainQueueRiders.forEach(r => { const t = getTimestampMs(r.last_drop_time); if (t > maks) maks = t; });
+            const dasar = Math.max(Date.now(), maks + 1000);
+            return Array.from({ length: Math.max(0, jumlah) }, (_, i) => new Date(dasar + i * 1000));
+        };
+
         window.promoteToMainQueue = async () => {
             const busyUids = new Set(allGlobalOrders.filter(o => (o.status === 'assigned' || o.status === 'processing')).map(o => o.rider_uid));
             const availableNewShift = newShiftRiders.filter(r => !busyUids.has(r.uid));
@@ -7562,19 +7597,19 @@
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
                     const batch = writeBatch(db);
-                    availableNewShift.forEach((rider) => {
+                    // Urut jam absen masuk shift (paling awal absen = paling depan di antara rider baru)
+                    const urut = availableNewShift.slice().sort((a, b) => getTimestampMs(a.last_updated) - getTimestampMs(b.last_updated));
+                    const waktu = waktuEkorAntrean(urut.length);
+                    urut.forEach((rider, i) => {
                         const ref = doc(db, 'status_rider_aktif', rider.uid);
-                        // LOGIKA BARU: Gunakan waktu asli saat rider absen "Tersedia" pertama kali (last_updated)
-                        // Ini menjamin rider yang duluan masuk shift akan mutlak mendapat urutan pertama.
-                        const originalTime = rider.last_updated || serverTimestamp(); 
                         batch.update(ref, { 
                             in_main_queue: true, 
-                            last_drop_time: originalTime, 
+                            last_drop_time: waktu[i], 
                             tanggal_order_pertama: serverTimestamp() 
                         });
                     });
                     await batch.commit();
-                    window.showAlert('Berhasil', 'Semua rider diletakkan di antrean radar sesuai urutan awal mereka masuk shift.', 'success');
+                    window.showAlert('Berhasil', 'Rider baru diletakkan di bawah antrean utama, berurutan sesuai jam masuk shift.', 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
@@ -7584,18 +7619,14 @@
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
-                    const rider = allRiders.find(r => r.uid === uid);
                     const ref = doc(db, 'status_rider_aktif', uid);
-                    
-                    // LOGIKA BARU: Gunakan waktu masuk shift asli milik rider tersebut
-                    const originalTime = (rider && rider.last_updated) ? rider.last_updated : serverTimestamp();
-                    
+                    // Masuk di ekor antrean utama (lihat waktuEkorAntrean)
                     await updateDoc(ref, { 
                         in_main_queue: true, 
-                        last_drop_time: originalTime, 
+                        last_drop_time: waktuEkorAntrean(1)[0], 
                         tanggal_order_pertama: serverTimestamp() 
                     });
-                    window.showAlert('Berhasil', `${name} diletakkan di antrean sesuai waktu masuk shift-nya.`, 'success');
+                    window.showAlert('Berhasil', `${name} diletakkan di bawah antrean utama.`, 'success');
                 } catch (error) { window.showAlert('Gagal', 'Terjadi kesalahan.', 'error'); } finally { loader.classList.add('hidden'); loader.classList.remove('flex'); }
             });
         };
@@ -17754,6 +17785,7 @@
                     master = (d.riders && typeof d.riders === 'object') ? d.riders : {};
                     masterSiap = true; masterGalat = '';
                     render();
+                    if (typeof window.krTampilBadgeBpjs === 'function') window.krTampilBadgeBpjs();
                 }, (e) => { masterSiap = true; masterGalat = String(e && (e.code || e.message) || e); render(); });
                 onSnapshot(qrisRef(), (s) => {
                     qris = s.exists() ? (s.data() || null) : null;
@@ -18140,6 +18172,11 @@
                 const ds = dokStatus(m);
                 const saldo = saldoDari(uid);
                 const warnaTgl = (t) => { const h = selisihHari(t); return h === null ? '' : (h < 0 ? 'color:var(--ad-bad)' : (h <= 30 ? 'color:var(--ad-warn)' : '')); };
+                // BPJS = tanggal UPDATE terakhir, berlaku 31 hari. Dulu hanya tanggal update yang tampil (tanpa warna),
+                // sehingga BPJS yang sudah habis terlihat seperti masih berlaku.
+                const tambahHariTgl = (t, n) => { const x = new Date(t + 'T00:00:00+07:00'); x.setDate(x.getDate() + n); return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(x); };
+                const teksBpjs = () => tglSah(d.bpjs) ? `Update ${tglTampil(d.bpjs)} · berlaku s/d ${tglTampil(tambahHariTgl(d.bpjs, BPJS_MAKS_HARI))}` : '-';
+                const warnaBpjs = () => { const st = infoDok(m, 'bpjs'); return !st ? '' : (st.c === 'b' ? 'color:var(--ad-bad);font-weight:800' : (st.c === 'w' ? 'color:var(--ad-warn);font-weight:800' : '')); };
                 const link = linkUlasan(m);
                 r.innerHTML = `
                     <button type="button" class="kr-btn g kr-back" data-kr="list"><i class="fa-solid fa-arrow-left"></i> Kelola Rider</button>
@@ -18162,7 +18199,7 @@
                             <span>Plat</span><span>${esc(d.plat || '-')}</span>
                             <span>SIM</span><span style="${warnaTgl(d.sim)}">${esc(tglTampil(d.sim))}</span>
                             <span>STNK</span><span style="${warnaTgl(d.stnk)}">${esc(tglTampil(d.stnk))}</span>
-                            <span>BPJS</span><span>${esc(tglTampil(d.bpjs))}</span>
+                            <span>BPJS</span><span style="${warnaBpjs()}">${esc(teksBpjs())}</span>
                         </div>
                         ${ds.length ? `<div class="kr-tags" style="margin-top:8px">${ds.map(s => `<span class="kr-tg ${s.c}">${esc(s.t)}</span>`).join('')}</div>` : ''}
                         ${!keluar ? `<div class="kr-row" style="margin-top:8px"><button type="button" class="kr-btn p sm" data-kr="editdok" data-uid="${esc(uid)}"><i class="fa-solid fa-pen"></i> Edit dokumen</button><button type="button" class="kr-btn g sm" data-kr="dokgas" data-uid="${esc(uid)}"><i class="fa-solid fa-file-import"></i> Ambil dari GAS lama</button></div>` : ''}
@@ -19179,6 +19216,42 @@
                 const s = e.target.closest('#kr-root select[data-kr-qris]');
                 if (s) gantiQrisRider(String(s.dataset.krQris || '').toUpperCase(), s.value);
             });
+
+            // ---------- BADGE BPJS HABIS DI BERANDA (15 Okt 2026) ----------
+            // Hitungan sama dengan chip "BPJS habis" di Kelola Rider (habis > 31 hari sejak update, atau belum diisi).
+            let bpjsDibaca = false;
+            const tampilBadgeBpjs = () => {
+                const b = document.getElementById('ad-bpjs-bnr');
+                if (!b) return;
+                if (!masterSiap && !bpjsDibaca) { b.hidden = true; return; }
+                const aktif = daftarAktif();
+                const n = aktif.filter(x => { const st = infoDok(master[x.uid], 'bpjs'); return st && st.c === 'b'; }).length;
+                const t = document.getElementById('ad-bpjs-n');
+                if (t) t.textContent = n + ' rider BPJS tidak aktif';
+                b.hidden = !aktif.length || n === 0;
+            };
+            window.krTampilBadgeBpjs = tampilBadgeBpjs;
+            // 1 read saat admin masuk (kalau daftar rider belum dipantau lewat Kelola Rider)
+            window.krCekBpjs = async () => {
+                try {
+                    if (!masterSiap && !bpjsDibaca) {
+                        const sn = await getDoc(masterRef());
+                        if (!masterSiap) {
+                            const d = sn.exists() ? (sn.data() || {}) : {};
+                            master = (d.riders && typeof d.riders === 'object') ? d.riders : {};
+                        }
+                        bpjsDibaca = true;
+                    }
+                } catch (e) { console.warn('[BPJS] gagal membaca data rider:', e && (e.code || e.message)); }
+                tampilBadgeBpjs();
+            };
+            window.krBukaBpjs = () => {
+                window.switchPage('manage-riders');
+                if (typeof window.switchKelolaRiderTab === 'function') window.switchKelolaRiderTab('data');
+                v = Object.assign(v, { hal: 'list', uid: null, tab: 'bpjs', cari: '' });
+                mulai(); render();
+                window.scrollTo(0, 0);
+            };
 
             // ---------- PASANG KE HALAMAN KELOLA RIDER ----------
             // switchKelolaRiderTab('data') memanggil renderManageRiders -> kini menampilkan menu terpadu.
