@@ -17829,16 +17829,15 @@
                 daftarAktif().forEach(r => { const k = qKodeRider(r.uid); if (k[0] === 'p') hit[k.slice(1)]++; });
                 return 'p' + Object.keys(hit).sort((a, b) => hit[a] - hit[b] || a.localeCompare(b))[0];
             };
-            // Status satu dokumen. SIM/STNK = tanggal berlaku. BPJS = tanggal update terakhir:
-            // dianggap habis bila lebih dari 1 bulan (31 hari) atau belum diisi.
+            // Status satu dokumen. SIM, STNK, dan BPJS = tanggal MASA BERLAKU (15 Okt 2026: BPJS tidak lagi
+            // dianggap "tanggal update + 31 hari"). Habis bila tanggalnya sudah lewat dari hari ini.
+            // BPJS yang belum diisi dihitung tidak aktif (admin yang membayar & mengisi).
             // lewat = jumlah hari lewat (positif) / sisa hari (negatif) -> untuk urutan "paling lama habis" di atas.
-            const BPJS_MAKS_HARI = 31;
             const infoDok = (m, jenis) => {
                 const d = (m && m.dok) || {};
                 if (jenis === 'bpjs') {
-                    const umur = selisihHari(d.bpjs);
-                    if (umur === null) return { c: 'b', t: 'BPJS belum diisi', lewat: 0.5 };
-                    const sisa = BPJS_MAKS_HARI + umur;      // umur negatif = sudah berlalu
+                    const sisa = selisihHari(d.bpjs);        // negatif = tanggal masa berlaku sudah lewat
+                    if (sisa === null) return { c: 'b', t: 'BPJS belum diisi', lewat: 0.5 };
                     if (sisa < 0) return { c: 'b', t: `BPJS habis ${-sisa} hari lalu`, lewat: -sisa };
                     if (sisa <= 7) return { c: 'w', t: sisa === 0 ? 'BPJS habis hari ini' : `BPJS ${sisa} hari lagi`, lewat: -sisa };
                     return null;
@@ -17928,7 +17927,7 @@
                         .filter(o => o.st)
                         .sort((a, b) => (b.st.lewat - a.st.lewat) || String(a.x.name).localeCompare(String(b.x.name)));
                     isi = rows.map(o => barisRider(o.x, o.st)).join('') || `<p class="kr-kosong">Tidak ada rider dengan ${esc(nm)} habis${q ? ' yang cocok' : ''}.</p>`;
-                    catatan = `<p class="kr-catatan">Urut dari yang paling lama habis. Yang ${tab === 'bpjs' ? '7' : '30'} hari lagi habis ikut tampil (kuning) supaya bisa diingatkan lebih dulu.${tab === 'bpjs' ? ' BPJS dianggap habis bila update terakhir lebih dari 1 bulan atau belum diisi.' : ' Yang tanggalnya belum diisi ada di paling bawah.'}</p>`;
+                    catatan = `<p class="kr-catatan">Urut dari yang paling lama habis. Yang ${tab === 'bpjs' ? '7' : '30'} hari lagi habis ikut tampil (kuning) supaya bisa diingatkan lebih dulu.${tab === 'bpjs' ? ' BPJS dianggap habis bila tanggal masa berlakunya sudah lewat dari hari ini, atau belum diisi.' : ' Yang tanggalnya belum diisi ada di paling bawah.'}</p>`;
                 }
                 const chip = (k, label, n) => `<button type="button" class="kr-chip ${tab === k ? 'on' : ''}" data-kr="tab" data-tab="${k}" aria-pressed="${tab === k}">${label}${n ? `<em>${n}</em>` : ''}</button>`;
 
@@ -17995,7 +17994,7 @@
                             <div class="kr-fld"><label>SIM berlaku s/d</label><input id="kr-f-sim" class="kr-in" type="date" value="${tglSah(dok.sim) ? dok.sim : ''}"></div>
                             <div class="kr-fld"><label>STNK berlaku s/d</label><input id="kr-f-stnk" class="kr-in" type="date" value="${tglSah(dok.stnk) ? dok.stnk : ''}"></div>
                         </div>
-                        <div class="kr-fld"><label>BPJS (update terakhir)</label><input id="kr-f-bpjs" class="kr-in" type="date" value="${tglSah(dok.bpjs) ? dok.bpjs : ''}"></div>
+                        <div class="kr-fld"><label>BPJS (masa berlaku)</label><input id="kr-f-bpjs" class="kr-in" type="date" value="${tglSah(dok.bpjs) ? dok.bpjs : ''}"></div>
                     </div></div></div>
                     <div class="kr-card"><div class="kr-step"><span class="kr-num">3</span><div style="flex:1;min-width:0">
                         <p class="kr-h">QRIS</p>
@@ -18172,10 +18171,8 @@
                 const ds = dokStatus(m);
                 const saldo = saldoDari(uid);
                 const warnaTgl = (t) => { const h = selisihHari(t); return h === null ? '' : (h < 0 ? 'color:var(--ad-bad)' : (h <= 30 ? 'color:var(--ad-warn)' : '')); };
-                // BPJS = tanggal UPDATE terakhir, berlaku 31 hari. Dulu hanya tanggal update yang tampil (tanpa warna),
-                // sehingga BPJS yang sudah habis terlihat seperti masih berlaku.
-                const tambahHariTgl = (t, n) => { const x = new Date(t + 'T00:00:00+07:00'); x.setDate(x.getDate() + n); return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(x); };
-                const teksBpjs = () => tglSah(d.bpjs) ? `Update ${tglTampil(d.bpjs)} · berlaku s/d ${tglTampil(tambahHariTgl(d.bpjs, BPJS_MAKS_HARI))}` : '-';
+                // BPJS = tanggal masa berlaku (diberi warna seperti SIM/STNK)
+                const teksBpjs = () => tglSah(d.bpjs) ? `Berlaku s/d ${tglTampil(d.bpjs)}` : '-';
                 const warnaBpjs = () => { const st = infoDok(m, 'bpjs'); return !st ? '' : (st.c === 'b' ? 'color:var(--ad-bad);font-weight:800' : (st.c === 'w' ? 'color:var(--ad-warn);font-weight:800' : '')); };
                 const link = linkUlasan(m);
                 r.innerHTML = `
@@ -19218,7 +19215,7 @@
             });
 
             // ---------- BADGE BPJS HABIS DI BERANDA (15 Okt 2026) ----------
-            // Hitungan sama dengan chip "BPJS habis" di Kelola Rider (habis > 31 hari sejak update, atau belum diisi).
+            // Hitungan sama dengan chip "BPJS habis" di Kelola Rider (masa berlaku sudah lewat, atau belum diisi).
             let bpjsDibaca = false;
             const tampilBadgeBpjs = () => {
                 const b = document.getElementById('ad-bpjs-bnr');

@@ -11004,11 +11004,10 @@
                 
                 checkDocumentStatus(simDate, 'profile-sim', 'sim-status-icon', 'sim-warning');
                 checkDocumentStatus(stnkDate, 'profile-stnk', 'stnk-status-icon', 'stnk-warning');
-                // PERBAIKAN (13 Okt 2026): dari admin (Kelola Rider) BPJS diisi "tanggal update terakhir", bukan tanggal habis.
-                // Dulu tanggal itu dianggap tanggal habis, jadi sehari setelah admin update sudah tampil merah/"akan diperbaharui".
-                // Sekarang dianggap berlaku 1 bulan (31 hari) sejak tanggal update — sama dengan aturan "BPJS habis" di admin.
+                // 15 Okt 2026: tanggal BPJS dari admin = tanggal MASA BERLAKU (bukan tanggal update + 31 hari).
+                // Habis bila tanggalnya sudah lewat dari hari ini; tanda "segera" 7 hari sebelumnya — sama dengan admin.
                 const bpjsVal = getVal(['updatebpjsbpuketenagakerjaan','updatebpjsbpu','masaberlakubpjs','berlakubpjs','expbpjs','bpjs','updatebpjs']);
-                checkDocumentStatus(bpjsVal, 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning', data.bpjs_update === true ? 31 : 0);
+                checkDocumentStatus(bpjsVal, 'profile-bpjs', 'bpjs-status-icon', 'bpjs-warning', 0, 7);
 
                 // CEK DOKUMEN MATI UNTUK BANNER PERINGATAN GLOBAL
                 const expiredDocs = [];
@@ -11025,7 +11024,7 @@
                 if (isExpired(stnkDate)) expiredDocs.push("STNK");
 
                 toggleDocWarning(expiredDocs);
-                if (typeof window.rbCekDokumen === 'function') window.rbCekDokumen(simDate, stnkDate, bpjsVal, data.bpjs_update === true ? 31 : 0);
+                if (typeof window.rbCekDokumen === 'function') window.rbCekDokumen(simDate, stnkDate, bpjsVal, 0);
             }
         }
 
@@ -11790,7 +11789,7 @@
                 bar.style.width = persen.toFixed(0) + '%';
             }
         }
-        function checkDocumentStatus(dateStr, targetElId, iconElId, warningElId, berlakuHari = 0) {
+        function checkDocumentStatus(dateStr, targetElId, iconElId, warningElId, berlakuHari = 0, hariSegera = 0) {
             const parsed = parseSheetDate(dateStr); const targetEl = document.getElementById(targetElId); const iconEl = document.getElementById(iconElId); const warningEl = document.getElementById(warningElId);
             const kartuDok = targetEl ? targetEl.closest('.dk-doc') : null;
             if (!parsed || parsed === "") { targetEl.innerText = "Data Kosong"; iconEl.innerHTML = '<i class="fa-solid fa-circle-question text-gray-300"></i>'; warningEl.classList.add('hidden'); tandaiKartuDok(kartuDok, 'kosong', null, berlakuHari); if (typeof window.segarkanTandaDokumen === 'function') window.segarkanTandaDokumen(); return; }
@@ -11804,7 +11803,8 @@
             if (docDate >= today) { iconEl.innerHTML = '<i class="fa-solid fa-circle-check text-green-500"></i>'; warningEl.classList.add('hidden'); }
             else { iconEl.innerHTML = '<i class="fa-solid fa-circle-xmark text-red-500"></i>'; warningEl.classList.remove('hidden'); }
             const sisaHari = Math.round((docDate - today) / 86400000);
-            tandaiKartuDok(kartuDok, sisaHari < 0 ? 'habis' : (sisaHari <= (berlakuHari > 0 ? 7 : 30) ? 'segera' : 'ok'), sisaHari, berlakuHari);
+            const batasSegera = hariSegera > 0 ? hariSegera : (berlakuHari > 0 ? 7 : 30);
+            tandaiKartuDok(kartuDok, sisaHari < 0 ? 'habis' : (sisaHari <= batasSegera ? 'segera' : 'ok'), sisaHari, berlakuHari || (hariSegera > 0 ? 31 : 0));
             if (typeof window.segarkanTandaDokumen === 'function') window.segarkanTandaDokumen();
         }
 
