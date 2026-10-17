@@ -15586,62 +15586,339 @@
         // FUNGSI 5 PILAR ANALISIS BISNIS LANJUTAN
         // =====================================================================
 
-        window.renderAnalisisOperasional = () => {
+        // =====================================================================
+        // TAB OPERASIONAL (17 Okt 2026): kehadiran rider, kebutuhan rider per jam,
+        // kecepatan & kendala, saran otomatis.
+        // Hemat read: ringkasan tiap hari yang SUDAH LEWAT dihitung sekali lalu disimpan
+        // di HP admin ini (localStorage). Hari yang sama tidak dibaca ulang.
+        // =====================================================================
+        const OP_SIMPAN = 'op_ringkas_v1_';
+        const OP_JAM_AWAL = 6, OP_JAM_AKHIR = 22;      // jam yang ditampilkan 06.00–22.00
+        const OP_CADANGAN = 1.2;                       // cadangan 20% di atas kebutuhan
+        let opHari = 7, opVersi = 0;
+        const opPad = (n) => String(n).padStart(2, '0');
+        const opIso = (d) => `${d.getFullYear()}-${opPad(d.getMonth() + 1)}-${opPad(d.getDate())}`;
+        const opUidOk = (u) => /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(String(u || ''));
+        const opBaca = (D) => { try { const c = JSON.parse(localStorage.getItem(OP_SIMPAN + D) || 'null'); return (c && c.v === 1) ? c : null; } catch (e) { return null; } };
+        const opTulis = (D, isi) => { try { localStorage.setItem(OP_SIMPAN + D, JSON.stringify(isi)); } catch (e) {} };
+        const opBuangLama = () => {
+            try {
+                const batas = new Date(); batas.setDate(batas.getDate() - 40);
+                const kunciBatas = OP_SIMPAN + opIso(batas);
+                for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.indexOf(OP_SIMPAN) === 0 && k < kunciBatas) localStorage.removeItem(k); }
+            } catch (e) {}
+        };
+
+        // Ringkasan order selesai satu hari (dibaca dari active_orders, sekali per hari)
+        async function opRingkasOrder(D) {
+            const ada = opBaca(D);
+            if (ada && ada.order) return ada.order;
+            const [y, m, d] = D.split('-').map(Number);
+            const awal = new Date(y, m - 1, d, 0, 0, 0, 0), akhir = new Date(y, m - 1, d, 23, 59, 59, 999);
+            const snap = await getDocs(query(
+                collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders'),
+                where('status', '==', 'completed'), where('created_at', '>=', awal), where('created_at', '<=', akhir), limit(600)
+            ));
+            const r = { total: 0, perRider: {}, perJam: Array(24).fill(0), accN: 0, accDetik: 0, acc2: 0, antarN: 0, antarMenit: 0, up: 0, terpotong: snap.size >= 600 };
+            snap.forEach(ds => {
+                const o = ds.data() || {};
+                const uid = String(o.rider_uid || '').trim().toUpperCase();
+                r.total++;
+                if (opUidOk(uid)) r.perRider[uid] = (r.perRider[uid] || 0) + 1;
+                const tBagi = onbidKeMs(o.created_at);
+                if (tBagi) r.perJam[new Date(tBagi).getHours()]++;
+                if (o.is_manual === true) return;                 // order susulan/impor: jamnya bukan jam asli
+                const tAcc = onbidKeMs(o.accepted_at), tSelesai = onbidKeMs(o.finished_at);
+                if (tBagi && tAcc && tAcc >= tBagi) {
+                    const dtk = (tAcc - tBagi) / 1000;
+                    if (dtk <= 3600) { r.accN++; r.accDetik += dtk; if (dtk > 120) r.acc2++; }
+                }
+                if (tBagi && tSelesai) {
+                    const mnt = (tSelesai - tBagi) / 60000;
+                    if (mnt > 1 && mnt < 180) { r.antarN++; r.antarMenit += mnt; }
+                }
+                if ((parseInt(o.pengingat_selesai_tahap, 10) || 0) >= 1) r.up++;
+            });
+            const isi = opBaca(D) || { v: 1 };
+            isi.order = r; opTulis(D, isi);
+            return r;
+        }
+
+        // Menit rider ON (antre / mengantar) per jam dalam satu hari, dari catatan onbid_harian
+        async function opRingkasOnbid(D) {
+            const ada = opBaca(D);
+            if (ada && ada.onbid) return ada.onbid;
+            const snap = await getDocs(query(
+                collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'onbid_harian'),
+                where('tanggal', '==', D)
+            ));
+            const [y, m, d] = D.split('-').map(Number);
+            const awalHari = new Date(y, m - 1, d, 0, 0, 0, 0).getTime(), akhirHari = awalHari + 86400000;
+            const menit = Array(24).fill(0);
+            const onUid = [];
+            const tambah = (a, b) => {               // tambahkan rentang ON [a,b) ke menit per jam
+                a = Math.max(a, awalHari); b = Math.min(b, akhirHari);
+                while (a < b) {
+                    const jam = Math.floor((a - awalHari) / 3600000);
+                    const batasJam = awalHari + (jam + 1) * 3600000;
+                    const ujung = Math.min(b, batasJam);
+                    if (jam >= 0 && jam < 24) menit[jam] += (ujung - a) / 60000;
+                    a = ujung;
+                }
+            };
+            snap.forEach(ds => {
+                const x = ds.data() || {};
+                const uid = String(x.uid || '').trim().toUpperCase();
+                const ev = (Array.isArray(x.events) ? x.events : [])
+                    .map(e => ({ t: onbidKeMs(e && e.t), s: String((e && e.s) || '') }))
+                    .filter(e => e.t > 0 && ONBID_STATUS_SAH.includes(e.s)).sort((a, b) => a.t - b.t);
+                let on = false, mulai = 0, pernah = false;
+                ev.forEach(e => {
+                    const jadiOn = e.s === 'antre' || e.s === 'order';
+                    if (on && !jadiOn) { tambah(mulai, e.t); on = false; }
+                    if (!on && jadiOn) { on = true; mulai = e.t; pernah = true; }
+                });
+                if (on) tambah(mulai, Math.min(akhirHari, Date.now()));
+                if (pernah && opUidOk(uid)) onUid.push(uid);
+            });
+            const r = { menit: menit.map(v => Math.round(v)), onUid };
+            const isi = opBaca(D) || { v: 1 };
+            isi.onbid = r; opTulis(D, isi);
+            return r;
+        }
+
+        // Order dialihkan / ditarik ke Pending dalam rentang tanggal (butuh index type + created_at)
+        async function opKendala(awal, akhir) {
+            try {
+                const snap = await getDocs(query(
+                    collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'),
+                    where('type', 'in', ['refund_reassign', 'refund_pending']),
+                    where('created_at', '>=', awal), where('created_at', '<=', akhir), limit(500)
+                ));
+                let alih = 0, tarik = 0;
+                snap.forEach(ds => { const t = (ds.data() || {}).type; if (t === 'refund_reassign') alih++; else if (t === 'refund_pending') tarik++; });
+                return { alih, tarik, galat: '' };
+            } catch (e) {
+                const pesan = String(e && e.message || '');
+                const link = (pesan.match(/https:\/\/console\.firebase\.google\.com\/[^\s"'<>`]+/) || [''])[0];
+                return { alih: null, tarik: null, galat: e && e.code === 'failed-precondition' ? 'index' : String(e && (e.code || e.message) || e), link };
+            }
+        }
+
+        window.opGantiHari = (n) => { opHari = n === 14 ? 14 : 7; window.renderAnalisisOperasional(); };
+        window.opMuatUlang = () => {
+            // Hanya hari kemarin yang dihitung ulang (order bisa masih diedit). Hari lain tetap dari simpanan.
+            const k = new Date(); k.setDate(k.getDate() - 1);
+            try { localStorage.removeItem(OP_SIMPAN + opIso(k)); } catch (e) {}
+            window.renderAnalisisOperasional();
+        };
+
+        window.renderAnalisisOperasional = async () => {
             const container = document.getElementById('operasional-container-results');
             if (!container) return;
+            const versi = ++opVersi;
+            const esc = window.escHtml;
+            container.innerHTML = '<div class="flex flex-col items-center justify-center py-8"><div class="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-2"></div><p class="text-[9px] font-bold text-slate-500">Menghitung data operasional...</p><p class="text-[8px] text-slate-400 mt-1">Pertama kali agak lama, berikutnya cepat.</p></div>';
+            opBuangLama();
 
-            const dataOrder = window.currentHistoryData || [];
-            if (dataOrder.length === 0) {
-                container.innerHTML = `<p class="text-[10px] text-slate-400 italic text-center py-6 border border-dashed border-gray-200 rounded-xl mt-2">Pilih tanggal di menu Histori terlebih dahulu.</p>`;
-                return;
+            // Hari yang dihitung: N hari terakhir sampai KEMARIN (hari ini belum selesai)
+            const hari = [];
+            for (let i = opHari; i >= 1; i--) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i); hari.push({ iso: opIso(d), obj: d }); }
+
+            try { if (typeof window.krCekBpjs === 'function') await window.krCekBpjs(); } catch (e) {}
+            try { if (typeof window.muatJadwalLibur === 'function') await window.muatJadwalLibur(); } catch (e) {}
+            const master = (typeof window._krMasterSemua === 'function' ? window._krMasterSemua() : null) || {};
+            const jadwal = (window._jadwalLibur && Array.isArray(window._jadwalLibur.riders)) ? window._jadwalLibur.riders : [];
+
+            const dataHari = [];
+            let galatBaca = '';
+            for (let i = 0; i < hari.length; i += 3) {             // 3 hari sekaligus
+                const blok = hari.slice(i, i + 3);
+                const hasil = await Promise.all(blok.map(async h => {
+                    let order = null, onbid = null;
+                    try { order = await opRingkasOrder(h.iso); } catch (e) { galatBaca = String(e && (e.code || e.message) || e); }
+                    try { onbid = await opRingkasOnbid(h.iso); } catch (e) { galatBaca = galatBaca || String(e && (e.code || e.message) || e); }
+                    return Object.assign({}, h, { order, onbid });
+                }));
+                dataHari.push(...hasil);
+                if (versi !== opVersi) return;                      // admin sudah pindah / buka ulang
             }
+            const awalP = new Date(hari[0].obj), akhirP = new Date(hari[hari.length - 1].obj); akhirP.setHours(23, 59, 59, 999);
+            const kendala = await opKendala(awalP, akhirP);
+            if (versi !== opVersi) return;
 
-            let validOrders = 0;
-            let totalMins = 0;
-
-            dataOrder.forEach(o => {
-                const start = o.admin_created_at?.seconds || o.created_at?.seconds;
-                const endStr = o.Jam; // "HH:MM"
-                
-                if (start && endStr && endStr.includes(':')) {
-                    const startDate = new Date(start * 1000);
-                    const endDate = new Date(start * 1000); // Copy date
-                    const [h, m] = endStr.split(':');
-                    endDate.setHours(parseInt(h), parseInt(m), 0, 0);
-
-                    const diffMs = endDate.getTime() - startDate.getTime();
-                    const diffMins = Math.floor(diffMs / 60000);
-
-                    // Filter anomali waktu (misal admin lupa selesaikan sampai besoknya)
-                    if (diffMins > 0 && diffMins < 180) { 
-                        totalMins += diffMins;
-                        validOrders++;
-                    }
-                }
+            // ---------- 1. KEHADIRAN ----------
+            const aktifSkrg = new Set(getMergedRidersForDropdown().map(r => String(r.uid).trim().toUpperCase()).filter(opUidOk));
+            const namaDari = (u) => { const r = getMergedRidersForDropdown().find(x => String(x.uid).trim().toUpperCase() === u); return (r && r.name) || (master[u] && master[u].nama) || u; };
+            const partTime = (u) => (typeof adm4PartTime === 'function') ? adm4PartTime(u) : false;
+            const tglSahOp = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+            const liburPada = (u, D, obj) => {
+                const j = jadwal.find(x => String(x.uid).trim().toUpperCase() === u);
+                if (!j || typeof window.hitungLiburMingguIni !== 'function') return false;
+                const h = window.hitungLiburMingguIni(j.patokan, obj);
+                return !!(h && h.tanggal && opIso(h.tanggal) === D);
+            };
+            const NAMA_HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const perRider = {}, perHariOff = {};
+            let jmlHariData = 0, sumAktif = 0, sumNarik = 0, sumLibur = 0, sumOff = 0, sumOrder = 0, sumNarikFull = 0;
+            dataHari.forEach(h => {
+                if (!h.order) return;
+                jmlHariData++;
+                const roster = new Set();
+                aktifSkrg.forEach(u => roster.add(u));
+                Object.keys(master).forEach(u => {
+                    const m = master[u];
+                    if (opUidOk(u) && m && m.status === 'keluar' && tglSahOp(m.keluar) && m.keluar > h.iso) roster.add(u);
+                });
+                Object.keys(h.order.perRider).forEach(u => roster.add(u));
+                let aktif = 0, narik = 0, libur = 0, off = 0, narikFull = 0;
+                roster.forEach(u => {
+                    const m = master[u];
+                    if (m && tglSahOp(m.gabung) && m.gabung > h.iso && !h.order.perRider[u]) return;   // belum gabung
+                    if (partTime(u)) return;                                                              // part time dipisah
+                    aktif++;
+                    const p = perRider[u] || (perRider[u] = { uid: u, narik: 0, libur: 0, off: 0 });
+                    if (h.order.perRider[u]) { narik++; narikFull++; p.narik++; }
+                    else if (liburPada(u, h.iso, h.obj)) { libur++; p.libur++; }
+                    else { off++; p.off++; }
+                });
+                sumAktif += aktif; sumNarik += narik; sumLibur += libur; sumOff += off; sumNarikFull += narikFull;
+                sumOrder += h.order.total;
+                const nh = NAMA_HARI[h.obj.getDay()];
+                perHariOff[nh] = (perHariOff[nh] || 0) + off;
             });
+            const rata = (v) => jmlHariData ? v / jmlHariData : 0;
+            const jmlPart = [...aktifSkrg].filter(partTime).length;
+            const sering = Object.values(perRider).filter(p => p.off >= 2).sort((a, b) => b.off - a.off).slice(0, 6);
+            const hariTerburuk = Object.keys(perHariOff).sort((a, b) => perHariOff[b] - perHariOff[a])[0];
 
-            const avgSLA = validOrders > 0 ? Math.round(totalMins / validOrders) : 0;
-            let slaStatus = avgSLA <= 30 ? '<span class="text-emerald-500">Sangat Cepat</span>' : (avgSLA <= 45 ? '<span class="text-amber-500">Normal / Wajar</span>' : '<span class="text-rose-500">Cukup Lambat</span>');
-            if (validOrders === 0) slaStatus = '<span class="text-slate-400">Data Tidak Cukup</span>';
+            // ---------- 2. KEBUTUHAN RIDER PER JAM ----------
+            let antarN = 0, antarMenit = 0, accN = 0, accDetik = 0, acc2 = 0, up = 0, terpotong = false;
+            const orderJam = Array(24).fill(0), menitOn = Array(24).fill(0);
+            let hariOrderJam = 0, hariOnbid = 0;
+            dataHari.forEach(h => {
+                if (h.order) {
+                    hariOrderJam++;
+                    h.order.perJam.forEach((v, j) => { orderJam[j] += v; });
+                    antarN += h.order.antarN; antarMenit += h.order.antarMenit;
+                    accN += h.order.accN; accDetik += h.order.accDetik; acc2 += h.order.acc2; up += h.order.up;
+                    if (h.order.terpotong) terpotong = true;
+                }
+                if (h.onbid) { hariOnbid++; h.onbid.menit.forEach((v, j) => { menitOn[j] += v; }); }
+            });
+            const lamaAntar = antarN ? antarMenit / antarN : 30;
+            const barisJam = [];
+            for (let j = OP_JAM_AWAL; j < OP_JAM_AKHIR; j++) {
+                const ord = hariOrderJam ? orderJam[j] / hariOrderJam : 0;
+                const siap = hariOnbid ? menitOn[j] / 60 / hariOnbid : 0;
+                const butuh = ord > 0 ? Math.max(1, Math.ceil(ord * lamaAntar / 60 * OP_CADANGAN)) : 0;
+                barisJam.push({ j, ord, siap, butuh });
+            }
+            const kurang = barisJam.filter(b => b.butuh > 0 && b.siap + 0.5 < b.butuh).sort((a, b) => (b.butuh - b.siap) - (a.butuh - a.siap));
+
+            // ---------- 4. SARAN ----------
+            const saran = [];
+            if (kurang.length) {
+                const k = kurang.slice(0, 3).map(b => `${opPad(b.j)}.00 (kurang ${Math.ceil(b.butuh - b.siap)})`).join(', ');
+                saran.push(`Rider kurang di jam ${k}. Geser jam masuk sebagian rider shift siang ke jam tersebut, atau tambah rider part time khusus jam itu.`);
+            } else if (hariOnbid) saran.push('Jumlah rider ON sudah cukup di semua jam sibuk.');
+            const rataOffPerNamaHari = Object.keys(perHariOff).length ? sumOff / Object.keys(perHariOff).length : 0;
+            if (hariTerburuk && perHariOff[hariTerburuk] >= 2 && perHariOff[hariTerburuk] > rataOffPerNamaHari * 1.3) saran.push(`Hari ${hariTerburuk} paling banyak rider off tanpa jadwal (${perHariOff[hariTerburuk]} rider). Hindari memberi libur terjadwal di hari ${hariTerburuk}.`);
+            if (sering.length) saran.push(`${sering.length} rider off tanpa jadwal 2 kali atau lebih. Cek dan tegur: ${sering.slice(0, 3).map(p => namaDari(p.uid)).join(', ')}.`);
+            const ordHari = rata(sumOrder), narikHari = rata(sumNarikFull);
+            if (ordHari > 0) {
+                const perluNarik = Math.ceil(ordHari / KONS_TARGET_HARI);
+                const perRiderNarik = narikHari ? ordHari / narikHari : 0;
+                if (perluNarik > narikHari + 0.5) {
+                    const perluRoster = Math.ceil(perluNarik * 7 / 6);   // libur 1 hari per minggu
+                    const rosterFull = [...aktifSkrg].filter(u => !partTime(u)).length;
+                    const tambah = Math.max(0, perluRoster - rosterFull);
+                    saran.push(`Rata-rata ${Math.round(ordHari)} order per hari butuh sekitar ${perluNarik} rider narik (target ${KONS_TARGET_HARI} order per rider), sekarang rata-rata ${Math.round(narikHari)}. ${tambah ? `Perlu sekitar ${tambah} rider fulltime baru, atau kurangi rider yang off tanpa jadwal.` : 'Rider terdaftar sudah cukup, yang perlu ditekan adalah rider yang off tanpa jadwal.'}`);
+                } else if (perRiderNarik < 10) {
+                    saran.push(`Order per rider masih rendah (sekitar ${Math.round(perRiderNarik)} order per hari). Rider sudah cukup, fokus menambah order.`);
+                }
+            }
+            if (accN && acc2 / accN > 0.1) saran.push(`${Math.round(acc2 / accN * 100)}% order baru di-ACC rider setelah lebih dari 2 menit. Ingatkan rider untuk tidak meninggalkan HP saat antre.`);
+            if (up >= Math.max(3, jmlHariData)) saran.push(`${up} order sampai lebih dari 40 menit (kena Up otomatis). Cek rider dan rute yang sering terlambat.`);
+
+            // ---------- TAMPILAN ----------
+            const n0 = (v) => Math.round(v).toLocaleString('id-ID');
+            const n1 = (v) => (Math.round(v * 10) / 10).toLocaleString('id-ID');
+            const kartu = (label, isi, sub) => `<div class="bg-slate-50 rounded-xl p-2.5 border border-slate-100"><p class="text-[9px] font-bold text-slate-500 uppercase tracking-wider">${label}</p><p class="text-lg font-black text-slate-800 leading-tight mt-0.5">${isi}</p>${sub ? `<p class="text-[9px] font-bold text-slate-400 mt-0.5">${sub}</p>` : ''}</div>`;
+            const judul = (ikon, teks) => `<p class="text-[10px] font-black text-slate-700 uppercase tracking-wider mb-2"><i class="fa-solid ${ikon} text-indigo-500 mr-1.5"></i>${teks}</p>`;
+            const periode = `${window.tglIndo(hari[0].obj)} – ${window.tglIndo(hari[hari.length - 1].obj)}`;
+            const btnHari = (n) => `<button type="button" onclick="window.opGantiHari(${n})" class="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${opHari === n ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-slate-50 text-slate-500 border-slate-200'}">${n} hari</button>`;
+
+            const htmlSering = sering.length ? `<p class="text-[9px] font-bold text-slate-500 mt-2">Paling sering off tanpa jadwal:</p><div class="flex flex-wrap gap-1 mt-1">${sering.map(p => `<span class="text-[9px] font-black bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded">${esc(namaDari(p.uid))} ${p.off}x</span>`).join('')}</div>` : '';
+
+            const maxSkala = Math.max(1, ...barisJam.map(b => Math.max(b.butuh, b.siap)));
+            const htmlJam = barisJam.map(b => {
+                const kurangJ = b.butuh > 0 && b.siap + 0.5 < b.butuh;
+                const pas = b.butuh > 0 && !kurangJ && b.siap < b.butuh + 1;
+                const warna = b.butuh === 0 ? 'bg-slate-300' : (kurangJ ? 'bg-rose-500' : (pas ? 'bg-amber-400' : 'bg-emerald-500'));
+                const teks = b.butuh === 0 ? 'text-slate-400' : (kurangJ ? 'text-rose-600' : (pas ? 'text-amber-600' : 'text-emerald-600'));
+                const lebarSiap = Math.min(100, b.siap / maxSkala * 100), posButuh = Math.min(100, b.butuh / maxSkala * 100);
+                return `<div class="flex items-center gap-2 mb-1.5">
+                    <span class="text-[9px] font-bold text-slate-500 w-[34px] shrink-0">${opPad(b.j)}.00</span>
+                    <div class="flex-1 relative h-3 rounded-full bg-slate-100 overflow-hidden">
+                        <div class="absolute inset-y-0 left-0 rounded-full ${warna}" style="width:${lebarSiap.toFixed(1)}%"></div>
+                        ${b.butuh ? `<div class="absolute inset-y-0 w-0.5 bg-slate-700" style="left:${posButuh.toFixed(1)}%"></div>` : ''}
+                    </div>
+                    <span class="text-[9px] font-black ${teks} w-[78px] text-right shrink-0">${b.butuh ? `${n1(b.siap)} / ${b.butuh}` : '-'} <span class="font-bold text-slate-400">· ${n1(b.ord)} ord</span></span>
+                </div>`;
+            }).join('');
+
+            const htmlKendala = kendala.galat === 'index'
+                ? `<p class="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">Angka order dialihkan / ditarik butuh index Firestore sekali. ${kendala.link && /^https:\/\/console\.firebase\.google\.com\//.test(kendala.link) ? `<a href="${esc(kendala.link)}" target="_blank" rel="noopener noreferrer" class="underline">Buat index di sini</a>, tunggu ±5 menit lalu buka ulang tab ini.` : 'Buat index riwayat_potongan: type (Ascending) + created_at (Ascending).'}</p>`
+                : (kendala.galat ? `<p class="text-[9px] font-bold text-rose-600 mt-2">Order dialihkan / ditarik gagal dimuat (${esc(kendala.galat)}).</p>` : '');
 
             container.innerHTML = `
-                <div class="mb-3 flex justify-between items-end border-b border-gray-100 pb-2 mt-1">
-                    <div>
-                        <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">SLA (Service Level Agreement)</p>
-                        <p class="text-[10px] font-bold text-slate-700 mt-0.5">Kecepatan Rata-Rata Order</p>
-                    </div>
+                <div class="flex justify-between items-center gap-2 mt-1 mb-3">
+                    <div><p class="text-[10px] font-black text-slate-700 uppercase tracking-wider">Operasional rider</p><p class="text-[9px] font-bold text-slate-400">${esc(periode)}</p></div>
+                    <div class="flex gap-1">${btnHari(7)}${btnHari(14)}<button type="button" onclick="window.opMuatUlang()" class="px-2.5 py-1.5 rounded-lg text-[9px] font-black border bg-slate-50 text-slate-500 border-slate-200" aria-label="Muat ulang" title="Muat ulang"><i class="fa-solid fa-rotate"></i></button></div>
                 </div>
-                <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-4 border border-slate-700 shadow-md relative overflow-hidden">
-                    <i class="fa-solid fa-stopwatch absolute right-[-10px] bottom-[-10px] text-6xl text-white/5"></i>
-                    <p class="text-[9px] font-bold text-slate-300 uppercase tracking-widest mb-1">Estimasi Waktu Penyelesaian</p>
-                    <div class="flex items-end gap-2 mb-2">
-                        <p class="text-3xl font-black text-white leading-none">${avgSLA}</p>
-                        <p class="text-sm font-bold text-slate-400 mb-0.5">Menit / Order</p>
+                ${galatBaca ? `<p class="text-[9px] font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2 mb-3">Sebagian data gagal dimuat (${esc(galatBaca)}). Angka di bawah bisa kurang lengkap.</p>` : ''}
+                ${terpotong ? '<p class="text-[9px] font-bold text-amber-700 mb-3">Ada hari dengan lebih dari 600 order; hanya 600 yang dihitung.</p>' : ''}
+
+                <div class="bg-white rounded-xl border border-gray-100 p-3 mb-3">
+                    ${judul('fa-user-clock', '1. Kehadiran rider fulltime')}
+                    <div class="grid grid-cols-2 gap-2">
+                        ${kartu('Rata-rata narik / hari', `${n0(rata(sumNarik))} <span class="text-[11px] text-slate-400">dari ${n0(rata(sumAktif))}</span>`, '')}
+                        ${kartu('Rata-rata off / hari', n0(rata(sumLibur + sumOff)), '')}
                     </div>
-                    <p class="text-[9px] font-bold bg-slate-800 border border-slate-600 px-2 py-1 rounded w-max">Status: ${slaStatus}</p>
+                    <div class="flex flex-wrap gap-1.5 mt-2">
+                        <span class="text-[9px] font-black bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded">Libur terjadwal ${n1(rata(sumLibur))}/hari</span>
+                        <span class="text-[9px] font-black bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded">Off tanpa jadwal ${n1(rata(sumOff))}/hari</span>
+                        ${jmlPart ? `<span class="text-[9px] font-black bg-slate-50 text-slate-600 border border-slate-200 px-2 py-0.5 rounded">${jmlPart} part time tidak dihitung</span>` : ''}
+                    </div>
+                    ${htmlSering}
+                    <p class="text-[8px] text-slate-400 mt-2 leading-relaxed">Narik = punya minimal 1 order selesai di hari itu. Libur terjadwal diambil dari Jadwal Libur.</p>
                 </div>
-                <p class="text-[8px] text-slate-400 text-center mt-2 italic">*Berdasarkan sampel ${validOrders} order di hari yang dipilih.</p>
-            `;
+
+                <div class="bg-white rounded-xl border border-gray-100 p-3 mb-3">
+                    ${judul('fa-users-line', '2. Kebutuhan rider per jam')}
+                    ${htmlJam}
+                    <p class="text-[8px] text-slate-400 mt-1 leading-relaxed">Angka = rata-rata rider ON / rider dibutuhkan, lalu rata-rata order per jam. Garis hitam = kebutuhan. Dihitung dari lama antar rata-rata ${n0(lamaAntar)} menit + cadangan 20%.${hariOnbid ? '' : ' Data jam ON rider belum ada.'}</p>
+                </div>
+
+                <div class="bg-white rounded-xl border border-gray-100 p-3 mb-3">
+                    ${judul('fa-stopwatch', '3. Kecepatan dan kendala')}
+                    <div class="grid grid-cols-2 gap-2">
+                        ${kartu('Rata-rata rider ACC', accN ? `${n0(accDetik / accN)} dtk` : '-', accN ? `${n0(accN)} order` : 'Belum ada data')}
+                        ${kartu('Belum ACC > 2 mnt', accN ? `${n0(acc2 / accN * 100)}%` : '-', accN ? `${n0(acc2)} order` : '')}
+                        ${kartu('Lama antar rata-rata', antarN ? `${n0(lamaAntar)} mnt` : '-', 'dari dibagikan sampai selesai')}
+                        ${kartu('Order > 40 mnt', n0(up), 'kena Up otomatis')}
+                        ${kartu('Order dialihkan', kendala.alih === null ? '-' : n0(kendala.alih), 'ke rider lain')}
+                        ${kartu('Ditarik ke Pending', kendala.tarik === null ? '-' : n0(kendala.tarik), '')}
+                    </div>
+                    ${htmlKendala}
+                </div>
+
+                <div class="bg-amber-50 rounded-xl border border-amber-200 p-3">
+                    ${judul('fa-lightbulb', '4. Saran')}
+                    ${saran.length ? `<ul class="space-y-1.5">${saran.map(s => `<li class="text-[10px] font-bold text-amber-800 leading-relaxed flex gap-1.5"><i class="fa-solid fa-angle-right mt-1 text-[8px]"></i><span>${esc(s)}</span></li>`).join('')}</ul>` : '<p class="text-[10px] font-bold text-amber-800">Belum ada saran. Operasional periode ini terlihat baik.</p>'}
+                </div>
+                <p class="text-[8px] text-slate-400 text-center mt-2 italic">Data hari yang sudah lewat disimpan di HP ini, jadi hanya dibaca sekali. Hari ini tidak ikut dihitung karena belum selesai.</p>`;
         };
 
         window.renderAnalisisKeuangan = () => {
@@ -16930,6 +17207,33 @@
             try { await signOut(uangAuthPemeriksa); } catch (e) {}
         }
 
+        // Tombol mata pada kolom password pemilik. Hanya mengubah tampilan kolom (type password/text),
+        // password tidak disimpan atau dikirim ke mana pun oleh tombol ini.
+        window.sembunyikanPassword = (id) => {
+            const inp = document.getElementById(id);
+            if (inp) inp.type = 'password';
+            const b = document.querySelector('[data-mata-untuk="' + id + '"]');
+            if (b) { b.setAttribute('aria-label', 'Tampilkan password'); b.title = 'Tampilkan password'; const i = b.querySelector('i'); if (i) i.className = 'fa-solid fa-eye'; }
+        };
+        if (!window._mataPasswordTerpasang) {
+            window._mataPasswordTerpasang = true;
+            document.addEventListener('click', (e) => {
+                const b = e.target.closest('[data-mata-untuk]');
+                if (!b) return;
+                const id = b.getAttribute('data-mata-untuk');
+                if (id !== 'uang-modal-pw' && id !== 'kr-pw-keluar') return;
+                const inp = document.getElementById(id);
+                if (!inp) return;
+                const lihat = inp.type === 'password';
+                inp.type = lihat ? 'text' : 'password';
+                b.setAttribute('aria-label', lihat ? 'Sembunyikan password' : 'Tampilkan password');
+                b.title = lihat ? 'Sembunyikan password' : 'Tampilkan password';
+                const i = b.querySelector('i'); if (i) i.className = lihat ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+                inp.focus();
+            });
+            // Pindah aplikasi / layar dikunci: password otomatis disembunyikan lagi
+            document.addEventListener('visibilitychange', () => { if (document.hidden) ['uang-modal-pw', 'kr-pw-keluar'].forEach(window.sembunyikanPassword); });
+        }
         let uangSetelahBuka = null;
         function uangModal() {
             let m = document.getElementById('uang-modal');
@@ -16942,7 +17246,7 @@
                     <div class="w-12 h-12 mx-auto mb-3 rounded-full bg-amber-50 text-amber-500 border-4 border-amber-100 flex items-center justify-center text-lg"><i class="fa-solid fa-lock"></i></div>
                     <h3 class="text-center font-black text-slate-800 text-sm uppercase tracking-wide">Buka Mode Omset</h3>
                     <p class="text-center text-[10px] font-bold text-slate-500 mt-1 mb-3">Masukkan password akun pemilik untuk menampilkan angka omset &amp; pendapatan.</p>
-                    <input id="uang-modal-pw" type="password" autocomplete="new-password" placeholder="Password pemilik" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-amber-400">
+                    <div style="position:relative"><input id="uang-modal-pw" type="password" autocomplete="new-password" placeholder="Password pemilik" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 pr-11 text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-amber-400"><button type="button" data-mata-untuk="uang-modal-pw" aria-label="Tampilkan password" title="Tampilkan password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;border:0;background:none;color:#64748b;display:flex;align-items:center;justify-content:center;cursor:pointer"><i class="fa-solid fa-eye" aria-hidden="true"></i></button></div>
                     <p id="uang-modal-err" class="hidden text-[10px] font-bold text-rose-600 mt-2 text-center"></p>
                     <div class="flex gap-2 mt-4">
                         <button type="button" id="uang-modal-batal" class="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-black text-xs uppercase">Batal</button>
@@ -16950,7 +17254,7 @@
                     </div>
                 </div>`;
             document.body.appendChild(m);
-            const tutup = () => { m.classList.add('hidden'); m.classList.remove('flex'); document.getElementById('uang-modal-pw').value = ''; uangSetelahBuka = null; };
+            const tutup = () => { m.classList.add('hidden'); m.classList.remove('flex'); document.getElementById('uang-modal-pw').value = ''; window.sembunyikanPassword('uang-modal-pw'); uangSetelahBuka = null; };
             const salah = (teks) => { const e = document.getElementById('uang-modal-err'); e.textContent = teks; e.classList.remove('hidden'); };
             const kirim = async () => {
                 const inp = document.getElementById('uang-modal-pw');
@@ -18441,7 +18745,7 @@
                     ⚠ Akun login dinonaktifkan manual di Firebase Console<br><br>
                     <b>1.</b> Ketik nama rider untuk konfirmasi (kolom di bawah)<br>
                     <b>2.</b> Masukkan password pemilik:</div>
-                    <input id="kr-pw-keluar" type="password" autocomplete="new-password" placeholder="Password pemilik" style="width:100%;margin-top:8px;padding:11px 12px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;font-weight:700;background:#f8fafc;color:#0f172a">
+                    <div style="position:relative;margin-top:8px"><input id="kr-pw-keluar" type="password" autocomplete="new-password" placeholder="Password pemilik" style="width:100%;padding:11px 46px 11px 12px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;font-weight:700;background:#f8fafc;color:#0f172a"><button type="button" data-mata-untuk="kr-pw-keluar" aria-label="Tampilkan password" title="Tampilkan password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;border:0;background:none;color:#64748b;display:flex;align-items:center;justify-content:center;cursor:pointer"><i class="fa-solid fa-eye" aria-hidden="true"></i></button></div>
                     <p id="kr-err-keluar" style="display:none;margin-top:8px;font-size:11px;font-weight:800;color:#e11d48;text-align:center"></p>`;
                 selectEl.classList.add('hidden');
                 inputEl.classList.remove('hidden'); inputEl.type = 'text'; inputEl.value = ''; inputEl.placeholder = `Ketik: ${nama}`; inputEl.oninput = null;
@@ -18451,7 +18755,7 @@
                 const pwEl = document.getElementById('kr-pw-keluar');
                 const errEl = document.getElementById('kr-err-keluar');
                 const salah = (t) => { if (errEl) { errEl.textContent = t; errEl.style.display = 'block'; } };
-                const tutup = () => { if (pwEl) pwEl.value = ''; modal.classList.add('hidden'); modal.classList.remove('flex'); inputEl.classList.add('hidden'); };
+                const tutup = () => { if (pwEl) { pwEl.value = ''; pwEl.type = 'password'; } modal.classList.add('hidden'); modal.classList.remove('flex'); inputEl.classList.add('hidden'); };
                 document.getElementById('kr-batal-keluar').onclick = tutup;
                 const okBtn = document.getElementById('kr-ok-keluar');
                 okBtn.onclick = async () => {
@@ -19423,6 +19727,7 @@
             window.renderManageRiders = () => { mulai(); render(); };
             window.krRender = render;
             // Nama rider dari catatan Kelola Rider (termasuk yang sudah keluar), dipakai daftar Top Up
+            window._krMasterSemua = () => master;
             window._krMasterNama = (uid) => { const m = master[String(uid || '').trim().toUpperCase()]; return (m && typeof m.nama === 'string') ? m.nama.slice(0, 60) : ''; };
             // Dipanggil tab Kelola Rider: buka daftar / form rider baru / Atur QRIS di kotak "Data Rider"
             window.krBuka = (hal) => {
