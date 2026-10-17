@@ -22941,5 +22941,72 @@ window.PembuatQR = PembuatQR;
         });
     })();
     </script>
+<!-- ================= GETAR HALUS SAAT TOMBOL DIKETUK (17 Okt 2026) =================
+     Setiap tombol / menu / kartu yang bisa diketuk memberi getaran singkat (15 ms).
+     Bisa dimatikan rider lewat menu samping: "Getar Tombol".
+     Tidak memakai data dari luar, tidak membaca/menulis Firebase. -->
+<script>
+(function () {
+    'use strict';
+    if (!('vibrate' in navigator)) return; // HP/browser tidak mendukung getar (mis. iPhone) -> diam saja
+
+    var KUNCI = 'rider_getar_tombol';     // 'mati' = dimatikan rider
+    var DURASI_MS = 15;                    // getaran halus; di bawah 10 ms sering tidak terasa di Android
+    var JEDA_MS = 90;                      // cegah getar dobel (label + input memicu 2 klik)
+    var terakhir = 0;
+
+    var BISA_DIKETUK = 'button, a[href], [role="button"], [onclick], label, select, ' +
+        'input[type="checkbox"], input[type="radio"], .menu-btn, .rv-dp, .rv-pill, .rv-tautan, .rv-ct-hari, .tbk-tab';
+
+    var aktif = function () { try { return localStorage.getItem(KUNCI) !== 'mati'; } catch (e) { return true; } };
+
+    function getar() {
+        var kini = Date.now();
+        if (kini - terakhir < JEDA_MS) return;
+        terakhir = kini;
+        try { navigator.vibrate(DURASI_MS); } catch (e) {}
+    }
+
+    document.addEventListener('click', function (e) {
+        if (!aktif() || document.hidden) return;
+        var el = e.target && e.target.closest ? e.target.closest(BISA_DIKETUK) : null;
+        if (!el) return;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') return;
+        // Jangan memotong getaran panjang "orderan masuk" yang sedang berbunyi
+        var popupOrder = document.getElementById('incoming-order-popup');
+        if (popupOrder && !popupOrder.classList.contains('hidden')) return;
+        getar();
+    }, true);
+
+    // ---------- Saklar di menu samping (di bawah "Nada Dering") ----------
+    function pasangSaklar() {
+        if (document.getElementById('btn-getar-tombol')) return;
+        var acuan = document.querySelector('#sidebar-content button[onclick*="ubahNadaDering"]');
+        if (!acuan) return;
+        var b = document.createElement('button');
+        b.id = 'btn-getar-tombol';
+        b.type = 'button';
+        b.className = acuan.className;
+        var bulat = document.createElement('div');
+        bulat.className = 'w-8 h-8 rounded-full bg-orange-50 flex items-center justify-center text-orange-500 shadow-inner';
+        var ikon = document.createElement('i');
+        ikon.className = 'fa-solid fa-mobile-screen-button';
+        bulat.appendChild(ikon);
+        var teks = document.createElement('span');
+        b.appendChild(bulat);
+        b.appendChild(teks);
+        var segarkan = function () { teks.textContent = 'Getar Tombol: ' + (aktif() ? 'Aktif' : 'Mati'); };
+        segarkan();
+        b.addEventListener('click', function () {
+            try { localStorage.setItem(KUNCI, aktif() ? 'mati' : 'aktif'); } catch (e) {}
+            segarkan();
+            if (aktif()) { terakhir = 0; getar(); } // contoh getaran saat dinyalakan
+        });
+        acuan.insertAdjacentElement('afterend', b);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasangSaklar); else pasangSaklar();
+})();
+</script>
+<!-- ================= AKHIR GETAR HALUS ================= -->
 </body>
 </html>
