@@ -4486,16 +4486,49 @@
 
         const tpNamaRider = (uid) => {
             const r = getMergedRidersForDropdown().find(x => String(x.uid) === String(uid));
-            return r ? r.name : uid;
+            if (r) return r.name;
+            // Rider yang sudah keluar: ambil nama dari catatan Kelola Rider bila ada (data di memori, 0 read)
+            const m = window._krMasterNama ? window._krMasterNama(uid) : '';
+            return m || uid;
+        };
+
+        // UID di daftar top up yang tidak ada lagi di daftar rider aktif.
+        // Kosong selama data saldo belum termuat (supaya tidak salah tandai).
+        const tpRiderKeluar = () => {
+            const hasil = new Set();
+            if (!isBalancesLoaded || !allRiderBalances.length) return hasil;
+            const aktif = new Set(getMergedRidersForDropdown().map(r => String(r.uid).trim().toUpperCase()));
+            Object.keys(topupKodeMap).forEach(uid => { if (!aktif.has(String(uid).trim().toUpperCase())) hasil.add(uid); });
+            return hasil;
+        };
+
+        // Hapus beberapa UID dari dokumen daftar top up dalam satu transaksi
+        const tpHapusUid = async (uids) => {
+            const daftar = uids.filter(u => TP_UID_OK(u));
+            if (!daftar.length) return 0;
+            let terhapus = 0;
+            await runTransaction(db, async (t) => {
+                const snap = await t.get(tpDocRef());
+                if (!snap.exists()) return;
+                const map = { ...(snap.data().riders || {}) };
+                terhapus = 0;
+                daftar.forEach(u => { if (Object.prototype.hasOwnProperty.call(map, u)) { delete map[u]; terhapus++; } });
+                if (terhapus) t.set(tpDocRef(), { riders: map, updated_at: serverTimestamp() });
+            });
+            return terhapus;
         };
 
         window.renderTopupDaftar = () => {
             const box = document.getElementById('tp-list');
             if (!box) return;
             const q = (document.getElementById('tp-search')?.value || '').trim().toLowerCase();
-            let data = Object.entries(topupKodeMap).map(([uid, kode]) => ({ uid, kode, nama: tpNamaRider(uid) }));
+            // Rider "keluar" = tidak ada lagi di daftar rider aktif (status antrean / dompet saldo).
+            // Baru ditandai setelah data saldo termuat, supaya tidak semua rider tampil "keluar" saat halaman baru dibuka.
+            const keluarSet = tpRiderKeluar();
+            let data = Object.entries(topupKodeMap).map(([uid, kode]) => ({ uid, kode, nama: tpNamaRider(uid), keluar: keluarSet.has(uid) }));
             if (q) data = data.filter(d => d.kode.toLowerCase().includes(q) || String(d.nama).toLowerCase().includes(q) || d.uid.toLowerCase().includes(q));
-            data.sort((a, b) => a.kode.localeCompare(b.kode, 'id', { numeric: true }));
+            // Rider yang sudah keluar ditaruh paling atas supaya mudah dibersihkan
+            data.sort((a, b) => (b.keluar - a.keluar) || a.kode.localeCompare(b.kode, 'id', { numeric: true }));
 
             const cnt = document.getElementById('tp-count');
             if (cnt) cnt.textContent = `(${data.length})`;
@@ -4504,16 +4537,26 @@
                 box.innerHTML = `<p class="text-center text-sm text-slate-400 py-8 px-6">${q ? 'Rider tidak ditemukan.' : 'Belum ada rider di daftar. Tekan <b>Tambah daftar rider</b> untuk menambahkan.'}</p>`;
                 return;
             }
-            box.innerHTML = data.map(d => {
+            const banner = keluarSet.size ? `
+                <div class="mx-4 my-3 bg-rose-50 border border-rose-200 rounded-2xl p-3 flex items-center gap-3">
+                    <i class="fa-solid fa-user-xmark text-rose-500 text-lg shrink-0"></i>
+                    <p class="flex-1 text-[12px] font-semibold text-rose-700 leading-snug">${keluarSet.size} rider di daftar ini sudah keluar.</p>
+                    <button type="button" onclick="window.bersihkanTopupKeluar()" class="shrink-0 px-3 py-2 rounded-xl bg-rose-600 text-white text-[11px] font-black uppercase active:scale-95">Hapus semua</button>
+                </div>` : '';
+            box.innerHTML = banner + data.map(d => {
                 const u = encodeURIComponent(d.uid).replace(/'/g, '%27');
                 return `
-                <div class="tp-row">
-                    <button type="button" onclick="window.bukaTopupForm('${u}')" class="flex-1 min-w-0 text-left">
-                        <p class="font-semibold text-[#2E6B8A] text-[16px] leading-tight">${tpEsc(d.kode)}</p>
+                <div class="tp-row${d.keluar ? ' bg-rose-50' : ''}">
+                    <button type="button" ${d.keluar ? 'disabled' : `onclick="window.bukaTopupForm('${u}')"`} class="flex-1 min-w-0 text-left">
+                        <p class="font-semibold ${d.keluar ? 'text-slate-400 line-through' : 'text-[#2E6B8A]'} text-[16px] leading-tight">${tpEsc(d.kode)}</p>
                         <p class="text-[13px] font-normal text-slate-500 truncate mt-1"><span class="capitalize">${tpEsc(d.nama)}</span> <span class="text-slate-400">${tpEsc(d.uid)}</span></p>
+                        ${d.keluar ? '<span class="inline-block mt-1 text-[10px] font-black uppercase bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">Sudah keluar</span>' : ''}
                     </button>
-                    <button type="button" onclick="window.openRiwayatSaldo(decodeURIComponent('${u}'))" class="shrink-0 flex items-center gap-1.5 text-slate-500 hover:text-[#2E6B8A] px-2 py-2 rounded-lg active:bg-slate-100">
+                    ${d.keluar ? '' : `<button type="button" onclick="window.openRiwayatSaldo(decodeURIComponent('${u}'))" class="shrink-0 flex items-center gap-1.5 text-slate-500 hover:text-[#2E6B8A] px-2 py-2 rounded-lg active:bg-slate-100">
                         <i class="fa-solid fa-clock-rotate-left text-lg"></i><span class="text-[13px] font-normal">History</span>
+                    </button>`}
+                    <button type="button" onclick="window.hapusDaftarTopupUid('${u}')" class="shrink-0 w-10 h-10 flex items-center justify-center rounded-lg ${d.keluar ? 'text-rose-600 bg-white border border-rose-200' : 'text-slate-400 hover:text-rose-600'} active:bg-rose-50" aria-label="Hapus dari daftar top up" title="Hapus dari daftar top up">
+                        <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>`;
             }).join('');
@@ -4584,6 +4627,48 @@
                     window.showAlert('Gagal', 'Tidak bisa menghapus. Periksa koneksi lalu coba lagi.', 'error');
                 }
             });
+        };
+
+        // Tombol tempat sampah di tiap baris daftar top up (bisa untuk rider yang sudah keluar)
+        window.hapusDaftarTopupUid = (encUid) => {
+            let uid = '';
+            try { uid = decodeURIComponent(encUid); } catch (e) { return; }
+            if (!TP_UID_OK(uid) || !topupKodeMap[uid]) return;
+            const keluar = tpRiderKeluar().has(uid);
+            // showConfirm memakai innerText, jadi teks tidak perlu di-escape di sini
+            window.showConfirm('Hapus dari daftar top up?',
+                `${tpNamaRider(uid)} (${topupKodeMap[uid]} · ${uid}) akan dihapus dari daftar top up.${keluar ? ' Rider ini sudah keluar.' : ''} Saldo dan riwayat rider tidak berubah.`,
+                async () => {
+                    try {
+                        await tpHapusUid([uid]);
+                    } catch (e) {
+                        window.showAlert('Gagal', 'Tidak bisa menghapus. Periksa koneksi lalu coba lagi.', 'error');
+                    }
+                });
+        };
+
+        // Hapus sekaligus semua rider yang sudah keluar dari daftar top up
+        window.bersihkanTopupKeluar = () => {
+            const uids = [...tpRiderKeluar()];
+            if (!uids.length) { window.showAlert('Sudah Bersih', 'Tidak ada rider keluar di daftar top up.', 'info'); return; }
+            const contoh = uids.slice(0, 8).map(u => `${topupKodeMap[u]} · ${tpNamaRider(u)}`).join(', ');
+            window.showConfirm(`Hapus ${uids.length} rider keluar?`,
+                `${contoh}${uids.length > 8 ? ', dan lainnya' : ''}. Hanya dihapus dari daftar top up. Saldo dan riwayat tidak berubah.`,
+                async () => {
+                    try {
+                        const n = await tpHapusUid(uids);
+                        window.showAlert('Berhasil', `${n} rider keluar dihapus dari daftar top up.`, 'success');
+                    } catch (e) {
+                        window.showAlert('Gagal', 'Tidak bisa menghapus. Periksa koneksi lalu coba lagi.', 'error');
+                    }
+                });
+        };
+
+        // Dipanggil otomatis saat rider dikeluarkan lewat Kelola Rider, supaya tidak nyangkut lagi
+        // Tidak bergantung pada daftar yang sudah dimuat: transaksi membaca dokumen terbaru dari server (1 read)
+        window.hapusTopupOtomatis = (uid) => {
+            if (!TP_UID_OK(uid)) return;
+            tpHapusUid([uid]).catch(e => console.warn('[TopUp] gagal menghapus rider keluar dari daftar:', e));
         };
 
         let topupFormUid = null;
@@ -11547,6 +11632,9 @@
                 allRiderBalances = [];
                 snapshot.forEach(docSnap => { allRiderBalances.push({ id: docSnap.id, ...docSnap.data() }); });
                 if (typeof window.renderRiderBalances === 'function') window.renderRiderBalances();
+                // Daftar top up ikut diperbarui (tanda "Sudah keluar"), hanya bila halamannya sedang dibuka
+                const halTopup = document.getElementById('page-topup-daftar');
+                if (halTopup && !halTopup.classList.contains('hidden-page') && typeof window.renderTopupDaftar === 'function') window.renderTopupDaftar();
                 checkAndEnforceRiderBalances();
                 if (typeof updateMainQueueUI === 'function') updateMainQueueUI();
                 if (typeof updateNewShiftUI === 'function') updateNewShiftUI();
@@ -18440,6 +18528,8 @@
                         if (hapusQ) b.update(qrisRef(), { [`rider.${uid}`]: deleteField() });
                     });
 
+                    // Ikut hapus dari daftar Top Up Saldo supaya tidak nyangkut (tidak menghalangi bila gagal)
+                    if (typeof window.hapusTopupOtomatis === 'function') window.hapusTopupOtomatis(uid);
                     v = Object.assign(v, { hal: 'list', tab: 'keluar', uid: null });
                     render();
                     alertAman('Rider Dikeluarkan', `<b>${esc(nama)}</b> sudah dikeluarkan dan datanya diarsipkan. Riwayat order tetap aman.<br><br><b>Langkah terakhir (manual):</b> Firebase Console → Authentication → cari <b>${esc(uid.toLowerCase())}@projekgo.id</b> → titik tiga → <b>Disable account</b>.`, 'success');
@@ -19332,6 +19422,8 @@
             // switchKelolaRiderTab('data') memanggil renderManageRiders -> kini menampilkan menu terpadu.
             window.renderManageRiders = () => { mulai(); render(); };
             window.krRender = render;
+            // Nama rider dari catatan Kelola Rider (termasuk yang sudah keluar), dipakai daftar Top Up
+            window._krMasterNama = (uid) => { const m = master[String(uid || '').trim().toUpperCase()]; return (m && typeof m.nama === 'string') ? m.nama.slice(0, 60) : ''; };
             // Dipanggil tab Kelola Rider: buka daftar / form rider baru / Atur QRIS di kotak "Data Rider"
             window.krBuka = (hal) => {
                 const h = ['list', 'form', 'qris'].includes(hal) ? hal : 'list';
