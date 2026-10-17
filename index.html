@@ -22942,18 +22942,24 @@ window.PembuatQR = PembuatQR;
     })();
     </script>
 <!-- ================= GETAR HALUS SAAT TOMBOL DIKETUK (17 Okt 2026) =================
-     Setiap tombol / menu / kartu yang bisa diketuk memberi getaran singkat (15 ms).
+     Setiap tombol / menu / kartu yang bisa diketuk memberi getaran singkat (30 ms).
      Bisa dimatikan rider lewat menu samping: "Getar Tombol".
      Tidak memakai data dari luar, tidak membaca/menulis Firebase. -->
 <script>
 (function () {
     'use strict';
-    if (!('vibrate' in navigator)) return; // HP/browser tidak mendukung getar (mis. iPhone) -> diam saja
-
     var KUNCI = 'rider_getar_tombol';     // 'mati' = dimatikan rider
-    var DURASI_MS = 15;                    // getaran halus; di bawah 10 ms sering tidak terasa di Android
+    var DURASI_MS = 30;                    // 15 ms terlalu pendek untuk motor getar banyak HP Android
     var JEDA_MS = 90;                      // cegah getar dobel (label + input memicu 2 klik)
     var terakhir = 0;
+
+    // Jalur 1 (paling terasa & tidak butuh izin): getar bawaan Android lewat APK,
+    // bila APK sudah punya fungsi AndroidInterface.getarHalus().
+    // Jalur 2 (cadangan): getar dari halaman web, butuh izin VIBRATE di APK.
+    var adaNative = function () {
+        try { return !!(window.AndroidInterface && typeof window.AndroidInterface.getarHalus === 'function'); } catch (e) { return false; }
+    };
+    if (!adaNative() && !('vibrate' in navigator)) return; // tidak ada cara getar sama sekali (mis. iPhone)
 
     var BISA_DIKETUK = 'button, a[href], [role="button"], [onclick], label, select, ' +
         'input[type="checkbox"], input[type="radio"], .menu-btn, .rv-dp, .rv-pill, .rv-tautan, .rv-ct-hari, .tbk-tab';
@@ -22964,7 +22970,10 @@ window.PembuatQR = PembuatQR;
         var kini = Date.now();
         if (kini - terakhir < JEDA_MS) return;
         terakhir = kini;
-        try { navigator.vibrate(DURASI_MS); } catch (e) {}
+        if (adaNative()) {
+            try { window.AndroidInterface.getarHalus(DURASI_MS); return; } catch (e) {}
+        }
+        try { if (navigator.vibrate) navigator.vibrate(DURASI_MS); } catch (e) {}
     }
 
     document.addEventListener('click', function (e) {
