@@ -768,9 +768,12 @@
         /* 17 Okt 2026: tanggal bawaan kolom TETAP terlihat (dulu dibuat transparan + ditimpa teks,
            di WebView sebagian HP Android teks penimpanya tidak muncul sehingga kolom tampak kosong).
            Tulisan "15 Oktober 2026" sekarang tampil sebagai keterangan di bawah kolom. */
-        #kr-root .kr-tgl { display: flex; flex-direction: column; }
-        #kr-root .kr-tgl input[type="date"].kr-in { width: 100%; order: 1; }
-        #kr-root .kr-tgl-teks { order: 2; margin: 4px 2px 0; font-size: 11.5px; font-weight: 700; color: var(--ad-acc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* 18 Okt 2026: kolom tanggal kalender bawaan HP diganti 3 pilihan (Tanggal · Bulan · Tahun)
+           karena di sebagian HP tanggal yang sudah tersimpan tidak tampil di kolom kalender. */
+        #kr-root .kr-tgl3 { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.7fr) minmax(0, 1fr); gap: 6px; }
+        #kr-root .kr-tgl3 select.kr-in { padding: 9px 6px; min-width: 0; }
+        #kr-root .kr-tgl-teks.salah { color: var(--ad-bad); }
+        #kr-root .kr-tgl-teks { display: block; margin: 4px 2px 0; font-size: 11.5px; font-weight: 700; color: var(--ad-acc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #kr-root .kr-tgl-teks.kosong { color: var(--ad-mu); font-weight: 600; }
         #kr-root .kr-card { background: var(--ad-sf); border: 1px solid var(--ad-ln); border-radius: 18px; padding: 13px; }
         #kr-root .kr-h { font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ad-ink); }
@@ -17997,14 +18000,21 @@
                     const d = s.exists() ? (s.data() || {}) : {};
                     master = (d.riders && typeof d.riders === 'object') ? d.riders : {};
                     masterSiap = true; masterGalat = '';
-                    render();
+                    renderDariData();
                     if (typeof window.krTampilBadgeBpjs === 'function') window.krTampilBadgeBpjs();
                 }, (e) => { masterSiap = true; masterGalat = String(e && (e.code || e.message) || e); render(); });
                 onSnapshot(qrisRef(), (s) => {
                     qris = s.exists() ? (s.data() || null) : null;
                     qrisSiap = true;
-                    render();
-                }, (e) => { qrisSiap = true; console.warn('[KR] qris', e); render(); });
+                    renderDariData();
+                }, (e) => { qrisSiap = true; console.warn('[KR] qris', e); renderDariData(); });
+            }
+            // Pembaruan data dari server tidak menggambar ulang form yang sedang terbuka,
+            // supaya tanggal/isian yang baru dipilih admin tidak kembali ke nilai lama.
+            function renderDariData() {
+                const r = document.getElementById('kr-root');
+                if (r && v.hal === 'form' && r.querySelector('#kr-f-nama')) return;
+                render();
             }
 
             // ---------- PEMBANTU DATA ----------
@@ -18170,6 +18180,28 @@
                 return h;
             }
 
+            // Kolom tanggal = 3 pilihan (Tanggal, Bulan, Tahun) + input tersembunyi berisi YYYY-MM-DD.
+            // id & label di sini teks tetap dari kode; nilai tanggal sudah dicek tglSah sebelum dipakai.
+            const NAMA_BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            function fldTgl(id, label, nilai) {
+                const ok = tglSah(nilai);
+                const [y, m, d] = ok ? nilai.split('-').map(Number) : [0, 0, 0];
+                const thIni = new Date().getFullYear();
+                const thMin = Math.min(thIni - 5, y || thIni), thMaks = Math.max(thIni + 15, y || thIni);
+                let oD = '<option value="">Tgl</option>', oM = '<option value="">Bulan</option>', oY = '<option value="">Tahun</option>';
+                for (let i = 1; i <= 31; i++) oD += `<option value="${i}"${i === d ? ' selected' : ''}>${i}</option>`;
+                NAMA_BLN.forEach((b, i) => { oM += `<option value="${i + 1}"${i + 1 === m ? ' selected' : ''}>${b}</option>`; });
+                for (let i = thMin; i <= thMaks; i++) oY += `<option value="${i}"${i === y ? ' selected' : ''}>${i}</option>`;
+                return `<div class="kr-fld"><label for="${id}-d">${label}</label>
+                    <div class="kr-tgl3" data-kr-tgl="${id}">
+                        <select id="${id}-d" class="kr-in" aria-label="${label}: tanggal">${oD}</select>
+                        <select id="${id}-m" class="kr-in" aria-label="${label}: bulan">${oM}</select>
+                        <select id="${id}-y" class="kr-in" aria-label="${label}: tahun">${oY}</select>
+                    </div>
+                    <input type="hidden" id="${id}" value="${ok ? nilai : ''}">
+                    <span class="kr-tgl-teks${ok ? '' : ' kosong'}">${esc(ok ? tglTampil(nilai) : 'Belum diisi')}</span></div>`;
+            }
+
             function renderForm(r) {
                 const edit = !!v.uid;
                 const uid = v.uid || '';
@@ -18205,10 +18237,10 @@
                         <div class="kr-two">
                             <div class="kr-fld"><label>Motor</label><input id="kr-f-motor" class="kr-in" value="${esc(dok.motor || '')}" placeholder="Honda Beat" maxlength="40"></div>
                             <div class="kr-fld"><label>Plat</label><input id="kr-f-plat" class="kr-in" value="${esc(dok.plat || '')}" placeholder="AA 1234 XX" maxlength="15" autocapitalize="characters"></div>
-                            <div class="kr-fld"><label>SIM berlaku s/d</label><div class="kr-tgl"><span class="kr-tgl-teks${tglSah(dok.sim) ? '' : ' kosong'}">${esc(tglSah(dok.sim) ? tglTampil(dok.sim) : 'Belum diisi')}</span><input id="kr-f-sim" class="kr-in" type="date" value="${tglSah(dok.sim) ? dok.sim : ''}" aria-label="SIM berlaku s/d"></div></div>
-                            <div class="kr-fld"><label>STNK berlaku s/d</label><div class="kr-tgl"><span class="kr-tgl-teks${tglSah(dok.stnk) ? '' : ' kosong'}">${esc(tglSah(dok.stnk) ? tglTampil(dok.stnk) : 'Belum diisi')}</span><input id="kr-f-stnk" class="kr-in" type="date" value="${tglSah(dok.stnk) ? dok.stnk : ''}" aria-label="STNK berlaku s/d"></div></div>
                         </div>
-                        <div class="kr-fld"><label>BPJS (masa berlaku)</label><div class="kr-tgl"><span class="kr-tgl-teks${tglSah(dok.bpjs) ? '' : ' kosong'}">${esc(tglSah(dok.bpjs) ? tglTampil(dok.bpjs) : 'Belum diisi')}</span><input id="kr-f-bpjs" class="kr-in" type="date" value="${tglSah(dok.bpjs) ? dok.bpjs : ''}" aria-label="BPJS (masa berlaku)"></div></div>
+                        ${fldTgl('kr-f-sim', 'SIM berlaku s/d', dok.sim)}
+                        ${fldTgl('kr-f-stnk', 'STNK berlaku s/d', dok.stnk)}
+                        ${fldTgl('kr-f-bpjs', 'BPJS (masa berlaku)', dok.bpjs)}
                     </div></div></div>
                     <div class="kr-card"><div class="kr-step"><span class="kr-num">3</span><div style="flex:1;min-width:0">
                         <p class="kr-h">QRIS</p>
@@ -18299,6 +18331,8 @@
                     bpjs: document.getElementById('kr-f-bpjs').value
                 };
                 ['sim', 'stnk', 'bpjs'].forEach(k => { if (!tglSah(dok[k])) dok[k] = ''; });
+                const tglSetengah = ['sim', 'stnk', 'bpjs'].find(k => !dok[k] && ['d', 'm', 'y'].some(p => ((document.getElementById(`kr-f-${k}-${p}`) || {}).value || '') !== ''));
+                if (tglSetengah) return alertAman('Tanggal Belum Benar', `Tanggal ${tglSetengah.toUpperCase()} belum lengkap atau tidak ada di kalender. Lengkapi tanggal, bulan, dan tahun, atau kosongkan ketiganya.`, 'warning');
 
                 if (!uidSah(uid) || uid.length < 3) return alertAman('UID Belum Benar', 'Isi UID dengan huruf/angka saja, minimal 3 karakter (contoh: UID512).', 'warning');
                 if (nama.length < 2) return alertAman('Nama Kosong', 'Nama rider wajib diisi.', 'warning');
@@ -18496,15 +18530,28 @@
             // ---------- KELUARKAN & AKTIFKAN LAGI ----------
             let krKeluarGagal = 0, krKeluarTahan = 0;   // batas percobaan password pemilik
             // Teks "15 Oktober 2026" di kolom tanggal Edit dokumen ikut berubah saat tanggal dipilih
-            ['input', 'change'].forEach(ev => document.addEventListener(ev, (e) => {
-                const inp = e.target;
-                if (!inp || inp.type !== 'date' || !inp.closest || !inp.closest('#kr-root .kr-tgl')) return;
-                const teks = inp.parentElement.querySelector('.kr-tgl-teks');
-                if (!teks) return;
-                const ok = tglSah(inp.value);
-                teks.textContent = ok ? tglTampil(inp.value) : 'Belum diisi';
-                teks.classList.toggle('kosong', !ok);
-            }));
+            document.addEventListener('change', (e) => {
+                const s = e.target;
+                if (!s || s.tagName !== 'SELECT' || !s.closest) return;
+                const w = s.closest('#kr-root .kr-tgl3');
+                if (!w) return;
+                const id = String(w.dataset.krTgl || '');
+                if (!/^kr-f-(sim|stnk|bpjs)$/.test(id)) return;
+                const ambil = (p) => parseInt((document.getElementById(id + '-' + p) || {}).value, 10) || 0;
+                const d = ambil('d'), m = ambil('m'), y = ambil('y');
+                const hid = document.getElementById(id);
+                const teks = w.parentElement.querySelector('.kr-tgl-teks');
+                if (!hid || !teks) return;
+                let nilai = '', pesan = 'Belum diisi', salah = false;
+                if (d && m && y) {
+                    if (d > new Date(y, m, 0).getDate()) { pesan = `Tanggal ${d} tidak ada di ${NAMA_BLN[m - 1]} ${y}`; salah = true; }
+                    else nilai = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                } else if (d || m || y) { pesan = 'Lengkapi tanggal, bulan, dan tahun'; salah = true; }
+                hid.value = nilai;
+                teks.textContent = nilai ? tglTampil(nilai) : pesan;
+                teks.classList.toggle('kosong', !nilai && !salah);
+                teks.classList.toggle('salah', salah);
+            });
             function keluarkan(uid) {
                 const aktifR = daftarAktif().find(x => x.uid === uid);
                 if (!aktifR) return;
