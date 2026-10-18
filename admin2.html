@@ -1610,6 +1610,8 @@
                     <i class="fa-solid fa-scale-balanced"></i>
                 </div>
             </div>
+            <!-- ANALISIS SELISIH PEMBANDING (18 Okt 2026): diisi otomatis bila data tidak MATCH -->
+            <div id="history-selisih-analisis" class="col-span-2 hidden"></div>
 
             <!-- KARTU PENGECEKAN POTONGAN ADM 16% (order yang sudah selesai) -->
             <div id="card-adm-ok" class="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
@@ -2415,6 +2417,13 @@
                 <button onclick="window.openAddCicilanModal()" class="bg-amber-50 text-amber-600 px-2 py-1 rounded-lg text-[9px] font-black uppercase hover:bg-amber-500 hover:text-white transition-colors border border-amber-200 flex items-center gap-1 shadow-sm"><i class="fa-solid fa-plus"></i> Tambah</button>
             </div>
             <p class="text-[9px] text-slate-500 leading-relaxed mb-3">Kelola data cicilan rider. Sistem memotong saldo otomatis setiap hari Minggu secara background sehingga sangat hemat database read.</p>
+
+            <div class="relative">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                <input type="text" id="cicilan-cari" oninput="if (window.renderCicilanCari) window.renderCicilanCari()" autocomplete="off" maxlength="40" placeholder="Cari rider (nama / kode)..." class="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-9 pr-3 text-[12px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400">
+            </div>
+            <div id="cicilan-cari-hasil" class="hidden space-y-1.5 max-h-[45vh] overflow-y-auto custom-scrollbar pr-1"></div>
+            <div id="cicilan-dobel-info" class="hidden bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-[10px] font-bold text-rose-700 leading-relaxed"></div>
 
             <div id="cicilan-list" class="space-y-2 pb-6 max-h-[60vh] overflow-y-auto custom-scrollbar pr-1 mt-2">
                 <p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Memuat data cicilan...</p>
@@ -4533,16 +4542,22 @@
                 box.innerHTML = `<p class="text-center text-sm text-slate-400 py-8 px-6">${q ? 'Rider tidak ditemukan.' : 'Belum ada rider di daftar. Tekan <b>Tambah daftar rider</b> untuk menambahkan.'}</p>`;
                 return;
             }
+            // 18 Okt 2026: tandai rider yang sudah tidak ada di data rider (kemungkinan sudah keluar)
+            const riderAda = new Set(getMergedRidersForDropdown().map(r => String(r.uid)));
             box.innerHTML = data.map(d => {
                 const u = encodeURIComponent(d.uid).replace(/'/g, '%27');
+                const keluar = riderAda.size > 0 && !riderAda.has(String(d.uid));
                 return `
                 <div class="tp-row">
                     <button type="button" onclick="window.bukaTopupForm('${u}')" class="flex-1 min-w-0 text-left">
-                        <p class="font-semibold text-[#2E6B8A] text-[16px] leading-tight">${tpEsc(d.kode)}</p>
+                        <p class="font-semibold text-[#2E6B8A] text-[16px] leading-tight">${tpEsc(d.kode)}${keluar ? ' <span class="ml-1 align-middle text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded">Sudah keluar</span>' : ''}</p>
                         <p class="text-[13px] font-normal text-slate-500 truncate mt-1"><span class="capitalize">${tpEsc(d.nama)}</span> <span class="text-slate-400">${tpEsc(d.uid)}</span></p>
                     </button>
                     <button type="button" onclick="window.openRiwayatSaldo(decodeURIComponent('${u}'))" class="shrink-0 flex items-center gap-1.5 text-slate-500 hover:text-[#2E6B8A] px-2 py-2 rounded-lg active:bg-slate-100">
                         <i class="fa-solid fa-clock-rotate-left text-lg"></i><span class="text-[13px] font-normal">History</span>
+                    </button>
+                    <button type="button" onclick="window.hapusDaftarTopup(decodeURIComponent('${u}'))" aria-label="Hapus dari daftar" class="shrink-0 flex items-center justify-center w-10 h-10 ${keluar ? 'text-rose-600 bg-rose-50' : 'text-slate-400'} hover:text-rose-600 rounded-lg active:bg-rose-50">
+                        <i class="fa-solid fa-trash-can text-lg"></i>
                     </button>
                 </div>`;
             }).join('');
@@ -4597,9 +4612,11 @@
             }
         };
 
-        window.hapusDaftarTopup = () => {
-            const uid = document.getElementById('tp-tambah-rider').value;
-            if (!uid || !topupKodeMap[uid]) return;
+        window.hapusDaftarTopup = (uidBaris) => {
+            // 18 Okt 2026: bisa dipanggil dari tombol sampah di tiap baris (uidBaris) atau dari panel tambah (dropdown)
+            const dariBaris = typeof uidBaris === 'string';
+            const uid = dariBaris ? uidBaris : document.getElementById('tp-tambah-rider').value;
+            if (!uid || !TP_UID_OK(uid) || !Object.prototype.hasOwnProperty.call(topupKodeMap, uid)) return;
             window.showConfirm('Hapus dari daftar?', `${tpEsc(tpNamaRider(uid))} (${tpEsc(topupKodeMap[uid])}) akan dihapus dari daftar top up. Saldo rider tidak berubah.`, async () => {
                 try {
                     await runTransaction(db, async (t) => {
@@ -4608,7 +4625,7 @@
                         delete map[uid];
                         t.set(tpDocRef(), { riders: map, updated_at: serverTimestamp() });
                     });
-                    window.toggleTambahDaftarTopup(false);
+                    if (!dariBaris) window.toggleTambahDaftarTopup(false);
                 } catch (e) {
                     window.showAlert('Gagal', 'Tidak bisa menghapus. Periksa koneksi lalu coba lagi.', 'error');
                 }
@@ -10143,7 +10160,7 @@
                             rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
                             Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
                             Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                            created_at: ts, admin_created_at: data.created_at, is_from_active: true,
+                            created_at: ts, admin_created_at: data.created_at, accepted_at: data.accepted_at || null, is_from_active: true,
                             fee_real: parseFloat(data.fee) || 0, adm_potong: data.adm_potong || null, adm_v: data.adm_v || 0
                         });
                     });
@@ -10174,7 +10191,7 @@
                                 rider_uid: data.rider_uid, rider_name: data.rider_name || (masterRidersMap.has(data.rider_uid) ? masterRidersMap.get(data.rider_uid).name : data.rider_uid),
                                 Nama_Pelanggan: data.customer_name || '-', Nominal_Kotor: (data.fee || 0) / 1000, Tambahan: (data.tambahan || 0) / 1000,
                                 Status: "Selesai", Keterangan: detailText, Jam: ts ? new Date(ts.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':') : '--:--',
-                                created_at: ts, admin_created_at: data.created_at, is_from_active: true,
+                                created_at: ts, admin_created_at: data.created_at, accepted_at: data.accepted_at || null, is_from_active: true,
                                 fee_real: parseFloat(data.fee) || 0, adm_potong: data.adm_potong || null, adm_v: data.adm_v || 0
                             });
                         });
@@ -11473,11 +11490,55 @@
         }
         // ============================================================================
 
+        // ===== POPUP KONFIRMASI BESAR (18 Okt 2026): Selesai / Batal di Pantauan, Hapus di Histori =====
+        // Semua teks dari data (nama rider, pelanggan) dipasang lewat textContent, bukan innerHTML.
+        window.konfirmasiBesar = (opsi, onYa) => {
+            document.getElementById('konfirmasi-besar')?.remove();
+            const J = {
+                selesai: { judul: 'SELESAIKAN', ikon: 'fa-check', warna: '#15803D', muda: '#DCFCE7', tombol: 'Ya, selesaikan' },
+                batal:   { judul: 'BATALKAN', ikon: 'fa-xmark', warna: '#DC2626', muda: '#FEE2E2', tombol: 'Ya, batalkan' },
+                hapus:   { judul: 'HAPUS', ikon: 'fa-xmark', warna: '#DC2626', muda: '#FEE2E2', tombol: 'Ya, hapus' }
+            }[opsi && opsi.jenis] || null;
+            if (!J || typeof onYa !== 'function') return;
+            const latar = document.createElement('div');
+            latar.id = 'konfirmasi-besar';
+            latar.setAttribute('role', 'dialog');
+            latar.setAttribute('aria-modal', 'true');
+            latar.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.7);display:flex;align-items:center;justify-content:center;padding:20px;';
+            latar.innerHTML = `
+                <div style="background:#fff;border-radius:28px;width:100%;max-width:360px;padding:26px 20px 20px;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.4);">
+                    <div style="width:84px;height:84px;margin:0 auto;border-radius:50%;background:${J.muda};color:${J.warna};display:flex;align-items:center;justify-content:center;font-size:46px;border:4px solid ${J.warna};"><i class="fa-solid ${J.ikon}" aria-hidden="true"></i></div>
+                    <p id="kb-judul" style="margin-top:14px;font-size:30px;font-weight:900;letter-spacing:.04em;color:${J.warna};line-height:1.1;"></p>
+                    <p style="margin-top:12px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.12em;">Rider</p>
+                    <p id="kb-rider" style="margin-top:2px;font-size:28px;font-weight:900;color:#0f172a;line-height:1.15;text-transform:uppercase;word-break:break-word;"></p>
+                    <p id="kb-info" style="margin-top:10px;font-size:13px;font-weight:700;color:#334155;"></p>
+                    <p id="kb-catatan" style="margin-top:8px;font-size:11px;font-weight:600;color:#64748b;line-height:1.5;"></p>
+                    <div style="display:flex;gap:10px;margin-top:20px;">
+                        <button type="button" id="kb-tidak" style="flex:1;min-height:52px;border:0;border-radius:16px;background:#f1f5f9;color:#334155;font-weight:900;font-size:13px;">Kembali</button>
+                        <button type="button" id="kb-ya" style="flex:1.5;min-height:52px;border:0;border-radius:16px;background:${J.warna};color:#fff;font-weight:900;font-size:14px;"></button>
+                    </div>
+                </div>`;
+            latar.querySelector('#kb-judul').textContent = J.judul;
+            latar.querySelector('#kb-rider').textContent = String((opsi.rider || '').toString().trim() || 'Belum ada rider').slice(0, 60);
+            const ongkir = Number(opsi.ongkir) || 0;
+            const info = [opsi.pelanggan ? 'Pelanggan: ' + String(opsi.pelanggan).slice(0, 40) : '', ongkir > 0 ? 'Ongkir Rp ' + Math.round(ongkir).toLocaleString('id-ID') : ''].filter(Boolean).join(' · ');
+            latar.querySelector('#kb-info').textContent = info;
+            latar.querySelector('#kb-catatan').textContent = String(opsi.catatan || '');
+            latar.querySelector('#kb-ya').textContent = J.tombol;
+            const tutup = () => latar.remove();
+            latar.querySelector('#kb-tidak').onclick = tutup;
+            latar.addEventListener('click', (e) => { if (e.target === latar) tutup(); });
+            let sudah = false;
+            latar.querySelector('#kb-ya').onclick = () => { if (sudah) return; sudah = true; tutup(); onYa(); };
+            document.body.appendChild(latar);
+            latar.querySelector('#kb-tidak').focus();
+        };
+
         window.completeOrderByAdmin = (id) => {
             const order = allGlobalOrders.find(o => o.id === id);
             if (!order) return;
 
-            window.showConfirm('Selesaikan Order?', 'Bantu rider menyelesaikan orderan ini secara manual? Orderan akan masuk ke Riwayat.', async () => {
+            window.konfirmasiBesar({ jenis: 'selesai', rider: order.rider_name || order.rider_uid, pelanggan: order.customer_name, ongkir: order.fee, catatan: 'Orderan diselesaikan oleh admin dan masuk ke Histori. Rider kembali ke antrean.' }, async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
@@ -11527,7 +11588,7 @@
             }
             // -----------------------------------------------------
 
-            window.showConfirm('Batalkan Order?', confirmMessage, async () => {
+            window.konfirmasiBesar({ jenis: 'batal', rider: order.rider_name || '', pelanggan: order.customer_name, ongkir: order.fee, catatan: order.rider_uid ? 'Orderan dihapus. Potongan 16% dikembalikan ke saldo rider dan rider kembali ke antrean paling atas.' : 'Orderan pending ini dihapus.' }, async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 try {
@@ -12706,6 +12767,12 @@
                         
                         // Validasi ulang di sisi server agar tidak double potong
                         if (data.last_deducted_date === todayStr || data.remaining_amount <= 0) return;
+
+                        // 18 Okt 2026: rider yang sudah dikeluarkan (dompet saldo dihapus) JANGAN dipotong.
+                        // Dulu set(merge) di bawah membuat ulang dompet saldo rider keluar dengan saldo minus.
+                        const balanceCekRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', data.rider_uid);
+                        const balanceCek = await transaction.get(balanceCekRef);
+                        if (!balanceCek.exists()) return;
                         
                         let deduction = data.amount_per_week;
                         if (data.remaining_amount < deduction) deduction = data.remaining_amount; // Cegah minus
@@ -12746,11 +12813,25 @@
 
             if (allCicilan.length === 0) {
                 container.innerHTML = '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada data cicilan rider aktif.</p>';
+                { const inf = document.getElementById('cicilan-dobel-info'); if (inf) inf.classList.add('hidden'); }
+                if (typeof window.renderCicilanCari === 'function') window.renderCicilanCari();
                 return;
             }
 
             const sorted = [...allCicilan].sort((a,b) => b.remaining_amount - a.remaining_amount);
             let html = '';
+            // 18 Okt 2026: tandai kartu DOBEL (rider punya >1 cicilan aktif = terpotong berkali-kali tiap Minggu)
+            // dan cicilan milik rider yang sudah tidak ada di data rider (kemungkinan sudah keluar).
+            const aktifPerRider = {};
+            allCicilan.forEach(c => { if (parseInt(c.remaining_amount || 0) > 0) aktifPerRider[c.rider_uid] = (aktifPerRider[c.rider_uid] || 0) + 1; });
+            const daftarRider = getMergedRidersForDropdown();
+            const adaRider = new Set(daftarRider.map(r => String(r.uid)));
+            const nDobel = Object.values(aktifPerRider).filter(n => n > 1).length;
+            const infoDobel = document.getElementById('cicilan-dobel-info');
+            if (infoDobel) {
+                infoDobel.classList.toggle('hidden', !nDobel);
+                infoDobel.textContent = nDobel ? `⚠ Ada ${nDobel} rider dengan cicilan DOBEL. Saldo mereka terpotong lebih dari sekali tiap Minggu. Hapus salah satu kartu yang bertanda DOBEL (pilih yang riwayat potongannya paling sedikit), lalu sesuaikan sisa di kartu yang tersisa.` : '';
+            }
             
             sorted.forEach(c => {
                 const sisa = parseInt(c.remaining_amount || 0);
@@ -12786,6 +12867,8 @@
                                     <div class="w-6 h-6 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center text-[10px] shrink-0"><i class="fa-solid fa-motorcycle"></i></div>
                                     <span class="font-black text-black text-[12px] uppercase truncate">${c.rider_name || c.rider_uid}</span>
                                 </div>
+                                ${(!isLunas && aktifPerRider[c.rider_uid] > 1) ? `<p class="text-[8px] font-black text-white bg-rose-600 px-1.5 py-0.5 rounded w-max mb-1"><i class="fa-solid fa-clone mr-1"></i>DOBEL – terpotong ${aktifPerRider[c.rider_uid]}x tiap Minggu</p>` : ''}
+                                ${(daftarRider.length && !adaRider.has(String(c.rider_uid))) ? `<p class="text-[8px] font-black text-slate-600 bg-slate-200 px-1.5 py-0.5 rounded w-max mb-1"><i class="fa-solid fa-user-slash mr-1"></i>Rider sudah keluar / tidak aktif</p>` : ''}
                                 <p class="text-[9px] font-bold text-slate-500 mb-0.5"><i class="fa-regular fa-calendar mr-1"></i>Mulai: ${startStr}</p>
                                 <p class="text-[9px] font-bold text-slate-500 mb-1"><i class="fa-solid fa-money-bill-wave mr-1"></i>Potongan: Rp ${perMinggu.toLocaleString('id-ID')} /minggu</p>
                                 ${c.last_deducted_date ? `<p class="text-[8px] font-bold text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded w-max border border-sky-100"><i class="fa-solid fa-check-double mr-1"></i>Terakhir dipotong: ${c.last_deducted_date}</p>` : ''}
@@ -12803,9 +12886,72 @@
                     </div>`;
             });
             container.innerHTML = html;
+            if (typeof window.renderCicilanCari === 'function') window.renderCicilanCari();
         };
 
-        window.openAddCicilanModal = () => {
+        // 18 Okt 2026: cari rider di halaman cicilan + badge sudah/belum ada cicilan + tombol tambah/edit.
+        // Semua teks dimasukkan lewat textContent (bukan innerHTML) dan tombol pakai addEventListener.
+        window.renderCicilanCari = () => {
+            const inp = document.getElementById('cicilan-cari');
+            const box = document.getElementById('cicilan-cari-hasil');
+            if (!inp || !box) return;
+            const q = inp.value.trim().toLowerCase();
+            box.textContent = '';
+            if (!q) { box.classList.add('hidden'); return; }
+            box.classList.remove('hidden');
+            const hasil = getMergedRidersForDropdown().filter(r => {
+                const kode = String(getRiderCode(r.uid) || '').toLowerCase();
+                return String(r.name || '').toLowerCase().includes(q) || kode.includes(q) || String(r.uid).toLowerCase().includes(q);
+            }).slice(0, 25);
+            if (!hasil.length) {
+                const p = document.createElement('p');
+                p.className = 'text-[10px] text-slate-400 italic text-center py-3 bg-slate-50 rounded-xl border border-dashed border-slate-200';
+                p.textContent = 'Rider tidak ditemukan.';
+                box.appendChild(p);
+                return;
+            }
+            hasil.forEach(r => {
+                const milik = allCicilan.filter(c => String(c.rider_uid) === String(r.uid));
+                const aktif = milik.filter(c => parseInt(c.remaining_amount || 0) > 0);
+                const baris = document.createElement('div');
+                baris.className = 'flex items-center gap-2 bg-white border border-gray-100 rounded-xl p-2.5 shadow-sm';
+                const kiri = document.createElement('div');
+                kiri.className = 'flex-1 min-w-0';
+                const nm = document.createElement('p');
+                nm.className = 'font-black text-[11px] text-black uppercase truncate';
+                nm.textContent = `${getRiderCode(r.uid) || ''} ${r.name || r.uid}`.trim();
+                const bdg = document.createElement('span');
+                bdg.className = 'inline-block mt-1 text-[8px] font-black px-1.5 py-0.5 rounded border ' +
+                    (aktif.length > 1 ? 'bg-rose-600 text-white border-rose-600'
+                    : aktif.length ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : 'bg-slate-50 text-slate-500 border-slate-200');
+                if (aktif.length > 1) bdg.textContent = `DOBEL – ${aktif.length} cicilan aktif`;
+                else if (aktif.length) bdg.textContent = `Sudah ada cicilan · sisa Rp ${parseInt(aktif[0].remaining_amount || 0).toLocaleString('id-ID')}`;
+                else if (milik.length) bdg.textContent = 'Belum ada cicilan aktif (yang lama lunas)';
+                else bdg.textContent = 'Belum ada cicilan';
+                kiri.appendChild(nm); kiri.appendChild(bdg);
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                const ik = document.createElement('i');
+                if (aktif.length) {
+                    btn.className = 'shrink-0 bg-sky-50 text-sky-600 border border-sky-200 px-2.5 py-2 rounded-lg text-[9px] font-black uppercase flex items-center gap-1';
+                    ik.className = 'fa-solid fa-pen';
+                    btn.appendChild(ik); btn.appendChild(document.createTextNode(' Edit'));
+                    const idCic = aktif[0].id;
+                    btn.addEventListener('click', () => window.openEditCicilanModal(idCic));
+                } else {
+                    btn.className = 'shrink-0 bg-amber-500 text-white px-2.5 py-2 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 shadow-sm active:scale-95';
+                    ik.className = 'fa-solid fa-plus';
+                    btn.appendChild(ik); btn.appendChild(document.createTextNode(' Tambah cicilan'));
+                    const uidR = r.uid;
+                    btn.addEventListener('click', () => window.openAddCicilanModal(uidR));
+                }
+                baris.appendChild(kiri); baris.appendChild(btn);
+                box.appendChild(baris);
+            });
+        };
+
+        window.openAddCicilanModal = (pilihUid) => {
             document.getElementById('cicilan-modal-id').value = '';
             document.getElementById('cicilan-total').value = '';
             document.getElementById('cicilan-per-minggu').value = '';
@@ -12815,6 +12961,10 @@
             getMergedRidersForDropdown().forEach(r => { html += `<option value="${r.uid}">${getRiderCode(r.uid)} - ${r.name}</option>`; });
             select.innerHTML = html;
             select.disabled = false;
+            if (typeof pilihUid === 'string' && pilihUid) {
+                const opsi = Array.from(select.options).find(o => o.value === pilihUid);
+                if (opsi) select.value = pilihUid;
+            }
 
             const today = new Date();
             const nextSunday = new Date(today);
@@ -12847,7 +12997,9 @@
             modal.classList.remove('hidden'); modal.classList.add('flex');
         };
 
+        let cicilanSedangSimpan = false; // 18 Okt 2026: cegah tombol Simpan ketekan 2x (penyebab kartu dobel)
         window.saveCicilan = async () => {
+            if (cicilanSedangSimpan) return;
             const id = document.getElementById('cicilan-modal-id').value;
             const riderUid = document.getElementById('cicilan-rider-select').value;
             const rawTotal = document.getElementById('cicilan-total').value;
@@ -12877,6 +13029,7 @@
 
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden'); loader.classList.add('flex');
+            cicilanSedangSimpan = true;
 
             try {
                 if (id) {
@@ -12896,8 +13049,7 @@
                         return;
                     }
 
-                    const ref = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan');
-                    await addDoc(ref, {
+                    const dataBaru = {
                         rider_uid: riderUid,
                         rider_name: rName,
                         remaining_amount: total,
@@ -12907,13 +13059,30 @@
                         deduction_logs: [],
                         created_at: serverTimestamp(),
                         updated_at: serverTimestamp()
-                    });
+                    };
+                    // 18 Okt 2026: dokumen cicilan baru memakai ID = UID rider (bukan ID acak).
+                    // Dicek di dalam transaksi server, jadi walau ditekan 2x / dari 2 HP tetap hanya 1 kartu.
+                    // ID ini juga yang dipakai fitur "Keluarkan rider" (arsip & pulihkan), jadi cicilan ikut terarsip.
+                    if (/^[A-Za-z0-9_-]{1,64}$/.test(String(riderUid))) {
+                        const ref = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan', riderUid);
+                        await runTransaction(db, async (t) => {
+                            const lama = await t.get(ref);
+                            if (lama.exists() && parseInt(lama.data().remaining_amount || 0) > 0) throw new Error('CICILAN_AKTIF');
+                            const logLama = lama.exists() && Array.isArray(lama.data().deduction_logs) ? lama.data().deduction_logs.slice(0, 60) : [];
+                            t.set(ref, Object.assign({}, dataBaru, { riwayat_lunas_sebelumnya: logLama }));
+                        });
+                    } else {
+                        const ref = collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_cicilan');
+                        await addDoc(ref, dataBaru);
+                    }
                     window.showAlert('Berhasil', 'Cicilan baru berhasil ditambahkan. Akan dipotong otomatis hari Minggu.', 'success');
                 }
                 document.getElementById('cicilan-modal').classList.add('hidden'); document.getElementById('cicilan-modal').classList.remove('flex');
             } catch(e) {
-                window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
+                if (e && e.message === 'CICILAN_AKTIF') window.showAlert('Gagal', 'Rider ini masih memiliki cicilan aktif. Silakan edit cicilan yang ada.', 'warning');
+                else window.showAlert('Gagal', 'Terjadi kesalahan sistem.', 'error');
             } finally {
+                cicilanSedangSimpan = false;
                 loader.classList.add('hidden'); loader.classList.remove('flex');
             }
         };
@@ -14605,7 +14774,8 @@
         };
 
         window.deleteHistoryOrder = (id, riderUid, isDaily) => {
-            window.showConfirm('Hapus Riwayat?', 'Yakin ingin menghapus riwayat orderan ini secara permanen? (Potongan 16% akan dikembalikan)', async () => {
+            const _oH = (window.currentHistoryData || []).find(o => o.id === id) || {};
+            window.konfirmasiBesar({ jenis: 'hapus', rider: _oH.rider_name || riderUid, pelanggan: _oH.Nama_Pelanggan, ongkir: _oH.fee, catatan: 'Riwayat order dihapus permanen. Potongan 16% dikembalikan ke saldo rider.' }, async () => {
                 const loader = document.getElementById('loading-overlay');
                 loader.classList.remove('hidden'); loader.classList.add('flex');
                 
@@ -15673,63 +15843,341 @@
         // FUNGSI 5 PILAR ANALISIS BISNIS LANJUTAN
         // =====================================================================
 
-        window.renderAnalisisOperasional = () => {
-            const container = document.getElementById('operasional-container-results');
-            if (!container) return;
+        // ================= ANALISIS OPERASIONAL (18 Okt 2026) =================
+        // Sumber data:
+        //  - rekap_harian 30 hari terakhir (sudah dimuat untuk analisis lain, 0 read tambahan) -> rider off/aktif per hari
+        //  - distribusi_jam 14 hari terakhir (maks 14 read, SEKALI per sesi)                   -> pola order per jam
+        //  - histori hari yang dipilih (sudah dimuat, 0 read tambahan)                          -> waktu ACC, lama antar, rider per jam
+        // Semua angka adalah PERKIRAAN untuk membantu mengatur jadwal, bukan hitungan pasti.
+        const OP_HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+        const OP_TGL = /^\d{4}-\d{2}-\d{2}$/;
+        let opDj = { kunci: '', data: [], memuat: false, dicoba: false, gagal: '' };
+        const opBacaKap = () => {
+            try { const v = parseInt(localStorage.getItem('op_kapasitas') || '0', 10); return (v >= 1 && v <= 6) ? v : 0; } catch (e) { return 0; }
+        };
+        window.opSetKapasitas = (v) => {
+            const n = parseInt(v, 10);
+            try { if (n >= 1 && n <= 6) localStorage.setItem('op_kapasitas', String(n)); else localStorage.removeItem('op_kapasitas'); } catch (e) { /* abaikan */ }
+            window.renderAnalisisOperasional();
+        };
+        window.opMuatUlang = () => { if (opDj.memuat) return; opDj = { kunci: '', data: [], memuat: false, dicoba: false, gagal: '' }; window.renderAnalisisOperasional(); };
+        const opMuatDj = async () => {
+            const hariIni = anHariIniStr();
+            if (opDj.memuat || (opDj.kunci === hariIni && opDj.dicoba)) return;
+            opDj = { kunci: hariIni, data: [], memuat: true, dicoba: false, gagal: '' };
+            try {
+                const snap = await getDocs(query(djCol(), where('tanggal', '<', hariIni), orderBy('tanggal', 'desc'), limit(14)));
+                snap.forEach(d => { const r = djBersihkanDok(d); if (r && r.total > 0) opDj.data.push(r); });
+            } catch (e) {
+                opDj.gagal = (e && e.code === 'permission-denied') ? 'izin' : 'jaringan';
+            }
+            opDj.memuat = false; opDj.dicoba = true;
+        };
+        const opYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const opDow = (tgl) => { const [y, m, d] = tgl.split('-').map(Number); return new Date(y, m - 1, d).getDay(); };
+        const opMenit = (ms) => { const dtk = Math.round(ms / 1000); return dtk < 60 ? `${dtk} dtk` : `${Math.floor(dtk / 60)}m ${String(dtk % 60).padStart(2, '0')}d`; };
+        const opRentangJam = (daftar) => {
+            // [11,12,13,18] -> ["11.00–14.00", "18.00–19.00"]
+            const hasil = []; let mulai = null, sblm = null;
+            daftar.concat([999]).forEach(h => {
+                if (mulai === null) { mulai = h; sblm = h; return; }
+                if (h === sblm + 1) { sblm = h; return; }
+                hasil.push(`${String(mulai).padStart(2, '0')}.00–${String(sblm + 1).padStart(2, '0')}.00`);
+                mulai = h; sblm = h;
+            });
+            return hasil;
+        };
+        const opMedian = (arr) => { if (!arr.length) return 0; const a = [...arr].sort((x, y) => x - y); const t = Math.floor(a.length / 2); return a.length % 2 ? a[t] : (a[t - 1] + a[t]) / 2; };
 
-            const dataOrder = window.currentHistoryData || [];
-            if (dataOrder.length === 0) {
-                container.innerHTML = `<p class="text-[10px] text-slate-400 italic text-center py-6 border border-dashed border-gray-200 rounded-xl mt-2">Pilih tanggal di menu Histori terlebih dahulu.</p>`;
-                return;
+        window.renderAnalisisOperasional = async () => {
+            const box = document.getElementById('operasional-container-results');
+            if (!box) return;
+            const hariIni = anHariIniStr();
+            if (!window._isCloudRecapsLoaded || !(opDj.kunci === hariIni && opDj.dicoba)) {
+                box.innerHTML = '<div class="flex flex-col items-center justify-center py-8"><div class="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-2"></div><p class="text-[9px] font-bold text-slate-500">Menghitung analisis operasional...</p></div>';
+                try { if (typeof window.loadCloudRecapsData === 'function') await window.loadCloudRecapsData(); } catch (e) { /* lanjut dengan data yang ada */ }
+                await opMuatDj();
+            }
+            try { opGambar(box, hariIni); }
+            catch (e) {
+                console.error('Analisis operasional gagal:', e);
+                box.innerHTML = '<p class="text-[10px] font-bold text-rose-600 text-center py-6 bg-rose-50 border border-rose-200 rounded-xl">Analisis gagal dihitung. Coba buka ulang tab ini.</p>';
+            }
+        };
+
+        function opGambar(box, hariIni) {
+            const esc = window.escHtml;
+            const JAM_A = DJ_JAM_AWAL, JAM_Z = DJ_JAM_AKHIR;
+
+            // ---------- A. Rider off per hari (rekap 30 hari, tanpa hari ini) ----------
+            const cekPT = (uid) => (typeof adm4PartTime === 'function') ? adm4PartTime(uid) : false;
+            const roster = getMergedRidersForDropdown().filter(r => !cekPT(r.uid));
+            const nmRider = new Map(getMergedRidersForDropdown().map(r => [String(r.uid), String(r.name || r.uid)]));
+            const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+            const awal30 = new Date(t0); awal30.setDate(awal30.getDate() - 30);
+            const batasAwal = opYmd(awal30);
+            const sudah = new Set();
+            const hari = (allCloudRecaps || []).filter(r => {
+                const tg = String(r.tanggal || '');
+                if (!OP_TGL.test(tg) || tg >= hariIni || tg < batasAwal || sudah.has(tg)) return false;
+                if (!Array.isArray(r.rekap_rider) || !(parseInt(r.total_orders, 10) > 0)) return false;
+                sudah.add(tg); return true;
+            }).sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+
+            const aktifPerHari = hari.map(r => {
+                const set = new Set();
+                r.rekap_rider.forEach(x => { if (x && x.uid && (parseInt(x.total_order, 10) || 0) > 0) set.add(String(x.uid)); });
+                return set;
+            });
+            const pertama = new Map(); // uid -> indeks hari pertama terlihat bekerja (rider baru tidak dihitung off sebelum mulai)
+            aktifPerHari.forEach((set, i) => set.forEach(u => { if (!pertama.has(u)) pertama.set(u, i); }));
+
+            const offPerRider = {}; // uid -> {off, hari}
+            let sOff = 0, sLayak = 0, sAktif = 0, sOrder = 0;
+            const dowOff = Array.from({ length: 7 }, () => ({ off: 0, n: 0 }));
+            hari.forEach((r, i) => {
+                let off = 0, layak = 0;
+                roster.forEach(rd => {
+                    const u = String(rd.uid);
+                    if (!pertama.has(u) || pertama.get(u) > i) return;
+                    layak++;
+                    if (!offPerRider[u]) offPerRider[u] = { off: 0, hari: 0 };
+                    offPerRider[u].hari++;
+                    if (!aktifPerHari[i].has(u)) { off++; offPerRider[u].off++; }
+                });
+                sOff += off; sLayak += layak; sAktif += aktifPerHari[i].size; sOrder += parseInt(r.total_orders, 10) || 0;
+                const d = opDow(r.tanggal); dowOff[d].off += off; dowOff[d].n++;
+            });
+            const nHari = hari.length;
+            const rataOff = nHari ? sOff / nHari : 0;
+            const rataLayak = nHari ? sLayak / nHari : 0;
+            const rataAktif = nHari ? sAktif / nHari : 0;
+            const orderPerAktif = sAktif ? sOrder / sAktif : 0;
+            const tingkatOff = sLayak ? sOff / sLayak : 0;
+            const tidakPernah = roster.filter(r => !pertama.has(String(r.uid)));
+            const seringOff = Object.entries(offPerRider)
+                .filter(([, v]) => v.hari >= 7 && v.off > 0)
+                .map(([u, v]) => ({ u, off: v.off, hari: v.hari, rasio: v.off / v.hari }))
+                .sort((a, b) => b.rasio - a.rasio).slice(0, 5);
+            const dowRata = dowOff.map(x => x.n ? x.off / x.n : null);
+
+            // ---------- B. Hari yang dipilih di Histori ----------
+            const histTgl = String((document.getElementById('history-date') || {}).value || '');
+            const dataSel = Array.isArray(window.currentHistoryData) ? window.currentHistoryData : [];
+            const tunggu = [], durasi = [];
+            const orderJamSel = Array(24).fill(0);
+            const riderJamSel = Array.from({ length: 24 }, () => new Set());
+            const tungguJam = Array.from({ length: 24 }, () => []);
+            const orderPerRiderSel = {};
+            dataSel.forEach(o => {
+                const tc = djKeMs(o.admin_created_at), ta = djKeMs(o.accepted_at), tf = djKeMs(o.created_at);
+                const u = o.rider_uid ? String(o.rider_uid) : '';
+                if (u) orderPerRiderSel[u] = (orderPerRiderSel[u] || 0) + 1;
+                const tMasuk = tc || tf;
+                if (tMasuk) orderJamSel[new Date(tMasuk).getHours()]++;
+                if (tc && ta && ta >= tc && ta - tc < 60 * 60000) {
+                    tunggu.push(ta - tc);
+                    tungguJam[new Date(tc).getHours()].push(ta - tc);
+                }
+                const mulai = ta || tc;
+                if (mulai && tf && tf > mulai && tf - mulai < 180 * 60000) {
+                    durasi.push(tf - mulai);
+                    if (u) {
+                        const hA = new Date(mulai).getHours(), hZ = new Date(tf).getHours();
+                        if (hZ >= hA) for (let h = hA; h <= hZ; h++) riderJamSel[h].add(u);
+                        else riderJamSel[hZ].add(u);
+                    }
+                } else if (u && tf) riderJamSel[new Date(tf).getHours()].add(u);
+            });
+            const rataTunggu = tunggu.length ? tunggu.reduce((a, b) => a + b, 0) / tunggu.length : 0;
+            const lamaTunggu = tunggu.filter(x => x > 2 * 60000).length;
+            const medDurasiMnt = opMedian(durasi) / 60000;
+            const rataDurasiMnt = durasi.length ? durasi.reduce((a, b) => a + b, 0) / durasi.length / 60000 : 0;
+            const kapOtomatis = medDurasiMnt > 0 ? Math.min(4, Math.max(1, Math.round(60 / medDurasiMnt))) : 2;
+            const kapManual = opBacaKap();
+            const kap = kapManual || kapOtomatis;
+
+            // ---------- C. Kebutuhan rider per jam (pola 14 hari) ----------
+            const pola = opDj.data;
+            const nPola = pola.length;
+            const rataJam = Array(24).fill(0), maksJam = Array(24).fill(0);
+            if (nPola) {
+                pola.forEach(p => { for (let h = 0; h < 24; h++) { const v = Number(p.jam[String(h).padStart(2, '0')]) || 0; rataJam[h] += v / nPola; if (v > maksJam[h]) maksJam[h] = v; } });
+            } else {
+                for (let h = 0; h < 24; h++) { rataJam[h] = orderJamSel[h]; maksJam[h] = orderJamSel[h]; }
+            }
+            const butuh = rataJam.map(v => v > 0 ? Math.ceil(v / kap) : 0);
+            const butuhRamai = maksJam.map(v => v > 0 ? Math.ceil(v / kap) : 0);
+            let puncakH = -1, puncakN = 0, puncakRamai = 0;
+            for (let h = JAM_A; h < JAM_Z; h++) {
+                if (butuh[h] > puncakN || (butuh[h] === puncakN && rataJam[h] > (rataJam[puncakH] || 0))) { puncakN = butuh[h]; puncakH = h; }
+                if (butuhRamai[h] > puncakRamai) puncakRamai = butuhRamai[h];
+            }
+            const adaSel = dataSel.length > 0;
+            const kurangJam = [], lambatJam = [];
+            const barisJam = [];
+            const maksBar = Math.max(1, ...butuhRamai.slice(JAM_A, JAM_Z));
+            for (let h = JAM_A; h < JAM_Z; h++) {
+                const perluSel = orderJamSel[h] > 0 ? Math.ceil(orderJamSel[h] / kap) : 0;
+                const terlihat = riderJamSel[h].size;
+                const tj = tungguJam[h];
+                const rataTj = tj.length ? tj.reduce((a, b) => a + b, 0) / tj.length : 0;
+                const kurang = adaSel && perluSel > terlihat ? perluSel - terlihat : 0;
+                const lambat = adaSel && tj.length >= 2 && rataTj > 2 * 60000;
+                if (kurang > 0) kurangJam.push(h);
+                if (lambat) lambatJam.push(h);
+                barisJam.push({ h, rata: rataJam[h], butuh: butuh[h], ramai: butuhRamai[h], terlihat, kurang, lambat, rataTj });
             }
 
-            let validOrders = 0;
-            let totalMins = 0;
+            // ---------- D. Beban order (hari dipilih) ----------
+            const beban = Object.entries(orderPerRiderSel).sort((a, b) => b[1] - a[1]);
+            const totalSel = beban.reduce((a, b) => a + b[1], 0);
+            const rataBeban = beban.length ? totalSel / beban.length : 0;
+            const nAtas = Math.max(1, Math.round(beban.length * 0.2));
+            const porsiAtas = totalSel ? beban.slice(0, nAtas).reduce((a, b) => a + b[1], 0) / totalSel : 0;
+            const bebanTinggi = beban.filter(b => rataBeban > 0 && b[1] >= rataBeban * 1.5);
 
-            dataOrder.forEach(o => {
-                const start = o.admin_created_at?.seconds || o.created_at?.seconds;
-                const endStr = o.Jam; // "HH:MM"
-                
-                if (start && endStr && endStr.includes(':')) {
-                    const startDate = new Date(start * 1000);
-                    const endDate = new Date(start * 1000); // Copy date
-                    const [h, m] = endStr.split(':');
-                    endDate.setHours(parseInt(h), parseInt(m), 0, 0);
+            // ---------- E. Rekomendasi ----------
+            const saran = [];
+            // Rider yang harus masuk per hari: jumlah "jam-rider" yang dibutuhkan dibagi ±8 jam kerja per rider,
+            // minimal sebanyak kebutuhan di jam puncak. Lalu ditambah cadangan sesuai tingkat libur.
+            const OP_JAM_KERJA = 8;
+            let jamRider = 0; for (let h = JAM_A; h < JAM_Z; h++) jamRider += butuh[h];
+            const masukPerHari = Math.max(puncakN, Math.ceil(jamRider / OP_JAM_KERJA));
+            const rosterIdeal = masukPerHari > 0 ? Math.ceil(masukPerHari / Math.max(0.3, 1 - tingkatOff)) : 0;
+            if (puncakN > 0) saran.push(`Jam paling ramai sekitar ${String(puncakH).padStart(2, '0')}.00 (rata-rata ${rataJam[puncakH].toFixed(1).replace('.', ',')} order/jam). Siapkan minimal ±${puncakN} rider bekerja bersamaan di jam itu${puncakRamai > puncakN ? `, ±${puncakRamai} kalau sedang ramai` : ''}.`);
+            if (rosterIdeal > 0 && nHari) {
+                const selisihR = rosterIdeal - roster.length;
+                saran.push(`Perkiraan rider yang perlu masuk per hari ±${masukPerHari} orang (anggap 1 rider kerja ±${OP_JAM_KERJA} jam). Dengan rata-rata ${Math.round(tingkatOff * 100)}% rider libur per hari, jumlah rider full-time yang ideal ±${rosterIdeal} orang. Sekarang ${roster.length} orang${selisihR > 0 ? ` (kurang ±${selisihR})` : selisihR < 0 ? ' (sudah cukup)' : ' (pas)'}.`);
+            }
+            if (kurangJam.length) saran.push(`Di hari yang dipilih, rider terlihat kurang di jam ${opRentangJam(kurangJam).join(', ')}. Pertimbangkan menggeser jam masuk shift atau menambah rider part-time di jam tersebut.`);
+            if (lambatJam.length) saran.push(`Order lama diterima rider (rata-rata lebih dari 2 menit) di jam ${opRentangJam(lambatJam).join(', ')}.`);
+            const dowValid = dowRata.map((v, i) => ({ v, i })).filter(x => x.v !== null && dowOff[x.i].n >= 2);
+            if (dowValid.length >= 3) {
+                const terburuk = [...dowValid].sort((a, b) => b.v - a.v)[0];
+                if (terburuk.v >= rataOff * 1.2 && terburuk.v >= 1) saran.push(`Hari ${OP_HARI[terburuk.i]} paling banyak rider off (rata-rata ${terburuk.v.toFixed(1).replace('.', ',')} orang). Atur jadwal libur bergilir supaya tidak menumpuk di hari itu.`);
+            }
+            if (tunggu.length >= 5 && lamaTunggu / tunggu.length >= 0.2) saran.push(`${Math.round(lamaTunggu / tunggu.length * 100)}% order di hari yang dipilih butuh lebih dari 2 menit sampai diterima rider. Ini tanda rider siaga kurang atau rider sering menolak.`);
+            if (beban.length >= 5 && porsiAtas >= 0.4) saran.push(`Beban order belum merata: ${nAtas} rider teratas memegang ${Math.round(porsiAtas * 100)}% order di hari yang dipilih.`);
+            if (tidakPernah.length && nHari >= 7) saran.push(`${tidakPernah.length} rider full-time tidak punya order sama sekali selama ${nHari} hari terakhir. Cek apakah masih aktif atau perlu dikeluarkan.`);
+            if (!saran.length) saran.push('Belum ada catatan khusus. Data yang tersedia masih sedikit atau operasional sudah berjalan baik.');
 
-                    const diffMs = endDate.getTime() - startDate.getTime();
-                    const diffMins = Math.floor(diffMs / 60000);
+            // ---------- Tampilan ----------
+            const kartu = (label, nilai, sub, warnaSub) => `
+                <div class="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
+                    <p class="text-[8px] font-black text-slate-400 uppercase tracking-wider leading-tight">${label}</p>
+                    <p class="text-xl font-black text-slate-800 leading-tight mt-1">${nilai}</p>
+                    ${sub ? `<p class="text-[9px] font-bold ${warnaSub || 'text-slate-500'} mt-0.5 leading-tight">${sub}</p>` : ''}
+                </div>`;
+            const koma = (n) => n.toFixed(1).replace('.', ',');
+            const judulBagian = (ikon, teks, ket) => `<div class="mt-4 mb-2 border-b border-gray-100 pb-1.5"><p class="text-[9px] font-black text-slate-500 uppercase tracking-widest"><i class="fa-solid ${ikon} mr-1 text-indigo-400"></i>${teks}</p>${ket ? `<p class="text-[8px] font-bold text-slate-400 mt-0.5">${ket}</p>` : ''}</div>`;
 
-                    // Filter anomali waktu (misal admin lupa selesaikan sampai besoknya)
-                    if (diffMins > 0 && diffMins < 180) { 
-                        totalMins += diffMins;
-                        validOrders++;
-                    }
-                }
-            });
-
-            const avgSLA = validOrders > 0 ? Math.round(totalMins / validOrders) : 0;
-            let slaStatus = avgSLA <= 30 ? '<span class="text-emerald-500">Sangat Cepat</span>' : (avgSLA <= 45 ? '<span class="text-amber-500">Normal / Wajar</span>' : '<span class="text-rose-500">Cukup Lambat</span>');
-            if (validOrders === 0) slaStatus = '<span class="text-slate-400">Data Tidak Cukup</span>';
-
-            container.innerHTML = `
-                <div class="mb-3 flex justify-between items-end border-b border-gray-100 pb-2 mt-1">
+            let html = `
+                <div class="flex justify-between items-end border-b border-gray-100 pb-2 mt-1">
                     <div>
-                        <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">SLA (Service Level Agreement)</p>
-                        <p class="text-[10px] font-bold text-slate-700 mt-0.5">Kecepatan Rata-Rata Order</p>
+                        <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest">Analisis Operasional</p>
+                        <p class="text-[10px] font-bold text-slate-700 mt-0.5">Rider, jam sibuk &amp; kebutuhan rider</p>
                     </div>
-                </div>
-                <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-4 border border-slate-700 shadow-md relative overflow-hidden">
-                    <i class="fa-solid fa-stopwatch absolute right-[-10px] bottom-[-10px] text-6xl text-white/5"></i>
-                    <p class="text-[9px] font-bold text-slate-300 uppercase tracking-widest mb-1">Estimasi Waktu Penyelesaian</p>
-                    <div class="flex items-end gap-2 mb-2">
-                        <p class="text-3xl font-black text-white leading-none">${avgSLA}</p>
-                        <p class="text-sm font-bold text-slate-400 mb-0.5">Menit / Order</p>
-                    </div>
-                    <p class="text-[9px] font-bold bg-slate-800 border border-slate-600 px-2 py-1 rounded w-max">Status: ${slaStatus}</p>
-                </div>
-                <p class="text-[8px] text-slate-400 text-center mt-2 italic">*Berdasarkan sampel ${validOrders} order di hari yang dipilih.</p>
-            `;
-        };
+                    <span class="text-[8px] font-black bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded">Perkiraan</span>
+                </div>`;
+
+            html += `<div class="grid grid-cols-2 gap-2 mt-3">
+                ${kartu('Rata-rata rider off / hari', nHari ? Math.round(rataOff) : '-', nHari ? `dari ±${Math.round(rataLayak)} rider full-time` : 'Belum ada rekap')}
+                ${kartu('Rider aktif / hari', nHari ? Math.round(rataAktif) : '-', nHari ? `rata-rata ${nHari} hari terakhir` : '')}
+                ${kartu('Order per rider aktif', sAktif ? koma(orderPerAktif) : '-', sAktif ? 'rata-rata per hari' : '')}
+                ${kartu('Butuh rider di jam puncak', puncakN || '-', puncakN ? (puncakRamai > puncakN ? `±${puncakRamai} saat ramai` : 'bekerja bersamaan') : 'Data jam belum ada')}
+                ${kartu('Rata-rata tunggu ACC', tunggu.length ? opMenit(rataTunggu) : '-', tunggu.length ? `${lamaTunggu} order &gt; 2 menit` : 'Belum ada data terima', lamaTunggu ? 'text-rose-600' : '')}
+                ${kartu('Rata-rata lama antar', durasi.length ? `${Math.round(rataDurasiMnt)} mnt` : '-', durasi.length ? `dari ${durasi.length} order` : '')}
+            </div>
+            <p class="text-[8px] font-bold text-slate-400 mt-1.5">Tunggu ACC, lama antar &amp; beban order dihitung dari hari yang dipilih di Histori${OP_TGL.test(histTgl) ? ` (${esc(window.tglIndo ? window.tglIndo(histTgl) : histTgl)})` : ''}.</p>`;
+
+            // Rekomendasi
+            html += judulBagian('fa-lightbulb', 'Rekomendasi', '');
+            html += `<div class="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3 space-y-1.5">${saran.map(t => `<p class="text-[10px] font-bold text-slate-700 leading-relaxed flex gap-1.5"><span class="text-indigo-400 shrink-0">•</span><span>${esc(t)}</span></p>`).join('')}</div>`;
+
+            // Kebutuhan per jam
+            let ketJam = nPola ? `Pola order rata-rata ${nPola} hari terakhir.` : (opDj.gagal === 'izin' ? 'Riwayat jam sibuk tidak bisa dibaca (izin ditolak). Memakai hari yang dipilih saja.' : opDj.gagal ? 'Riwayat jam sibuk gagal dimuat. Memakai hari yang dipilih saja.' : 'Riwayat jam sibuk belum ada. Memakai hari yang dipilih saja.');
+            html += judulBagian('fa-clock', 'Kebutuhan rider per jam', esc(ketJam));
+            html += `<div class="flex items-center gap-2 mb-2">
+                <label for="op-kap" class="text-[9px] font-bold text-slate-500 leading-tight">1 rider sanggup</label>
+                <select id="op-kap" onchange="window.opSetKapasitas(this.value)" class="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-black text-slate-700">
+                    <option value="0"${kapManual ? '' : ' selected'}>Otomatis (${kapOtomatis})</option>
+                    ${[1, 2, 3, 4].map(n => `<option value="${n}"${kapManual === n ? ' selected' : ''}>${n}</option>`).join('')}
+                </select>
+                <span class="text-[9px] font-bold text-slate-500">order / jam</span>
+                ${opDj.gagal ? '<button type="button" onclick="window.opMuatUlang()" class="ml-auto text-[9px] font-black text-indigo-600 underline">Muat ulang</button>' : ''}
+            </div>`;
+            if (puncakRamai === 0) {
+                html += '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada data order per jam.</p>';
+            } else {
+                html += `<div class="bg-white border border-gray-100 rounded-xl p-2.5 shadow-sm">
+                    <div class="grid grid-cols-[38px_1fr_42px_46px] gap-x-2 text-[8px] font-black text-slate-400 uppercase pb-1 border-b border-gray-100 mb-1"><span>Jam</span><span>Butuh rider</span><span class="text-right">Order</span><span class="text-right">${adaSel ? 'Terlihat' : ''}</span></div>
+                    ${barisJam.filter(b => b.ramai > 0 || b.terlihat > 0).map(b => {
+                        const w1 = Math.round(b.butuh / maksBar * 100), w2 = Math.round(b.ramai / maksBar * 100);
+                        const warnaT = b.kurang ? 'text-rose-600' : (b.lambat ? 'text-amber-600' : 'text-emerald-600');
+                        return `<div class="grid grid-cols-[38px_1fr_42px_46px] gap-x-2 items-center py-0.5">
+                            <span class="text-[10px] font-black text-slate-600">${String(b.h).padStart(2, '0')}.00</span>
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <div class="relative h-2.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
+                                    <div class="absolute inset-y-0 left-0 bg-indigo-200 rounded-full" style="width:${w2}%"></div>
+                                    <div class="absolute inset-y-0 left-0 bg-indigo-500 rounded-full" style="width:${w1}%"></div>
+                                </div>
+                                <span class="text-[10px] font-black text-slate-700 w-8 text-right shrink-0">${b.butuh}${b.ramai > b.butuh ? `<span class="text-slate-400">–${b.ramai}</span>` : ''}</span>
+                            </div>
+                            <span class="text-[10px] font-bold text-slate-500 text-right">${koma(b.rata)}</span>
+                            <span class="text-[10px] font-black text-right ${adaSel ? warnaT : 'text-slate-300'}">${adaSel ? b.terlihat + (b.kurang ? ` <span class="text-[8px]">-${b.kurang}</span>` : '') : ''}</span>
+                        </div>`;
+                    }).join('')}
+                    <p class="text-[8px] font-bold text-slate-400 mt-2 leading-relaxed">Batang gelap = kebutuhan rata-rata, batang muda = saat ramai. "Order" = rata-rata order per jam. ${adaSel ? '"Terlihat" = rider yang mengerjakan order di jam itu pada hari yang dipilih (rider yang standby tanpa order tidak terhitung). Merah = kurang, kuning = order lama diterima.' : ''}</p>
+                </div>`;
+            }
+
+            // Rider off per hari dalam seminggu
+            html += judulBagian('fa-calendar-week', 'Rider off per hari', nHari ? `Rata-rata dari ${nHari} hari yang punya rekap. Rider baru dihitung sejak hari pertama ia bekerja.` : '');
+            if (!nHari) {
+                html += '<p class="text-[10px] text-slate-400 italic text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">Belum ada rekap harian 30 hari terakhir. Rekap tersimpan saat menu Histori menyimpan rekap harian.</p>';
+            } else {
+                const urutDow = [1, 2, 3, 4, 5, 6, 0];
+                const maksDow = Math.max(1, ...dowRata.filter(v => v !== null));
+                html += `<div class="bg-white border border-gray-100 rounded-xl p-3 shadow-sm"><div class="flex items-end gap-1.5 h-24">
+                    ${urutDow.map(i => {
+                        const v = dowRata[i];
+                        const tinggi = v === null ? 0 : Math.max(4, Math.round(v / maksDow * 64));
+                        const tinggiSendiri = v !== null && v >= rataOff * 1.2 && v >= 1;
+                        return `<div class="flex-1 flex flex-col items-center justify-end h-full">
+                            <span class="text-[9px] font-black ${tinggiSendiri ? 'text-rose-600' : 'text-slate-600'}">${v === null ? '-' : koma(v)}</span>
+                            <div class="w-full rounded-t-md ${tinggiSendiri ? 'bg-rose-400' : 'bg-slate-300'}" style="height:${tinggi}px"></div>
+                            <span class="text-[8px] font-black text-slate-400 mt-1">${OP_HARI[i].slice(0, 3)}</span>
+                        </div>`;
+                    }).join('')}
+                </div></div>`;
+                if (seringOff.length) {
+                    html += `<p class="text-[9px] font-black text-slate-500 mt-3 mb-1">Paling sering off</p><div class="space-y-1">${seringOff.map(x => `
+                        <div class="flex justify-between items-center bg-white border border-gray-100 rounded-lg px-2.5 py-1.5">
+                            <span class="text-[10px] font-black text-slate-700 truncate uppercase">${esc((typeof getRiderCode === 'function' ? (getRiderCode(x.u) || '') + ' ' : '') + (nmRider.get(x.u) || x.u))}</span>
+                            <span class="text-[9px] font-bold text-slate-500 shrink-0 ml-2">off ${x.off} dari ${x.hari} hari</span>
+                        </div>`).join('')}</div>`;
+                }
+                if (tidakPernah.length && nHari >= 7) {
+                    html += `<p class="text-[9px] font-black text-slate-500 mt-3 mb-1">Tidak ada order ${nHari} hari terakhir (${tidakPernah.length})</p>
+                        <p class="text-[10px] font-bold text-slate-600 leading-relaxed bg-slate-50 border border-slate-200 rounded-lg p-2">${tidakPernah.slice(0, 15).map(r => esc(r.name || r.uid)).join(', ')}${tidakPernah.length > 15 ? ` dan ${tidakPernah.length - 15} lainnya` : ''}</p>`;
+                }
+            }
+
+            // Beban order
+            if (beban.length) {
+                html += judulBagian('fa-scale-balanced', 'Beban order per rider', 'Hari yang dipilih di Histori.');
+                html += `<div class="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
+                    <p class="text-[10px] font-bold text-slate-600 leading-relaxed">${beban.length} rider mengerjakan ${totalSel} order (rata-rata ${koma(rataBeban)} order/rider). ${nAtas} rider teratas memegang ${Math.round(porsiAtas * 100)}% order.</p>
+                    ${bebanTinggi.length ? `<p class="text-[9px] font-black text-slate-500 mt-2 mb-1">Beban tinggi (≥1,5× rata-rata)</p><div class="flex flex-wrap gap-1">${bebanTinggi.slice(0, 8).map(b => `<span class="text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">${esc(nmRider.get(b[0]) || b[0])} · ${b[1]}</span>`).join('')}</div>` : ''}
+                </div>`;
+            } else if (!adaSel) {
+                html += '<p class="text-[9px] text-slate-400 italic text-center mt-3">Pilih tanggal di menu Histori untuk melihat waktu ACC, lama antar dan beban order.</p>';
+            }
+
+            html += '<p class="text-[8px] text-slate-400 text-center mt-4 italic">Semua angka adalah perkiraan untuk membantu mengatur jadwal.</p>';
+            box.innerHTML = html;
+        }
 
         window.renderAnalisisKeuangan = () => {
             const container = document.getElementById('keuangan-container-results');
@@ -16911,7 +17359,7 @@
         const UANG_BATAS_DIAM_MS = 5 * 60 * 1000;
         // Area angka BISNIS yang disamarkan. Ongkir tiap order & saldo rider sengaja tidak termasuk.
         const UANG_AREA = ['#page-omset', '#page-analisis', '#page-pemasukan-lainnya', '#history-total-fee',
-            '#history-total-admin', '#history-pembanding-admin', '#cloud-recaps-list', '#stat-active-omset'];
+            '#history-total-admin', '#history-pembanding-admin', '#cloud-recaps-list', '#stat-active-omset', '#history-selisih-analisis'];
         const UANG_POLA = /Rp\.?\s*-?\s*\d[\d.,]*(?:\s?(?:rb|jt|k)\b)?/gi;
         const UANG_SAMAR = 'Rp ••••••';
         let uangTerbuka = false;
@@ -17037,7 +17485,7 @@
                     </div>
                 </div>`;
             document.body.appendChild(m);
-            const tutup = () => { m.classList.add('hidden'); m.classList.remove('flex'); document.getElementById('uang-modal-pw').value = ''; uangSetelahBuka = null; };
+            const tutup = () => { m.classList.add('hidden'); m.classList.remove('flex'); const pwI = document.getElementById('uang-modal-pw'); pwI.value = ''; if (pwI._mataReset) pwI._mataReset(); uangSetelahBuka = null; };
             const salah = (teks) => { const e = document.getElementById('uang-modal-err'); e.textContent = teks; e.classList.remove('hidden'); };
             const kirim = async () => {
                 const inp = document.getElementById('uang-modal-pw');
@@ -17075,11 +17523,41 @@
             return m;
         }
         // Minta password; jika sudah terbuka, langsung jalankan aksinya
+        // 18 Okt 2026: tombol mata (lihat/sembunyikan) untuk kolom password pemilik.
+        // Selalu mulai dalam keadaan TERSEMBUNYI; dipasang sekali per kolom.
+        window.adPasangMata = (inp) => {
+            if (!inp || inp.dataset.mata === '1') return;
+            inp.dataset.mata = '1';
+            const bungkus = document.createElement('div');
+            bungkus.style.position = 'relative';
+            inp.parentNode.insertBefore(bungkus, inp);
+            bungkus.appendChild(inp);
+            inp.style.paddingRight = '44px';
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.setAttribute('aria-label', 'Lihat password');
+            b.style.cssText = 'position:absolute;right:4px;top:50%;transform:translateY(-50%);width:38px;height:38px;display:flex;align-items:center;justify-content:center;color:#64748b;background:transparent;border:0;';
+            const ik = document.createElement('i');
+            ik.className = 'fa-solid fa-eye';
+            b.appendChild(ik);
+            if (inp.style.marginTop) { bungkus.style.marginTop = inp.style.marginTop; inp.style.marginTop = '0'; }
+            b.addEventListener('click', () => {
+                const lihat = inp.type === 'password';
+                inp.type = lihat ? 'text' : 'password';
+                ik.className = lihat ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+                b.setAttribute('aria-label', lihat ? 'Sembunyikan password' : 'Lihat password');
+                inp.focus();
+            });
+            bungkus.appendChild(b);
+            inp._mataReset = () => { inp.type = 'password'; ik.className = 'fa-solid fa-eye'; };
+        };
+
         window.uangMintaBuka = (setelahBuka) => {
             if (uangTerbuka) { if (typeof setelahBuka === 'function') setelahBuka(); return; }
             const m = uangModal();
             uangSetelahBuka = setelahBuka || null;
             document.getElementById('uang-modal-err').classList.add('hidden');
+            { const pwI = document.getElementById('uang-modal-pw'); window.adPasangMata(pwI); if (pwI && pwI._mataReset) pwI._mataReset(); }
             m.classList.remove('hidden'); m.classList.add('flex');
             setTimeout(() => { const i = document.getElementById('uang-modal-pw'); if (i) i.focus(); }, 50);
         };
@@ -17149,6 +17627,8 @@
             let tlSiapPeserta = false, tlSiapLap = false, tlSudahMulai = false;
             let tlSibuk = false, tlTimerJalan = null;
             let tlTglLihat = '';
+            let tlLapSemua = null;          // seluruh laporan harian (dimuat sekali saat diminta)
+            let tlMemuatSemua = false;
             let tlCari = '';
 
             // Tanggal mulai potong untuk satu peserta = besok setelah mendaftar (atau 1 Okt, mana yang lebih akhir)
@@ -17348,6 +17828,7 @@
                         <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
                             <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-moon text-emerald-600 mr-1.5"></i> Tabungan Lebaran</h2>
                             <div id="tl-ringkas"></div>
+                            <div id="tl-status"></div>
                         </section>
                         <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
                             <div class="flex justify-between items-center gap-2 border-b border-gray-100 pb-2">
@@ -17355,6 +17836,10 @@
                                 <input type="date" id="tl-tgl" class="bg-slate-50 border border-gray-200 rounded-lg px-2 py-1 text-[10px] font-bold text-black focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
                             <div id="tl-cek"></div>
+                        </section>
+                        <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
+                            <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-chart-column text-emerald-600 mr-1.5"></i> Riwayat Total Masuk Harian</h2>
+                            <div id="tl-riwayat"></div>
                         </section>
                         <section class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
                             <h2 class="font-black text-black text-[11px] uppercase tracking-wider border-b border-gray-100 pb-2"><i class="fa-solid fa-users text-slate-400 mr-1.5"></i> Peserta</h2>
@@ -17378,6 +17863,14 @@
                         else if (aksi === 'aktif') { if (uidSah(uid)) ubahStatus(uid, 'aktif'); }
                         else if (aksi === 'hapus') { if (uidSah(uid)) bukaHapus(uid); }
                         else if (aksi === 'proses') prosesManual();
+                        else if (aksi === 'lihat') {
+                            const t = String(el.dataset.tgl || '');
+                            if (!tglSah(t)) return;
+                            tlTglLihat = t; window.renderTabunganLebaran();
+                            const sek = document.getElementById('tl-cek');
+                            if (sek && sek.parentElement) sek.parentElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                        else if (aksi === 'muatsemua') muatSemuaLaporan();
                     });
                 }
             })();
@@ -17534,14 +18027,67 @@
                 window.showConfirm('Proses potongan sekarang?', `Rider yang belum terpotong / gagal pada ${teksTgl(D)} akan dicoba dipotong sekarang. Yang sudah berhasil tidak dipotong dua kali.`, () => tlJalankan(D));
             }
 
+            // ---------- RANGKUMAN STATUS & RIWAYAT HARIAN ----------
+            // Gabungan laporan: 15 terbaru (realtime) + seluruh laporan bila sudah dimuat.
+            const tlLapPeta = () => {
+                const peta = new Map();
+                (tlLapSemua || []).forEach(l => peta.set(l.id, l));
+                tlLaporan.forEach(l => peta.set(l.id, l));
+                return peta;
+            };
+            async function muatSemuaLaporan() {
+                if (tlMemuatSemua) return;
+                tlMemuatSemua = true; window.renderTabunganLebaran();
+                try {
+                    // sekali baca, maks ±160 dokumen (1 per hari periode tabungan)
+                    const snap = await getDocs(query(lapCol(), orderBy('tanggal', 'desc'), limit(200)));
+                    tlLapSemua = snap.docs.filter(d => tglSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
+                } catch (e) {
+                    console.error('[TL] muat semua laporan:', e);
+                    window.showAlert('Gagal', 'Riwayat lengkap tidak bisa dimuat. Periksa koneksi.', 'error');
+                } finally { tlMemuatSemua = false; window.renderTabunganLebaran(); }
+            }
+            function tlRangkuman() {
+                const now = new Date();
+                const hariIni = tglWib(now);
+                const siap = tlSiapPeserta && tlSiapLap && isBalancesLoaded;
+                const peta = tlLapPeta();
+                const lengkap = !!tlLapSemua || (tlSiapLap && tlLaporan.length < 15);
+                let awal = TL_MULAI;
+                if (!lengkap && tlLaporan.length) { const tertua = tlLaporan.map(l => l.id).sort()[0]; if (tertua > awal) awal = tertua; }
+                const akhir = hariIni < TL_SELESAI ? hariIni : TL_SELESAI;
+                const sudahJam = jamWib(now) >= TL_JAM_POTONG;
+                const hari = [];
+                if (akhir >= awal) {
+                    for (let D = akhir; D >= awal && hari.length < 400; D = geser(D, -1)) {
+                        const lap = peta.get(D);
+                        const rinc = (lap && lap.rincian) || {};
+                        let ok = 0, total = 0, gagal = 0;
+                        Object.entries(rinc).forEach(([uid, x]) => {
+                            if (!uidSah(uid) || !x) return;
+                            if (x.status === 'ok') { ok++; total += Number(x.nominal) || 0; }
+                            else if (x.status === 'gagal') gagal++;
+                        });
+                        const waktu = D < hariIni || sudahJam;
+                        const belum = (waktu && siap) ? targetHari(D).filter(t => !rinc[t.uid]).length : 0;
+                        hari.push({ D, ok, total, gagal, belum });
+                    }
+                }
+                const lalu = hari.filter(h => h.D < hariIni);
+                const masalah = lalu.filter(h => h.gagal || h.belum);
+                const ini = hari.find(h => h.D === hariIni);
+                const nPerluCek = masalah.reduce((a, h) => a + h.gagal + h.belum, 0) + (ini ? ini.gagal : 0);
+                return { siap, hari, lalu, masalah, lengkap, hariIni, nPerluCek };
+            }
+
             // ---------- TAMPILAN ----------
             window.renderTabunganLebaran = () => {
                 // Badge gagal hari ini di menu
                 const hariIni = tglWib(new Date());
-                const lapHariIni = tlLaporan.find(l => l.id === hariIni);
-                const gagalHariIni = lapHariIni ? Object.values(lapHariIni.rincian || {}).filter(x => x.status === 'gagal').length : 0;
+                const rk = tlRangkuman();
                 const badge = document.getElementById('tl-tile-badge');
-                if (badge) { badge.textContent = `${gagalHariIni} gagal`; badge.classList.toggle('hidden', !gagalHariIni); }
+                if (badge) { badge.textContent = `${rk.nPerluCek} perlu cek`; badge.classList.toggle('hidden', !rk.nPerluCek); }
+                if (typeof window.adBaruSet === 'function') window.adBaruSet('tl', rk.siap ? rk.nPerluCek : 0);
 
                 const hal = document.getElementById('page-tabungan-lebaran');
                 if (!hal || hal.classList.contains('hidden-page')) return;
@@ -17553,6 +18099,7 @@
                 if (window._tlGalat && !tlSiapPeserta) {
                     ringkasEl.innerHTML = `<p class="text-[10px] font-bold text-rose-600">Data tidak bisa dibaca (${esc(window._tlGalat)}). Pasang Firestore Rules tabungan lebaran dulu.</p>`;
                     cekEl.innerHTML = ''; pesertaEl.innerHTML = '';
+                    ['tl-status', 'tl-riwayat'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
                     return;
                 }
 
@@ -17575,12 +18122,59 @@
                         ${kotak('Estimasi H-3', esc(rp(estimasi)), 'indigo')}
                     </div>`;
 
+                // Status potongan hari-hari sebelumnya
+                const statusEl = document.getElementById('tl-status');
+                const riwayatEl = document.getElementById('tl-riwayat');
+                const tglPendek = (t) => { const [y, m, d] = t.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }); };
+                const ketCek = rk.lengkap ? '' : ' Yang dicek baru 15 hari terakhir; tekan "Muat semua riwayat" di bawah untuk cek sejak awal.';
+                let statusHtml;
+                if (!rk.siap) statusHtml = '<p class="text-[10px] font-bold text-slate-500">Memeriksa riwayat potongan…</p>';
+                else if (hariIni < TL_MULAI) statusHtml = `<p class="text-[10px] font-bold text-slate-500">Potongan pertama ${esc(teksTgl(TL_MULAI))}.</p>`;
+                else if (!rk.lalu.length) statusHtml = '<p class="text-[10px] font-bold text-slate-500">Belum ada hari sebelumnya untuk dicek.</p>';
+                else if (!rk.masalah.length) {
+                    const dari = rk.lalu[rk.lalu.length - 1].D, sampai = rk.lalu[0].D;
+                    statusHtml = `<div class="rounded-2xl bg-emerald-50 border border-emerald-300 p-3 flex gap-2.5 items-start">
+                        <i class="fa-solid fa-circle-check text-emerald-600 text-xl mt-0.5"></i>
+                        <div><p class="text-[11px] font-black text-emerald-800 uppercase">Sejauh ini terpotong sukses</p>
+                        <p class="text-[10px] font-bold text-emerald-700 leading-relaxed mt-0.5">Tidak ada potongan gagal dari ${esc(tglPendek(dari))} sampai kemarin ${esc(tglPendek(sampai))} (${rk.lalu.length} hari).${esc(ketCek)}</p></div></div>`;
+                } else {
+                    const chip = rk.masalah.slice(0, 20).map(h => `<button type="button" data-tl="lihat" data-tgl="${h.D}" class="px-2 py-1 rounded-lg bg-white border border-rose-300 text-rose-700 text-[9px] font-black">${esc(tglPendek(h.D))} · ${h.gagal ? h.gagal + ' gagal' : ''}${h.gagal && h.belum ? ', ' : ''}${h.belum ? h.belum + ' belum' : ''}</button>`).join('');
+                    statusHtml = `<div class="rounded-2xl bg-rose-50 border border-rose-300 p-3">
+                        <p class="text-[11px] font-black text-rose-700 uppercase"><i class="fa-solid fa-triangle-exclamation mr-1"></i>${rk.masalah.length} hari sebelumnya ada yang belum terpotong</p>
+                        <p class="text-[10px] font-bold text-rose-600 leading-relaxed mt-0.5">Ketuk tanggal untuk melihat rider mana. "Belum" berarti hari itu aplikasi admin tidak terbuka setelah 06.00; potongan susulan otomatis hanya sampai 7 hari ke belakang.${esc(ketCek)}</p>
+                        <div class="flex flex-wrap gap-1.5 mt-2">${chip}</div></div>`;
+                }
+                if (statusEl) statusEl.innerHTML = statusHtml;
+
+                // Riwayat total masuk per hari
+                if (riwayatEl) {
+                    const tampilHari = rk.hari.filter(h => h.ok || h.gagal || h.belum);
+                    const jumlah = tampilHari.reduce((a, h) => a + h.total, 0);
+                    const baris = tampilHari.slice(0, 90).map(h => {
+                        const masalah = h.gagal || h.belum;
+                        const ket = [h.ok ? `${h.ok} rider` : '', h.gagal ? `${h.gagal} gagal` : '', h.belum ? `${h.belum} belum` : ''].filter(Boolean).join(' · ');
+                        return `<button type="button" data-tl="lihat" data-tgl="${h.D}" class="w-full flex justify-between items-center gap-2 py-2 px-2 border-b border-slate-100 last:border-0 text-left ${masalah ? 'bg-rose-50 rounded-lg' : ''}">
+                            <span class="min-w-0"><span class="block text-[10px] font-black text-slate-700">${esc(teksTgl(h.D))}${h.D === rk.hariIni ? ' <span class="text-emerald-600">(hari ini)</span>' : ''}</span>
+                            <span class="block text-[9px] font-bold ${masalah ? 'text-rose-600' : 'text-slate-500'}">${esc(ket)}</span></span>
+                            <span class="text-[12px] font-black text-emerald-700 shrink-0">${esc(rp(h.total))}</span></button>`;
+                    }).join('');
+                    riwayatEl.innerHTML = `
+                        <div class="flex justify-between items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl p-2.5">
+                            <span class="text-[9px] font-black text-emerald-800 uppercase tracking-wider">Total ${tampilHari.length} hari tampil</span>
+                            <span class="text-[14px] font-black text-emerald-700">${esc(rp(jumlah))}</span></div>
+                        <div class="mt-1">${baris || '<p class="text-[10px] text-slate-400 italic text-center py-4">Belum ada potongan tabungan.</p>'}</div>
+                        ${tampilHari.length > 90 ? '<p class="text-[9px] text-slate-400 text-center mt-1">Menampilkan 90 hari terbaru.</p>' : ''}
+                        ${rk.lengkap ? '<p class="text-[9px] text-slate-400 text-center mt-2">Riwayat lengkap sejak awal periode.</p>'
+                            : `<button type="button" data-tl="muatsemua" ${tlMemuatSemua ? 'disabled' : ''} class="w-full mt-2 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-black uppercase">${tlMemuatSemua ? 'Memuat…' : '<i class="fa-solid fa-clock-rotate-left mr-1"></i>Muat semua riwayat sejak awal'}</button>`}
+                        <p class="text-[9px] text-slate-400 mt-1">Ketuk tanggal untuk melihat rincian per rider.</p>`;
+                }
+
                 // Cek potongan per tanggal
                 const batasAkhir = hariIni < TL_SELESAI ? hariIni : TL_SELESAI;
                 if (!tlTglLihat) tlTglLihat = batasAkhir < TL_MULAI ? TL_MULAI : batasAkhir;
                 if (tglEl) { tglEl.min = TL_MULAI; tglEl.max = batasAkhir < TL_MULAI ? TL_MULAI : batasAkhir; tglEl.value = tlTglLihat; }
                 const D = tlTglLihat;
-                const lap = tlLaporan.find(l => l.id === D);
+                const lap = tlLapPeta().get(D);
                 const rinc = (lap && lap.rincian) || {};
                 const target = targetHari(D);
                 const sudahWaktu = D < hariIni || (D === hariIni && jamWib(new Date()) >= TL_JAM_POTONG);
@@ -18582,6 +19176,7 @@
                     <button type="button" id="kr-batal-keluar" class="flex-1 py-3 bg-slate-100 text-slate-800 font-black rounded-xl text-[9px] uppercase">Batal</button>
                     <button type="button" id="kr-ok-keluar" class="flex-1 py-3 bg-rose-600 text-white font-black rounded-xl text-[9px] uppercase shadow-md flex justify-center items-center gap-1.5"><i class="fa-solid fa-user-xmark"></i> Keluarkan</button>`;
                 const pwEl = document.getElementById('kr-pw-keluar');
+                if (typeof window.adPasangMata === 'function') window.adPasangMata(pwEl);
                 const errEl = document.getElementById('kr-err-keluar');
                 const salah = (t) => { if (errEl) { errEl.textContent = t; errEl.style.display = 'block'; } };
                 const tutup = () => { if (pwEl) pwEl.value = ''; modal.classList.add('hidden'); modal.classList.remove('flex'); inputEl.classList.add('hidden'); };
@@ -19527,6 +20122,12 @@
                 b.hidden = !aktif.length || n === 0;
             };
             window.krTampilBadgeBpjs = tampilBadgeBpjs;
+            // Rider yang dikeluarkan hari ini beserta saldo yang diarsipkan (dipakai analisis selisih Histori)
+            window.krKeluarHariIni = () => {
+                const hari = tglHariIni();
+                return Object.keys(master).filter(u => uidSah(u) && master[u] && master[u].status === 'keluar' && master[u].keluar === hari)
+                    .map(u => ({ uid: u, nama: String(master[u].nama || u).slice(0, 60), saldo: Number(master[u].saldo_arsip) || 0 }));
+            };
             // 1 read saat admin masuk (kalau daftar rider belum dipantau lewat Kelola Rider)
             window.krCekBpjs = async () => {
                 try {
@@ -19693,6 +20294,277 @@
                 else if (t.dataset.va === 'muat') muat();
             });
             window.bukaVersiApp = () => { render(); muat(); };
+        })();
+
+        // ===================== ANALISIS SELISIH PEMBANDING OMSET (18 Okt 2026) =====================
+        // Pembanding = (saldo awal + top up manual) - saldo sekarang - tabungan lebaran
+        //            = total uang yang benar-benar keluar dari saldo rider hari ini (di luar edit manual).
+        // Omset 16% = yang seharusnya terpotong dari order hari ini.
+        // Selisih = Pembanding - Omset 16%.
+        //   negatif -> KEKURANGAN: saldo rider berkurang lebih sedikit dari seharusnya (potensi kerugian).
+        //   positif -> KELEBIHAN : saldo rider berkurang lebih banyak (ada potongan lain di luar order).
+        (function analisisSelisih() {
+            const P = firebaseConfig.projectId;
+            const esc = (v) => window.escHtml(v);
+            const tglLokal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            const sembunyi = () => window.userRole === 'admin';
+            const rp = (n) => sembunyi() ? '****' : ((n < 0 ? '-Rp ' : 'Rp ') + Math.abs(Math.round(Number(n) || 0)).toLocaleString('id-ID'));
+            const rpTanda = (n) => sembunyi() ? '****' : ((n > 0 ? '+' : n < 0 ? '−' : '') + 'Rp ' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('id-ID'));
+            let rinci = null, rinciMemuat = false, rinciGalat = '';
+
+            // Bagian yang bisa dihitung tanpa membaca database
+            function penyebabCepat(hariIni) {
+                const hasil = [];
+                // 1) Order hari ini yang potongan ADM-nya tidak tercatat / tidak sesuai
+                let nGagal = 0, efekGagal = 0;
+                const cekOrder = (feeReal, m, admV, riderUid) => {
+                    const harus = Math.round((Number(feeReal) || 0) * 0.16);
+                    if (!(harus > 0) || !admV) return;
+                    if (!m || typeof m !== 'object') { nGagal++; efekGagal -= harus; return; }
+                    if (String(m.rider_uid || '').toUpperCase() !== String(riderUid || '').toUpperCase()) return;
+                    const jml = Number(m.jumlah);
+                    if (Number.isFinite(jml) && Math.abs(jml - harus) > 2) { nGagal++; efekGagal += jml - harus; }
+                };
+                (window.currentHistoryData || []).forEach(o => cekOrder(Number.isFinite(o.fee_real) ? o.fee_real : (parseFloat(o.Nominal_Kotor) || 0) * 1000, o.adm_potong, o.adm_v, o.rider_uid));
+                try { allGlobalOrders.filter(o => o.status === 'assigned' || o.status === 'processing').forEach(o => cekOrder(o.fee, o.adm_potong, o.adm_v, o.rider_uid)); } catch (e) {}
+                if (nGagal) hasil.push({ efek: efekGagal, teks: `${nGagal} order potongan ADM 16%-nya tidak tercatat / tidak sesuai (lihat kartu merah di daftar order)` });
+
+                // 2) Cicilan otomatis yang dipotong hari ini (bukan potongan order)
+                let cic = 0;
+                try { (allCicilan || []).forEach(c => (c.deduction_logs || []).forEach(l => { if (l && l.date === hariIni) cic += Number(l.amount) || 0; })); } catch (e) {}
+                if (cic) hasil.push({ efek: cic, teks: 'Potongan cicilan otomatis hari ini (bukan omset order)' });
+
+                // 3) ADM tambahan 4% yang dieksekusi hari ini
+                let adm4 = 0;
+                try {
+                    const awal = new Date(); awal.setHours(0, 0, 0, 0);
+                    (adm4Laporan || []).forEach(l => Object.values(l.rincian || {}).forEach(x => {
+                        if (x && x.status === 'ok' && Number(x.at_ms) >= awal.getTime() && !x.pesan) adm4 += Number(x.potong) || 0;
+                    }));
+                } catch (e) {}
+                if (adm4) hasil.push({ efek: adm4, teks: 'ADM tambahan 4% dieksekusi hari ini (bukan omset order)' });
+
+                // 4) Rider dikeluarkan hari ini: saldonya ikut hilang dari total saldo
+                try {
+                    const kel = typeof window.krKeluarHariIni === 'function' ? window.krKeluarHariIni() : [];
+                    kel.forEach(k => { if (k.saldo) hasil.push({ efek: k.saldo, teks: `Rider ${k.nama} dikeluarkan hari ini, saldo ${rp(k.saldo)} diarsipkan (keluar dari total saldo)` }); });
+                } catch (e) {}
+                return hasil;
+            }
+
+            async function muatRinci(tgl) {
+                if (rinciMemuat) return;
+                rinciMemuat = true; rinciGalat = ''; gambar();
+                try {
+                    const [y, m, d] = tgl.split('-').map(Number);
+                    const awal = new Date(y, m - 1, d, 0, 0, 0, 0), akhir = new Date(y, m - 1, d, 23, 59, 59, 999);
+                    const snap = await getDocs(query(collection(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan'),
+                        where('created_at', '>=', awal), where('created_at', '<=', akhir)));
+                    const k = { order: 0, refund: 0, koreksi: 0, cicilan: 0, adm4: 0, tl: 0, manual: 0, lain: 0, n: 0 };
+                    snap.forEach(ds => {
+                        const x = ds.data() || {};
+                        const a = Number(x.amount) || 0, t = String(x.type || '');
+                        k.n++;
+                        if (t === 'auto_order' || t === 'manual_order') k.order += a;
+                        else if (t.indexOf('refund') === 0) k.refund += a;
+                        else if (t === 'koreksi_order') k.koreksi += a;
+                        else if (t === 'auto_cicilan') k.cicilan += a;
+                        else if (t === 'adm_tambahan') k.adm4 += a;
+                        else if (t === 'tabungan_lebaran') k.tl += a;
+                        else if (t === 'manual_add' || t === 'manual_sub' || t === 'manual_set') k.manual += a;
+                        else k.lain += a;
+                    });
+                    rinci = { tgl, k, waktu: Date.now() };
+                } catch (e) {
+                    console.warn('[Selisih] buku kas:', e);
+                    rinciGalat = String(e && (e.code || e.message) || e);
+                } finally { rinciMemuat = false; gambar(); }
+            }
+
+            let terakhir = null;   // angka terakhir dari kartu pembanding
+            function gambar() {
+                const box = document.getElementById('history-selisih-analisis');
+                if (!box) return;
+                if (!terakhir || Math.round(terakhir.selisih) === 0) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+                const { selisih, pembanding, aktual, hariIni, topUp, T } = terakhir;
+                const kurang = selisih < 0;
+                const warna = kurang ? 'rose' : 'amber';
+                const cepat = penyebabCepat(hariIni);
+                const terjelaskan = cepat.reduce((a, c) => a + c.efek, 0);
+                const sisa = selisih - terjelaskan;
+                const barisCepat = cepat.map(c => `<li class="flex justify-between gap-2 py-1 border-b border-${warna}-100 last:border-0"><span class="text-[10px] font-bold text-slate-700">${esc(c.teks)}</span><span class="text-[10px] font-black shrink-0 ${c.efek < 0 ? 'text-rose-700' : 'text-amber-700'}">${esc(rpTanda(c.efek))}</span></li>`).join('');
+
+                let htmlRinci = '';
+                if (rinci && rinci.tgl === hariIni) {
+                    const k = rinci.k;
+                    const efekOrder = (k.order + k.refund + k.koreksi) - aktual;
+                    const efekManual = k.manual + topUp;      // seharusnya 0: top up tercatat sama dengan buku kas
+                    const efekTl = k.tl - T;                  // seharusnya 0
+                    const daftar = [
+                        ['Potongan order (16%, refund & koreksi) dibanding omset order', efekOrder, 'Bila minus: ada order yang potongannya belum masuk, atau ada refund order dari hari sebelumnya.'],
+                        ['Cicilan otomatis', k.cicilan, ''],
+                        ['ADM tambahan 4%', k.adm4, ''],
+                        ['Edit saldo manual: buku kas vs catatan Top Up hari ini', efekManual, 'Bila tidak nol: ada top up / kurangi saldo yang tidak tercatat di pelacak harian.'],
+                        ['Tabungan Lebaran: buku kas vs yang dikeluarkan dari hitungan', efekTl, ''],
+                        ['Jenis potongan lain', k.lain, '']
+                    ].filter(r => Math.round(r[1]) !== 0);
+                    const total = daftar.reduce((a, r) => a + r[1], 0);
+                    const tak = selisih - total;
+                    htmlRinci = `<div class="mt-3 pt-2 border-t border-dashed border-${warna}-200">
+                        <p class="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">Rincian dari buku kas hari ini (${rinci.k.n} catatan)</p>
+                        <ul>${daftar.map(r => `<li class="py-1 border-b border-${warna}-100 last:border-0"><div class="flex justify-between gap-2"><span class="text-[10px] font-bold text-slate-700">${esc(r[0])}</span><span class="text-[10px] font-black shrink-0 ${r[1] < 0 ? 'text-rose-700' : 'text-amber-700'}">${esc(rpTanda(r[1]))}</span></div>${r[2] ? `<p class="text-[9px] text-slate-500">${esc(r[2])}</p>` : ''}</li>`).join('') || '<li class="text-[10px] text-slate-500 py-1">Semua kategori buku kas cocok.</li>'}</ul>
+                        <div class="flex justify-between gap-2 mt-1.5"><span class="text-[10px] font-black text-slate-700">Selisih di luar buku kas</span><span class="text-[10px] font-black ${Math.round(tak) ? 'text-rose-700' : 'text-emerald-700'}">${esc(rpTanda(tak))}</span></div>
+                        ${Math.round(tak) ? '<p class="text-[9px] text-slate-500 mt-0.5">Perubahan saldo yang tidak tercatat di buku kas: saldo awal hari ini salah tercatat (cek tombol pensil di kartu Pembanding), rider dikeluarkan / diaktifkan lagi, atau saldo diubah lewat aplikasi lain.</p>' : ''}
+                    </div>`;
+                } else if (rinciGalat) {
+                    htmlRinci = `<p class="text-[10px] font-bold text-rose-600 mt-2">Buku kas gagal dibaca (${esc(rinciGalat)}).</p>`;
+                }
+
+                box.classList.remove('hidden');
+                box.innerHTML = `
+                    <div class="rounded-2xl border p-4 bg-${warna}-50 border-${warna}-300">
+                        <div class="flex items-center gap-3">
+                            <div class="w-11 h-11 rounded-full bg-${warna}-500 text-white flex items-center justify-center text-lg shrink-0"><i class="fa-solid ${kurang ? 'fa-arrow-trend-down' : 'fa-arrow-trend-up'}"></i></div>
+                            <div class="min-w-0">
+                                <p class="text-[9px] font-black uppercase tracking-widest text-${warna}-800">Analisis selisih</p>
+                                <p class="text-[20px] font-black leading-tight text-${warna}-700">${esc(rp(Math.abs(selisih)))}</p>
+                                <p class="text-[11px] font-black uppercase text-${warna}-700">${kurang ? 'Kekurangan · potensi kerugian' : 'Kelebihan potongan'}</p>
+                            </div>
+                        </div>
+                        <p class="text-[10px] font-semibold text-slate-600 leading-relaxed mt-2">${kurang
+                            ? `Saldo rider hanya berkurang <b>${esc(rp(pembanding))}</b>, padahal dari order seharusnya terpotong <b>${esc(rp(aktual))}</b>. Ada potongan yang belum masuk atau saldo rider bertambah di luar Top Up.`
+                            : `Saldo rider berkurang <b>${esc(rp(pembanding))}</b>, lebih banyak dari potongan order <b>${esc(rp(aktual))}</b>. Ada potongan lain di luar omset order hari ini.`}</p>
+                        <p class="text-[9px] font-black text-slate-600 uppercase tracking-widest mt-3 mb-1">Penyebab yang terdeteksi</p>
+                        <ul>${barisCepat || '<li class="text-[10px] text-slate-500 py-1">Belum ada penyebab yang terdeteksi dari data di layar.</li>'}</ul>
+                        <div class="flex justify-between gap-2 mt-1.5"><span class="text-[10px] font-black text-slate-700">Belum terjelaskan</span><span class="text-[10px] font-black ${Math.round(sisa) ? 'text-rose-700' : 'text-emerald-700'}">${esc(rpTanda(sisa))}</span></div>
+                        ${htmlRinci}
+                        <button type="button" data-selisih="rinci" ${rinciMemuat ? 'disabled' : ''} class="w-full mt-3 py-2.5 rounded-xl bg-white border border-${warna}-300 text-${warna}-700 text-[10px] font-black uppercase">${rinciMemuat ? 'Membaca buku kas…' : (rinci && rinci.tgl === hariIni ? '<i class="fa-solid fa-rotate mr-1"></i>Analisis ulang dari buku kas' : '<i class="fa-solid fa-magnifying-glass-chart mr-1"></i>Analisis rinci dari buku kas')}</button>
+                        <p class="text-[9px] text-slate-500 mt-1">Analisis rinci membaca catatan potongan hari ini (1 read per catatan).</p>
+                    </div>`;
+            }
+
+            document.addEventListener('click', (e) => {
+                const t = e.target.closest('[data-selisih="rinci"]');
+                if (!t || !terakhir) return;
+                muatRinci(terakhir.hariIni);
+            });
+
+            const asli = window.compareOmsetAdmin;
+            if (typeof asli !== 'function') return;
+            window.compareOmsetAdmin = (aktual) => {
+                asli(aktual);
+                try {
+                    const tr = window.dailyBalanceTracker;
+                    const dateVal = document.getElementById('history-date')?.value;
+                    if (!tr || dateVal !== tr.shift_date || typeof window._currentTotalSaldo === 'undefined') { terakhir = null; gambar(); return; }
+                    const T = (tr.tl_potong && Number(tr.tl_potong[tr.shift_date])) || 0;
+                    const topUp = Number(tr.top_up) || 0;
+                    const pembanding = Math.round((Number(tr.saldo_jam_6) || 0) + topUp - (Number(window._currentTotalSaldo) || 0) - T);
+                    const akt = Math.round(Number(aktual) || 0);
+                    if (rinci && rinci.tgl !== tr.shift_date) rinci = null;
+                    terakhir = { selisih: pembanding - akt, pembanding, aktual: akt, hariIni: tr.shift_date, topUp, T };
+                    gambar();
+                } catch (e) { console.warn('[Selisih]', e); }
+            };
+        })();
+
+        // ===================== BADGE DATA BARU BELUM DIBUKA (18 Okt 2026) =====================
+        // Menghitung data yang masuk SETELAH halaman terkait terakhir dibuka di HP ini:
+        // - Ulasan Pelanggan : ulasan_rider + masukan_pelanggan  -> badge di tile & tombol Menu
+        // - Resto Tutup      : laporan_resto_tutup                -> badge di tombol Tutup
+        // Hemat: tiap sumber 1 listener, hanya data yang lebih baru dari "terakhir dibuka" (maks 30),
+        // lalu 1 read per data baru. Tanda "terakhir dibuka" disimpan di HP admin (localStorage).
+        (function badgeDataBaru() {
+            const P = firebaseConfig.projectId;
+            const col = (n) => collection(db, 'artifacts', P, 'public', 'data', n);
+            const MAKS = 30;
+            const sumber = {
+                ulasan:  { col: 'ulasan_rider',        field: 'dibuat_at',  hal: 'ulasan' },
+                masukan: { col: 'masukan_pelanggan',   field: 'dibuat_at',  hal: 'ulasan' },
+                resto:   { col: 'laporan_resto_tutup', field: 'created_at', hal: 'resto-tutup' }
+            };
+            const keMs = (t) => (t && typeof t.toMillis === 'function') ? t.toMillis() : (t && typeof t.seconds === 'number' ? t.seconds * 1000 : 0);
+            const bacaDilihat = (k) => { try { const v = Number(localStorage.getItem('adm_dilihat_' + k)); return isFinite(v) && v > 0 ? v : 0; } catch (e) { return 0; } };
+            const simpanDilihat = (k, ms) => { try { localStorage.setItem('adm_dilihat_' + k, String(ms)); } catch (e) {} };
+            const st = {};   // k -> { dilihat, waktu: [ms...] , penuh }
+
+            // ---- jumlah per sumber untuk badge tombol Menu (ulasan + tabungan lebaran) ----
+            const nMenu = {};
+            window.adBaruSet = (k, n) => {
+                if (!/^[a-z]{1,12}$/.test(String(k))) return;
+                nMenu[k] = Math.max(0, Math.floor(Number(n) || 0));
+                const total = Object.values(nMenu).reduce((a, b) => a + b, 0);
+                const el = pasangBadge('nav-lainnya', 'baru-badge-menu', true);
+                if (el) { el.textContent = total > 99 ? '99+' : String(total); el.classList.toggle('hidden', !total); }
+            };
+            function pasangBadge(idInduk, id, diDalamDiv) {
+                let el = document.getElementById(id);
+                if (el) return el;
+                const tombol = document.getElementById(idInduk);
+                if (!tombol) return null;
+                const induk = (diDalamDiv && tombol.querySelector(':scope > div.relative')) || tombol;
+                induk.classList.add('relative');
+                el = document.createElement('span');
+                el.id = id;
+                el.className = 'hidden adm-baru-bdg';
+                el.setAttribute('aria-live', 'polite');
+                induk.appendChild(el);
+                return el;
+            }
+            (function gaya() {
+                const css = document.createElement('style');
+                css.textContent = `
+                    .adm-baru-bdg { position: absolute; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #C53030; color: #fff; font-size: 10px; font-weight: 900; line-height: 18px; text-align: center; border: 2px solid #fff; z-index: 3; pointer-events: none; }
+                    #baru-badge-menu { bottom: -6px; right: -12px; }
+                    #nav-resto-tutup #baru-badge-resto { top: 2px; right: 18%; }
+                    #btn-menu-ulasan #baru-badge-ulasan { top: 6px; right: 6px; }`;
+                document.head.appendChild(css);
+            })();
+
+            const halTerbuka = (hal) => { const el = document.getElementById('page-' + hal); return !!el && !el.classList.contains('hidden-page'); };
+            function hitung(k) { const s = st[k]; return s ? s.waktu.filter(ms => ms > s.dilihat).length : 0; }
+            function tampil() {
+                const nUl = hitung('ulasan') + hitung('masukan');
+                const penuhUl = (st.ulasan && st.ulasan.penuh) || (st.masukan && st.masukan.penuh);
+                const bU = pasangBadge('btn-menu-ulasan', 'baru-badge-ulasan', false);
+                if (bU) { bU.textContent = penuhUl ? MAKS + '+' : String(nUl); bU.classList.toggle('hidden', !nUl); bU.title = nUl + ' ulasan/masukan baru'; }
+                window.adBaruSet('ulasan', nUl);
+                const nR = hitung('resto');
+                const bR = pasangBadge('nav-resto-tutup', 'baru-badge-resto', false);
+                if (bR) { bR.textContent = (st.resto && st.resto.penuh) ? MAKS + '+' : String(nR); bR.classList.toggle('hidden', !nR); bR.title = nR + ' laporan resto tutup baru'; }
+            }
+            // Tandai sudah dibaca: pakai waktu data terbaru yang sudah terlihat (bukan jam HP),
+            // jadi data yang masuk sesudahnya tetap terhitung baru walau jam HP admin tidak tepat.
+            function tandaiDibaca(hal) {
+                Object.keys(sumber).forEach(k => {
+                    if (sumber[k].hal !== hal || !st[k]) return;
+                    const maks = st[k].waktu.reduce((a, b) => Math.max(a, b), 0);
+                    if (maks > st[k].dilihat) { st[k].dilihat = maks; simpanDilihat(k, maks); }
+                });
+                tampil();
+            }
+            function mulai() {
+                Object.keys(sumber).forEach(k => {
+                    if (st[k]) return;
+                    let dilihat = bacaDilihat(k);
+                    if (!dilihat) { dilihat = Date.now() - 24 * 60 * 60 * 1000; simpanDilihat(k, dilihat); }   // pertama kali: 24 jam terakhir
+                    st[k] = { dilihat, waktu: [], penuh: false };
+                    const q = query(col(sumber[k].col), where(sumber[k].field, '>', __fsSemua.Timestamp.fromMillis(dilihat)), orderBy(sumber[k].field, 'desc'), limit(MAKS));
+                    onSnapshot(q, (snap) => {
+                        st[k].waktu = snap.docs.map(d => keMs(d.get(sumber[k].field))).filter(ms => ms > 0);
+                        st[k].penuh = snap.size >= MAKS && hitung(k) >= MAKS;
+                        if (halTerbuka(sumber[k].hal)) tandaiDibaca(sumber[k].hal); else tampil();
+                    }, (e) => console.warn('[Badge] ' + k + ':', e && (e.code || e.message)));
+                });
+            }
+            onAuthStateChanged(auth, (u) => { if (u && window.roleFromEmail(u.email)) mulai(); });
+
+            const asliSwitch = window.switchPage;
+            window.switchPage = (page) => {
+                const hasil = asliSwitch(page);
+                if (page === 'ulasan' || page === 'resto-tutup') tandaiDibaca(page);
+                return hasil;
+            };
         })();
 
 </script>
@@ -19895,12 +20767,92 @@
 
     window.konfirmasiKeluar = { tampil: tampil, tutup: tutup, terbuka: terbuka, pasangPenjaga: pasangPenjaga };
 
+    // ---- 18 Okt 2026: tombol kembali ----
+    // 1) Ada popup / jendela terbuka -> tutup dulu.
+    // 2) Di halaman selain Beranda -> kembali ke halaman sebelumnya (Menu / Beranda), TIDAK keluar.
+    // 3) Di Beranda -> tekan kembali 2x dalam 2 detik baru keluar.
+    var MODAL_STATIS = ['custom-modal', 'edit-modal', 'saldo-modal', 'riwayat-saldo-modal', 'riwayat-edit-global-modal',
+        'riwayat-jaket-modal', 'cicilan-modal', 'tabungan-modal', 'riwayat-tabungan-modal', 'riwayat-global-tabungan-modal',
+        'target-modal', 'stats-shift-modal', 'edit-rider-modal', 'suspend-modal', 'modal-impor', 'adm4-popup', 'uang-modal'];
+    var MODAL_DINAMIS = ['konfirmasi-besar', 'dialog-libur', 'tl-editor', 'tl-hapus', 'panel-izin-login'];
+    var HAL_UTAMA = ['pending', 'active', 'history', 'resto-tutup', 'lainnya'];
+    function kelihatan(el) { return !!el && !el.classList.contains('hidden') && !el.hidden && el.offsetParent !== null; }
+    function tutupJendela() {
+        var pin = document.getElementById('adm4-pin');
+        if (pin && !pin.classList.contains('hidden')) { if (typeof window.tutupPinAdm4 === 'function') window.tutupPinAdm4(); return true; }
+        var sukses = document.getElementById('tp-sukses');
+        if (sukses && !sukses.classList.contains('hidden')) { if (typeof window.tutupTopupSukses === 'function') window.tutupTopupSukses(); return true; }
+        var sheet = document.getElementById('ad-sheet-baru');
+        if (sheet && !sheet.hidden) { if (typeof window.adTutupBaruMasuk === 'function') window.adTutupBaruMasuk(); return true; }
+        for (var i = 0; i < MODAL_DINAMIS.length; i++) { var d = document.getElementById(MODAL_DINAMIS[i]); if (d) { d.remove(); return true; } }
+        for (var j = 0; j < MODAL_STATIS.length; j++) {
+            var m = document.getElementById(MODAL_STATIS[j]);
+            if (m && !m.classList.contains('hidden')) { m.classList.add('hidden'); m.classList.remove('flex'); return true; }
+        }
+        return false;
+    }
+    function halamanAktif() {
+        var semua = document.querySelectorAll('main[id^="page-"]:not(.hidden-page)');
+        for (var i = 0; i < semua.length; i++) {
+            var luar = semua[i].parentElement && semua[i].parentElement.closest('main[id^="page-"]');
+            if (!luar) return semua[i].id.slice(5);
+        }
+        return 'dispatch';
+    }
+    function kembaliSatuLangkah() {
+        var login = document.getElementById('login-overlay');
+        if (login && !login.classList.contains('hidden')) return false;   // di layar login = seperti Beranda
+        var hal = halamanAktif();
+        if (hal === 'dispatch') {
+            // Beranda di HP: dari halaman Antrean / Pending, kembali ke Input dulu
+            if ((document.body.classList.contains('ab-hal2') || document.body.classList.contains('ab-hal3')) && typeof window.abKeHalaman === 'function' && window.abKeHalaman(0)) return true;
+            return false;
+        }
+        // Kelola Rider / Ulasan: kalau sedang di detail / form, kembali ke daftar dulu
+        var krBack = document.querySelector('#kr-root .kr-back');
+        if (krBack && kelihatan(krBack)) { krBack.click(); return true; }
+        var tx = window.tempTx || {};
+        var tujuan = 'lainnya';
+        if (HAL_UTAMA.indexOf(hal) !== -1) tujuan = 'dispatch';
+        else if (hal === 'topup-daftar') tujuan = 'saldo';
+        else if (hal === 'topup-form') tujuan = 'topup-daftar';
+        else if (hal === 'topup-cek') tujuan = 'topup-form';
+        else if (hal === 'topup-pin') tujuan = 'topup-cek';
+        else if (hal === 'input-nominal') tujuan = tx.module || 'lainnya';
+        else if (hal === 'konfirmasi-nominal') tujuan = tx.returnPage || 'input-nominal';
+        if (typeof window.switchPage === 'function') window.switchPage(tujuan);
+        window.scrollTo(0, 0);
+        return true;
+    }
+    var tekanTerakhir = 0, tostEl = null, tostTimer = 0;
+    function tostKeluar() {
+        if (!tostEl) {
+            tostEl = document.createElement('div');
+            tostEl.setAttribute('role', 'status');
+            tostEl.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:2147483600;background:#111827;color:#fff;padding:10px 16px;border-radius:999px;font:700 12px sans-serif;white-space:nowrap;box-shadow:0 8px 20px rgba(0,0,0,.3);';
+            tostEl.textContent = 'Tekan kembali sekali lagi untuk keluar';
+        }
+        document.body.appendChild(tostEl);
+        clearTimeout(tostTimer);
+        tostTimer = setTimeout(function () { if (tostEl) tostEl.remove(); }, 2000);
+    }
+
     if (MANDIRI) {
         var tangani = function () {
             if (sedangKeluar) return true;
             pasangPenjaga();                 // tetap di aplikasi dulu
-            if (terbuka()) tutup();          // tombol kembali saat popup terbuka = Batal
-            else tampil();
+            if (terbuka()) { tutup(); return true; }
+            if (tutupJendela()) { tekanTerakhir = 0; return true; }
+            if (kembaliSatuLangkah()) { tekanTerakhir = 0; return true; }
+            var kini = Date.now();
+            if (kini - tekanTerakhir < 2000) {   // tekan kedua di Beranda -> keluar
+                tekanTerakhir = 0;
+                if (tostEl) tostEl.remove();
+                keluar();
+            } else {
+                tekanTerakhir = kini;
+                tostKeluar();
+            }
             return true;
         };
         pasangPenjaga();
