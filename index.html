@@ -23261,16 +23261,18 @@ window.PembuatQR = PembuatQR;
         });
     })();
     </script>
-<!-- ================= GETAR HALUS SAAT TOMBOL DIKETUK (17 Okt 2026) =================
-     Setiap tombol / menu / kartu yang bisa diketuk memberi getaran singkat (30 ms).
-     Bisa dimatikan rider lewat menu samping: "Getar Tombol".
+<!-- ================= GETAR SAAT TOMBOL DIKETUK (17 Okt 2026, diperkuat 18 Okt 2026) =================
+     Setiap tombol / menu / kartu yang bisa diketuk memberi getaran.
+     Kuat = 150 ms (5x lebih lama dari sebelumnya, terasa jauh lebih kuat), Lemah = 30 ms (seperti dulu).
+     Rider bisa memilih Kuat / Lemah / Mati lewat menu samping: "Getar Tombol".
      Tidak memakai data dari luar, tidak membaca/menulis Firebase. -->
 <script>
 (function () {
     'use strict';
-    var KUNCI = 'rider_getar_tombol';     // 'mati' = dimatikan rider
-    var DURASI_MS = 30;                    // 15 ms terlalu pendek untuk motor getar banyak HP Android
-    var JEDA_MS = 90;                      // cegah getar dobel (label + input memicu 2 klik)
+    var KUNCI = 'rider_getar_tombol';     // 'kuat' (bawaan) / 'lemah' / 'mati'
+    // Web tidak bisa mengatur kekuatan motor getar, hanya lamanya. Makin lama = makin terasa kuat.
+    var DURASI = { kuat: 150, lemah: 30 };
+    var JEDA_MS = 200;                     // cegah getar dobel (label + input memicu 2 klik); > durasi terlama
     var terakhir = 0;
 
     // Jalur 1 (paling terasa & tidak butuh izin): getar bawaan Android lewat APK,
@@ -23284,16 +23286,23 @@ window.PembuatQR = PembuatQR;
     var BISA_DIKETUK = 'button, a[href], [role="button"], [onclick], label, select, ' +
         'input[type="checkbox"], input[type="radio"], .menu-btn, .rv-dp, .rv-pill, .rv-tautan, .rv-ct-hari, .tbk-tab';
 
-    var aktif = function () { try { return localStorage.getItem(KUNCI) !== 'mati'; } catch (e) { return true; } };
+    // Nilai lama 'aktif' (sebelum 18 Okt 2026) dianggap 'kuat'. Nilai lain yang tidak dikenal juga 'kuat'.
+    var mode = function () {
+        var v = '';
+        try { v = localStorage.getItem(KUNCI) || ''; } catch (e) {}
+        return (v === 'mati' || v === 'lemah') ? v : 'kuat';
+    };
+    var aktif = function () { return mode() !== 'mati'; };
 
     function getar() {
         var kini = Date.now();
         if (kini - terakhir < JEDA_MS) return;
         terakhir = kini;
+        var ms = DURASI[mode()] || DURASI.kuat;
         if (adaNative()) {
-            try { window.AndroidInterface.getarHalus(DURASI_MS); return; } catch (e) {}
+            try { window.AndroidInterface.getarHalus(ms); return; } catch (e) {}
         }
-        try { if (navigator.vibrate) navigator.vibrate(DURASI_MS); } catch (e) {}
+        try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {}
     }
 
     document.addEventListener('click', function (e) {
@@ -23324,12 +23333,15 @@ window.PembuatQR = PembuatQR;
         var teks = document.createElement('span');
         b.appendChild(bulat);
         b.appendChild(teks);
-        var segarkan = function () { teks.textContent = 'Getar Tombol: ' + (aktif() ? 'Aktif' : 'Mati'); };
+        var NAMA = { kuat: 'Kuat', lemah: 'Lemah', mati: 'Mati' };
+        var BERIKUT = { kuat: 'lemah', lemah: 'mati', mati: 'kuat' };   // ketuk berulang: Kuat -> Lemah -> Mati -> Kuat
+        var segarkan = function () { teks.textContent = 'Getar Tombol: ' + NAMA[mode()]; };
         segarkan();
         b.addEventListener('click', function () {
-            try { localStorage.setItem(KUNCI, aktif() ? 'mati' : 'aktif'); } catch (e) {}
+            var baru = BERIKUT[mode()];
+            try { localStorage.setItem(KUNCI, baru); } catch (e) {}
             segarkan();
-            if (aktif()) { terakhir = 0; getar(); } // contoh getaran saat dinyalakan
+            if (baru !== 'mati') { setTimeout(function () { terakhir = 0; getar(); }, 220); } // contoh getaran sesuai pilihan baru
         });
         acuan.insertAdjacentElement('afterend', b);
     }
