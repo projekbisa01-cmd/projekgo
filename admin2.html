@@ -2091,7 +2091,7 @@
                             <label>Nama rider (otomatis)<input id="tf-fNama" readonly tabindex="-1" placeholder="terisi dari kode"></label>
                             <label>Nominal (Rp)<input id="tf-fNominal" inputmode="numeric" required maxlength="13" placeholder="0" autocomplete="off"></label>
                             <label>Nama pelanggan<input id="tf-fPel" required minlength="2" maxlength="80" autocomplete="off"></label>
-                            <label>Jam transfer (di bukti)<input id="tf-fJam" data-tfjam="1" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="ketik 2030 &rarr; 20:30" required></label>
+                            <label>Jam transfer (di bukti)<input id="tf-fJam" data-tfjam="1" maxlength="30" autocomplete="off" placeholder="2030 &rarr; 20:30, atau tulisan" required></label>
                             <div><button class="pri" type="button" id="tf-fBtn" style="width:100%;margin-bottom:8px">+ Tambah ke daftar</button></div>
                         </div>
                         <p class="hint" id="tf-fHint" style="margin:0"></p>
@@ -20922,6 +20922,22 @@
                 const h = d.length <= 2 ? Number(d) : Number(d.slice(0, d.length - 2)), m = d.length <= 2 ? 0 : Number(d.slice(-2));
                 return (h <= 23 && m <= 59) ? pad(h) + ':' + pad(m) : '';
             };
+            // Jam di bukti boleh angka (otomatis 24 jam) atau tulisan (mis. "pagi", "tidak ada jam").
+            const adaHuruf = v => /[A-Za-z]/.test(String(v || ''));
+            const jamT = t => t && t.waktuTransfer ? jam(t.waktuTransfer) : ((t && t.jamTeks) || '-');
+            function bacaJam(v, tgl) {
+                const sv = String(v || '').trim().replace(/\s+/g, ' ');
+                if (!sv) return {err: 'Jam transfer wajib diisi: angka (mis. 2030) atau tulisan (mis. pagi).'};
+                if (adaHuruf(sv)) {
+                    if (!/^[A-Za-z0-9 .:\/-]{1,30}$/.test(sv)) return {err: 'Tulisan jam maksimal 30 huruf (huruf, angka, spasi, . : / -).'};
+                    return {ms: null, teks: sv};
+                }
+                const n = normJam(sv);
+                if (!n) return {err: 'Jam tidak valid. Ketik 4 angka format 24 jam, mis. 2030 = 20:30, 0915 = 09:15, atau tulis keterangan.'};
+                const ms = msDari(tgl, n);
+                if (ms > Date.now() + 5 * 60000) return {err: 'Jam transfer tidak boleh di masa depan.'};
+                return {ms: ms, teks: ''};
+            }
             const short = e => String(e || '').split('@')[0];
             const normKode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
             const normNama = s => String(s || '').replace(/\s+/g, ' ').trim();
@@ -20929,7 +20945,7 @@
             const sum = a => a.reduce((x, t) => x + (t.nominal || 0), 0);
             const slug = s => normNama(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
             const isLate = t => (t.status === 'siapcek' || t.status === 'dicek') && t.dicatatAt && (Date.now() - t.dicatatAt) > TERLAMBAT_JAM * 36e5;
-            const ringkas = t => ('No ' + t.no + ' ' + t.kodeRider + ' ' + t.namaRider + ' ' + rp(t.nominal) + ' / ' + t.pelanggan + ' / ' + jam(t.waktuTransfer)).slice(0, 380);
+            const ringkas = t => ('No ' + t.no + ' ' + t.kodeRider + ' ' + t.namaRider + ' ' + rp(t.nominal) + ' / ' + t.pelanggan + ' / ' + jamT(t)).slice(0, 380);
             const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
             const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 
@@ -20979,7 +20995,7 @@
                 const a = 'name="' + esc(f.name) + '" ' + (f.req ? 'required ' : '') +
                     (f.min != null ? (num ? 'min="' + f.min + '" ' : 'minlength="' + f.min + '" ') : '') +
                     (f.max != null ? (num ? 'max="' + f.max + '" ' : 'maxlength="' + f.max + '" ') : '') +
-                    (f.list ? 'list="' + esc(f.list) + '" ' : '') + (f.jam ? 'data-tfjam="1" inputmode="numeric" maxlength="5" placeholder="20:30" ' : '');
+                    (f.list ? 'list="' + esc(f.list) + '" ' : '') + (f.jam ? 'data-tfjam="1" maxlength="30" placeholder="2030 atau tulisan" ' : '');
                 if (f.type === 'textarea') return '<label>' + esc(f.label) + '<textarea ' + a + ' rows="2">' + esc(f.value || '') + '</textarea></label>';
                 return '<label>' + esc(f.label) + '<input ' + a + ' type="' + esc(f.type || 'text') + '" value="' + esc(f.type === 'password' ? '' : (f.value || '')) + '" autocomplete="' + (f.type === 'password' ? 'new-password' : 'off') + '"></label>';
             }
@@ -21131,7 +21147,7 @@
                 const last = proc.length ? proc[proc.length - 1] : null;
                 g('tf-terakhir').innerHTML = last
                     ? '<div class="note"><h3>Data terakhir yang sudah berhasil diproses — lanjutkan input SESUDAH bukti ini di grup WA</h3><div class="kv">' +
-                      [['No', last.no], ['Kode rider', last.kodeRider], ['Nama rider', last.namaRider], ['Nominal', rp(last.nominal)], ['Pelanggan', last.pelanggan], ['Jam transfer', jam(last.waktuTransfer)]].map(p => '<span>' + esc(p[0]) + ': <b>' + esc(p[1]) + '</b></span>').join('') + '</div></div>'
+                      [['No', last.no], ['Kode rider', last.kodeRider], ['Nama rider', last.namaRider], ['Nominal', rp(last.nominal)], ['Pelanggan', last.pelanggan], ['Jam transfer', jamT(last)]].map(p => '<span>' + esc(p[0]) + ': <b>' + esc(p[1]) + '</b></span>').join('') + '</div></div>'
                     : '<div class="note info"><h3>Belum ada data yang diproses untuk tanggal ini</h3><span class="hint">Mulai dari bukti pertama di grup WA tanggal ini. Nomor mulai dari 1.</span></div>';
                 const c1 = by('dicatat'), c2 = by('siapcek'), c3 = by('dicek'), c4 = by('diteruskan');
                 const d2 = ds.find(d => d.phase === 2), d3 = ds.find(d => d.phase === 3), d4 = ds.find(d => d.phase === 4);
@@ -21142,12 +21158,12 @@
                 g('tf-list1').innerHTML = c1.length
                     ? '<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><b>Daftar yang sedang dicatat (' + c1.length + ' transaksi, ' + esc(rp(sum(c1))) + ')</b><button type="button" class="ok big" data-act="selesai">Selesai ✓ lanjut ke langkah 2</button></div>' +
                       '<div class="scroll"><table><thead><tr><th>No</th><th>Kode</th><th>Nama rider</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam</th><th></th></tr></thead><tbody>' +
-                      c1.map(t => '<tr><td class="no">' + esc(t.no) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td>' + esc(jam(t.waktuTransfer)) + '</td><td class="r" style="white-space:nowrap"><button type="button" class="sm" data-act="ubah" data-id="' + esc(t.id) + '">Ubah</button> <button type="button" class="sm bad" data-act="batal" data-id="' + esc(t.id) + '">Batal</button></td></tr>').join('') + '</tbody></table></div>'
+                      c1.map(t => '<tr><td class="no">' + esc(t.no) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td>' + esc(jamT(t)) + '</td><td class="r" style="white-space:nowrap"><button type="button" class="sm" data-act="ubah" data-id="' + esc(t.id) + '">Ubah</button> <button type="button" class="sm bad" data-act="batal" data-id="' + esc(t.id) + '">Batal</button></td></tr>').join('') + '</tbody></table></div>'
                     : '<p class="hint" style="margin:0">Daftar kosong. Tambahkan bukti dari grup WA, lalu tekan <b>Selesai ✓</b> agar lanjut ke langkah 2. Setelah itu bisa langsung input lagi; nomornya melanjutkan.</p>';
                 renderStep2(d2); renderStep3(d3); renderStep4(d4);
                 const prob = T.filter(t => t.status === 'masalah' || t.status === 'selisih');
                 g('tf-tindak').innerHTML = prob.length ? '<div class="card" style="border-color:#f5b5c0"><h2>⚠ Perlu tindak lanjut owner <small>' + prob.length + ' transaksi</small></h2><ol class="items">' + prob.map(t => itemHtml(t, {state: 'prob', body:
-                    '<div class="l1"><span class="uid">' + esc(t.kodeRider) + ' · ' + esc(t.namaRider) + '</span><span class="nom">' + esc(rp(t.nominal)) + '</span>' + badge(t) + '</div><div class="l2">' + esc(t.pelanggan) + ' · ' + esc(jam(t.waktuTransfer)) + '</div>' +
+                    '<div class="l1"><span class="uid">' + esc(t.kodeRider) + ' · ' + esc(t.namaRider) + '</span><span class="nom">' + esc(rp(t.nominal)) + '</span>' + badge(t) + '</div><div class="l2">' + esc(t.pelanggan) + ' · ' + esc(jamT(t)) + '</div>' +
                     (t.status === 'masalah' ? '<div class="l2"><b>' + esc(t.masalahFase === 'sesudah' ? 'UANG SUDAH TERKIRIM di BCA, tapi ada yang beda' : (t.masalahFase === 'sebelum' ? 'Belum ditransfer (dihentikan sebelum password)' : 'Ditemukan saat cek UID & nominal')) + ':</b> ' + esc(t.masalahCatatan) + '</div>'
                       : '<div class="l2"><b>Riwayat BCA: ' + esc(rp(t.nominalBca)) + '</b> (catatan ' + esc(rp(t.nominal)) + ', selisih ' + esc(rp(t.nominalBca - t.nominal)) + ')</div>') +
                     '<div class="l2">oleh ' + esc(pNama(t.masalahPetugas || t.akhirPetugas)) + ' ' + esc(fmtWaktu(t.masalahAt || t.akhirAt)) + '</div>' +
@@ -21174,7 +21190,7 @@
                         const a = act && t.id === act.id;
                         const state = t.status === 'siapcek' ? '' : (t.status === 'masalah' ? 'prob' : 'done');
                         return itemHtml(t, {aktif: a, state: state, body:
-                            '<div class="l1"><span class="uid">' + esc(t.kodeRider) + '</span><span class="nom">' + esc(rp(t.nominal)) + '</span>' + late(t) + (t.diperbaikiDari ? ' <span class="badge b-dicatat">diperbaiki</span>' : '') + '</div><div class="l2">' + esc(t.namaRider) + ' · ' + esc(t.pelanggan) + ' · ' + esc(jam(t.waktuTransfer)) + '</div>',
+                            '<div class="l1"><span class="uid">' + esc(t.kodeRider) + '</span><span class="nom">' + esc(rp(t.nominal)) + '</span>' + late(t) + (t.diperbaikiDari ? ' <span class="badge b-dicatat">diperbaiki</span>' : '') + '</div><div class="l2">' + esc(t.namaRider) + ' · ' + esc(t.pelanggan) + ' · ' + esc(jamT(t)) + '</div>',
                             panel: a ? '<div class="panel"><label class="cb"><input type="checkbox" data-act="c2box" data-id="' + esc(t.id) + '"' + (S.c2 === t.id ? ' checked' : '') + '> Bukti di grup: uang ditransfer ke <b>QRIS ProjekGo</b> (Masuk ProjekGo)</label>' +
                                 '<div class="acts"><button type="button" class="pri big" data-act="c2ok" data-id="' + esc(t.id) + '"' + (S.c2 === t.id ? '' : ' disabled') + '>✓ Cocok, sudah ditandai di grup</button><button type="button" class="sm" data-act="c2fix" data-id="' + esc(t.id) + '">✎ Salah, perbaiki</button><button type="button" class="sm bad" data-act="masalah" data-fase="cek" data-id="' + esc(t.id) + '">⚠ Masalah</button></div></div>' : ''});
                     }).join('') + '</ol>';
@@ -21257,7 +21273,7 @@
                 const list = histFiltered(), s = summarize(list);
                 if (!list.length) { g('tf-hist').innerHTML = '<div class="empty">Tidak ada data.</div>'; return; }
                 g('tf-hist').innerHTML = '<table><thead><tr><th>Tanggal</th><th>No</th><th>Jam</th><th>Kode</th><th>Nama rider</th><th class="r">Nominal</th><th>Pelanggan</th><th class="c">Masuk ProjekGo</th><th>Ditransfer</th><th>Cek akhir</th><th>Petugas</th><th></th></tr></thead><tbody>' +
-                    list.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td>' + esc(t.tanggal) + '</td><td class="no">' + esc(t.no) + '</td><td>' + esc(jam(t.waktuTransfer)) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td class="c">' + (t.masukProjekgo ? '&#10003;' : '') + '</td><td>' +
+                    list.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td>' + esc(t.tanggal) + '</td><td class="no">' + esc(t.no) + '</td><td>' + esc(jamT(t)) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td class="c">' + (t.masukProjekgo ? '&#10003;' : '') + '</td><td>' +
                         (t.diteruskanAt ? esc(jam(t.diteruskanAt)) + ' ' + esc(pNama(t.diteruskanPetugas)) : (t.status === 'batal' ? 'BATAL' : '<i>belum</i>')) + '</td><td>' + (t.status === 'cocok' ? '&#10003; cocok' : t.status === 'selisih' ? 'SELISIH ' + esc(rp(t.nominalBca)) : t.status === 'beres' ? 'selisih, beres' : t.status === 'masalah' ? 'MASALAH' : '') + '</td><td>' + esc(pNama(t.dicatatPetugas)) + '</td><td>' +
                         (S.role === 'pemilik' && t.status !== 'batal' ? '<button type="button" class="sm" data-act="ubah" data-id="' + esc(t.id) + '">Koreksi</button>' : '') + '</td></tr>').join('') +
                     '<tr><td colspan="5"><b>Total</b></td><td class="r"><b>' + esc(rp(sum(s.nb))) + '</b></td><td colspan="6">ditransfer: ' + esc(rp(sum(s.tf))) + '</td></tr></tbody></table>';
@@ -21285,13 +21301,12 @@
             const logOp = (aksi, tiketId, alasan, sebelum, sesudah, oleh) => ({op: 'set', col: C.log, data: {aksi: aksi, tiketId: tiketId || '', oleh: oleh || S.me, waktu: NOW, alasan: String(alasan || '').slice(0, 300), sebelum: String(sebelum || '').slice(0, 400), sesudah: String(sesudah || '').slice(0, 400)}});
             const findT = id => S.tiket.find(x => x.id === id) || S.hist.find(x => x.id === id) || S.pend.find(x => x.id === id);
             const up = (t, data) => ({op: 'update', col: C.tiket, id: t.id, data: data});
-            function validTransaksi(kode, nominal, pel, waktu) {
+            function validTransaksi(kode, nominal, pel, J) {
                 const r = S.riders.find(x => x.id === kode);
                 if (!r) return 'Kode transfer rider belum ada di daftar. Tambahkan dulu lewat tombol "+ Tambah kode".';
                 if (!(nominal > 0) || nominal > MAX_NOMINAL || Math.floor(nominal) !== nominal) return 'Nominal harus angka bulat antara 1 dan ' + MAX_NOMINAL.toLocaleString('id-ID') + '.';
                 if (pel.length < 2 || pel.length > 80) return 'Nama pelanggan 2 sampai 80 huruf.';
-                if (!waktu || isNaN(waktu)) return 'Jam transfer tidak valid. Ketik 4 angka format 24 jam, mis. 2030 = 20:30, 0915 = 09:15.';
-                if (waktu > Date.now() + 5 * 60000) return 'Jam transfer tidak boleh di masa depan.';
+                if (J && J.err) return J.err;
                 return '';
             }
             function cekLokal(t, status) { if (!t || t.status !== status) { toast('Data sudah berubah. Coba lagi.', 'bad'); return false; } return needP(); }
@@ -21383,7 +21398,7 @@
                         {name: 'alasan', label: 'Apa yang salah?', type: 'textarea', req: 1, min: 3, max: 150}]});
                     if (!v) return;
                     const kode = normKode(v.kode), nominal = Number(v.nominal), r = S.riders.find(x => x.id === kode);
-                    const bad = validTransaksi(kode, nominal, t.pelanggan, t.waktuTransfer);
+                    const bad = validTransaksi(kode, nominal, t.pelanggan, null);
                     if (bad) return toast(bad, 'bad');
                     if (kode === t.kodeRider && nominal === t.nominal) return toast('Tidak ada yang diubah. Kalau sudah benar, pakai tombol Cocok.', 'bad');
                     const dari = (t.kodeRider + ' ' + rp(t.nominal) + ' — ' + v.alasan).slice(0, 200);
@@ -21469,14 +21484,14 @@
                         {name: 'kode', label: 'Kode rider', value: t.kodeRider, list: 'tf-dlRider', req: 1, max: 10},
                         {name: 'nominal', label: 'Nominal (Rp)', value: String(t.nominal), type: 'number', min: 1, max: MAX_NOMINAL, req: 1},
                         {name: 'pel', label: 'Nama pelanggan', value: t.pelanggan, req: 1, min: 2, max: 80},
-                        {name: 'jam', label: 'Jam transfer (24 jam, mis. 2030)', value: jam(t.waktuTransfer), jam: 1, req: 1},
+                        {name: 'jam', label: 'Jam transfer (angka 24 jam mis. 2030, atau tulisan)', value: t.waktuTransfer ? jam(t.waktuTransfer) : (t.jamTeks || ''), jam: 1, req: 1},
                         {name: 'alasan', label: 'Alasan perubahan', type: 'textarea', req: 1, min: 3, max: 300}]});
                     if (!v) return;
-                    const kode = normKode(v.kode), nominal = Number(v.nominal), pel = normNama(v.pel), waktu = msDari(t.tanggal, normJam(v.jam));
-                    const bad = validTransaksi(kode, nominal, pel, waktu);
+                    const kode = normKode(v.kode), nominal = Number(v.nominal), pel = normNama(v.pel), J = bacaJam(v.jam, t.tanggal);
+                    const bad = validTransaksi(kode, nominal, pel, J);
                     if (bad) return toast(bad, 'bad');
                     const r = S.riders.find(x => x.id === kode);
-                    const after = {kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: waktu};
+                    const after = {kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks};
                     const data = Object.assign({}, after, locked ? {diubahOleh: S.me, diubahAt: NOW} : st('diubah'));
                     await B.commit([up(t, data), logOp(locked ? 'koreksi' : 'ubah', t.id, v.alasan, ringkas(t), ringkas(Object.assign({no: t.no}, after)))]);
                     toast('Perubahan disimpan dan dicatat di log'); await reloadHist();
@@ -21514,11 +21529,12 @@
                 if (c && c.dataset && c.dataset.act === 'c2box') { S.c2 = c.checked ? c.dataset.id : ''; renderKerja(); }
             });
             // isian jam: ketik angka, titik dua muncul sendiri
-            PAGE.addEventListener('input', ev => { const el = ev.target; if (el && el.dataset && el.dataset.tfjam) { const v = ketikJam(el.value); if (v !== el.value) el.value = v; el.setCustomValidity(''); } });
+            PAGE.addEventListener('input', ev => { const el = ev.target; if (el && el.dataset && el.dataset.tfjam) { if (!adaHuruf(el.value)) { const v = ketikJam(el.value); if (v !== el.value) el.value = v; } el.setCustomValidity(''); } });
             PAGE.addEventListener('focusout', ev => {
                 const el = ev.target; if (!el || !el.dataset || !el.dataset.tfjam || !el.value) return;
+                if (adaHuruf(el.value)) { el.value = el.value.trim().replace(/\s+/g, ' '); el.setCustomValidity(''); return; }   // tulisan: dibiarkan apa adanya
                 const n = normJam(el.value);
-                if (n) { el.value = n; el.setCustomValidity(''); } else el.setCustomValidity('Jam tidak valid. Contoh: 2030 = 20:30');
+                if (n) { el.value = n; el.setCustomValidity(''); } else el.setCustomValidity('Jam tidak valid. Contoh: 2030 = 20:30, atau tulis keterangan');
             });
 
             /* ---------- form catat (langkah 1) ---------- */
@@ -21530,12 +21546,12 @@
                 if (!needP()) return;
                 const tgl = S.tgl;
                 if (!izinOk(tgl)) return toast('Tanggal ini belum disetujui owner. Tekan "Ganti tanggal" lagi untuk minta persetujuan.', 'bad');
-                const kode = normKode(g('tf-fKode').value), nominal = Number(digits(g('tf-fNominal').value)), pel = normNama(g('tf-fPel').value), waktu = msDari(tgl, normJam(g('tf-fJam').value));
-                const bad = validTransaksi(kode, nominal, pel, waktu);
+                const kode = normKode(g('tf-fKode').value), nominal = Number(digits(g('tf-fNominal').value)), pel = normNama(g('tf-fPel').value), J = bacaJam(g('tf-fJam').value, tgl);
+                const bad = validTransaksi(kode, nominal, pel, J);
                 if (bad) return toast(bad, 'bad');
                 const r = S.riders.find(x => x.id === kode);
                 const pool = S.tiket.concat(S.pend.filter(t => t.tanggal !== tgl));
-                const mirip = pool.filter(t => t.status !== 'batal' && t.kodeRider === kode && t.nominal === nominal && Math.abs((t.waktuTransfer || 0) - waktu) < 864e5);
+                const mirip = pool.filter(t => t.status !== 'batal' && t.kodeRider === kode && t.nominal === nominal && (t.tanggal === tgl || (J.ms && t.waktuTransfer && Math.abs(t.waktuTransfer - J.ms) < 864e5)));
                 if (mirip.length) {
                     const persis = mirip.some(t => String(t.pelanggan).toLowerCase() === pel.toLowerCase());
                     const v = await ask({title: persis ? 'KEMUNGKINAN DOBEL' : 'Ada transaksi mirip', ok: 'Ini transaksi berbeda, tetap catat', tone: 'bad', info:
@@ -21547,7 +21563,7 @@
                     const v = await ask({title: 'Nominal besar, sudah benar?', ok: 'Ya, nominal benar', info: '<div class="big">' + esc(rp(nominal)) + '</div><p>untuk ' + esc(kode) + ' ' + esc(r.nama) + '</p>'});
                     if (!v) return;
                 }
-                const no = await B.tambahTiket(tgl, Object.assign({kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: waktu, status: 'dicatat'}, st('dicatat')));
+                const no = await B.tambahTiket(tgl, Object.assign({kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks, status: 'dicatat'}, st('dicatat')));
                 g('tf-fKode').value = ''; g('tf-fNama').value = ''; g('tf-fNominal').value = ''; g('tf-fPel').value = ''; g('tf-fJam').value = '';
                 g('tf-fKode').focus(); toast('Tercatat sebagai No ' + no + '.');
             });
@@ -21573,7 +21589,7 @@
             g('tf-hCsv').addEventListener('click', () => {
                 if (!S.histLoaded) return toast('Tampilkan dulu datanya.', 'bad');
                 const rows = [['Tanggal', 'No', 'Jam transfer', 'Kode rider', 'Nama rider', 'Nominal', 'Pelanggan', 'Masuk ProjekGo', 'Status', 'Ditransfer', 'Ditransfer oleh', 'Nominal BCA', 'Petugas catat']];
-                histFiltered().forEach(t => rows.push([t.tanggal, t.no, jam(t.waktuTransfer), t.kodeRider, t.namaRider, t.nominal, t.pelanggan, t.masukProjekgo ? 'ya' : 'tidak', LBL[t.status] || t.status, t.diteruskanAt ? fmtWaktu(t.diteruskanAt) : '', t.diteruskanPetugas ? pNama(t.diteruskanPetugas) : '', t.nominalBca || '', pNama(t.dicatatPetugas)]));
+                histFiltered().forEach(t => rows.push([t.tanggal, t.no, jamT(t), t.kodeRider, t.namaRider, t.nominal, t.pelanggan, t.masukProjekgo ? 'ya' : 'tidak', LBL[t.status] || t.status, t.diteruskanAt ? fmtWaktu(t.diteruskanAt) : '', t.diteruskanPetugas ? pNama(t.diteruskanPetugas) : '', t.nominalBca || '', pNama(t.dicatatPetugas)]));
                 const blob = new Blob(['﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n')], {type: 'text/csv;charset=utf-8'});
                 const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'transfer-' + g('tf-hFrom').value + '_' + g('tf-hTo').value + '.csv';
                 document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -21603,7 +21619,7 @@
                     if (!r) { h += '<tr><td class="no">' + no + '</td><td></td><td></td><td></td><td></td><td></td></tr>'; continue; }
                     const ck = r.status === 'cocok' || r.status === 'beres', sl = r.status === 'selisih' || r.status === 'masalah';
                     h += '<tr><td class="no">' + no + '</td><td>' + esc(r.kodeRider || '-') + '</td><td class="' + (ck ? 'ck' : '') + '">' + esc(shortName(r.namaRider) || '-') +
-                        '</td><td class="num' + (sl ? ' sl' : '') + '">' + esc(angka(r.nominal)) + '</td><td>' + esc(r.pelanggan || '-') + '</td><td>' + esc(jam(r.waktuTransfer)) + '</td></tr>';
+                        '</td><td class="num' + (sl ? ' sl' : '') + '">' + esc(angka(r.nominal)) + '</td><td>' + esc(r.pelanggan || '-') + '</td><td>' + esc(jamT(r)) + '</td></tr>';
                 }
                 return h + '</tbody></table>';
             }
