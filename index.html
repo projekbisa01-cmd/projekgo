@@ -3094,8 +3094,9 @@
                 </div>
             </div>
 
-            <button onclick="window.closeSuccessAndSendWA()" class="w-full py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
-                <i class="fa-brands fa-whatsapp text-xl"></i> OK & MINTA RATING
+            <!-- DIUBAH (21 Okt 2026): tidak lagi membuka WA minta rating. Link ulasan sudah ada di pesan WA pertama. -->
+            <button onclick="window.closeOrderSuccessPopup()" class="w-full py-4 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl shadow-lg shadow-green-200 active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                OK
             </button>
         </div>
     </div>
@@ -13135,7 +13136,14 @@
                 ],
                 templatechat: [
                     { sel: '#active-order-overlay .rv-tc-buka', j: 'Template chat pelanggan', t: 'Ketuk tombol ini untuk mengirim pesan siap pakai ke pelanggan: resto tutup, resto antri, atau minta share lokasi.' },
-                    { sel: '#btn-wa-customer', j: 'Pesan pembuka', t: 'Chat WA pertama sudah berisi detail pesanan dan link ulasan. Kirim apa adanya, jangan hapus link-nya supaya pelanggan bisa memberi bintang.' }
+                    { sel: '#btn-wa-customer', j: 'Pesan pembuka', t: 'Chat WA pertama sudah berisi detail pesanan dan link pantau pesanan + ulasan. Kirim apa adanya, jangan hapus link-nya.' }
+                ],
+                // ALUR PESANAN (21 Okt 2026): dibuka dari tombol "Cara kerja" di kotak ungu Tugas Berjalan
+                lacak: [
+                    { sel: '#lk-tahap .lk-aksi', j: 'Ketuk tombol ungu tiap tahap', t: 'Pelanggan melihat tahap ini di link WA, jadi tidak perlu bertanya "sudah sampai mana?". Ketuk sesuai kenyataan ya, jangan didahulukan.' },
+                    { sel: '#lk-tahap .lk-chips', j: 'Di resto lama? Pilih estimasi', t: 'Khusus order Food: saat di resto, pilih perkiraan menit masak (5, 10, 15, 20, 30+). Pelanggan jadi tenang menunggu. Ketuk lagi untuk menghapus.' },
+                    { sel: '#lk-tahap .lk-lok', j: 'Lokasi dari pelanggan', t: 'Kalau pelanggan mengisi lokasi, kotak hijau muncul di sini. Tekan Maps untuk membuka arah, atau Salin untuk menyalin titiknya.' },
+                    { sel: '', j: 'Salah ketuk?', t: 'Setelah mengetuk, ada tulisan "Kembali ke tahap sebelumnya" selama 8 detik. Ketuk itu untuk membatalkan.' }
                 ],
                 'templatechat-popup': [
                     { sel: '#rv-tc-daftar .rv-tc-opsi', j: 'Pilih pesan', t: 'Ketuk salah satu pesan. WhatsApp pelanggan langsung terbuka dengan teks sudah terisi.' },
@@ -13224,6 +13232,8 @@
                 requestAnimationFrame(() => { posisi(); setTimeout(posisi, 120); });
             }
             // paksa = true dari tombol "?"; tanpa paksa hanya tampil sekali per HP
+            window.pgTourAktif = () => !!aktif;
+            window.pgTourSudah = (key) => adaFlag('pgtour_' + key);
             window.pgTourMulai = (key, paksa) => {
                 if (!TOUR[key]) return;
                 if (!paksa && adaFlag('pgtour_' + key)) return;
@@ -17791,13 +17801,13 @@
               
               const displayRiderNameEl = document.getElementById('display-rider-name');
               const riderNameForWA = displayRiderNameEl ? displayRiderNameEl.innerText : "Rider";
-              let waMessage = `Halo kak, saya ${riderNameForWA} Rider PROJEKGO Siap Membantu. 🙏`;
-              // Link ulasan (sekali pakai per order) ditaruh tepat setelah salam supaya tidak terhapus.
-              // Order lama tanpa kode ulasan: bagian ini dilewati.
+              // FORMAT BARU (21 Okt 2026): singkat, detail pesanan jelas, link pantau + ulasan satu baris.
+              let waMessage = `Halo kak, saya *${riderNameForWA}*, rider PROJEKGO 🙏`;
+              // Link pantau pesanan + ulasan (sekali pakai per order). Order lama tanpa kode: bagian ini dilewati.
               const linkUlasanAwal = (typeof window.linkUlasanSaya === 'function') ? window.linkUlasanSaya() : '';
-              // LACAK PESANAN (20 Okt 2026): link yang sama sekarang juga halaman pantau pesanan + kirim lokasi.
-              const kataLokasiWA = data.jenis === 'ojek' ? 'lokasi jemput' : 'lokasi antar';
-              if (linkUlasanAwal) waMessage += `\n\n📍 Pantau pesanan, kirim ${kataLokasiWA}, dan beri penilaian di sini ya kak 🙏\n${linkUlasanAwal}`;
+              const kataLokasiWA = data.jenis === 'ojek' ? 'lokasi jemput' : 'lokasi';
+              const judulDetailWA = ({ food: '🍔 PESANAN', ojek: '🏍️ PERJALANAN', kirim: '📦 KIRIMAN' })[data.jenis] || '📋 DETAIL';
+              let barisWA = '';   // detail pesanan versi WA (• item, 📝 catatan); teks nota tetap seperti dulu
               const phoneStr = data.customer_phone?.replace(/^0/, '62') || "";
               
               // Hitung ongkir (jangan ditotalkan, tambahkan fallback huruf besar/kecil)
@@ -17827,7 +17837,7 @@
             // --- LOGIKA BARU: INJEKSI DATA TEKS LANGSUNG (SANGAT RINGAN) ---
               const listEl = document.getElementById('active-order-items');
               let copyText = `*PROJEKGO DELIVERY ORDER*\nAdmin CS: 081292802623\n----------------------\n*Daftar Pesanan:*\n`;
-              let detailPesananWA = `\n\n*Detail Pesanan:*\n`;
+              let detailPesananWA = `\n\n*${judulDetailWA}*\n`;
               
               // Cek apakah Admin mengirimkan data siap saji (String text)
               // Kita beri dukungan nama field: pesanan_text (bisa disesuaikan admin nanti)
@@ -17858,17 +17868,19 @@
                               // Item pesanan: beri bullet orange dan menjorok ke kanan
                               htmlContent += `<div class="pl-4 relative"><span class="absolute left-0 top-0 text-orange-500">•</span>${window.escapeHtmlPesanan(cleanT)}</div>`;
                               plainTextContent += `  - ${cleanT}\n`;
+                              barisWA += `• ${cleanT}\n`;
                           } else {
                               // Catatan biasa: rata kiri tanpa bullet
                               htmlContent += `<div class="text-amber-900">${window.escapeHtmlPesanan(cleanT)}</div>`;
                               plainTextContent += `${cleanT}\n`;
+                              barisWA += /^#/.test(cleanT) ? `🏪 ${cleanT.replace(/^#\s*/, '')}\n` : `📝 ${cleanT}\n`;
                           }
                       });
 
                       listEl.innerHTML = htmlContent;
                       
                       copyText += plainTextContent;
-                      detailPesananWA += plainTextContent;
+                      detailPesananWA += barisWA;
                       window.currentActiveOrderItems = plainTextContent.trim();
                   } 
                   else if (data.items && Array.isArray(data.items) && data.items.length > 0) {
@@ -17895,23 +17907,25 @@
                               // Item pesanan: beri bullet orange dan menjorok ke kanan
                               htmlContent += `<div class="pl-4 relative"><span class="absolute left-0 top-0 text-orange-500">•</span>${window.escapeHtmlPesanan(cleanT)}</div>`;
                               plainTextContent += `  - ${cleanT}\n`;
+                              barisWA += `• ${cleanT}\n`;
                           } else {
                               // Catatan biasa: rata kiri tanpa bullet
                               htmlContent += `<div class="text-amber-900">${window.escapeHtmlPesanan(cleanT)}</div>`;
                               plainTextContent += `${cleanT}\n`;
+                              barisWA += /^#/.test(cleanT) ? `🏪 ${cleanT.replace(/^#\s*/, '')}\n` : `📝 ${cleanT}\n`;
                           }
                       });
 
                       listEl.innerHTML = htmlContent;
                       
                       copyText += plainTextContent;
-                      detailPesananWA += plainTextContent;
+                      detailPesananWA += barisWA;
                       window.currentActiveOrderItems = plainTextContent.trim();
                   } 
                   else {
                       listEl.innerHTML = "<div class=\"text-amber-700 italic\">- Pesanan dari admin</div>";
                       copyText += `- Pesanan dari admin\n`;
-                      detailPesananWA += `- Pesanan dari admin\n`;
+                      detailPesananWA += `• Pesanan dari admin\n`;
                       window.currentActiveOrderItems = "- Pesanan dari admin";
                   }
               }
@@ -17919,17 +17933,19 @@
               // Gabungkan pesan WA dengan detail pesanan
               waMessage += detailPesananWA;
 
-              // Tambahkan rincian Ongkir di bawah pesan
-              waMessage += `\n----------------\n*Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
+              // Ongkir satu baris
+              waMessage += `\n💰 *Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
               if (extraFee > 0) {
-                  waMessage += ` + Rp ${extraFee.toLocaleString('id-ID')} (tambahan)`;
+                  waMessage += ` + Rp ${extraFee.toLocaleString('id-ID')}`;
               }
+              // Link pantau pesanan, kirim lokasi & ulasan
+              if (linkUlasanAwal) waMessage += `\n\n📍 Pantau & kirim ${kataLokasiWA}, juga nilai saya di sini:\n${linkUlasanAwal}`;
 
               // Link penilaian TIDAK lagi ditaruh di pesan awal: link sekali pakai per order
               // hanya dikirim setelah pesanan selesai (sendFeedbackWAAndContinue).
               const myUid = window.getRiderUid();
 
-              waMessage += `\n\nPROJEKGO sudah ada di Play Store kak. Lihat katalog makanan yang diupdate langsung oleh penjual di sini: https://katalog.projekgo.id/unduh\n_Terima kasih banyak!_ 😊`;
+              waMessage += `\n\nJika kakak terbiasa dan nyaman memesan pakai aplikasi, PROJEKGO juga sudah ada di Play Store loh 😊\nKlik https://katalog.projekgo.id/unduh untuk melihat langsung di Play Store.`;
 
               const btnWaCustomer = document.getElementById('btn-wa-customer');
               if (btnWaCustomer) {
@@ -23371,23 +23387,29 @@ window.PembuatQR = PembuatQR;
      - Semua penulisan "tanpa ditunggu": kalau gagal (sinyal / rules belum dipasang), order tetap jalan.
      - Read: 1 pemantau dokumen kecil lacak/<kode> selama layar Tugas Berjalan terbuka. -->
 <style>
-    .lk-tahap { flex: none; margin: 0 16px 10px; border: 1px solid var(--rv-soft-line); background: var(--rv-soft); border-radius: 16px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    /* DIUBAH (21 Okt 2026): warna ungu-biru supaya beda dari bagian lain + kepala "Cara kerja" */
+    .lk-tahap { --lk-bg: #eef2ff; --lk-line: #c7d2fe; --lk-ink: #1e1b4b; --lk-acc: #4338ca; --lk-soft: #4338ca;
+                flex: none; margin: 0 16px 10px; border: 1.5px solid var(--lk-line); background: var(--lk-bg); border-radius: 16px; padding: 0 12px 10px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+    body.dark-mode .lk-tahap { --lk-bg: #1e1b4b; --lk-line: #3730a3; --lk-ink: #e0e7ff; --lk-soft: #a5b4fc; }
+    .lk-kepala { margin: 0 -12px; background: #4338ca; color: #fff; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 12px; font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+    .lk-cara { flex: none; border: 0; background: rgba(255,255,255,.2); color: #fff; border-radius: 999px; padding: 6px 11px; min-height: 30px; font-size: 11.5px; font-weight: 800; letter-spacing: 0; text-transform: none; display: inline-flex; align-items: center; gap: 5px; }
+    .lk-cara:active { transform: scale(.96); }
     .lk-tahap[hidden] { display: none; }
     .lk-atas { display: flex; align-items: center; gap: 10px; }
     .lk-teks { flex: 1; min-width: 0; }
-    .lk-teks small { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--rv-soft-ink); opacity: .85; }
-    .lk-teks b { display: block; font-size: 15px; font-weight: 800; color: var(--rv-ink); line-height: 1.25; }
+    .lk-teks small { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--lk-soft); opacity: .9; }
+    .lk-teks b { display: block; font-size: 15px; font-weight: 800; color: var(--lk-ink); line-height: 1.25; }
     .lk-titik3 { display: flex; gap: 4px; margin-top: 5px; }
-    .lk-titik3 i { flex: 1; height: 5px; border-radius: 5px; background: var(--rv-soft-line); display: block; }
-    .lk-titik3 i.on { background: #ea580c; }
-    .lk-aksi { flex: none; max-width: 52%; min-height: 44px; border: 0; border-radius: 12px; background: #1c1917; color: #fff; padding: 6px 12px; font-size: 12.5px; font-weight: 800; line-height: 1.25; display: flex; align-items: center; gap: 6px; text-align: left; }
+    .lk-titik3 i { flex: 1; height: 5px; border-radius: 5px; background: var(--lk-line); display: block; }
+    .lk-titik3 i.on { background: var(--lk-acc); }
+    .lk-aksi { flex: none; max-width: 52%; min-height: 44px; border: 0; border-radius: 12px; background: #4338ca; color: #fff; padding: 6px 12px; font-size: 12.5px; font-weight: 800; line-height: 1.25; display: flex; align-items: center; gap: 6px; text-align: left; }
     .lk-aksi:disabled { opacity: .55; }
     .lk-aksi:active { transform: scale(.97); }
     .lk-est { display: flex; flex-direction: column; gap: 6px; }
     .lk-est > span { font-size: 12px; font-weight: 700; color: var(--rv-ink2); }
     .lk-chips { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
     .lk-chips button { height: 38px; border-radius: 10px; border: 1.5px solid var(--rv-line2); background: var(--rv-surface); color: var(--rv-ink); font-size: 13px; font-weight: 800; }
-    .lk-chips button.on { background: #ea580c; border-color: #ea580c; color: #fff; }
+    .lk-chips button.on { background: #4338ca; border-color: #4338ca; color: #fff; }
     .lk-lok { display: flex; align-items: center; gap: 8px; border-radius: 12px; padding: 8px 10px; font-size: 12px; font-weight: 700; line-height: 1.35; }
     .lk-lok.ada { background: var(--rv-ok-bg); color: var(--rv-ok-ink); }
     .lk-lok.belum { background: var(--rv-surface); color: var(--rv-ink2); border: 1px dashed var(--rv-line2); }
@@ -23395,7 +23417,7 @@ window.PembuatQR = PembuatQR;
     .lk-lok button { flex: none; height: 34px; border: 0; border-radius: 10px; padding: 0 10px; font-size: 12px; font-weight: 800; color: #fff; background: #1d4ed8; }
     .lk-lok button.wa { background: #15803d; }
     .lk-lok button.abu { background: var(--rv-tile); color: var(--rv-ink); border: 1px solid var(--rv-line2); }
-    .lk-batal { align-self: flex-start; background: none; border: 0; padding: 0; font-size: 12px; font-weight: 800; color: var(--rv-soft-ink); text-decoration: underline; }
+    .lk-batal { align-self: flex-start; background: none; border: 0; padding: 0; font-size: 12px; font-weight: 800; color: var(--lk-soft); text-decoration: underline; }
 </style>
 <script>
 (function lacakPesananRider() {
@@ -23529,16 +23551,6 @@ window.PembuatQR = PembuatQR;
         var q = Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
         try { navigator.clipboard.writeText(q).then(function () { toast('Titik disalin: ' + q); }, function () { toast(q); }); } catch (e) { toast(q); }
     }
-    function mintaLokasiWA() {
-        var link = typeof window.linkUlasanSaya === 'function' ? window.linkUlasanSaya() : '';
-        if (!link) return;
-        var hp = String(window.currentActiveCustomerPhone || '').replace(/^0/, '62');
-        var kata = cfg().kataLok === 'jemput' ? 'lokasi jemput' : 'lokasi antar';
-        var pesan = 'Halo kak, biar saya cepat sampai, mohon bantu isi ' + kata + ' di link ini ya kak 🙏\n' + link +
-            '\n\nKalau pesanannya untuk orang lain, link ini boleh diteruskan ke penerima.';
-        if (typeof window.openWaSelector === 'function') window.openWaSelector(hp, pesan);
-    }
-
     // ---------- Tampilan ----------
     function gambar() {
         var box = document.getElementById('lk-tahap');
@@ -23549,9 +23561,20 @@ window.PembuatQR = PembuatQR;
         if (idx < 0) idx = 0;
         box.replaceChildren();
 
+        // Kepala ungu + tombol "Cara kerja" (membuka panduan langkah demi langkah)
+        var kepala = el('div', 'lk-kepala');
+        kepala.appendChild(el('span', '', 'Alur pesanan · terlihat pelanggan'));
+        var cara = el('button', 'lk-cara');
+        cara.type = 'button';
+        cara.innerHTML = '<i class="fa-solid fa-circle-info" aria-hidden="true"></i>';
+        cara.appendChild(document.createTextNode('Cara kerja'));
+        cara.addEventListener('click', function () { if (typeof window.pgTourMulai === 'function') window.pgTourMulai('lacak', true); });
+        kepala.appendChild(cara);
+        box.appendChild(kepala);
+
         var atas = el('div', 'lk-atas');
         var teks = el('div', 'lk-teks');
-        teks.appendChild(el('small', '', 'Tahap ' + (idx + 1) + ' dari ' + (c.langkah.length + 1) + ' · terlihat pelanggan'));
+        teks.appendChild(el('small', '', 'Tahap ' + (idx + 1) + ' dari ' + (c.langkah.length + 1)));
         teks.appendChild(el('b', '', c.langkah[idx][1]));
         var garis = el('div', 'lk-titik3');
         for (var i = 0; i <= c.langkah.length; i++) garis.appendChild(el('i', i <= idx ? 'on' : ''));
@@ -23607,16 +23630,26 @@ window.PembuatQR = PembuatQR;
             bs.addEventListener('click', function () { salinTitik(t); });
             ada.appendChild(bm); ada.appendChild(bs);
             box.appendChild(ada);
-        } else if (st.tahap !== 'antar' && KODE_ORDER.test(st.kode)) {
-            var belum = el('div', 'lk-lok belum');
-            belum.innerHTML = '<i class="fa-regular fa-map" aria-hidden="true"></i>';
-            belum.appendChild(el('div', 'lk-isi', 'Pelanggan belum mengisi lokasi ' + kata + '.'));
-            var bw = el('button', 'wa', 'Minta lewat WA'); bw.type = 'button';
-            bw.addEventListener('click', mintaLokasiWA);
-            belum.appendChild(bw);
-            box.appendChild(belum);
         }
+        // (21 Okt 2026) Pelanggan belum mengisi lokasi: tidak ditampilkan apa-apa (rider bisa tanya admin).
         box.hidden = false;
+        tawarkanPanduan();
+    }
+
+    // Panduan muncul otomatis SEKALI per HP, setelah panduan Template Chat selesai (supaya tidak bertabrakan)
+    var panduanDijadwal = false;
+    function tawarkanPanduan() {
+        if (panduanDijadwal) return;
+        try {
+            if (typeof window.pgTourSudah !== 'function' || window.pgTourSudah('lacak') || !window.pgTourSudah('templatechat')) return;
+        } catch (e) { return; }
+        panduanDijadwal = true;
+        setTimeout(function () {
+            panduanDijadwal = false;
+            var box = document.getElementById('lk-tahap');
+            if (!box || box.hidden || !st.id || (window.pgTourAktif && window.pgTourAktif())) return;
+            window.pgTourMulai('lacak');
+        }, 1800);
     }
 
     // ---------- Dipanggil dari showActiveOrderOverlay ----------
