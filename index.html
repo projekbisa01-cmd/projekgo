@@ -2616,6 +2616,9 @@
                     </a>
                 </div>
 
+                <!-- TAHAP KERJA (LACAK PESANAN, 20 Okt 2026): diisi oleh blok "LACAK PESANAN" di akhir file -->
+                <div id="lk-tahap" class="lk-tahap" hidden></div>
+
                 <!-- BAGIAN 2: DETAIL PESANAN (MELEBAR PENUH, ISI MENGISI SISA LAYAR) -->
                 <div class="panel-pesanan flex-1 min-h-0 flex flex-col">
                     <div class="panel-pesanan-head shrink-0 flex justify-between items-center px-4 py-2.5">
@@ -17792,7 +17795,9 @@
               // Link ulasan (sekali pakai per order) ditaruh tepat setelah salam supaya tidak terhapus.
               // Order lama tanpa kode ulasan: bagian ini dilewati.
               const linkUlasanAwal = (typeof window.linkUlasanSaya === 'function') ? window.linkUlasanSaya() : '';
-              if (linkUlasanAwal) waMessage += `\n\n⭐ Setelah pesanan sampai, mohon bantu nilai pelayanan saya di sini ya kak 🙏\n${linkUlasanAwal}`;
+              // LACAK PESANAN (20 Okt 2026): link yang sama sekarang juga halaman pantau pesanan + kirim lokasi.
+              const kataLokasiWA = data.jenis === 'ojek' ? 'lokasi jemput' : 'lokasi antar';
+              if (linkUlasanAwal) waMessage += `\n\n📍 Pantau pesanan, kirim ${kataLokasiWA}, dan beri penilaian di sini ya kak 🙏\n${linkUlasanAwal}`;
               const phoneStr = data.customer_phone?.replace(/^0/, '62') || "";
               
               // Hitung ongkir (jangan ditotalkan, tambahkan fallback huruf besar/kecil)
@@ -17951,7 +17956,10 @@
               if (typeof window.startActiveQueueCountListener === 'function') {
                   window.startActiveQueueCountListener();
               }
-              
+
+              // Tahap kerja & lokasi dari pelanggan (blok LACAK PESANAN). Gagal di sini tidak boleh mengganggu order.
+              try { if (typeof window.lacakRender === 'function') window.lacakRender(data, docId); } catch (eLacak) { console.warn('[Lacak]', eLacak); }
+
               // Pastikan status on-bid menyala (Opsional tapi berguna agar radar tetap online)
               const toggle = document.getElementById('onbid-toggle');
               if (toggle && !toggle.checked) {
@@ -17961,6 +17969,7 @@
           } 
 
           window.hideActiveOrderOverlay = function() {
+              try { if (typeof window.lacakTutup === 'function') window.lacakTutup(); } catch (eLacak) {}
               const overlay = document.getElementById('active-order-overlay');
               if(overlay) {
                   overlay.classList.add('hidden');
@@ -18223,6 +18232,8 @@
                       errDitarik.idOrder = idOrderSelesai;
                       throw errDitarik;
                   }
+                  // Halaman lacak pelanggan -> "sampai" + form ulasan; lokasi pelanggan dihapus (tanpa ditunggu)
+                  try { if (typeof window.lacakSelesai === 'function') window.lacakSelesai(idOrderSelesai); } catch (eLacak) {}
 
                   // Order sudah sah selesai di server -> baru sekarang riwayat hariannya dibuka.
                   // 0 read; hanya menyentuh dokumen riwayat milik rider ini sendiri. Kalau gagal,
@@ -22860,6 +22871,8 @@ window.PembuatQR = PembuatQR;
                 errDitarik.idOrder = idOrder;
                 throw errDitarik;
             }
+            // Halaman lacak pelanggan -> "sampai" + form ulasan; lokasi pelanggan dihapus (tanpa ditunggu)
+            try { if (typeof window.lacakSelesai === 'function') window.lacakSelesai(idOrder); } catch (eLacak) {}
 
             // ===== Mulai dari sini order SUDAH sah selesai di server. =====
             // Langkah di bawah tidak boleh membuat rider melihat pesan "gagal".
@@ -23349,5 +23362,322 @@ window.PembuatQR = PembuatQR;
 })();
 </script>
 <!-- ================= AKHIR GETAR HALUS ================= -->
+
+<!-- ================= LACAK PESANAN (20 Okt 2026) =================
+     Tahap kerja di Tugas Berjalan (menuju -> di resto/lokasi -> mengantar), estimasi,
+     dan lokasi antar/jemput yang dikirim pelanggan dari halaman rider.projekgo.id/u/.
+     - Tahap ditulis ke active_orders (dibaca admin) & lacak/<kode order> (dibaca halaman pelanggan).
+     - lacak/<kode> TIDAK berisi nomor HP, nama pelanggan, isi pesanan, atau ongkir.
+     - Semua penulisan "tanpa ditunggu": kalau gagal (sinyal / rules belum dipasang), order tetap jalan.
+     - Read: 1 pemantau dokumen kecil lacak/<kode> selama layar Tugas Berjalan terbuka. -->
+<style>
+    .lk-tahap { flex: none; margin: 0 16px 10px; border: 1px solid var(--rv-soft-line); background: var(--rv-soft); border-radius: 16px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .lk-tahap[hidden] { display: none; }
+    .lk-atas { display: flex; align-items: center; gap: 10px; }
+    .lk-teks { flex: 1; min-width: 0; }
+    .lk-teks small { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--rv-soft-ink); opacity: .85; }
+    .lk-teks b { display: block; font-size: 15px; font-weight: 800; color: var(--rv-ink); line-height: 1.25; }
+    .lk-titik3 { display: flex; gap: 4px; margin-top: 5px; }
+    .lk-titik3 i { flex: 1; height: 5px; border-radius: 5px; background: var(--rv-soft-line); display: block; }
+    .lk-titik3 i.on { background: #ea580c; }
+    .lk-aksi { flex: none; max-width: 52%; min-height: 44px; border: 0; border-radius: 12px; background: #1c1917; color: #fff; padding: 6px 12px; font-size: 12.5px; font-weight: 800; line-height: 1.25; display: flex; align-items: center; gap: 6px; text-align: left; }
+    .lk-aksi:disabled { opacity: .55; }
+    .lk-aksi:active { transform: scale(.97); }
+    .lk-est { display: flex; flex-direction: column; gap: 6px; }
+    .lk-est > span { font-size: 12px; font-weight: 700; color: var(--rv-ink2); }
+    .lk-chips { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+    .lk-chips button { height: 38px; border-radius: 10px; border: 1.5px solid var(--rv-line2); background: var(--rv-surface); color: var(--rv-ink); font-size: 13px; font-weight: 800; }
+    .lk-chips button.on { background: #ea580c; border-color: #ea580c; color: #fff; }
+    .lk-lok { display: flex; align-items: center; gap: 8px; border-radius: 12px; padding: 8px 10px; font-size: 12px; font-weight: 700; line-height: 1.35; }
+    .lk-lok.ada { background: var(--rv-ok-bg); color: var(--rv-ok-ink); }
+    .lk-lok.belum { background: var(--rv-surface); color: var(--rv-ink2); border: 1px dashed var(--rv-line2); }
+    .lk-lok .lk-isi { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .lk-lok button { flex: none; height: 34px; border: 0; border-radius: 10px; padding: 0 10px; font-size: 12px; font-weight: 800; color: #fff; background: #1d4ed8; }
+    .lk-lok button.wa { background: #15803d; }
+    .lk-lok button.abu { background: var(--rv-tile); color: var(--rv-ink); border: 1px solid var(--rv-line2); }
+    .lk-batal { align-self: flex-start; background: none; border: 0; padding: 0; font-size: 12px; font-weight: 800; color: var(--rv-soft-ink); text-decoration: underline; }
+</style>
+<script>
+(function lacakPesananRider() {
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var PROYEK = 'onbid-2f87a';
+    var KODE_ORDER = /^[A-Za-z0-9]{12,32}$/, KODE_RIDER = /^[A-Za-z0-9]{10,32}$/, ID_SAH = /^[A-Za-z0-9_-]{1,64}$/;
+    var ESTIMASI = [5, 10, 15, 20, 30];
+
+    // Tahap per jenis order (jenis dipilih admin saat input: food / ojek / kirim / lain).
+    // Order lama tanpa jenis dianggap "lain".
+    var JENIS = {
+        food:  { langkah: [['menuju', 'Menuju resto'], ['lokasi', 'Di resto'], ['antar', 'Mengantar']],
+                 aksi: { menuju: ['Sudah di resto', 'lokasi'], lokasi: ['Pesanan diambil, mulai antar', 'antar'] },
+                 tanyaEst: 'Sudah dipesankan? Perkiraan lama masak, menit (opsional):', kataLok: 'antar' },
+        ojek:  { langkah: [['menuju', 'Menuju jemput'], ['antar', 'Mengantar penumpang']],
+                 aksi: { menuju: ['Penumpang naik, mulai antar', 'antar'] }, kataLok: 'jemput' },
+        kirim: { langkah: [['menuju', 'Menuju pengambilan'], ['antar', 'Mengantar barang']],
+                 aksi: { menuju: ['Barang diambil, mulai antar', 'antar'] }, kataLok: 'antar' },
+        lain:  { langkah: [['menuju', 'Menuju lokasi'], ['lokasi', 'Sedang dikerjakan'], ['antar', 'Mengantar']],
+                 aksi: { menuju: ['Sudah di lokasi', 'lokasi'], lokasi: ['Mulai antar', 'antar'] },
+                 tanyaEst: 'Perkiraan selesai dikerjakan, menit (opsional):', kataLok: 'antar' }
+    };
+
+    var st = { id: '', kode: '', jenis: 'lain', tahap: 'menuju', est: 0, lacak: null, henti: null, undo: null, undoTimer: 0, awalDitulis: {}, titikDiberitahu: '' };
+    var simpanan = {};   // per order: data yang dibutuhkan saat selesai (layar mungkin sudah ditutup duluan)
+
+    function fsMod() { return import(URL_FS); }
+    function uidKu() { try { return String((window.getRiderUid && window.getRiderUid()) || '').trim().toUpperCase(); } catch (e) { return ''; } }
+    function kodeRiderKu() {
+        var uid = uidKu(), k = '';
+        try { k = (window._profilRiderData && window._profilRiderData.ulasan_kode) || localStorage.getItem('rider_ulasan_kode_' + uid) || ''; } catch (e) {}
+        return KODE_RIDER.test(k) ? k : '';
+    }
+    function ms(t) { return t && typeof t.toMillis === 'function' ? t.toMillis() : (t && typeof t.seconds === 'number' ? t.seconds * 1000 : 0); }
+    function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
+    function toast(t) { try { if (typeof window.showCustomToast === 'function') window.showCustomToast(t); } catch (e) {} }
+    function cfg() { return JENIS[st.jenis] || JENIS.lain; }
+    function tahapSah(t) { return cfg().langkah.some(function (x) { return x[0] === t; }); }
+
+    // ---------- Tulis ke server (tanpa ditunggu layar) ----------
+    async function tulis(dataOrder, dataLacak, diam) {
+        var id = st.id, kode = st.kode, k = kodeRiderKu(), uid = uidKu();
+        if (!ID_SAH.test(id) || !uid) return;
+        var m = await fsMod(), db = m.getFirestore();
+        var janji = [];
+        if (dataOrder) {
+            var o = Object.assign({}, dataOrder);
+            if ('tahap' in o) o.tahap_at = m.serverTimestamp();
+            janji.push(m.updateDoc(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', id), o));
+        }
+        if (dataLacak && KODE_ORDER.test(kode) && k) {
+            // tahap selalu ikut (supaya data lama "menunggu" dari admin ikut terganti); waktu tahap hanya saat tahap berubah
+            var l = Object.assign({ order_id: id, uid: uid, k: k, jenis: st.jenis, tahap: st.tahap }, dataLacak);
+            if ('tahap' in dataLacak) l.tahap_at = m.serverTimestamp();
+            if ('estimasi_menit' in l) l.estimasi_at = l.estimasi_menit ? m.serverTimestamp() : null;
+            janji.push(m.setDoc(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', kode), l, { merge: true }));
+        }
+        var hasil = await Promise.allSettled(janji);
+        if (hasil.some(function (h) { return h.status === 'rejected'; })) {
+            console.warn('[Lacak] sebagian gagal tersimpan', hasil);
+            if (!diam) toast('Tahap belum terkirim ke pelanggan. Cek sinyal, lalu ketuk lagi kalau perlu.');
+        }
+    }
+
+    // ---------- Pemantau lacak/<kode>: lokasi dari pelanggan + memastikan dokumen milik rider ini ----------
+    async function mulaiPantau() {
+        if (st.henti || !KODE_ORDER.test(st.kode)) return;
+        var idSaat = st.id;
+        var m = await fsMod(), db = m.getFirestore();
+        if (st.id !== idSaat || st.henti) return;
+        var pertama = true;
+        st.henti = m.onSnapshot(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', st.kode), function (s) {
+            if (st.id !== idSaat) return;
+            var d = s.exists() ? s.data() : null;
+            st.lacak = d;
+            if (pertama) {
+                pertama = false;
+                // Dokumen belum ada / masih milik rider sebelumnya (order dialihkan) / tahap tertinggal -> tulis ulang
+                var k = kodeRiderKu();
+                if (k && (!d || d.uid !== uidKu() || d.k !== k || d.tahap !== st.tahap || d.jenis !== st.jenis)) {
+                    tulis(null, { tahap: st.tahap }, true);
+                }
+            }
+            // Pelanggan baru saja mengirim lokasi -> beri tahu sekali
+            var t = d && d.titik;
+            var tanda = t && typeof t.lat === 'number' ? (t.lat + ',' + t.lng) : '';
+            if (tanda && st.titikDiberitahu && tanda !== st.titikDiberitahu) {
+                toast('Pelanggan mengirim lokasi ' + cfg().kataLok + '.');
+                try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+            }
+            st.titikDiberitahu = tanda || st.titikDiberitahu || '-';
+            gambar();
+        }, function (e) { console.warn('[Lacak] pemantau berhenti', e); st.henti = null; });
+    }
+    function hentiPantau() { if (st.henti) { try { st.henti(); } catch (e) {} st.henti = null; } }
+
+    // ---------- Aksi ----------
+    function majuKe(baru) {
+        if (!tahapSah(baru) || baru === st.tahap) return;
+        var lama = st.tahap;
+        st.tahap = baru;
+        tulis({ tahap: baru }, { tahap: baru });
+        // Salah ketuk? 8 detik untuk membatalkan
+        clearTimeout(st.undoTimer);
+        st.undo = lama;
+        st.undoTimer = setTimeout(function () { st.undo = null; gambar(); }, 8000);
+        gambar();
+    }
+    function batalkan() {
+        if (!st.undo) return;
+        var ke = st.undo; st.undo = null; clearTimeout(st.undoTimer);
+        st.tahap = ke;
+        tulis({ tahap: ke }, { tahap: ke });
+        gambar();
+    }
+    function pilihEstimasi(n) {
+        st.est = st.est === n ? 0 : n;   // ketuk lagi = hapus estimasi
+        tulis({ estimasi_menit: st.est || null }, { estimasi_menit: st.est || null });
+        gambar();
+    }
+    function bukaMaps(t) {
+        var lat = Number(t.lat), lng = Number(t.lng);
+        if (!isFinite(lat) || !isFinite(lng)) return;
+        var q = lat.toFixed(6) + ',' + lng.toFixed(6);
+        // APK versi 3: jembatan khusus. APK lama: alamat geo: diteruskan APK ke aplikasi peta.
+        if (window.AndroidInterface && typeof window.AndroidInterface.bukaPeta === 'function') { try { window.AndroidInterface.bukaPeta(lat, lng); return; } catch (e) {} }
+        if (window.AndroidInterface) window.location.href = 'geo:' + q + '?q=' + q;
+        else window.open('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q), '_blank', 'noopener');
+    }
+    function salinTitik(t) {
+        var q = Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
+        try { navigator.clipboard.writeText(q).then(function () { toast('Titik disalin: ' + q); }, function () { toast(q); }); } catch (e) { toast(q); }
+    }
+    function mintaLokasiWA() {
+        var link = typeof window.linkUlasanSaya === 'function' ? window.linkUlasanSaya() : '';
+        if (!link) return;
+        var hp = String(window.currentActiveCustomerPhone || '').replace(/^0/, '62');
+        var kata = cfg().kataLok === 'jemput' ? 'lokasi jemput' : 'lokasi antar';
+        var pesan = 'Halo kak, biar saya cepat sampai, mohon bantu isi ' + kata + ' di link ini ya kak 🙏\n' + link +
+            '\n\nKalau pesanannya untuk orang lain, link ini boleh diteruskan ke penerima.';
+        if (typeof window.openWaSelector === 'function') window.openWaSelector(hp, pesan);
+    }
+
+    // ---------- Tampilan ----------
+    function gambar() {
+        var box = document.getElementById('lk-tahap');
+        if (!box) return;
+        if (!st.id) { box.hidden = true; box.replaceChildren(); return; }
+        var c = cfg();
+        var idx = c.langkah.findIndex(function (x) { return x[0] === st.tahap; });
+        if (idx < 0) idx = 0;
+        box.replaceChildren();
+
+        var atas = el('div', 'lk-atas');
+        var teks = el('div', 'lk-teks');
+        teks.appendChild(el('small', '', 'Tahap ' + (idx + 1) + ' dari ' + (c.langkah.length + 1) + ' · terlihat pelanggan'));
+        teks.appendChild(el('b', '', c.langkah[idx][1]));
+        var garis = el('div', 'lk-titik3');
+        for (var i = 0; i <= c.langkah.length; i++) garis.appendChild(el('i', i <= idx ? 'on' : ''));
+        teks.appendChild(garis);
+        atas.appendChild(teks);
+        var aksi = c.aksi[st.tahap];
+        if (aksi) {
+            var b = el('button', 'lk-aksi');
+            b.type = 'button';
+            b.innerHTML = '<i class="fa-solid fa-circle-check" aria-hidden="true"></i>';
+            b.appendChild(document.createTextNode(aksi[0]));
+            b.addEventListener('click', function () { majuKe(aksi[1]); });
+            atas.appendChild(b);
+        }
+        box.appendChild(atas);
+
+        if (st.undo) {
+            var u = el('button', 'lk-batal', 'Salah ketuk? Kembali ke tahap sebelumnya');
+            u.type = 'button'; u.addEventListener('click', batalkan);
+            box.appendChild(u);
+        }
+
+        if (st.tahap === 'lokasi' && c.tanyaEst) {
+            var est = el('div', 'lk-est');
+            est.appendChild(el('span', '', c.tanyaEst));
+            var ch = el('div', 'lk-chips');
+            ch.setAttribute('role', 'group'); ch.setAttribute('aria-label', 'Perkiraan menit');
+            ESTIMASI.forEach(function (n) {
+                var x = el('button', st.est === n ? 'on' : '', n === 30 ? '30+' : String(n));
+                x.type = 'button'; x.setAttribute('aria-pressed', st.est === n ? 'true' : 'false');
+                x.setAttribute('aria-label', n + ' menit');
+                x.addEventListener('click', function () { pilihEstimasi(n); });
+                ch.appendChild(x);
+            });
+            est.appendChild(ch);
+            box.appendChild(est);
+        }
+
+        // Lokasi dari pelanggan
+        var t = st.lacak && st.lacak.titik;
+        var kata = c.kataLok === 'jemput' ? 'jemput' : 'antar';
+        if (t && typeof t.lat === 'number' && typeof t.lng === 'number') {
+            var ada = el('div', 'lk-lok ada');
+            ada.innerHTML = '<i class="fa-solid fa-location-dot" aria-hidden="true"></i>';
+            var isi = el('div', 'lk-isi');
+            var asal = t.cara === 'gps' ? ('GPS' + (typeof t.akurasi === 'number' ? ' ±' + Math.round(t.akurasi) + ' m' : '')) : 'dipilih di peta';
+            isi.appendChild(el('div', '', 'Lokasi ' + kata + ' dari pelanggan (' + asal + ')'));
+            if (typeof t.patokan === 'string' && t.patokan.trim()) isi.appendChild(el('div', '', 'Patokan: ' + t.patokan.slice(0, 100)));
+            ada.appendChild(isi);
+            var bm = el('button', '', 'Maps'); bm.type = 'button';
+            bm.addEventListener('click', function () { bukaMaps(t); });
+            var bs = el('button', 'abu', 'Salin'); bs.type = 'button'; bs.setAttribute('aria-label', 'Salin titik lokasi');
+            bs.addEventListener('click', function () { salinTitik(t); });
+            ada.appendChild(bm); ada.appendChild(bs);
+            box.appendChild(ada);
+        } else if (st.tahap !== 'antar' && KODE_ORDER.test(st.kode)) {
+            var belum = el('div', 'lk-lok belum');
+            belum.innerHTML = '<i class="fa-regular fa-map" aria-hidden="true"></i>';
+            belum.appendChild(el('div', 'lk-isi', 'Pelanggan belum mengisi lokasi ' + kata + '.'));
+            var bw = el('button', 'wa', 'Minta lewat WA'); bw.type = 'button';
+            bw.addEventListener('click', mintaLokasiWA);
+            belum.appendChild(bw);
+            box.appendChild(belum);
+        }
+        box.hidden = false;
+    }
+
+    // ---------- Dipanggil dari showActiveOrderOverlay ----------
+    window.lacakRender = function (data, docId) {
+        if (!data || !ID_SAH.test(String(docId || ''))) return;
+        var kode = KODE_ORDER.test(String(data.ulasan_kode || '')) ? data.ulasan_kode : '';
+        if (docId !== st.id) {
+            hentiPantau();
+            clearTimeout(st.undoTimer);
+            st = { id: docId, kode: kode, jenis: 'lain', tahap: 'menuju', est: 0, lacak: null, henti: null, undo: null, undoTimer: 0, awalDitulis: st.awalDitulis || {}, titikDiberitahu: '' };
+            var j = String(data.jenis || '');
+            st.jenis = JENIS[j] ? j : 'lain';
+            // Tahap dari server dipakai hanya kalau ditulis SETELAH order ini diterima rider ini
+            // (order lemparan dari rider lain mulai lagi dari tahap 1).
+            var tSrv = String(data.tahap || '');
+            var segar = tSrv && ms(data.tahap_at) && ms(data.accepted_at) && ms(data.tahap_at) >= ms(data.accepted_at) - 5000;
+            if (segar && tahapSah(tSrv)) st.tahap = tSrv;
+            if (Number.isInteger(data.estimasi_menit) && segar) st.est = data.estimasi_menit;
+            simpanan[docId] = { kode: kode, jenis: st.jenis };
+        } else if (!st.kode && kode) {
+            st.kode = kode; simpanan[docId] = { kode: kode, jenis: st.jenis };
+        }
+        var diproses = String(data.status || '').trim().toLowerCase() === 'processing';
+        if (diproses) {
+            // Baru diterima (atau order lemparan): tahap 1 dicatat sekali ke data order supaya admin melihatnya
+            var tS = String(data.tahap || '');
+            var segarS = tS && ms(data.tahap_at) && ms(data.accepted_at) && ms(data.tahap_at) >= ms(data.accepted_at) - 5000;
+            if (!segarS && !st.awalDitulis[docId] && st.tahap === 'menuju') {
+                st.awalDitulis[docId] = true;
+                tulis({ tahap: 'menuju', estimasi_menit: null }, null, true);
+            }
+            mulaiPantau();
+        }
+        gambar();
+    };
+
+    // ---------- Dipanggil saat layar Tugas Berjalan ditutup ----------
+    window.lacakTutup = function () {
+        hentiPantau();
+        clearTimeout(st.undoTimer);
+        st.id = ''; st.lacak = null; st.undo = null;
+        gambar();
+    };
+
+    // ---------- Dipanggil setelah order sah selesai di server ----------
+    window.lacakSelesai = function (idOrder) {
+        var s = simpanan[idOrder];
+        var k = kodeRiderKu(), uid = uidKu();
+        if (!s || !KODE_ORDER.test(s.kode) || !k || !uid || !ID_SAH.test(String(idOrder || ''))) return;
+        delete simpanan[idOrder];
+        fsMod().then(function (m) {
+            var db = m.getFirestore();
+            return m.setDoc(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', s.kode), {
+                order_id: idOrder, uid: uid, k: k, jenis: s.jenis,
+                tahap: 'selesai', tahap_at: m.serverTimestamp(), selesai_at: m.serverTimestamp(),
+                titik: null   // lokasi pelanggan dihapus begitu pesanan selesai
+            }, { merge: true });
+        }).catch(function (e) { console.warn('[Lacak] tanda selesai gagal', e); });
+    };
+})();
+</script>
+<!-- ================= AKHIR LACAK PESANAN ================= -->
 </body>
 </html>
