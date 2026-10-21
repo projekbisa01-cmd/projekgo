@@ -1484,6 +1484,20 @@
         #page-transfer .tf-swipe.drag .knob{cursor:grabbing}
         #page-transfer .tf-swipe:not(.drag) .knob,#page-transfer .tf-swipe:not(.drag) .fill{transition:transform .2s,width .2s}
         #page-transfer .tf-swipe.busy{opacity:.6}
+        #page-transfer .tf-kblok{position:fixed;inset:0;z-index:2147481000;background:rgba(238,242,247,.97);display:flex;align-items:center;justify-content:center;padding:16px}
+        #page-transfer .tf-kblok .box{background:#fff;border:1px solid var(--tf-line);border-top:5px solid var(--tf-bad);border-radius:16px;padding:20px;max-width:420px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(15,23,42,.18)}
+        #page-transfer .tf-kblok .ic{font-size:34px;line-height:1}
+        #page-transfer .tf-kblok h3{font-size:18px;margin:8px 0 6px}
+        #page-transfer .tf-kblok .who{background:var(--tf-badbg);border-radius:10px;padding:8px 10px;margin:10px 0;font-size:14px}
+        #page-transfer .tf-kblok .acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px}
+        #page-transfer .tf-kinfo{background:var(--tf-warnbg);color:var(--tf-warn);font-size:12px;padding:6px 14px}
+        #page-transfer .tf-lock{border:2px dashed #b9c8dc;border-radius:12px;padding:14px;background:#f6f8fb;text-align:center}
+        #page-transfer .tf-lock .ic{font-size:28px;line-height:1}
+        #page-transfer .tf-lock h3{font-size:16px;margin:6px 0 4px}
+        #page-transfer .tf-lock .st{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:10px 0}
+        #page-transfer .tf-lock .st span{background:#fff;border:1px solid var(--tf-line);border-radius:99px;padding:3px 10px;font-size:12px}
+        #page-transfer .tf-lock .st span b{color:var(--tf-ink)}
+        #page-transfer .tf-swipe.ok{--tf-acc:var(--tf-ok);background:var(--tf-okbg);border-color:#9fd8b5}
         #page-transfer .t3bad{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:14px;font-size:12px;color:var(--tf-mut)}
         @media (max-width:620px){
             #page-transfer .t3box .rw{grid-template-columns:96px minmax(0,1fr)}
@@ -2136,6 +2150,7 @@
             </div>
         </div>
         <div class="tf-red" id="tf-redBadge" hidden></div>
+        <div class="tf-kinfo" id="tf-kunciInfo" hidden></div>
 
         <div class="tf-head">
             <h1>TRANSFER rider</h1>
@@ -2176,6 +2191,8 @@
                             <button class="pri big" type="button" id="tf-fBtn" style="width:100%;margin-top:10px">+ Tambah ke daftar</button>
                             <p class="hint" id="tf-fHint" style="margin:6px 0 0"></p>
                         </div>
+                        <!-- 21 Okt 2026: form dikunci selama masih ada daftar yang berjalan di tahap 2-4 -->
+                        <div id="tf-fLock" class="tf-lock" hidden></div>
                         <datalist id="tf-dlRider"></datalist>
                         <div id="tf-list1" style="margin-top:10px"></div>
                     </div>
@@ -2214,7 +2231,7 @@
                         <button type="button" id="tf-hCsv" style="margin-bottom:8px">Unduh CSV</button>
                     </div>
                     <label style="margin:8px 0 4px">Catatan untuk cetakan (opsional, muncul di halaman terakhir tiap tanggal)<textarea id="tf-hNote" rows="2" maxlength="1000"></textarea></label>
-                    <p class="hint" style="margin:0">Maksimal 31 hari sekali tampil. Cetak: A4, tiap tanggal mulai di halaman baru, 2 blok x 50 baris (100 transaksi per halaman), urut jam transfer dari yang terpagi. Selalu lengkap per tanggal (filter status &amp; cari tidak berlaku); yang batal tidak dicetak. Kolom RIDER oranye = sudah cocok di cek akhir, NOMINAL merah = selisih/masalah.</p>
+                    <p class="hint" style="margin:0">Maksimal 31 hari sekali tampil. Cetak: A4, tiap tanggal mulai di halaman baru, 2 blok x 50 baris (100 transaksi per halaman), urut jam transfer dari yang terpagi; jam tulisan (mis. "pagi") tetap di bawah data yang diinput sebelumnya; yang belum ada jam di paling bawah dengan kolom WAKTU kosong. Selalu lengkap per tanggal (filter status &amp; cari tidak berlaku); yang batal tidak dicetak. Kolom RIDER oranye = sudah cocok di cek akhir, NOMINAL merah = selisih/masalah.</p>
                 </div>
                 <div class="card"><div class="scroll" id="tf-hist"></div></div>
             </section>
@@ -2269,6 +2286,8 @@
             </form>
         </dialog>
         <div id="tf-toast" class="tf-toast" hidden></div>
+        <!-- 21 Okt 2026: kunci 1 HP — tampil kalau halaman Transfer sedang dipakai di HP lain -->
+        <div id="tf-kunciBlok" class="tf-kblok" hidden role="alertdialog" aria-modal="true" aria-labelledby="tf-kunciJudul"></div>
         <!-- popup "Tercatat" setelah Tambah ke daftar berhasil (tutup sendiri; ketik apa saja juga menutupnya) -->
         <div id="tf-okPop" class="tf-okpop" hidden role="status" aria-live="polite">
             <div class="box">
@@ -21076,6 +21095,89 @@
             let unsubs = [], unsubTgl = null, unsubLuar = [], dibuka = false;
             const S = {user: null, me: '', role: null, riders: [], riderDocs: [], petugas: [], petugasId: '', tgl: '', tiket: [], pend: [], tutup: [], log: [], hist: [], histLoaded: false, ringDay: '', ringList: [], tab: 'kerja', izin: {}, step: 1, v3: '', l3: '', drag3: false, pend3: false, jamList: []};
             const pNama = id => { const p = S.petugas.find(x => x.id === id); return p ? p.nama : (id || '-'); };
+
+            /* ---------- kunci 1 HP (21 Okt 2026) ----------
+               Hanya satu HP yang boleh memakai halaman Transfer pada satu waktu, supaya tidak ada input dobel.
+               Dokumen transfer_kunci/halaman berisi HP yang memegang kunci + detak (diperbarui tiap menit).
+               Kunci lepas saat keluar dari halaman (tombol Menu / pindah halaman), atau otomatis basi 10 menit
+               setelah detak terakhir (mis. HP mati). Owner bisa mengambil alih kapan saja.
+               Kalau Rules transfer_kunci belum dipasang, fitur ini mati dan halaman tetap bisa dipakai seperti biasa. */
+            const KUNCI_ID = 'halaman', KUNCI_BASI = 10 * 60000, KUNCI_DETAK = 60000;
+            const PERANGKAT = (() => {   // id acak per tab browser (bukan data pribadi), tetap sama saat halaman dimuat ulang
+                try { const v = sessionStorage.getItem('tf_perangkat'); if (v && /^[a-f0-9]{16}$/.test(v)) return v; } catch (e) {}
+                const a = new Uint8Array(8); crypto.getRandomValues(a);
+                const v = Array.from(a, x => x.toString(16).padStart(2, '0')).join('');
+                try { sessionStorage.setItem('tf_perangkat', v); } catch (e) {}
+                return v;
+            })();
+            const K = {status: 'cek', x: null};   // cek | punya | blok | bebas | mati
+            let unsubKunci = null, kunciTimer = null, kunciCoba = false;
+            const halamanTerbuka = () => !PAGE.classList.contains('hidden-page');
+            const kunciBasi = x => !x || !x.detak || (Date.now() - x.detak) > KUNCI_BASI;
+            function kunciData() { return {perangkat: PERANGKAT, petugas: String(S.petugasId || '').slice(0, 40), email: String(S.user && S.user.email || ''), sejak: NOW, detak: NOW}; }
+            async function kunciAmbil(paksa) {
+                if (K.status === 'mati' || kunciCoba || !S.user || !halamanTerbuka()) return;
+                kunciCoba = true;
+                try {
+                    const r = await B.kunciAmbil(KUNCI_ID, kunciData(), KUNCI_BASI, !!paksa);
+                    if (r.ok) K.status = 'punya'; else { K.status = 'blok'; K.x = r.oleh; }
+                } catch (e) {
+                    // ditolak Rules: kunci masih dipegang HP lain (menurut jam server). Kalau tidak jelas siapa, jangan menghalangi kerja.
+                    if (e && e.code === 'permission-denied') K.status = (K.x && K.x.perangkat !== PERANGKAT) ? 'blok' : 'mati';
+                    else toast(errMsg(e), 'bad');
+                } finally { kunciCoba = false; renderKunciBlok(); }
+            }
+            function kunciSnap(x) {
+                K.x = x;
+                if (K.status === 'mati') return;
+                if (x && x.perangkat === PERANGKAT) K.status = 'punya';
+                else if (x && !kunciBasi(x)) K.status = 'blok';
+                else { K.status = 'bebas'; kunciAmbil(false); }
+                renderKunciBlok();
+            }
+            function kunciMulai() {
+                if (!unsubKunci) unsubKunci = B.watchDoc('transfer_kunci', KUNCI_ID, kunciSnap, e => {
+                    if (e && e.code === 'permission-denied') { K.status = 'mati'; unsubKunci = null; renderKunciBlok(); }   // Rules belum dipasang
+                    else toast(errMsg(e), 'bad');
+                });
+                if (!kunciTimer) kunciTimer = setInterval(kunciDetak, KUNCI_DETAK);
+                if (K.status === 'punya' || K.status === 'bebas') kunciAmbil(false);
+            }
+            function kunciDetak() {
+                if (!S.user || !halamanTerbuka()) return;
+                if (K.status === 'punya') { if (document.visibilityState === 'visible') B.kunciDetak(KUNCI_ID, PERANGKAT, String(S.petugasId || '').slice(0, 40)).catch(() => {}); }
+                else if (K.status === 'blok' && kunciBasi(K.x)) kunciAmbil(false);
+                else if (K.status === 'blok') renderKunciBlok();   // perbarui "aktif terakhir"
+            }
+            function kunciSelesai() {   // keluar dari halaman Transfer: lepas kunci milik HP ini
+                if (kunciTimer) { clearInterval(kunciTimer); kunciTimer = null; }
+                if (unsubKunci) { try { unsubKunci(); } catch (e) {} unsubKunci = null; }
+                if (K.status === 'punya' && S.user) B.kunciLepas(KUNCI_ID, PERANGKAT).catch(() => {});
+                K.status = K.status === 'mati' ? 'mati' : 'cek'; K.x = null;
+                renderKunciBlok();
+            }
+            function renderKunciBlok() {
+                const el = g('tf-kunciBlok'), info = g('tf-kunciInfo');
+                if (info) { info.hidden = !(K.status === 'mati' && S.role === 'pemilik'); info.textContent = 'Kunci 1 HP belum aktif: Firestore Rules transfer_kunci belum dipasang. Halaman tetap bisa dipakai, tapi bisa dibuka di beberapa HP sekaligus.'; }
+                const blok = K.status === 'blok' && halamanTerbuka();
+                if (!blok) { el.hidden = true; el.innerHTML = ''; return; }
+                if (el.hidden) {   // baru terkunci: tutup popup yang sedang terbuka supaya tidak ada yang tersimpan setengah jalan
+                    try { if (dlg.open) dlg.close(); } catch (e) {}
+                    g('tf-okPop').hidden = true;
+                    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+                }
+                const x = K.x || {}, basi = kunciBasi(x);
+                const sisa = x.detak ? Math.max(0, Math.ceil((x.detak + KUNCI_BASI - Date.now()) / 60000)) : 0;
+                el.innerHTML = '<div class="box"><div class="ic">🔒</div><h3 id="tf-kunciJudul">Halaman Transfer sedang dipakai di HP lain</h3>' +
+                    '<div class="who">Petugas: <b>' + esc(pNama(x.petugas) || '-') + '</b> (' + esc(short(x.email)) + ')<br>sejak ' + esc(jam(x.sejak)) + ' · aktif terakhir ' + esc(jam(x.detak)) + '</div>' +
+                    '<p class="hint" style="margin:0">Supaya tidak ada input dobel, tunggu sampai petugas itu keluar dari halaman Transfer (tekan <b>← Menu</b>). Halaman ini akan terbuka sendiri. ' +
+                    (basi ? 'HP tersebut sudah tidak aktif lebih dari 10 menit.' : 'Kalau HP itu mati atau tertutup, halaman bebas otomatis sekitar <b>' + sisa + ' menit</b> lagi.') + '</p>' +
+                    '<div class="acts"><button type="button" data-act="kunciMenu">← Menu</button><button type="button" data-act="kunciCoba">Coba lagi</button>' +
+                    (S.role === 'pemilik' || basi ? '<button type="button" class="bad solid" data-act="kunciAlih">Ambil alih</button>' : '') + '</div></div>';
+                el.hidden = false;
+            }
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && unsubKunci) kunciDetak(); });
+            window.addEventListener('pagehide', () => { if (K.status === 'punya' && S.user) B.kunciLepas(KUNCI_ID, PERANGKAT).catch(() => {}); });
             const st = pre => { const o = {}; o[pre + 'Oleh'] = S.me; o[pre + 'At'] = NOW; o[pre + 'Petugas'] = S.petugasId; return o; };
             function needP() {
                 const p = S.petugas.find(x => x.id === S.petugasId && x.aktif);
@@ -21250,6 +21352,7 @@
             function renderKerja() {
                 renderBadgeMenu();
                 if (!S.user || !dibuka) return;
+                if (S.drag3) { S.pend3 = true; return; }   // tombol geser sedang digeser: gambar ulang setelah dilepas
                 const T = S.tiket, by = s => T.filter(t => t.status === s);
                 const ds = daftarList();
                 const lain = {};
@@ -21266,15 +21369,20 @@
                 const nj = S.jamList.length;
                 g('tf-jamNote').innerHTML = nj ? '<div class="jnote"><span>⏰ <b>' + nj + ' transfer</b> belum ada jam (bukti pelanggan belum dikirim).</span><button type="button" class="sm" data-act="bukajam">Isi jam</button></div>' : '';
                 const c1 = by('dicatat'), c2 = by('siapcek'), c3 = by('dicek'), c4 = by('diteruskan');
+                const jalan = transaksiJalan(), terkunci = jalan.length > 0;
+                renderKunci(jalan);
                 const d2 = ds.find(d => d.phase === 2), d3 = ds.find(d => d.phase === 3), d4 = ds.find(d => d.phase === 4);
                 renderStepNav({1: c1.length, 2: c2.length, 3: c3.length, 4: c4.length});
                 const maxNo = T.reduce((m, t) => Math.max(m, t.no || 0), 0);
                 g('tf-nextNo').textContent = '— baris berikutnya: No ' + (maxNo + 1);
                 g('tf-list1').innerHTML = c1.length
-                    ? '<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><b>Daftar yang sedang dicatat (' + c1.length + ' transaksi, ' + esc(rp(sum(c1))) + ')</b><button type="button" class="ok big" data-act="selesai">Selesai ✓ lanjut ke tahap 2</button></div>' +
+                    ? '<b>Daftar yang sedang dicatat (' + c1.length + ' transaksi, No ' + esc(c1[0].no) + '–' + esc(c1[c1.length - 1].no) + ', ' + esc(rp(sum(c1))) + ')</b>' +
+                      (terkunci ? '<p class="hint" style="margin:8px 0">🔒 Data ini menunggu daftar sebelumnya tuntas di Cek akhir, baru bisa digeser ke tahap 2.</p>' :
+                      '<div class="tf-swipe ok" data-swipe="selesai" data-sampai="' + esc(c1[c1.length - 1].no) + '" style="margin:8px 0 4px"><div class="fill"></div><div class="txt">Geser → Selesai, lanjut ke tahap 2</div><button type="button" class="knob" aria-label="Geser untuk selesai mencatat dan lanjut ke tahap 2">»</button></div>' +
+                      '<p class="hint" style="margin:0 0 8px">Setelah digeser, daftar ini masuk tahap 2 (cek dari bawah ke atas). Input data baru dikunci sampai daftar ini tuntas di Cek akhir.</p>') +
                       '<div class="scroll"><table><thead><tr><th>No</th><th>Kode</th><th>Nama rider</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam</th><th></th></tr></thead><tbody>' +
                       c1.map(t => '<tr><td class="no">' + esc(t.no) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td>' + jamHtml(t) + '</td><td class="r" style="white-space:nowrap"><button type="button" class="sm" data-act="ubah" data-id="' + esc(t.id) + '">Ubah</button> <button type="button" class="sm bad" data-act="batal" data-id="' + esc(t.id) + '">Batal</button></td></tr>').join('') + '</tbody></table></div>'
-                    : '<p class="hint" style="margin:0">Daftar kosong. Tambahkan bukti dari grup WA, lalu tekan <b>Selesai ✓</b> agar lanjut ke tahap 2. Setelah itu bisa langsung input lagi; nomornya melanjutkan.</p>';
+                    : terkunci ? '' : '<p class="hint" style="margin:0">Daftar kosong. Tambahkan bukti dari grup WA, lalu geser tombol <b>Selesai</b> agar lanjut ke tahap 2. Input data baru bisa lagi setelah daftar itu tuntas di Cek akhir; nomornya melanjutkan.</p>';
                 renderStep2(d2); renderStep3(d3); renderStep4(d4);
                 const prob = T.filter(t => t.status === 'masalah' || t.status === 'selisih');
                 g('tf-tindak').innerHTML = prob.length ? '<div class="card" style="border-color:#f5b5c0"><h2>⚠ Perlu tindak lanjut owner <small>' + prob.length + ' transaksi</small></h2><ol class="items">' + prob.map(t => itemHtml(t, {state: 'prob', body:
@@ -21293,6 +21401,28 @@
             }
             // Jam di daftar: "belum info bukti" diberi badge kuning supaya mudah dicari dan dilengkapi lewat Ubah
             function jamHtml(t) { return (!t.waktuTransfer && t.jamTeks === JAM_KOSONG) ? '<span class="badge b-bukti">' + esc(JAM_KOSONG) + '</span>' : esc(jamT(t)); }
+            // Kunci input (21 Okt 2026): selama masih ada transaksi di tahap 2, 3, atau 4 (semua tanggal), form Catat dan
+            // tombol Selesai dikunci sampai daftar itu tuntas di Cek akhir. Transaksi "Masalah"/"Selisih" (menunggu owner) tidak mengunci.
+            // Catatan: ini kunci di tampilan aplikasi, bukan aturan database.
+            const JALAN = ['siapcek', 'dicek', 'diteruskan'];
+            function transaksiJalan() {
+                const m = new Map();
+                S.pend.concat(S.tiket).forEach(t => m.set(t.id, t));   // S.tiket (tanggal aktif) paling baru, menimpa S.pend
+                return Array.from(m.values()).filter(t => JALAN.indexOf(t.status) >= 0).sort((a, b) => a.tanggal < b.tanggal ? -1 : a.tanggal > b.tanggal ? 1 : a.no - b.no);
+            }
+            function renderKunci(jalan) {
+                const kunci = jalan.length > 0, el = g('tf-fLock');
+                g('tf-fCatat').hidden = kunci; el.hidden = !kunci;
+                if (!kunci) { el.innerHTML = ''; return; }
+                const n = s => jalan.filter(t => t.status === s).length;
+                const tahap = n('siapcek') ? 2 : n('dicek') ? 3 : 4;
+                const tg = Array.from(new Set(jalan.map(t => t.tanggal)));
+                el.innerHTML = '<div class="ic">🔒</div><h3>Input baru dikunci dulu</h3>' +
+                    '<p class="hint" style="margin:0">Masih ada <b>' + jalan.length + ' transaksi</b> (No ' + esc(jalan[0].no) + '–' + esc(jalan[jalan.length - 1].no) + (tg.length > 1 || tg[0] !== S.tgl ? ', ' + esc(tg.map(teksTgl).join(' & ')) : '') + ') yang belum selesai. Jalankan semua tahap sampai <b>Cek akhir</b> selesai, baru bisa mencatat data baru.</p>' +
+                    '<div class="st"><span>Tahap 2 Cek UID: <b>' + n('siapcek') + '</b></span><span>Tahap 3 Transfer: <b>' + n('dicek') + '</b></span><span>Tahap 4 Cek akhir: <b>' + n('diteruskan') + '</b></span></div>' +
+                    (tg.length === 1 && tg[0] !== S.tgl ? '<button type="button" class="pri" data-act="bukatgl" data-tgl="' + esc(tg[0]) + '">Buka tanggal ' + esc(teksTgl(tg[0])) + '</button>'
+                        : '<button type="button" class="pri" data-act="step" data-tfstep="' + tahap + '">Lanjut ke tahap ' + tahap + ' →</button>');
+            }
             // Stepper: hanya satu tahap yang tampil. Angka merah = jumlah transaksi yang menunggu di tahap itu.
             function renderStepNav(n) {
                 g('tf-stepnav').innerHTML = [1, 2, 3, 4].map(i => '<button type="button" data-act="step" data-tfstep="' + i + '" class="' + (S.step === i ? 'on' : '') + '"' + (S.step === i ? ' aria-current="step"' : '') + '><i>' + i + '</i><span>' + esc(STEP_NAMA[i]) + '</span>' + (n[i] ? '<em>' + (n[i] > 99 ? '99+' : n[i]) + '</em>' : '') + '</button>').join('');
@@ -21303,7 +21433,7 @@
 
             function renderStep2(d) {
                 const el = g('tf-card2');
-                if (!d) { el.className = 'card lock'; el.innerHTML = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas') + '<div class="empty">Belum ada daftar. Tekan Selesai ✓ di langkah 1.</div>'; return; }
+                if (!d) { el.className = 'card lock'; el.innerHTML = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas') + '<div class="empty">Belum ada daftar. Geser tombol Selesai di tahap 1.</div>'; return; }
                 el.className = 'card';
                 const act = d.rows.filter(t => t.status === 'siapcek').pop();
                 el.innerHTML = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas', 'Daftar ' + d.k + ' (No ' + d.dari + '–' + d.sampai + ') · cocokkan dengan pesan rider di grup, lalu tandai di grup') +
@@ -21548,15 +21678,19 @@
                     if (ok) toast('Kode ' + r.id + ' dihapus');
                 },
                 async bukatgl(t, b) { await cobaGanti(b.dataset.tgl); },
-                async selesai() {
-                    if (!needP()) return;
-                    const rows = S.tiket.filter(t => t.status === 'dicatat');
-                    if (!rows.length) return;
-                    const v = await ask({title: 'Selesai mencatat?', ok: 'Ya, lanjut ke langkah 2', info: '<p><b>' + rows.length + ' transaksi</b> (No ' + rows[0].no + '–' + rows[rows.length - 1].no + '), total <b>' + esc(rp(sum(rows))) + '</b>.</p><p class="hint">Daftar ini dikunci dan masuk langkah 2 (cek dari bawah ke atas). Input berikutnya melanjutkan nomor.</p>'});
-                    if (!v) return;
-                    const sampai = rows[rows.length - 1].no;
-                    await B.commit(rows.map(t => up(t, Object.assign({status: 'siapcek', daftarSampai: sampai}, st('selesai')))));
-                    toast('Masuk tahap 2 (buka tombol 2 Cek UID). Mulai dari baris paling bawah.');
+                // Dipanggil dari tombol geser (geser = konfirmasi, tanpa popup tambahan). Hanya data yang tampil saat digeser
+                // (sampai nomor data-sampai) yang dikunci; data yang baru masuk dari HP lain tetap di tahap 1.
+                async selesai(t, b) {
+                    try {
+                        if (!needP()) return;
+                        if (transaksiJalan().length) return toast('Masih ada daftar yang belum tuntas sampai Cek akhir. Selesaikan dulu.', 'bad');
+                        const batas = Number(b && b.dataset.sampai) || Infinity;
+                        const rows = S.tiket.filter(x => x.status === 'dicatat' && x.no <= batas);
+                        if (!rows.length) return;
+                        const sampai = rows[rows.length - 1].no;
+                        await B.commit(rows.map(x => up(x, Object.assign({status: 'siapcek', daftarSampai: sampai}, st('selesai')))));
+                        toast(rows.length + ' transaksi masuk tahap 2 (buka tombol 2 Cek UID). Mulai dari baris paling bawah.');
+                    } finally { renderKerja(); }
                 },
                 async c2ok(t) {
                     // Ceklis "Transfer ke ProjekGo" sudah dilakukan saat mencatat (tahap 1), jadi di sini cukup Cocok.
@@ -21611,6 +21745,16 @@
                     S.v3 = (vi >= 0 && vi < done.length - 1) ? done[vi + 1].id : '';
                     renderKerja();
                 },
+                async kunciMenu() { if (O.kembali) O.kembali(); },
+                async kunciCoba() { await kunciAmbil(false); if (K.status === 'blok') toast('Halaman masih dipakai di HP lain.', 'bad'); },
+                async kunciAlih() {
+                    const x = K.x || {};
+                    if (S.role !== 'pemilik' && !kunciBasi(x)) return toast('Hanya owner yang bisa mengambil alih saat HP lain masih aktif.', 'bad');
+                    const v = await ask({title: 'Ambil alih halaman Transfer?', ok: 'Ya, ambil alih', tone: 'bad', info: '<p>Petugas <b>' + esc(pNama(x.petugas)) + '</b> di HP lain akan langsung terkunci.</p><p class="hint">Pastikan petugas itu <b>tidak sedang di tengah transfer di BCA</b>. Tanyakan dulu kalau bisa.</p>'});
+                    if (!v) return;
+                    await kunciAmbil(true);
+                    if (K.status === 'punya') toast('Halaman Transfer sekarang dipakai di HP ini.');
+                },
                 async bukajam() { setTab('jam'); window.scrollTo(0, 0); },
                 // Isi jam transfer yang tadinya "belum info bukti" (bukti pelanggan menyusul). Yang berubah hanya jamnya.
                 async isijam(t, b) {
@@ -21633,7 +21777,7 @@
                     else {
                         try { await B.commit([up(t, Object.assign({}, base, st('diubah'))), log()]); }
                         catch (e) {
-                            // Data yang sudah lewat tahap 1 hanya boleh dikoreksi owner (aturan database): minta persetujuan owner
+                            // Cadangan: kalau Rules isiJamOk (21 Okt 2026) belum dipasang, data yang sudah lewat tahap 1 hanya boleh dikoreksi owner
                             if (!e || e.code !== 'permission-denied') throw e;
                             const ok = await mintaOwner('Persetujuan owner: isi jam transfer', info + '<p class="hint">Data ini sudah lewat tahap 1, jadi perubahan jam perlu persetujuan owner.</p>', [],
                                 em => [up(t, Object.assign({}, base, {diubahOleh: em, diubahAt: NOW})), log(em)]);
@@ -21730,15 +21874,16 @@
                 const b = ev.target.closest('[data-act]');
                 if (!b || !PAGE.contains(b) || b.tagName === 'INPUT' || b.disabled) return;
                 const a = b.dataset.act;
+                if (K.status === 'blok' && !/^kunci/.test(a)) return;   // halaman dipakai HP lain: hanya tombol di layar kunci yang jalan
                 if (ACT[a]) run(() => ACT[a](b.dataset.id ? findT(b.dataset.id) : null, b));
             });
             /* ---------- tombol geser tahap 3 (sentuh & mouse) ---------- */
             let geser = null;
             PAGE.addEventListener('pointerdown', ev => {
                 const k = ev.target.closest('.tf-swipe .knob');
-                if (!k || busy || geser) return;
+                if (!k || busy || geser || K.status === 'blok') return;
                 const tr = k.parentElement;
-                geser = {k: k, tr: tr, fill: tr.querySelector('.fill'), x0: ev.clientX, dx: 0, max: Math.max(1, tr.clientWidth - k.offsetWidth - 8), id: tr.dataset.id, pid: ev.pointerId};
+                geser = {k: k, tr: tr, fill: tr.querySelector('.fill'), x0: ev.clientX, dx: 0, max: Math.max(1, tr.clientWidth - k.offsetWidth - 8), id: tr.dataset.id, act: tr.dataset.swipe === 'selesai' ? 'selesai' : 'geser3', pid: ev.pointerId};
                 S.drag3 = true; tr.classList.add('drag');
                 try { k.setPointerCapture(ev.pointerId); } catch (e) {}
                 ev.preventDefault();
@@ -21754,8 +21899,8 @@
                 const x = geser; geser = null; S.drag3 = false; x.tr.classList.remove('drag');
                 if (ev && ev.type === 'pointerup' && x.dx >= x.max * 0.85) {
                     x.k.style.transform = 'translateX(' + x.max + 'px)'; x.fill.style.width = '100%'; x.tr.classList.add('busy');
-                    const t = findT(x.id);
-                    run(() => ACT.geser3(t)).then(() => { if (S.pend3 || x.tr.isConnected) renderKerja(); });
+                    const t = x.id ? findT(x.id) : null;
+                    run(() => ACT[x.act](t, x.tr)).then(() => { if (S.pend3 || x.tr.isConnected) renderKerja(); });
                 } else {
                     x.k.style.transform = ''; x.fill.style.width = '';
                     if (S.pend3) renderKerja();
@@ -21794,7 +21939,9 @@
             }
             g('tf-okTutup').addEventListener('click', tutupOkPop);
             const kirimCatat = () => run(async () => {
+                if (K.status === 'blok') return;
                 if (okPopBuka()) return;   // popup Tercatat masih terbuka: tekan OK dulu
+                if (transaksiJalan().length) { renderKerja(); return toast('Input baru dikunci: selesaikan dulu daftar yang berjalan sampai Cek akhir.', 'bad'); }
                 const wajib = ['tf-fKode', 'tf-fNominal', 'tf-fPel', 'tf-fJam'].map(g).find(x => !x.checkValidity());
                 if (wajib) { wajib.reportValidity(); return; }
                 if (!needP()) return;
@@ -21876,10 +22023,22 @@
                 return ini ? w[0] + '.' + ini : w[0];
             }
             const menitWib = ms => { if (!ms) return null; const d = wd(ms); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
-            const sortForPrint = rows => rows.slice().sort((a, b) => {
-                const ma = menitWib(a.waktuTransfer), mb = menitWib(b.waktuTransfer);
-                return ((ma === null) - (mb === null)) || (ma === null ? 0 : ma - mb) || (a.no - b.no);
-            });
+            // Urutan cetak (21 Okt 2026):
+            //  - jam angka (mis. 20:30): urut dari yang terpagi
+            //  - jam tulisan (mis. "pagi"): ikut urutan input, yaitu tepat di bawah data yang diinput sebelumnya
+            //  - jam kosong ("belum info bukti"): paling bawah, urut No
+            const jamKosongCetak = t => !t.waktuTransfer && (!t.jamTeks || t.jamTeks === JAM_KOSONG);
+            const sortForPrint = rows => {
+                const urut = rows.slice().sort((a, b) => a.no - b.no);
+                const awal = [], grup = [], kosong = [];
+                urut.forEach(t => {
+                    if (jamKosongCetak(t)) kosong.push(t);
+                    else if (t.waktuTransfer) grup.push({t: t, m: menitWib(t.waktuTransfer), ikut: []});
+                    else (grup.length ? grup[grup.length - 1].ikut : awal).push(t);   // jam tulisan menempel ke data sebelumnya
+                });
+                grup.sort((a, b) => (a.m - b.m) || (a.t.no - b.t.no));
+                return awal.concat(...grup.map(x => [x.t].concat(x.ikut)), kosong);
+            };
             function printHalf(rows, startNo) {
                 const w = [6, 10, 25, 18, 24, 14];   // mm, total 97: NO, KODE, RIDER, NOMINAL, PELANGGAN, WAKTU
                 let h = '<table class="half"><colgroup>' + w.map(x => '<col style="width:' + x + 'mm">').join('') + '</colgroup>' +
@@ -22004,11 +22163,13 @@
                     if (S.role === 'pemilik') unsubs.push(B.watch(C.log, {orderBy: 'waktu', desc: true, limit: 100}, a => { S.log = a; renderLog(); }, eh));
                     setTab('kerja'); setTgl(t);
                 } else { renderTop(); renderKerja(); }
+                kunciMulai();
             }
-            function keluar() { stopSemua(); S.user = null; S.role = null; S.tiket = []; S.pend = []; S.hist = []; S.histLoaded = false; S.izin = {}; S.jamList = []; dibuka = false; renderBadgeMenu(); renderJamBadge(); }
+            function tutup() { kunciSelesai(); }
+            function keluar() { kunciSelesai(); stopSemua(); S.user = null; S.role = null; S.tiket = []; S.pend = []; S.hist = []; S.histLoaded = false; S.izin = {}; S.jamList = []; dibuka = false; renderBadgeMenu(); renderJamBadge(); }
             // Lewat tengah malam: badge merah muncul sendiri
             setInterval(() => { if (S.user && dibuka && !busy && !dlg.open && !PAGE.classList.contains('hidden-page')) { renderTop(); renderKerja(); } }, 60000);
-            return {masuk: masuk, buka: buka, keluar: keluar};
+            return {masuk: masuk, buka: buka, tutup: tutup, keluar: keluar};
         }
 
         // Sambungan Firebase untuk menu Transfer Rider: memakai login, db, dan daftar rider aplikasi admin ini.
@@ -22066,6 +22227,27 @@
                     tx.set(hr, {jumlah: no});
                     return no;
                 }),
+                // Kunci 1 HP (koleksi transfer_kunci). Dibaca & ditulis dalam transaksi supaya dua HP tidak memegang kunci bersamaan.
+                watchDoc: (col, id, cb, onErr) => onSnapshot(doc(db, col, id), s => cb(s.exists() ? fromDoc(s) : null), onErr),
+                kunciAmbil: (id, data, basiMs, paksa) => runTransaction(db, async tx => {
+                    const ref = doc(db, 'transfer_kunci', id), s = await tx.get(ref);
+                    if (s.exists() && !paksa) {
+                        const x = fromDoc(s);
+                        if (x.perangkat !== data.perangkat && x.detak && (Date.now() - x.detak) < basiMs) return {ok: false, oleh: x};
+                    }
+                    tx.set(ref, toData(data));
+                    return {ok: true};
+                }),
+                kunciDetak: (id, perangkat, petugas) => runTransaction(db, async tx => {
+                    const ref = doc(db, 'transfer_kunci', id), s = await tx.get(ref);
+                    if (!s.exists() || s.data().perangkat !== perangkat) return false;
+                    tx.update(ref, {detak: serverTimestamp(), petugas: petugas});
+                    return true;
+                }),
+                kunciLepas: (id, perangkat) => runTransaction(db, async tx => {
+                    const ref = doc(db, 'transfer_kunci', id), s = await tx.get(ref);
+                    if (s.exists() && s.data().perangkat === perangkat) tx.delete(ref);
+                }),
                 // Owner mengetik sandinya sendiri. Dipakai sesi terpisah tanpa disimpan, lalu langsung keluar.
                 ownerDo: async (email, pass, opsFn) => {
                     if (!authOwner) {
@@ -22092,7 +22274,7 @@
                 const hasil = asliSwitch(page);   // menyembunyikan halaman lain
                 const pt = document.getElementById('page-transfer');
                 if (pt) pt.classList.toggle('hidden-page', page !== 'transfer');
-                if (page === 'transfer') { window.scrollTo(0, 0); T.buka(); }
+                if (page === 'transfer') { window.scrollTo(0, 0); T.buka(); } else T.tutup();   // keluar halaman = lepas kunci 1 HP
                 return hasil;
             };
         })();
