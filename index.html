@@ -23449,6 +23449,9 @@ window.PembuatQR = PembuatQR;
     .lk-gerbang-isi h3 { margin: 0 0 6px; font-size: 17px; font-weight: 900; }
     .lk-gerbang-isi p { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: #57534e; }
     .lk-gerbang-isi button { width: 100%; min-height: 48px; border: 0; border-radius: 14px; background: #4338ca; color: #fff; font-size: 14px; font-weight: 800; }
+    .lk-gerbang-isi button:disabled { opacity: .6; }
+    .lk-gerbang-isi .lk-gerbang-nanti { margin-top: 8px; min-height: 42px; background: #f5f5f4; color: #57534e; }
+    .lk-gerbang-ikon.lk-ikon-lok { background: #ffedd5; font-size: 26px; }
     .lk-tahap.lk-sorot { animation: lk-sorot 1.1s ease-in-out 3; }
     @keyframes lk-sorot { 0%, 100% { box-shadow: 0 0 0 0 rgba(67,56,202,.0); } 50% { box-shadow: 0 0 0 6px rgba(67,56,202,.45); } }
     @media (prefers-reduced-motion: reduce) { .lk-tahap.lk-sorot { animation: none; outline: 3px solid #4338ca; } }
@@ -23550,22 +23553,27 @@ window.PembuatQR = PembuatQR;
 
     // ---------- Aksi ----------
     function majuKe(baru) {
-        if (!tahapSah(baru) || baru === st.tahap) return;
+        if (!tahapSah(baru) || baru === st.tahap) return false;
+        // (22 Okt 2026, APK versi 4) Mulai antar wajib izin lokasi -> pelanggan melihat posisi di peta
+        if (baru === 'antar' && !gerbangLokasi()) return false;
         if (st.id) tandaiUpdateTahap(st.id);
         var lama = st.tahap;
         st.tahap = baru; st.tahapMs = Date.now();
-        tulis({ tahap: baru }, { tahap: baru });
+        tulis({ tahap: baru }, dataLacakTahap(baru, lama));
+        lokasiIkutiTahap();
         // Salah ketuk? 8 detik untuk membatalkan
         clearTimeout(st.undoTimer);
         st.undo = lama;
         st.undoTimer = setTimeout(function () { st.undo = null; gambar(); }, 8000);
         gambar();
+        return true;
     }
     function batalkan() {
         if (!st.undo) return;
-        var ke = st.undo; st.undo = null; clearTimeout(st.undoTimer);
+        var ke = st.undo, dari = st.tahap; st.undo = null; clearTimeout(st.undoTimer);
         st.tahap = ke; st.tahapMs = Date.now();
-        tulis({ tahap: ke }, { tahap: ke });
+        tulis({ tahap: ke }, dataLacakTahap(ke, dari));
+        lokasiIkutiTahap();
         gambar();
     }
     function pilihEstimasi(n) {
@@ -23761,6 +23769,121 @@ window.PembuatQR = PembuatQR;
         lain: 'Perkiraan selesai berapa menit lagi?'
     };
     var INGAT_MENIT = 8, INGAT_TAMBAH_EST = 3;
+    // APK versi 4: warna & ikon bar diatur dari sini (APK lama mengabaikannya)
+    var BAR_WARNA = '#EA580C';
+    function ikonTahap() {
+        if (st.tahap === 'lokasi') return st.jenis === 'food' ? '🍳' : '🧰';   // wajan / kotak alat
+        if (st.tahap === 'antar' && st.jenis === 'kirim') return '📦';                     // paket
+        return '🛵';                                                                          // motor
+    }
+
+    // ---------- LOKASI LIVE (APK versi 4, 22 Okt 2026) ----------
+    // Layanan lokasi APK dinyalakan SIAGA saat order diterima (aplikasi masih terbuka), GPS baru
+    // dibaca & dikirim saat tahap "Mengantar". Token login rider diserahkan ke APK (hanya di memori)
+    // dan diperbarui tiap 10 menit. APK lama / Chrome: tidak ada lacakSiap -> bagian ini diam.
+    var lok = { id: '', timer: 0, tundaAntar: false };
+    function adaLokasi() { var ai = window.AndroidInterface; return !!(ai && typeof ai.lacakSiap === 'function'); }
+    function statusLokasi() { try { return String(window.AndroidInterface.lacakStatus() || ''); } catch (e) { return ''; } }
+    async function ambilToken() {
+        var u = window.riderAuth && window.riderAuth.currentUser;
+        if (!u) return '';
+        try { return String(await u.getIdToken() || ''); } catch (e) { return ''; }
+    }
+    // Mundur dari "Mengantar" (salah ketuk) -> posisi dihapus supaya peta pelanggan tidak menampilkan posisi lama
+    function dataLacakTahap(t, lama) {
+        var d = { tahap: t };
+        if (lama === 'antar' && t !== 'antar') d.posisi = null;
+        return d;
+    }
+    async function siapkanLokasi() {
+        if (!adaLokasi() || !st.id || !KODE_ORDER.test(st.kode) || !st.proses) return '';
+        var t = await ambilToken();
+        if (!t || !st.id) return '';
+        var hasil = '';
+        try { hasil = String(window.AndroidInterface.lacakSiap(st.kode, t, st.tahap === 'antar') || ''); } catch (e) { hasil = 'gagal'; }
+        if (hasil === 'aktif') { lok.id = st.id; jadwalToken(); }
+        return hasil;
+    }
+    function jadwalToken() {
+        clearInterval(lok.timer);
+        lok.timer = setInterval(async function () {
+            if (!lok.id) { clearInterval(lok.timer); return; }
+            var t = await ambilToken();
+            try { if (t) window.AndroidInterface.lacakToken(t); } catch (e) {}
+        }, 10 * 60 * 1000);
+    }
+    function lokasiIkutiTahap() {
+        if (!adaLokasi()) return;
+        try { window.AndroidInterface.lacakKirim(st.tahap === 'antar'); } catch (e) {}
+    }
+    function hentikanLokasi() {
+        lok.id = ''; lok.tundaAntar = false; clearInterval(lok.timer);
+        var pop = document.getElementById('lk-izin-lok'); if (pop) pop.remove();
+        if (!adaLokasi()) return;
+        try { window.AndroidInterface.lacakBerhenti(); } catch (e) {}
+    }
+    // Tahap "Mulai antar": izin lokasi wajib. Kendala teknis lain (token, sinyal) TIDAK menahan rider.
+    function gerbangLokasi() {
+        if (!adaLokasi()) return true;
+        var s = statusLokasi();
+        if (s === 'aktif') return true;
+        if (s === 'izin') { siapkanLokasi(); return true; }   // izin ada, layanan belum jalan -> nyalakan, lanjut
+        lok.tundaAntar = true;
+        tampilIzinLokasi(false);
+        return false;
+    }
+    window.lacakStatusDariAndroid = function (s) {
+        s = String(s || '');
+        var pop = document.getElementById('lk-izin-lok');
+        if (s === 'aktif') {
+            lok.id = st.id; jadwalToken();
+            if (pop) pop.remove();
+            if (lok.tundaAntar) {
+                lok.tundaAntar = false;
+                var a = cfg().aksi[st.tahap];
+                if (a && a[1] === 'antar') majuKe('antar');
+            } else lokasiIkutiTahap();
+        } else if (s === 'izin_ditolak') {
+            if (lok.tundaAntar) tampilIzinLokasi(true);
+        } else if (s === 'gagal') {
+            toast('Lokasi belum bisa dinyalakan. Coba lagi sebentar.');
+        }
+    };
+    function tampilIzinLokasi(ditolak) {
+        var lama = document.getElementById('lk-izin-lok'); if (lama) lama.remove();
+        var latar = el('div', 'lk-gerbang'); latar.id = 'lk-izin-lok';
+        latar.setAttribute('role', 'alertdialog'); latar.setAttribute('aria-modal', 'true');
+        var k = el('div', 'lk-gerbang-isi');
+        k.appendChild(el('div', 'lk-gerbang-ikon lk-ikon-lok', '📍'));
+        k.appendChild(el('h3', '', 'Izinkan lokasi untuk mulai mengantar'));
+        k.appendChild(el('p', '', ditolak
+            ? 'Izin lokasi ditolak. Buka Pengaturan → Izin → Lokasi → pilih "Izinkan saat aplikasi digunakan", lalu kembali ke sini.'
+            : 'Selama mengantar, pelanggan melihat posisimu di peta, jadi tidak perlu bertanya "sudah sampai mana?". Lokasi hanya dibagikan sampai pesanan selesai.'));
+        var b = el('button', '', ditolak ? 'Buka pengaturan' : 'Izinkan lokasi'); b.type = 'button';
+        b.addEventListener('click', function () {
+            if (ditolak) { try { window.AndroidInterface.bukaPengaturanAplikasi(); } catch (e) {} return; }
+            b.disabled = true;
+            siapkanLokasi().then(function (h) {
+                b.disabled = false;
+                if (h === 'aktif') window.lacakStatusDariAndroid('aktif');
+                else if (h !== 'minta_izin') toast('Lokasi belum bisa dinyalakan. Coba lagi sebentar.');
+                // 'minta_izin': jawaban menyusul lewat lacakStatusDariAndroid
+            });
+        });
+        var tutup = el('button', 'lk-gerbang-nanti', 'Nanti'); tutup.type = 'button';
+        tutup.addEventListener('click', function () { lok.tundaAntar = false; latar.remove(); });
+        k.appendChild(b); k.appendChild(tutup);
+        latar.appendChild(k);
+        document.body.appendChild(latar);
+        b.focus();
+    }
+    // Kembali dari Pengaturan / layar dibuka lagi: nyalakan lagi kalau order sedang berjalan
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible' || !adaLokasi() || !st.id || !st.proses) return;
+        if (statusLokasi() !== 'izin') return;
+        siapkanLokasi().then(function (h) { if (h === 'aktif' && lok.tundaAntar) window.lacakStatusDariAndroid('aktif'); });
+    });
+
     var barTerakhir = '';
     function adaBar() { var ai = window.AndroidInterface; return !!(ai && typeof ai.barLacakSet === 'function'); }
     function kirimBar() {
@@ -23782,7 +23905,8 @@ window.PembuatQR = PembuatQR;
                     tombol: (BAR_TOMBOL[st.jenis] || BAR_TOMBOL.lain)[st.tahap] || 'Buka aplikasi',
                     aksi: a ? 'maju:' + a[1] : 'buka',
                     tanya: tanya, est: st.est || 0, opsi: ESTIMASI,
-                    undo: !!st.undo, ingat: ingat, hijau: st.tahap === 'antar'
+                    undo: !!st.undo, ingat: ingat, hijau: st.tahap === 'antar',
+                    warna: BAR_WARNA, ikon: ikonTahap()
                 });
             }
         } catch (e) { teks = ''; }
@@ -23799,7 +23923,7 @@ window.PembuatQR = PembuatQR;
         if ((m = /^maju:([a-z]{4,8})$/.exec(aksi))) {
             var a = c.aksi[st.tahap];
             if (!a || a[1] !== m[1]) { barTerakhir = ''; kirimBar(); return; }   // bar tertinggal -> kirim keadaan terbaru
-            majuKe(m[1]);
+            if (!majuKe(m[1])) gagal();   // mis. izin lokasi belum ada -> bar menawarkan buka aplikasi
         } else if ((m = /^est:(\d{1,3})$/.exec(aksi))) {
             var n = parseInt(m[1], 10);
             if (st.tahap !== 'lokasi' || !c.tanyaEst || ESTIMASI.indexOf(n) < 0) { gagal(); return; }
@@ -23894,6 +24018,13 @@ window.PembuatQR = PembuatQR;
                 tulis({ tahap: 'menuju', estimasi_menit: null }, null, true);
             }
             mulaiPantau();
+            // Lokasi live: siaga sejak order diterima (sekali per order, atau kalau layanan mati)
+            if (adaLokasi() && document.visibilityState === 'visible' && (lok.id !== docId || statusLokasi() !== 'aktif')) {
+                lok.id = docId;
+                siapkanLokasi().then(function (h) {
+                    if (h !== 'aktif' && h !== 'minta_izin') lok.id = '';   // dicoba lagi pada render berikutnya
+                });
+            }
         }
         gambar();
     };
@@ -23904,6 +24035,7 @@ window.PembuatQR = PembuatQR;
         hentiPantau();
         clearTimeout(st.undoTimer);
         st.id = ''; st.lacak = null; st.undo = null; st.proses = false;
+        hentikanLokasi();
         gambar();
     };
 
@@ -23915,11 +24047,18 @@ window.PembuatQR = PembuatQR;
         delete simpanan[idOrder];
         fsMod().then(function (m) {
             var db = m.getFirestore();
-            return m.setDoc(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', s.kode), {
+            var ref = m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', s.kode);
+            var isi = {
                 order_id: idOrder, uid: uid, k: k, jenis: s.jenis,
                 tahap: 'selesai', tahap_at: m.serverTimestamp(), selesai_at: m.serverTimestamp(),
-                titik: null   // lokasi pelanggan dihapus begitu pesanan selesai
-            }, { merge: true });
+                titik: null,   // lokasi pelanggan dihapus begitu pesanan selesai
+                posisi: null   // posisi rider (lokasi live) ikut dihapus
+            };
+            // Cadangan: rules lama (belum mengenal "posisi") menolak -> tanda selesai tetap dikirim tanpa posisi
+            return m.setDoc(ref, isi, { merge: true }).catch(function () {
+                delete isi.posisi;
+                return m.setDoc(ref, isi, { merge: true });
+            });
         }).catch(function (e) { console.warn('[Lacak] tanda selesai gagal', e); });
     };
 })();
