@@ -118,6 +118,17 @@
   .sc-cik { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; border-radius: 2px; animation: sc-pecah 1.4s .25s ease-out both; }
   @keyframes sc-pecah { from { transform: translate(0,0) scale(0); opacity: 1; } to { transform: translate(var(--x), var(--y)) scale(1) rotate(160deg); opacity: 0; } }
   .track { position: relative; display: flex; justify-content: space-between; margin: 10px 0 0; }
+  /* PETA RIDER (22 Okt 2026): posisi rider saat tahap "Diantar" (dikirim aplikasi rider tiap ±30 detik) */
+  .peta-rider { margin-top: 10px; border: 1px solid var(--ln); border-radius: 14px; overflow: hidden; background: var(--soft); }
+  .peta-rider[hidden] { display: none; }
+  #lk-peta { height: 190px; background: var(--soft); }
+  .peta-ket { display: flex; align-items: center; gap: 6px; padding: 7px 10px; font-size: 12px; font-weight: 700; color: var(--mu); background: var(--sf); border-top: 1px solid var(--ln); }
+  .peta-ket b { color: var(--ink); }
+  .peta-tunggu { padding: 14px 12px; font-size: 12.5px; font-weight: 700; color: var(--mu); text-align: center; }
+  .pin-rider { width: 38px; height: 38px; border-radius: 50%; background: var(--acc); border: 3px solid #fff; box-shadow: 0 4px 12px rgba(0,0,0,.3); display: grid; place-items: center; font-size: 19px; }
+  .pin-rider::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 3px solid var(--acc); animation: pin-denyut 1.8s ease-out infinite; }
+  @keyframes pin-denyut { from { transform: scale(1); opacity: .7; } to { transform: scale(1.9); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .pin-rider::after { animation: none; display: none; } }
   .tr-garis { position: absolute; left: 30px; right: 30px; top: 13px; height: 4px; border-radius: 4px; background: var(--ln); }
   .tr-isi { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--acc), #ffb37a, var(--acc)); background-size: 200% 100%; animation: tr-kilau 1.6s linear infinite; transition: width .7s ease; }
   .track.ok .tr-isi { background: #1a8f55; animation: none; }
@@ -192,6 +203,11 @@
           <div class="upd" id="lk-upd" hidden></div>
         </div>
         <div class="track" id="lk-track" aria-hidden="true"></div>
+        <div class="peta-rider" id="lk-peta-wrap" hidden>
+          <div id="lk-peta" role="img" aria-label="Peta posisi rider"></div>
+          <div class="peta-tunggu" id="lk-peta-tunggu" hidden>📍 Menunggu lokasi rider…</div>
+          <div class="peta-ket" id="lk-peta-ket" hidden>🛵 <span id="lk-peta-teks"></span></div>
+        </div>
         <button class="suara" id="lk-suara" type="button" aria-pressed="false">🔔 Ketuk untuk menyalakan suara tiap tahap</button>
         <div class="rider" id="lk-rider" hidden>
           <div class="av" id="lk-av">?</div>
@@ -456,6 +472,7 @@
     $('lk-hero').classList.toggle('ok', selesai);
     gambarAdegan(t);
     gambarGaris(daftar.length, idx, selesai);
+    gambarPeta(t);
     $('lk-suara').hidden = selesai;
     aturTombolSuara();
 
@@ -466,6 +483,79 @@
     $('k-ulas').hidden = false;
     aturKunci(t);
   }
+
+  // ---------- Peta rider saat "Diantar" (22 Okt 2026) ----------
+  // Posisi dari lacak/<kode>.posisi (ditulis aplikasi rider HANYA selama tahap Mengantar).
+  // Leaflet + peta OpenStreetMap dimuat hanya saat dibutuhkan. Posisi > 10 menit dianggap basi.
+  let peta = null, pinRider = null, leafletJanji = null;
+  function muatLeaflet() {
+    if (window.L) return Promise.resolve(window.L);
+    if (leafletJanji) return leafletJanji;
+    leafletJanji = new Promise((ok, gagalMuat) => {
+      const css = document.createElement('link');
+      css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      css.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin = '';
+      document.head.appendChild(css);
+      const js = document.createElement('script');
+      js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      js.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin = '';
+      js.onload = () => window.L ? ok(window.L) : gagalMuat(new Error('leaflet'));
+      js.onerror = () => { leafletJanji = null; gagalMuat(new Error('leaflet')); };
+      document.head.appendChild(js);
+    });
+    return leafletJanji;
+  }
+  function posisiSah() {
+    const p = lacak && lacak.posisi;
+    if (!p || typeof p.lat !== 'number' || typeof p.lng !== 'number') return null;
+    if (!isFinite(p.lat) || !isFinite(p.lng) || Math.abs(p.lat) > 90 || Math.abs(p.lng) > 180) return null;
+    const at = msDari(p.at);
+    if (!at || Date.now() - at > 10 * 60000) return null;
+    return { lat: p.lat, lng: p.lng, at };
+  }
+  function teksDetik(ms) {
+    const d = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    return d < 15 ? 'baru saja' : (d < 60 ? d + ' detik lalu' : Math.round(d / 60) + ' menit lalu');
+  }
+  function gambarPeta(t) {
+    const wrap = $('lk-peta-wrap');
+    if (t !== 'antar') { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    const p = posisiSah();
+    $('lk-peta').hidden = !p;
+    $('lk-peta-ket').hidden = !p;
+    $('lk-peta-tunggu').hidden = !!p;
+    if (!p) return;
+    $('lk-peta-teks').innerHTML = '';
+    $('lk-peta-teks').append('Posisi rider · diperbarui ', Object.assign(document.createElement('b'), { textContent: teksDetik(p.at) }));
+    muatLeaflet().then((L) => {
+      const titik = [p.lat, p.lng];
+      if (!peta) {
+        peta = L.map('lk-peta', { zoomControl: false, attributionControl: true }).setView(titik, 16);
+        // referrerPolicy: OpenStreetMap hanya menerima nama situs, bukan alamat lengkap (kode order tidak ikut terkirim)
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(peta);
+        pinRider = L.marker(titik, { icon: L.divIcon({ className: '', html: '<div class="pin-rider">🛵</div>', iconSize: [38, 38], iconAnchor: [19, 19] }), keyboard: false }).addTo(peta);
+      } else {
+        pinRider.setLatLng(titik);
+        peta.panTo(titik, { animate: true });
+      }
+      setTimeout(() => { try { peta.invalidateSize(); } catch (e) {} }, 60);
+    }).catch(() => {
+      $('lk-peta').hidden = true;
+      $('lk-peta-tunggu').hidden = false;
+      $('lk-peta-tunggu').textContent = 'Peta belum bisa dimuat. Cek koneksi internet.';
+    });
+  }
+  // "diperbarui x detik lalu" tetap berjalan tanpa membaca server
+  setInterval(() => {
+    if (document.hidden || $('lk-peta-wrap').hidden) return;
+    const p = posisiSah();
+    if (!p) { gambarPeta(tahapSekarang()); return; }
+    const b = $('lk-peta-teks').querySelector('b'); if (b) b.textContent = teksDetik(p.at);
+  }, 15000);
 
   // ---------- Kotak ulasan: terkunci / terbuka ----------
   function aturKunci(t) {
