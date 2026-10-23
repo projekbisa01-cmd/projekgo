@@ -961,6 +961,14 @@
         .pr-ban { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 10px; padding: 8px 10px; font-size: 11.5px; font-weight: 700; }
         .pr-dit { font-size: 9px; font-weight: 900; padding: 1px 6px; border-radius: 99px; background: var(--ad-sf2); color: var(--ad-mu); margin-left: 4px; }
         /* Pratinjau "Tampilan di HP rider" (23 Okt 2026). Gaya psn-* disalin dari aplikasi rider, dibatasi di .pr-hp */
+        /* Kartu pesan terpisah + nama penerima (23 Okt 2026). Garis kiri: biru khusus, merah peringatan, oranye semua */
+        .pr-row.pr-row2 { border: 1px solid var(--ad-ln); border-left: 4px solid #94a3b8; border-radius: 12px; padding: 10px 11px; margin-top: 8px; background: var(--ad-sf); box-shadow: 0 1px 2px rgba(15,23,42,.05); row-gap: 5px; }
+        .pr-row.pr-row2:first-child { margin-top: 0; }
+        .pr-row2.pk { border-left-color: #0284c7; } .pr-row2.pu { border-left-color: #ea580c; }
+        .pr-row2.pp { border-left-color: #dc2626; background-image: linear-gradient(rgba(220,38,38,.05), rgba(220,38,38,.05)); }
+        .pr-to { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px; } .pr-to span { font-size: 10.5px; font-weight: 800; padding: 2px 8px; border-radius: 99px; background: var(--ad-sf2); color: var(--ad-ink); border: 1px solid var(--ad-ln); }
+        .pr-to span.p { background: #fee2e2; color: #b91c1c; border-color: #fecaca; } .pr-to span.m { background: none; border: 0; color: var(--ad-mu); font-weight: 700; }
+        .pr-tgl { flex-basis: 100%; font-size: 10px; font-weight: 700; color: var(--ad-mu); }
         .pr-row.pr-klik { cursor: pointer; } .pr-aksi .v { background: #ffedd5; color: #c2410c; }
         .pr-lihat { position: fixed; inset: 0; z-index: 2147483000; background: rgba(15,23,42,.6); display: flex; align-items: center; justify-content: center; padding: 12px; }
         .pr-lihat-k { width: 100%; max-width: 380px; max-height: 100%; overflow-y: auto; background: #334155; border-radius: 18px; padding: 12px; }
@@ -12491,7 +12499,7 @@
             kartu.appendChild(prEl('p', 'pr-h', prS.edit ? '✏️ Edit pesan' : '✉️ Kirim pesan ke rider'));
             if (prS.edit) {
                 const t = prS.edit.at ? new Date(prS.edit.at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-                kartu.appendChild(prEl('div', 'pr-ban', 'Mengedit pesan untuk ' + (prS.edit.untuk === 'semua' ? 'semua rider' : prS.edit.untuk.length + ' rider') + (t ? ' · terkirim ' + t : '')));
+                kartu.appendChild(prEl('div', 'pr-ban', 'Mengedit pesan untuk ' + prNamaUntuk(prS.edit.untuk) + (t ? ' · terkirim ' + t : '')));
                 kartu.appendChild(prEl('p', 'pr-mu', 'Tujuan tidak bisa diubah. Rider tidak mendapat notifikasi ulang; pesan diberi tanda "diedit".'));
             }
             if (!prS.edit) {
@@ -12595,18 +12603,49 @@
             daftar.appendChild(wadah); root.appendChild(daftar);
             prMuatTerkirim(wadah);
         }
+        // Nama rider penerima (dari daftar rider yang sudah dimuat admin; tanpa read tambahan). Tidak dikenal = UID.
+        function prNamaPeta() {
+            const p = {};
+            try { getMergedRidersForDropdown().forEach(r => { if (r && r.uid) p[String(r.uid).toUpperCase()] = String(r.name || '').trim() || String(r.uid); }); } catch (e) {}
+            return p;
+        }
+        const prNama = (u, peta) => (peta || prNamaPeta())[String(u).toUpperCase()] || String(u);
+        // 'semua rider' / 'Budi' / 'Budi, Andi' / 'Budi, Andi, Sari +3 lainnya'
+        function prNamaUntuk(untuk) {
+            if (untuk === 'semua') return 'semua rider';
+            if (!Array.isArray(untuk) || !untuk.length) return 'rider';
+            const peta = prNamaPeta(), n = untuk.slice(0, 3).map(u => prNama(u, peta));
+            return n.join(', ') + (untuk.length > 3 ? ' +' + (untuk.length - 3) + ' lainnya' : '');
+        }
+        function prWaktu(ms) {
+            if (!ms) return '';
+            const d = new Date(ms), kini = new Date(), jm = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+            if (d.toDateString() === kini.toDateString()) return 'Hari ini ' + jm;
+            const kmrn = new Date(kini); kmrn.setDate(kini.getDate() - 1);
+            if (d.toDateString() === kmrn.toDateString()) return 'Kemarin ' + jm;
+            return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }) + ' ' + jm;
+        }
         async function prMuatTerkirim(wadah) {
             try {
                 const snap = await getDocs(query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'pesan_terkirim'), orderBy('at', 'desc'), limit(15)));
                 wadah.replaceChildren();
                 if (snap.empty) { wadah.appendChild(prEl('p', 'pr-mu', 'Belum ada pesan terkirim.')); return; }
+                const peta = prNamaPeta();
                 snap.forEach(d => {
-                    const x = d.data(), r = prEl('div', 'pr-row pr-row2');
+                    const x = d.data(), semua = x.untuk === 'semua', daftarU = Array.isArray(x.untuk) ? x.untuk : [], prt = x.jenis === 'peringatan';
+                    const r = prEl('div', 'pr-row pr-row2 ' + (prt ? 'pp' : (semua ? 'pu' : 'pk')));
                     const kiri = prEl('span'); kiri.appendChild(prEl('b', '', x.judul || '(tanpa judul)'));
-                    kiri.appendChild(document.createTextNode(' · ' + (x.untuk === 'semua' ? 'Semua' : (Array.isArray(x.untuk) ? x.untuk.length + ' rider' : '')) + (x.jenis === 'peringatan' ? ' · peringatan' : '')));
+                    kiri.appendChild(document.createTextNode(' · ' + (prt ? 'Peringatan' : (semua ? 'Semua rider' : (daftarU.length > 1 ? daftarU.length + ' rider' : 'Khusus')))));
                     if (x.diedit_at) kiri.appendChild(prEl('span', 'pr-dit', 'diedit'));
                     const kanan = prEl('span', 'pr-baca', '…');
                     r.appendChild(kiri); r.appendChild(kanan); wadah.appendChild(r);
+                    if (!semua && daftarU.length) {
+                        const to = prEl('div', 'pr-to');
+                        daftarU.slice(0, 3).forEach(u => to.appendChild(prEl('span', prt ? 'p' : '', '👤 ' + prNama(u, peta))));
+                        if (daftarU.length > 3) to.appendChild(prEl('span', 'm', '+' + (daftarU.length - 3) + ' lainnya'));
+                        r.appendChild(to);
+                    }
+                    const wkt = prWaktu(prMs(x.at)); if (wkt) r.appendChild(prEl('div', 'pr-tgl', wkt));
                     if (PR_ID.test(d.id) && (x.untuk === 'semua' || Array.isArray(x.untuk))) {
                         r.appendChild(prTombolAksi(d.id, x));
                         // Ketuk kartu = lihat tampilan di HP rider (tombol di dalam kartu tetap berfungsi sendiri)
@@ -12627,7 +12666,7 @@
             bv.onclick = async () => { bv.disabled = true; await prBukaLihat(id, x); bv.disabled = false; };
             be.onclick = async () => { be.disabled = true; await prCobaEdit(id, x); be.disabled = false; };
             bh.onclick = () => {
-                const target = x.untuk === 'semua' ? 'semua rider' : x.untuk.length + ' rider penerima';
+                const target = prNamaUntuk(x.untuk);
                 window.showConfirm('Hapus pesan ini?', '"' + (x.judul || 'tanpa judul') + '" akan hilang dari laci pesan ' + target + ', termasuk gambarnya. Tidak bisa dibatalkan.', async () => {
                     bh.disabled = be.disabled = true; bh.textContent = 'Menghapus…';
                     try {
