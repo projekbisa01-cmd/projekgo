@@ -2149,6 +2149,22 @@
         #step1 { overflow-y: auto !important; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
         #step1 > .panel-pesanan { flex: none !important; }
         #active-order-items { flex: none !important; overflow: visible !important; min-height: 72px; }
+        /* (23 Okt 2026, v8) Tahap pesanan di tombol geser: garis tahap di bawah header + kartu tahap di atas tombol */
+        .tp-strip { display: flex; gap: 4px; padding: 7px 12px 8px; background: #fff7ed; border-bottom: 1px solid #fed7aa; flex: none; }
+        .tp-strip div { flex: 1; min-width: 0; text-align: center; font-size: 9.5px; font-weight: 800; color: #a8a29e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tp-strip div i { display: block; height: 5px; border-radius: 3px; background: #e7e5e4; margin-bottom: 4px; }
+        .tp-strip div.ok { color: #9a3412; } .tp-strip div.ok i { background: #ea580c; }
+        .tp-strip div.now { color: #1c1917; } .tp-strip div.now i { background: linear-gradient(90deg, #ea580c 50%, #fdba74 50%); }
+        .tp-kartu { margin: 0 0 8px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 14px; padding: 9px 11px; font-size: 12px; font-weight: 600; color: #7c2d12; }
+        .tp-kartu > b { display: block; font-size: 14px; font-weight: 900; color: #1c1917; margin-bottom: 2px; }
+        .tp-est { display: flex; gap: 6px; margin-top: 7px; }
+        .tp-est button { flex: 1; min-height: 38px; border: 1.5px solid #fdba74; border-radius: 10px; background: #fff; color: #9a3412; font-size: 13px; font-weight: 800; padding: 0; }
+        .tp-est button.on { background: #ea580c; border-color: #ea580c; color: #fff; }
+        .tp-undo { display: block; width: 100%; margin-top: 7px; border: 0; background: none; text-align: center; font-size: 12px; font-weight: 700; color: #78716c; text-decoration: underline; min-height: 32px; }
+        body.dark-mode .tp-strip { background: #1c2433; border-color: #33415a; } body.dark-mode .tp-strip div.now { color: #f8fafc; }
+        body.dark-mode .tp-strip div i { background: #334155; } body.dark-mode .tp-strip div.ok i { background: #f0a05a; }
+        body.dark-mode .tp-kartu { background: #1c2433; border-color: #33415a; color: #f0c275; } body.dark-mode .tp-kartu > b { color: #f8fafc; }
+        body.dark-mode .tp-est button { background: #0f172a; border-color: #475569; color: #f0c275; } body.dark-mode .tp-est button.on { background: #ea580c; border-color: #ea580c; color: #fff; }
         #step1-geser-wrap { position: sticky; bottom: 0; z-index: 5; margin-top: auto; background: inherit; box-shadow: 0 -8px 16px -10px rgba(0,0,0,.18); }
     </style>
     <!-- ===== OPTIMASI TAMPILAN (tidak mengubah logika) ===== -->
@@ -13166,6 +13182,13 @@
                     { sel: '#btn-wa-customer', j: 'Pesan pembuka', t: 'Chat WA pertama sudah berisi detail pesanan dan link pantau pesanan + ulasan. Kirim apa adanya, jangan hapus link-nya.' }
                 ],
                 // ALUR PESANAN (21 Okt 2026): dibuka dari tombol "Cara kerja" di kotak ungu Tugas Berjalan
+                // (23 Okt 2026, v8) Tahap di tombol geser. Kunci baru supaya rider yang sudah melihat panduan lama tetap ditunjukkan sekali.
+                lacak_geser: [
+                    { sel: '#step1-swipe-track', j: 'Geser untuk update tahap', t: 'Tiap tahap cukup digeser: sudah di resto, mulai antar, lalu sudah sampai. Pelanggan langsung melihatnya di link WA. Geser sesuai kenyataan ya.' },
+                    { sel: '#tp-kartu .tp-est', j: 'Di resto lama? Pilih estimasi', t: 'Khusus order Food: saat di resto, pilih perkiraan menit masak. Pelanggan jadi tenang menunggu. Ketuk lagi untuk menghapus.' },
+                    { sel: '#tp-strip', j: 'Posisi tahap', t: 'Garis di atas menunjukkan tahap yang sedang berjalan. Setelah "sudah sampai", kamu masuk ke halaman bukti foto.' },
+                    { sel: '', j: 'Salah geser?', t: 'Setelah menggeser, ada tulisan "Kembali ke tahap sebelumnya" selama 8 detik. Ketuk itu untuk membatalkan.' }
+                ],
                 lacak: [
                     { sel: '#lk-tahap .lk-aksi', j: 'Ketuk tombol ungu tiap tahap', t: 'Pelanggan melihat tahap ini di link WA, jadi tidak perlu bertanya "sudah sampai mana?". Ketuk sesuai kenyataan ya, jangan didahulukan.' },
                     { sel: '#lk-tahap .lk-chips', j: 'Di resto lama? Pilih estimasi', t: 'Khusus order Food: saat di resto, pilih perkiraan menit masak (5, 10, 15, 20, 30+). Pelanggan jadi tenang menunggu. Ketuk lagi untuk menghapus.' },
@@ -23274,7 +23297,12 @@ window.PembuatQR = PembuatQR;
         (function () {
             var s2 = document.getElementById('step2'), chip = document.getElementById('rv-tb-langkah');
             if (!s2 || !chip || !window.MutationObserver) return;
-            var atur = function () { chip.textContent = s2.classList.contains('hidden') ? 'Langkah 1 dari 2' : 'Langkah 2 dari 2'; };
+            var atur = function () {
+                // (23 Okt 2026, v8) Order dengan tahap: "Tahap x dari N" (lihat blok LACAK PESANAN)
+                var t = '';
+                try { if (typeof window.lacakChipTeks === 'function') t = window.lacakChipTeks(!s2.classList.contains('hidden')); } catch (e) { t = ''; }
+                chip.textContent = t || (s2.classList.contains('hidden') ? 'Langkah 1 dari 2' : 'Langkah 2 dari 2');
+            };
             atur();
             new MutationObserver(atur).observe(s2, { attributes: true, attributeFilter: ['class'] });
         })();
@@ -23710,12 +23738,15 @@ window.PembuatQR = PembuatQR;
         var box = document.getElementById('lk-tahap');
         if (!box) return;
         kirimBar();
-        if (!st.id) { box.hidden = true; box.replaceChildren(); return; }
+        if (!st.id) { box.hidden = true; box.replaceChildren(); gambarGeser(); return; }
         var c = cfg();
         var idx = c.langkah.findIndex(function (x) { return x[0] === st.tahap; });
         if (idx < 0) idx = 0;
         box.replaceChildren();
+        gambarGeser();
 
+        // (23 Okt 2026, v8) Tahap pindah ke tombol geser -> kotak ungu tinggal lokasi dari pelanggan
+        if (!TAHAP_DI_GESER || !KODE_ORDER.test(st.kode)) {
         // Kepala ungu + tombol "Cara kerja" (membuka panduan langkah demi langkah)
         var kepala = el('div', 'lk-kepala');
         kepala.appendChild(el('span', '', 'Alur pesanan · terlihat pelanggan'));
@@ -23778,6 +23809,7 @@ window.PembuatQR = PembuatQR;
             est.appendChild(ch);
             box.appendChild(est);
         }
+        }   // akhir bagian tahap kotak ungu (tidak dipakai saat TAHAP_DI_GESER)
 
         // Lokasi dari pelanggan
         var t = st.lacak && st.lacak.titik;
@@ -23798,8 +23830,86 @@ window.PembuatQR = PembuatQR;
             box.appendChild(ada);
         }
         // (21 Okt 2026) Pelanggan belum mengisi lokasi: tidak ditampilkan apa-apa (rider bisa tanya admin).
-        box.hidden = false;
+        box.hidden = (TAHAP_DI_GESER && KODE_ORDER.test(st.kode)) ? !box.children.length : false;
         tawarkanPanduan();
+    }
+
+    // ---------- TAHAP DI TOMBOL GESER TUGAS BERJALAN (23 Okt 2026, APK v8) ----------
+    // Bar di atas WhatsApp tidak bisa diandalkan untuk update tahap (HP menidurkan halaman saat
+    // di-minimize). Tahap kini di-update dengan tombol "Geser" yang sama dengan menyelesaikan order:
+    // tiap geseran naik satu tahap; setelah "Mengantar", geseran berikutnya masuk ke bukti foto.
+    // false = kembali ke kotak ungu (cara lama).
+    var TAHAP_DI_GESER = true;
+    var GESER_LABEL = {
+        food:  { menuju: 'Geser jika sudah di resto', lokasi: 'Geser jika mulai antar', antar: 'Geser jika sudah sampai' },
+        ojek:  { menuju: 'Geser jika penumpang naik', antar: 'Geser jika sudah sampai' },
+        kirim: { menuju: 'Geser jika barang diambil', antar: 'Geser jika sudah sampai' },
+        lain:  { menuju: 'Geser jika sudah di lokasi', lokasi: 'Geser jika mulai antar', antar: 'Geser jika sudah selesai' }
+    };
+    function geserAktif() { return TAHAP_DI_GESER && !!st.id && KODE_ORDER.test(st.kode); }
+    function labelGeser() { return (GESER_LABEL[st.jenis] || GESER_LABEL.lain)[st.tahap] || 'Geser jika sudah sampai'; }
+    function step2Tampil() { var s2 = document.getElementById('step2'); return !!(s2 && !s2.classList.contains('hidden')); }
+    function idxTahap() { var i = cfg().langkah.findIndex(function (x) { return x[0] === st.tahap; }); return i < 0 ? 0 : i; }
+    window.lacakChipTeks = function (s2) {
+        if (!geserAktif()) return '';
+        var n = cfg().langkah.length + 1;
+        gambarStrip(s2);
+        return 'Tahap ' + (s2 ? n : idxTahap() + 1) + ' dari ' + n;
+    };
+    function gambarStrip(s2) {
+        var ov = document.getElementById('active-order-overlay'), kepala = ov && ov.querySelector('header');
+        var strip = document.getElementById('tp-strip');
+        if (!geserAktif() || !kepala) { if (strip) strip.remove(); return; }
+        if (!strip) { strip = el('div', 'tp-strip'); strip.id = 'tp-strip'; kepala.after(strip); }
+        var nama = cfg().langkah.map(function (x) { return x[1]; }).concat(['Bukti & selesai']);
+        var now = s2 ? nama.length - 1 : idxTahap();
+        strip.replaceChildren();
+        nama.forEach(function (t, i) {
+            var d = el('div', i < now ? 'ok' : (i === now ? 'now' : ''));
+            d.appendChild(el('i')); d.appendChild(document.createTextNode(t));
+            strip.appendChild(d);
+        });
+    }
+    function gambarGeser() {
+        var wrap = document.getElementById('step1-geser-wrap');
+        var span = document.querySelector('#step1-swipe-track > div:first-child span');
+        var kartu = document.getElementById('tp-kartu');
+        if (span && !span.hasAttribute('data-asli')) span.setAttribute('data-asli', span.textContent);
+        var chip = document.getElementById('rv-tb-langkah');
+        if (!geserAktif()) {
+            if (kartu) kartu.remove();
+            gambarStrip(false);
+            if (span) span.textContent = span.getAttribute('data-asli') || 'Geser Untuk Selesai';
+            if (chip && /^Tahap /.test(chip.textContent)) chip.textContent = step2Tampil() ? 'Langkah 2 dari 2' : 'Langkah 1 dari 2';
+            return;
+        }
+        if (span) span.textContent = labelGeser();
+        if (chip) chip.textContent = window.lacakChipTeks(step2Tampil());
+        if (!wrap) return;
+        if (!kartu) { kartu = el('div', 'tp-kartu'); kartu.id = 'tp-kartu'; wrap.prepend(kartu); }
+        kartu.replaceChildren();
+        var c = cfg(), nama = c.langkah[idxTahap()][1];
+        kartu.appendChild(el('b', '', ikonTahap() + ' ' + nama));
+        if (st.tahap === 'lokasi' && c.tanyaEst) {
+            kartu.appendChild(document.createTextNode((BAR_TANYA[st.jenis] || BAR_TANYA.lain)));
+            var est = el('div', 'tp-est'); est.setAttribute('role', 'group'); est.setAttribute('aria-label', 'Perkiraan menit');
+            ESTIMASI.forEach(function (n) {
+                var b = el('button', st.est === n ? 'on' : '', (n === 30 ? '30+' : n) + ' mnt'); b.type = 'button';
+                b.setAttribute('aria-pressed', st.est === n ? 'true' : 'false');
+                b.addEventListener('click', function () { pilihEstimasi(n); });
+                est.appendChild(b);
+            });
+            kartu.appendChild(est);
+        } else if (st.tahap === 'antar' && adaLokasi()) {
+            kartu.appendChild(document.createTextNode('Lokasi kamu tampil di peta pelanggan. Geser setelah pesanan diterima.'));
+        } else {
+            kartu.appendChild(document.createTextNode('Pelanggan melihat: "' + nama + '"'));
+        }
+        if (st.undo) {
+            var u = el('button', 'tp-undo', 'Salah geser? Kembali ke tahap sebelumnya'); u.type = 'button';
+            u.addEventListener('click', batalkan);
+            kartu.appendChild(u);
+        }
     }
 
     // ---------- Pengingat "konfirmasi pelanggan" di tombol Chat WA ----------
@@ -23846,14 +23956,14 @@ window.PembuatQR = PembuatQR;
     function tawarkanPanduan() {
         if (panduanDijadwal) return;
         try {
-            if (typeof window.pgTourSudah !== 'function' || window.pgTourSudah('lacak') || !window.pgTourSudah('templatechat')) return;
+            if (typeof window.pgTourSudah !== 'function' || window.pgTourSudah(geserAktif() ? 'lacak_geser' : 'lacak') || !window.pgTourSudah('templatechat')) return;
         } catch (e) { return; }
         panduanDijadwal = true;
         setTimeout(function () {
             panduanDijadwal = false;
-            var box = document.getElementById('lk-tahap');
+            var box = geserAktif() ? document.getElementById('tp-kartu') : document.getElementById('lk-tahap');
             if (!box || box.hidden || !st.id || (window.pgTourAktif && window.pgTourAktif())) return;
-            window.pgTourMulai('lacak');
+            window.pgTourMulai(geserAktif() ? 'lacak_geser' : 'lacak');
         }, 1800);
     }
 
@@ -24120,6 +24230,20 @@ window.PembuatQR = PembuatQR;
                 // Pengingat: 8 menit tanpa update; saat menunggu masakan = estimasi + 3 menit
                 var ingat = (tanya && st.est && st.estMs) ? st.estMs + (st.est + INGAT_TAMBAH_EST) * 60000
                                                            : (st.tahapMs || Date.now()) + INGAT_MENIT * 60000;
+                if (TAHAP_DI_GESER) {
+                    // (23 Okt 2026, v8) Bar / kotak hanya PENGINGAT: ketuk = buka aplikasi (dikerjakan APK, selalu bisa
+                    // walau halaman sedang ditidurkan HP). Update tahap dilakukan dengan tombol geser di Tugas Berjalan.
+                    // APK v3-v7 menampilkannya sebagai bar lama berisi pengingat; APK v8 sebagai kotak kecil (memakai "pendek").
+                    var lb = labelGeser(), lbKecil = lb.charAt(0).toLowerCase() + lb.slice(1);
+                    teks = JSON.stringify({
+                        id: st.id, no: idx + 1, total: c.langkah.length + 1,
+                        nama: c.langkah[idx][1],
+                        tombol: 'Buka aplikasi, lalu ' + lbKecil,
+                        pendek: 'Buka & ' + lbKecil,
+                        aksi: 'buka', tanya: '', est: 0, opsi: [], undo: false, ingat: 0,
+                        hijau: st.tahap === 'antar', warna: BAR_WARNA, ikon: ikonTahap()
+                    });
+                } else
                 teks = JSON.stringify({
                     id: st.id, no: idx + 1, total: c.langkah.length + 1,
                     nama: c.langkah[idx][1],
@@ -24197,6 +24321,15 @@ window.PembuatQR = PembuatQR;
     window.lacakCekSelesai = function () {
         sinkronIngatNative();
         if (!st.id || !st.kode || st.tahap === 'antar' || st.tahap === 'selesai') return true;
+        // (23 Okt 2026, v8) Geser sebelum "Mengantar" = naik satu tahap (tidak masuk ke bukti foto)
+        var a = cfg().aksi[st.tahap];
+        if (geserAktif() && a) {
+            if (majuKe(a[1])) {
+                try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) {}
+                toast('Tahap: ' + (cfg().langkah[idxTahap()] || ['', ''])[1] + ' (terlihat pelanggan)');
+            }
+            return false;
+        }
         tampilGerbang();
         return false;
     };
