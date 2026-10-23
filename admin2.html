@@ -951,6 +951,16 @@
         .pr-gm { display: flex; gap: 8px; align-items: center; border: 1px dashed #94a3b8; border-radius: 10px; padding: 6px; } .pr-gm img { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; } .pr-gm span { flex: 1; font-size: 11px; color: var(--ad-mu); } .pr-gm button { border: 0; background: none; color: #b91c1c; font-weight: 800; font-size: 11px; }
         .pr-pv { border: 1px solid #fed7aa; background: #fffbf5; border-radius: 10px; padding: 9px 11px; color: #292524; } .pr-pv p, .pr-pv li { font-size: 12.5px; line-height: 1.5; margin: 0 0 4px; overflow-wrap: anywhere; } .pr-pv ul, .pr-pv ol { padding-left: 18px; margin: 0 0 4px; } .pr-pv li::marker { color: #ea580c; font-weight: 900; }
         .pr-pv-img { width: 100%; border-radius: 10px; margin-bottom: 6px; display: block; }
+        /* (23 Okt 2026, malam) Pesan panjang + beberapa gambar dengan penanda [gambar N] */
+        .pr-pv .pr-pv-img, .pr-hp .psn-teks .psn-gbr { margin: 4px 0 10px; }
+        .pr-pv-tunggu { width: 100%; height: 90px; border-radius: 10px; background: repeating-linear-gradient(45deg, #f5f5f4, #f5f5f4 8px, #fafaf9 8px, #fafaf9 16px); margin: 4px 0 10px; }
+        .pr-gl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+        .pr-gl div { border: 1px solid var(--ad-ln); border-radius: 9px; padding: 4px; text-align: center; font-size: 10px; font-weight: 800; color: var(--ad-ink); background: var(--ad-sf); }
+        .pr-gl img { width: 100%; height: 52px; object-fit: cover; border-radius: 6px; display: block; margin-bottom: 3px; }
+        .pr-gl small { display: block; font-weight: 600; color: var(--ad-mu); font-size: 9px; }
+        .pr-gl button { border: 0; background: none; color: #b91c1c; font-weight: 800; font-size: 10px; padding: 3px 0 0; }
+        .pr-tb button.pr-tb-g { background: #ffedd5; border-color: #fb923c; color: #c2410c; }
+        .pr-ket { font-size: 10.5px; color: var(--ad-mu); background: var(--ad-sf2); border-radius: 8px; padding: 7px 9px; margin-top: 6px; line-height: 1.45; }
         .pr-btn { width: 100%; margin-top: 10px; min-height: 44px; border: 0; border-radius: 11px; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; background: #0284c7; color: #fff; } .pr-btn:disabled { opacity: .6; }
         .pr-btn.g { background: var(--ad-sf2); color: var(--ad-ink); border: 1px solid var(--ad-ln); }
         .pr-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; padding: 8px 0; border-top: 1px dashed var(--ad-ln); } .pr-row:first-child { border-top: 0; }
@@ -12365,7 +12375,17 @@
         //   Lebih dari 3 order bermasalah/minggu ditandai "Perlu tindakan" di menu Kepatuhan Rider (keputusan admin).
         // =====================================================================
         const PR_ID = /^[A-Za-z0-9]{12,32}$/;
-        const PR_MAKS_ISI = 1500;   // batas isi pesan (dulu 500, dinaikkan 23 Okt 2026)
+        const PR_MAKS_ISI = 10000;  // batas isi pesan (500 -> 1500 -> 10.000 huruf, 23 Okt 2026)
+        // (23 Okt 2026, malam) Pesan panjang + maks 5 gambar. Isi lengkap & gambar disimpan di pesan_gambar
+        // (dibaca rider hanya saat pesan dibuka; rules lama sudah membatasi ke penerima lewat kolom "untuk"):
+        //   pesan_gambar/<ID>      = gambar 1 (sama seperti dulu)   pesan_gambar/<ID>_g2.._g5 = gambar 2-5
+        //   pesan_gambar/<ID>_isi  = isi lengkap (hanya bila isi > 500 huruf atau memakai penanda [gambar N])
+        // Kotak pesan hanya menyimpan ringkasan, jadi laci rider tetap ringan.
+        const PR_MAKS_GAMBAR = 5;
+        const PR_PENANDA = /\[gambar ([1-5])\]/g;
+        const prDocGambar = (id, k) => k <= 1 ? id : id + '_g' + k;
+        const prPanjang = (isi) => isi.length > 500 || /\[gambar [1-5]\]/.test(isi);
+        const prIsiRingkas = (isi) => { const t = isi.replace(PR_PENANDA, '').replace(/\n{3,}/g, '\n\n').trim(); return t.length > 300 ? t.slice(0, 300).trim() + '…' : t; };
         const prAcak = () => { const h = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; const a = new Uint32Array(16); crypto.getRandomValues(a); return Array.from(a, x => h[x % h.length]).join(''); };
         const prPd = (...s) => doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', ...s);
         const prEl = (tag, cls, teks) => { const e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; };
@@ -12394,7 +12414,26 @@
                 }
             });
         }
-        const prRingkas = (isi) => String(isi || '').replace(/^\s*([-•]|\d{1,2}[.)])\s+/gm, '').replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+        const prRingkas = (isi) => String(isi || '').replace(PR_PENANDA, ' ').replace(/^\s*([-•]|\d{1,2}[.)])\s+/gm, '').replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+        // Isi + gambar sesuai penanda [gambar N]; gambar tanpa penanda tampil di bawah (atas = pesan lama).
+        // srcs[i] = data gambar ke-(i+1), '' = masih dimuat. Tidak pernah innerHTML.
+        function prRenderIsi(w, isi, srcs, kelasGbr, gambarDiAtas) {
+            const dipakai = new Set(), gbr = (k) => {
+                const s = srcs[k - 1];
+                if (s === null) return null;   // gambar gagal dimuat / sudah tidak ada
+                if (s) { const im = prEl('img', kelasGbr || 'pr-pv-img'); im.alt = 'Gambar ' + k; im.src = s; return im; }
+                return prEl('div', 'pr-pv-tunggu');
+            };
+            const pasang = (k) => { const e = gbr(k); if (e) w.appendChild(e); };
+            const sisa = () => srcs.forEach((s, i) => { if (!dipakai.has(i + 1)) { dipakai.add(i + 1); pasang(i + 1); } });
+            if (gambarDiAtas) sisa();
+            String(isi || '').split(/(\[gambar [1-5]\])/).forEach(b => {
+                const m = /^\[gambar ([1-5])\]$/.exec(b);
+                if (m) { const k = +m[1]; if (k <= srcs.length && !dipakai.has(k)) { dipakai.add(k); pasang(k); } return; }
+                if (b.trim()) prGambarTeks(w, b);
+            });
+            sisa();
+        }
 
         // Simpan pesan ke dokumen kotak (maks 30 pesan terbaru)
         async function prSimpanKeKotak(ref, item) {
@@ -12409,12 +12448,16 @@
             const id = prAcak();
             const target = untuk === 'semua' ? 'semua' : [...new Set(untuk.map(u => String(u).trim().toUpperCase()))].filter(u => /^[A-Z0-9][A-Z0-9_-]{0,63}$/.test(u)).slice(0, 200);
             if (target !== 'semua' && !target.length) throw new Error('Pilih rider tujuan');
-            const item = { id, judul: String(judul || '').slice(0, 80), isi: String(isi || '').slice(0, PR_MAKS_ISI), gambar: !!gambar, at: Date.now(), jenis: target === 'semua' ? 'umum' : (jenis || 'khusus') };
-            if (gambar) await setDoc(prPd('pesan_gambar', id), { data: gambar, untuk: target, at: serverTimestamp() });
+            // gambar: satu data gambar (cara lama) atau daftar maks 5
+            const daftarG = (Array.isArray(gambar) ? gambar : (gambar ? [gambar] : [])).filter(Boolean).slice(0, PR_MAKS_GAMBAR);
+            const isiPenuh = String(isi || '').slice(0, PR_MAKS_ISI), panjang = prPanjang(isiPenuh);
+            const item = { id, judul: String(judul || '').slice(0, 80), isi: panjang ? prIsiRingkas(isiPenuh) : isiPenuh, gambar: daftarG.length > 0, n_gambar: daftarG.length, panjang, at: Date.now(), jenis: target === 'semua' ? 'umum' : (jenis || 'khusus') };
+            for (let k = 1; k <= daftarG.length; k++) await setDoc(prPd('pesan_gambar', prDocGambar(id, k)), { data: daftarG[k - 1], untuk: target, at: serverTimestamp() });
+            if (panjang) await setDoc(prPd('pesan_gambar', id + '_isi'), { isi: isiPenuh, untuk: target, at: serverTimestamp() });
             if (target === 'semua') await prSimpanKeKotak(prPd('pesan_umum', 'daftar'), item);
             else for (const u of target) await prSimpanKeKotak(prPd('pesan_rider', u), item);
             const nTarget = target === 'semua' ? getMergedRidersForDropdown().length : target.length;
-            setDoc(prPd('pesan_terkirim', id), { judul: item.judul, isi: item.isi, gambar: item.gambar, jenis: item.jenis, untuk: target, n_target: nTarget, at: serverTimestamp() }).catch(() => {});
+            setDoc(prPd('pesan_terkirim', id), { judul: item.judul, isi: isiPenuh, gambar: item.gambar, n_gambar: item.n_gambar, jenis: item.jenis, untuk: target, n_target: nTarget, at: serverTimestamp() }).catch(() => {});
             if (!diam) {
                 // Notifikasi ke HP rider (jalur yang sama dengan notifikasi order), berurutan supaya tidak membebani
                 const uids = target === 'semua' ? getMergedRidersForDropdown().map(r => r.uid) : target;
@@ -12449,25 +12492,28 @@
             }
             return n;
         }
-        async function prEditPesan({ id, untuk, judul, isi, gambar, gambarBerubah }) {
+        // gambarList = data gambar baru (urut 1..5), gambarAwal = data gambar sebelum diedit
+        async function prEditPesan({ id, untuk, judul, isi, gambarList, gambarAwal }) {
             if (!PR_ID.test(String(id || ''))) throw new Error('Pesan tidak valid');
             const refs = prKotakDari(untuk); if (!refs.length) throw new Error('Tujuan pesan tidak dikenali');
-            const j = String(judul || '').slice(0, 80), t = String(isi || '').slice(0, PR_MAKS_ISI), adaGambar = !!gambar;
-            // Gambar baru ditulis dulu, supaya rider yang memuat ulang langsung mendapat gambar baru
-            if (gambarBerubah && adaGambar) await setDoc(prPd('pesan_gambar', id), { data: gambar, untuk, at: serverTimestamp() });
-            const n = await prUbahDiKotak(refs, id, (x) => Object.assign({}, x, { judul: j, isi: t, gambar: adaGambar, edit: Date.now(), gv: (parseInt(x.gv, 10) || 0) + (gambarBerubah ? 1 : 0) }));
-            if (!n) {
-                if (gambarBerubah && adaGambar) deleteDoc(prPd('pesan_gambar', id)).catch(() => {});
-                throw new Error('Pesan ini sudah tidak ada di kotak rider (tergeser 30 pesan yang lebih baru).');
-            }
-            if (gambarBerubah && !adaGambar) await deleteDoc(prPd('pesan_gambar', id)).catch(() => {});
-            await setDoc(prPd('pesan_terkirim', id), { judul: j, isi: t, gambar: adaGambar, diedit_at: serverTimestamp() }, { merge: true }).catch(() => {});
+            const j = String(judul || '').slice(0, 80), t = String(isi || '').slice(0, PR_MAKS_ISI), panjang = prPanjang(t);
+            const baru = (gambarList || []).filter(Boolean).slice(0, PR_MAKS_GAMBAR), lama = (gambarAwal || []).slice(0, PR_MAKS_GAMBAR);
+            const berubah = baru.length !== lama.length || baru.some((s, i) => s !== lama[i]);
+            // Gambar & isi lengkap ditulis dulu, supaya rider yang memuat ulang langsung mendapat versi baru
+            for (let k = 1; k <= baru.length; k++) if (baru[k - 1] !== lama[k - 1]) await setDoc(prPd('pesan_gambar', prDocGambar(id, k)), { data: baru[k - 1], untuk, at: serverTimestamp() });
+            if (panjang) await setDoc(prPd('pesan_gambar', id + '_isi'), { isi: t, untuk, at: serverTimestamp() });
+            const n = await prUbahDiKotak(refs, id, (x) => Object.assign({}, x, { judul: j, isi: panjang ? prIsiRingkas(t) : t, gambar: baru.length > 0, n_gambar: baru.length, panjang, edit: Date.now(), gv: (parseInt(x.gv, 10) || 0) + (berubah ? 1 : 0) }));
+            if (!n) throw new Error('Pesan ini sudah tidak ada di kotak rider (tergeser 30 pesan yang lebih baru).');
+            for (let k = baru.length + 1; k <= Math.max(lama.length, 1); k++) await deleteDoc(prPd('pesan_gambar', prDocGambar(id, k))).catch(() => {});
+            if (!panjang) await deleteDoc(prPd('pesan_gambar', id + '_isi')).catch(() => {});
+            await setDoc(prPd('pesan_terkirim', id), { judul: j, isi: t, gambar: baru.length > 0, n_gambar: baru.length, diedit_at: serverTimestamp() }, { merge: true }).catch(() => {});
             return n;
         }
         async function prHapusPesan({ id, untuk }) {
             if (!PR_ID.test(String(id || ''))) throw new Error('Pesan tidak valid');
             const n = await prUbahDiKotak(prKotakDari(untuk), id, () => null);
-            await deleteDoc(prPd('pesan_gambar', id)).catch(() => {});
+            for (let k = 1; k <= PR_MAKS_GAMBAR; k++) await deleteDoc(prPd('pesan_gambar', prDocGambar(id, k))).catch(() => {});
+            await deleteDoc(prPd('pesan_gambar', id + '_isi')).catch(() => {});
             // Tanda "dibaca" pesan ini ikut dibersihkan (1 read per tanda, maks jumlah rider)
             try {
                 const sn = await getDocs(query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'pesan_dibaca'), where('pesan_id', '==', id), limit(450)));
@@ -12479,7 +12525,7 @@
         window.prEditPesan = prEditPesan; window.prHapusPesan = prHapusPesan;
 
         // ---------- Halaman "Pesan Rider" ----------
-        const prS = { tujuan: 'semua', pilih: [], gambar: '', gambarInfo: '' };
+        const prS = { tujuan: 'semua', pilih: [], gambarList: [] };   // gambarList: [{ src, info }] maks 5
         function prKompresGambar(file) {
             return new Promise((ok, gagal) => {
                 if (!file || !/^image\//.test(file.type)) return gagal(new Error('Pilih file gambar'));
@@ -12541,48 +12587,78 @@
             const judul = prEl('input', 'pr-in'); judul.id = 'pr-judul'; judul.maxLength = 80; judul.value = prS.judul || '';
             judul.oninput = () => { prS.judul = judul.value; };
             kartu.appendChild(judul);
-            kartu.appendChild(prEl('label', 'pr-lb', 'Isi pesan (maks ' + PR_MAKS_ISI + ' huruf)'));
+            kartu.appendChild(prEl('label', 'pr-lb', 'Isi pesan (maks ' + PR_MAKS_ISI.toLocaleString('id-ID') + ' huruf · maks ' + PR_MAKS_GAMBAR + ' gambar)'));
             const tb = prEl('div', 'pr-tb');
-            const isi = prEl('textarea', 'pr-in pr-isi'); isi.id = 'pr-isi'; isi.maxLength = PR_MAKS_ISI; isi.rows = 6; isi.value = prS.isi || '';
-            isi.placeholder = 'Tulis pesan. Gaya WhatsApp: - poin, 1. nomor, *tebal*';
+            const isi = prEl('textarea', 'pr-in pr-isi'); isi.id = 'pr-isi'; isi.maxLength = PR_MAKS_ISI; isi.rows = 8; isi.value = prS.isi || '';
+            isi.placeholder = 'Tulis pesan. Gaya WhatsApp: - poin, 1. nomor, *tebal*. Gambar: tombol 🖼 menyisipkan [gambar 1] di posisi kursor.';
             const pv = prEl('div', 'pr-pv');
-            const segarkan = () => { prS.isi = isi.value; pv.replaceChildren(); if (isi.value.trim()) prGambarTeks(pv, isi.value); else pv.appendChild(prEl('p', 'pr-mu', 'Pratinjau muncul di sini.')); hitung.textContent = isi.value.length + '/' + PR_MAKS_ISI; };
+            const daftarG = prS.gambarList || (prS.gambarList = []);
+            const srcs = () => daftarG.map(g => g.src);
+            const segarkan = () => {
+                prS.isi = isi.value; pv.replaceChildren();
+                if (isi.value.trim() || daftarG.length) prRenderIsi(pv, isi.value, srcs()); else pv.appendChild(prEl('p', 'pr-mu', 'Pratinjau muncul di sini.'));
+                hitung.textContent = isi.value.length.toLocaleString('id-ID') + '/' + PR_MAKS_ISI.toLocaleString('id-ID') + ' · ' + daftarG.length + '/' + PR_MAKS_GAMBAR + ' gambar';
+            };
             const awalBaris = (awalan) => {
                 const a = isi.selectionStart, txt = isi.value, mulai = txt.lastIndexOf('\n', a - 1) + 1;
                 isi.value = txt.slice(0, mulai) + awalan + txt.slice(mulai); isi.focus(); isi.selectionStart = isi.selectionEnd = a + awalan.length; segarkan();
             };
+            let kursorGambar = null;
             [['• Poin', () => awalBaris('- ')], ['1. Nomor', () => awalBaris('1. ')], ['B Tebal', () => {
                 const a = isi.selectionStart, b = isi.selectionEnd, t = isi.value;
                 isi.value = t.slice(0, a) + '*' + (t.slice(a, b) || 'teks') + '*' + t.slice(b); isi.focus(); segarkan();
-            }], ['🖼 Gambar', () => fileIn.click()]].forEach(([t, f]) => { const b = prEl('button', '', t); b.type = 'button'; b.onclick = f; tb.appendChild(b); });
+            }], ['🖼 Sisipkan gambar di kursor', () => {
+                if (daftarG.length >= PR_MAKS_GAMBAR) return window.showAlert('Gambar', 'Maksimal ' + PR_MAKS_GAMBAR + ' gambar per pesan.', 'warning');
+                kursorGambar = isi.selectionStart; fileIn.click();
+            }]].forEach(([t, f], i) => { const b = prEl('button', i === 3 ? 'pr-tb-g' : '', t); b.type = 'button'; b.onclick = f; tb.appendChild(b); });
             const fileIn = prEl('input'); fileIn.type = 'file'; fileIn.accept = 'image/*'; fileIn.hidden = true;
             fileIn.onchange = async () => {
                 const f = fileIn.files && fileIn.files[0]; fileIn.value = '';
-                try { prS.gambar = await prKompresGambar(f); prS.gambarInfo = (f.name || 'gambar').slice(0, 40) + ' · ' + Math.round(prS.gambar.length * 0.75 / 1024) + ' KB'; prRender(); }
-                catch (e) { window.showAlert('Gambar', e.message || 'Gagal memproses gambar', 'warning'); }
+                if (!f || daftarG.length >= PR_MAKS_GAMBAR) return;
+                try {
+                    const src = await prKompresGambar(f);
+                    daftarG.push({ src, info: Math.round(src.length * 0.75 / 1024) + ' KB' });
+                    // Penanda di posisi kursor, di baris sendiri
+                    const t = isi.value, a = Math.max(0, Math.min(t.length, kursorGambar == null ? t.length : kursorGambar));
+                    const tanda = '[gambar ' + daftarG.length + ']';
+                    const depan = a > 0 && t[a - 1] !== '\n' ? '\n' : '', belakang = a < t.length && t[a] !== '\n' ? '\n' : '';
+                    prS.isi = (t.slice(0, a) + depan + tanda + belakang + t.slice(a)).slice(0, PR_MAKS_ISI);
+                    prRender();
+                } catch (e) { window.showAlert('Gambar', e.message || 'Gagal memproses gambar', 'warning'); }
             };
             const hitung = prEl('span', 'pr-mu');
             isi.oninput = segarkan;
             kartu.appendChild(tb); kartu.appendChild(isi); kartu.appendChild(hitung); kartu.appendChild(fileIn);
-            if (prS.gambar) {
-                kartu.appendChild(prEl('label', 'pr-lb', 'Gambar (1)'));
-                const gm = prEl('div', 'pr-gm'); const im = prEl('img'); im.src = prS.gambar; im.alt = '';
-                const hapus = prEl('button', '', 'Hapus'); hapus.type = 'button'; hapus.onclick = () => { prS.gambar = ''; prRender(); };
-                gm.appendChild(im); gm.appendChild(prEl('span', '', prS.gambarInfo)); gm.appendChild(hapus); kartu.appendChild(gm);
+            if (daftarG.length) {
+                kartu.appendChild(prEl('label', 'pr-lb', 'Gambar (' + daftarG.length + ')'));
+                const gl = prEl('div', 'pr-gl');
+                daftarG.forEach((g, i) => {
+                    const c = prEl('div'); const im = prEl('img'); im.src = g.src; im.alt = ''; c.appendChild(im);
+                    c.appendChild(document.createTextNode('Gambar ' + (i + 1))); c.appendChild(prEl('small', '', g.info || ''));
+                    const h = prEl('button', '', 'Hapus'); h.type = 'button';
+                    h.onclick = () => {
+                        // Hapus gambar ke-(i+1): penandanya dibuang, nomor penanda sesudahnya turun satu
+                        daftarG.splice(i, 1);
+                        prS.isi = String(prS.isi || isi.value).replace(PR_PENANDA, (s, n) => { n = +n; return n === i + 1 ? '' : (n > i + 1 ? '[gambar ' + (n - 1) + ']' : s); }).replace(/\n{3,}/g, '\n\n');
+                        prRender();
+                    };
+                    c.appendChild(h); gl.appendChild(c);
+                });
+                kartu.appendChild(gl);
+                kartu.appendChild(prEl('div', 'pr-ket', '💡 Atas / tengah / bawah: pindahkan penanda [gambar N] ke baris yang diinginkan (potong & tempel). Gambar yang penandanya terhapus tampil di bawah pesan.'));
             }
             kartu.appendChild(prEl('label', 'pr-lb', 'Pratinjau di HP rider'));
-            if (prS.gambar) { const im2 = prEl('img', 'pr-pv-img'); im2.src = prS.gambar; im2.alt = ''; kartu.appendChild(im2); }
             kartu.appendChild(pv);
             const kirim = prEl('button', 'pr-btn', prS.tujuan === 'semua' ? '📨 Kirim ke semua rider' : '📨 Kirim ke ' + prS.pilih.length + ' rider'); kirim.type = 'button';
             kirim.onclick = async () => {
                 const j = judul.value.trim(), t = isi.value.trim();
-                if (!t && !prS.gambar) return window.showAlert('Pesan kosong', 'Isi pesan atau gambar dulu.', 'warning');
+                if (!t && !daftarG.length) return window.showAlert('Pesan kosong', 'Isi pesan atau gambar dulu.', 'warning');
                 if (prS.tujuan === 'pilih' && !prS.pilih.length) return window.showAlert('Tujuan', 'Pilih minimal satu rider.', 'warning');
                 if (!confirm(prS.tujuan === 'semua' ? 'Kirim pesan ini ke SEMUA rider?' : 'Kirim pesan ini ke ' + prS.pilih.length + ' rider?')) return;
                 kirim.disabled = true; kirim.textContent = 'Mengirim…';
                 try {
-                    await prKirimPesan({ untuk: prS.tujuan === 'semua' ? 'semua' : prS.pilih, judul: j, isi: t, gambar: prS.gambar });
-                    Object.assign(prS, { judul: '', isi: '', gambar: '', gambarInfo: '', pilih: [] });
+                    await prKirimPesan({ untuk: prS.tujuan === 'semua' ? 'semua' : prS.pilih, judul: j, isi: t, gambar: srcs() });
+                    Object.assign(prS, { judul: '', isi: '', gambarList: [], pilih: [] });
                     window.showAlert('Terkirim', 'Pesan sudah dikirim ke rider.', 'success');
                     prRender();
                 } catch (e) { console.warn(e); window.showAlert('Gagal', 'Pesan gagal dikirim. ' + (e && e.message ? e.message : ''), 'error'); kirim.disabled = false; }
@@ -12593,10 +12669,10 @@
                 kirim.textContent = '💾 Simpan perubahan';
                 kirim.onclick = async () => {
                     const j = judul.value.trim(), t = isi.value.trim();
-                    if (!t && !prS.gambar) return window.showAlert('Pesan kosong', 'Isi pesan atau gambar dulu.', 'warning');
+                    if (!t && !daftarG.length) return window.showAlert('Pesan kosong', 'Isi pesan atau gambar dulu.', 'warning');
                     kirim.disabled = true; kirim.textContent = 'Menyimpan…';
                     try {
-                        await prEditPesan({ id: ed.id, untuk: ed.untuk, judul: j, isi: t, gambar: prS.gambar, gambarBerubah: prS.gambar !== ed.gambarAwal });
+                        await prEditPesan({ id: ed.id, untuk: ed.untuk, judul: j, isi: t, gambarList: srcs(), gambarAwal: ed.gambarAwal || [] });
                         prSelesaiEdit();
                         window.showAlert('Tersimpan', 'Pesan sudah diperbarui di HP rider.', 'success');
                         prRender();
@@ -12745,6 +12821,13 @@
             }
             return null;
         }
+        // Isi lengkap (pesan panjang / memakai penanda gambar). Kosong = pakai isi dari kotak.
+        async function prAmbilIsi(id) {
+            const g = await getDoc(prPd('pesan_gambar', id + '_isi')).catch(() => null);
+            return g && g.exists() && typeof g.data().isi === 'string' ? g.data().isi.slice(0, PR_MAKS_ISI) : '';
+        }
+        // Jumlah gambar pesan (pesan lama: 0 / 1)
+        const prJmlGambar = (x) => Number.isInteger(x && x.n_gambar) ? Math.max(0, Math.min(PR_MAKS_GAMBAR, x.n_gambar)) : (x && x.gambar === true ? 1 : 0);
         async function prAmbilGambar(id) {
             const g = await getDoc(prPd('pesan_gambar', id)).catch(() => null);
             const src = g && g.exists() ? String(g.data().data || '') : '';
@@ -12768,11 +12851,13 @@
         }
         async function prLihat(id, x) {
             // Pesan baru / yang pernah diedit: isi ada di catatan admin (tanpa read tambahan). Pesan lama: ambil dari kotak rider.
-            const it = typeof x.isi === 'string' ? { judul: x.judul, isi: x.isi, gambar: x.gambar === true, at: prMs(x.at), jenis: x.jenis, edit: x.diedit_at ? 1 : 0 } : await prAmbilItem(id, x);
+            const it = typeof x.isi === 'string' ? { judul: x.judul, isi: x.isi, gambar: x.gambar === true, n_gambar: x.n_gambar, at: prMs(x.at), jenis: x.jenis, edit: x.diedit_at ? 1 : 0 } : await prAmbilItem(id, x);
             if (!it) throw new Error('Pesan ini sudah tidak ada di kotak rider (tergeser 30 pesan yang lebih baru).');
+            if (typeof x.isi !== 'string' && it.panjang === true) it.isi = (await prAmbilIsi(id)) || it.isi;
             const jenis = ['umum', 'khusus', 'peringatan'].includes(it.jenis) ? it.jenis : (x.untuk === 'semua' ? 'umum' : 'khusus');
-            const m = { judul: String(it.judul || '').slice(0, 80), isi: String(it.isi || '').slice(0, PR_MAKS_ISI), gambar: it.gambar === true, at: Number(it.at) || prMs(x.at) || 0, jenis, edit: !!it.edit };
-            let src = '', mode = 'isi';
+            const m = { judul: String(it.judul || '').slice(0, 80), isi: String(it.isi || '').slice(0, PR_MAKS_ISI), n: prJmlGambar(it), lama: !Number.isInteger(it.n_gambar), at: Number(it.at) || prMs(x.at) || 0, jenis, edit: !!it.edit };
+            m.gambar = m.n > 0;
+            const srcs = new Array(m.n).fill(''); let mode = 'isi';
             const lama = document.getElementById('pr-lihat'); if (lama) lama.remove();
             const lt = prEl('div', 'pr-lihat'); lt.id = 'pr-lihat'; lt.setAttribute('role', 'dialog'); lt.setAttribute('aria-modal', 'true'); lt.setAttribute('aria-label', 'Tampilan di HP rider');
             const k = prEl('div', 'pr-lihat-k'); lt.appendChild(k);
@@ -12798,8 +12883,7 @@
                     info.appendChild(prEl('small', '', prIkon(jenis) + ' ' + (jenis === 'umum' ? 'Pengumuman · semua rider' : (jenis === 'peringatan' ? 'Peringatan · untukmu' : 'Khusus untukmu')) + ' · ' + prJam(m.at) + (m.edit ? ' · diedit' : '')));
                     atas.appendChild(info); panel.appendChild(atas);
                     const det = prEl('div', 'psn-det'); det.appendChild(prEl('h3', '', m.judul || 'Pesan dari admin'));
-                    if (m.gambar) { if (src) { const im = prEl('img', 'psn-gbr'); im.alt = 'Gambar pesan'; im.src = src; det.appendChild(im); } else det.appendChild(prEl('div', 'psn-gbr', '')); }
-                    const teks = prEl('div', 'psn-teks'); prGambarTeks(teks, m.isi); det.appendChild(teks);
+                    const teks = prEl('div', 'psn-teks'); prRenderIsi(teks, m.isi, srcs, 'psn-gbr', m.lama); det.appendChild(teks);
                     det.appendChild(prEl('div', 'psn-dibaca', '✓ Sudah dibaca'));
                     panel.appendChild(det); layar.appendChild(panel);
                 } else if (mode === 'daftar') {
@@ -12822,7 +12906,7 @@
                     if (jenis === 'peringatan') {
                         const w = prEl('div', 'psn-peringatan'); const kotak = prEl('div');
                         kotak.appendChild(prEl('div', 'ik', '⚠️')); kotak.appendChild(prEl('h3', '', m.judul || 'Peringatan kepatuhan'));
-                        const isi = prEl('div', 'isi psn-teks'); prGambarTeks(isi, m.isi); kotak.appendChild(isi);
+                        const isi = prEl('div', 'isi psn-teks'); prGambarTeks(isi, m.isi.replace(PR_PENANDA, '')); kotak.appendChild(isi);
                         kotak.appendChild(prEl('button', '', 'Saya mengerti')); w.appendChild(kotak); layar.appendChild(w);
                     } else {
                         const hd = prEl('div', 'psn-heads'); hd.appendChild(prEl('div', 'psn-logo', 'P'));
@@ -12837,23 +12921,27 @@
             foot.appendChild(be); foot.appendChild(bt); k.appendChild(foot);
             k.appendChild(prEl('p', 'pr-lihat-ket', 'Hanya pratinjau: tidak menandai "dibaca" dan tidak mengirim apa pun ke rider.'));
             gambar(); document.body.appendChild(lt); bx.focus();
-            if (m.gambar) { src = await prAmbilGambar(id); if (lt.isConnected) gambar(); }
+            for (let k = 1; k <= m.n; k++) { srcs[k - 1] = (await prAmbilGambar(prDocGambar(id, k))) || null; if (!lt.isConnected) return; gambar(); }
         }
         window.prBukaLihat = prBukaLihat;
         // Isi diambil dari kotak rider (isi terbaru & memastikan pesan masih ada), gambar dari pesan_gambar.
         async function prMulaiEdit(id, x) {
             const item = await prAmbilItem(id, x);
             if (!item) throw new Error('Pesan ini sudah tidak ada di kotak rider (tergeser 30 pesan yang lebih baru).');
-            const gambar = item.gambar === true ? await prAmbilGambar(id) : '';
-            if (!prS.edit) prS.draf = { tujuan: prS.tujuan, pilih: prS.pilih.slice(), judul: prS.judul || '', isi: prS.isi || '', gambar: prS.gambar, gambarInfo: prS.gambarInfo };
-            prS.edit = { id, untuk: x.untuk, at: prMs(x.at) || Number(item.at) || 0, gambarAwal: gambar };
-            Object.assign(prS, { judul: String(item.judul || '').slice(0, 80), isi: String(item.isi || '').slice(0, PR_MAKS_ISI), gambar, gambarInfo: gambar ? 'Gambar tersimpan · ' + Math.round(gambar.length * 0.75 / 1024) + ' KB' : '' });
+            let isiPenuh = String(item.isi || '');
+            if (item.panjang === true) isiPenuh = (await prAmbilIsi(id)) || (typeof x.isi === 'string' ? x.isi : isiPenuh);
+            const srcAwal = [];
+            for (let k = 1; k <= prJmlGambar(item); k++) srcAwal.push(await prAmbilGambar(prDocGambar(id, k)));
+            const ada = srcAwal.filter(Boolean);
+            if (!prS.edit) prS.draf = { tujuan: prS.tujuan, pilih: prS.pilih.slice(), judul: prS.judul || '', isi: prS.isi || '', gambarList: (prS.gambarList || []).slice() };
+            prS.edit = { id, untuk: x.untuk, at: prMs(x.at) || Number(item.at) || 0, gambarAwal: ada.length === srcAwal.length ? srcAwal : [] };
+            Object.assign(prS, { judul: String(item.judul || '').slice(0, 80), isi: isiPenuh.slice(0, PR_MAKS_ISI), gambarList: ada.map(s => ({ src: s, info: 'Tersimpan · ' + Math.round(s.length * 0.75 / 1024) + ' KB' })) });
             prRender();
             const root = document.getElementById('pr-root'); if (root && root.scrollIntoView) root.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
         // Keluar dari mode edit dan kembalikan draf pesan baru yang sedang ditulis sebelumnya
         function prSelesaiEdit() {
-            const d = prS.draf || { tujuan: 'semua', pilih: [], judul: '', isi: '', gambar: '', gambarInfo: '' };
+            const d = prS.draf || { tujuan: 'semua', pilih: [], judul: '', isi: '', gambarList: [] };
             Object.assign(prS, d); prS.edit = null; prS.draf = null;
         }
         window.bukaPesanRider = (uidTujuan, templat) => {

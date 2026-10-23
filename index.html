@@ -17853,7 +17853,8 @@
               const displayRiderNameEl = document.getElementById('display-rider-name');
               const riderNameForWA = displayRiderNameEl ? displayRiderNameEl.innerText : "Rider";
               // FORMAT BARU (21 Okt 2026): singkat, detail pesanan jelas, link pantau + ulasan satu baris.
-              let waMessage = `Halo kak, saya *${riderNameForWA}*, rider PROJEKGO 🙏`;
+              // FORMAT (23 Okt 2026, malam): salam + link pantau di atas, detail pesanan & ongkir di dalam garis, ajakan Play Store di bawah.
+              let waMessage = `Halo kak, saya ${riderNameForWA}, rider PROJEKGO 🙏`;
               // Link pantau pesanan + ulasan (sekali pakai per order). Order lama tanpa kode: bagian ini dilewati.
               const linkUlasanAwal = (typeof window.linkUlasanSaya === 'function') ? window.linkUlasanSaya() : '';
               const judulDetailWA = ({ food: 'PESANAN', ojek: 'PERJALANAN', kirim: 'KIRIMAN' })[data.jenis] || 'DETAIL PESANAN';
@@ -17887,7 +17888,7 @@
             // --- LOGIKA BARU: INJEKSI DATA TEKS LANGSUNG (SANGAT RINGAN) ---
               const listEl = document.getElementById('active-order-items');
               let copyText = `*PROJEKGO DELIVERY ORDER*\nAdmin CS: 081292802623\n----------------------\n*Daftar Pesanan:*\n`;
-              let detailPesananWA = `\n\n*${judulDetailWA}*\n`;
+              let detailPesananWA = `${judulDetailWA}\n`;
               
               // Cek apakah Admin mengirimkan data siap saji (String text)
               // Kita beri dukungan nama field: pesanan_text (bisa disesuaikan admin nanti)
@@ -17980,22 +17981,23 @@
                   }
               }
 
-              // Gabungkan pesan WA dengan detail pesanan
-              waMessage += detailPesananWA;
+              // Link pantau pesanan (+ ulasan di halaman yang sama) langsung di bawah salam
+              if (linkUlasanAwal) waMessage += `\nPantau pesanan kamu di sini:\n${linkUlasanAwal}`;
 
-              // Ongkir satu baris
-              waMessage += `\n*Ongkir:* Rp ${baseFee.toLocaleString('id-ID')}`;
+              // Detail pesanan + ongkir di dalam garis pembatas
+              const garisWA = '====================';
+              waMessage += `\n\n\n${garisWA}\n` + detailPesananWA;
+              waMessage += `\nOngkir: Rp ${baseFee.toLocaleString('id-ID')}`;
               if (extraFee > 0) {
                   waMessage += ` + Rp ${extraFee.toLocaleString('id-ID')}`;
               }
-              // Link pantau pesanan (+ ulasan di halaman yang sama)
-              if (linkUlasanAwal) waMessage += `\n\nPantau pesanan kamu di sini:\n${linkUlasanAwal}`;
+              waMessage += `\n${garisWA}`;
 
               // Link penilaian TIDAK lagi ditaruh di pesan awal: link sekali pakai per order
               // hanya dikirim setelah pesanan selesai (sendFeedbackWAAndContinue).
               const myUid = window.getRiderUid();
 
-              waMessage += `\n\nJika kakak terbiasa dan nyaman memesan pakai aplikasi, PROJEKGO juga sudah ada di Play Store loh 😊\nKlik https://katalog.projekgo.id/unduh untuk melihat langsung di Play Store.`;
+              waMessage += `\n\n\n\nJika kakak terbiasa dan nyaman memesan pakai aplikasi, PROJEKGO juga sudah ada di Play Store loh 😊\nKlik https://katalog.projekgo.id/unduh untuk melihat langsung di Play Store.`;
 
               const btnWaCustomer = document.getElementById('btn-wa-customer');
               if (btnWaCustomer) {
@@ -24554,7 +24556,13 @@ window.PembuatQR = PembuatQR;
     var PROYEK = 'onbid-2f87a';
     var ID_PESAN = /^[A-Za-z0-9]{12,32}$/;
     var JENIS_SAH = { umum: 1, khusus: 1, peringatan: 1 };
-    var s = { uid: '', henti: [], umum: [], khusus: [], awal: true, tab: 'semua', laci: null, kenal: {}, gambar: {} };
+    var s = { uid: '', henti: [], umum: [], khusus: [], awal: true, tab: 'semua', laci: null, kenal: {}, gambar: {}, isiPenuh: {} };
+    // (23 Okt 2026, malam) Pesan panjang + maks 5 gambar dengan penanda [gambar N] (ditulis admin).
+    // Isi lengkap: pesan_gambar/<ID>_isi, gambar 2-5: pesan_gambar/<ID>_g2.._g5 (gambar 1 tetap <ID>).
+    // Diambil hanya saat pesan dibuka. Kotak pesan hanya berisi ringkasan.
+    var MAKS_GAMBAR = 5, MAKS_ISI = 10000;
+    var PENANDA = /\[gambar ([1-5])\]/g;
+    function docGambar(id, k) { return k <= 1 ? id : id + '_g' + k; }
 
     function fsMod() { return import(URL_FS); }
     function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
@@ -24588,6 +24596,8 @@ window.PembuatQR = PembuatQR;
             return {
                 id: String(x.id), judul: String(x.judul || '').slice(0, 80), isi: String(x.isi || '').slice(0, 1500),   // maks 1500 huruf (23 Okt 2026)
                 gambar: x.gambar === true, at: Number(x.at) || 0, jenis: JENIS_SAH[j] ? j : jenisAsal,
+                n_gambar: Number.isInteger(x.n_gambar) ? Math.max(0, Math.min(MAKS_GAMBAR, x.n_gambar)) : (x.gambar === true ? 1 : 0),
+                lama: !Number.isInteger(x.n_gambar), panjang: x.panjang === true,
                 edit: Number(x.edit) || 0, gv: Math.min(9999, Math.max(0, parseInt(x.gv, 10) || 0))   // pesan diedit admin (23 Okt 2026)
             };
         });
@@ -24664,7 +24674,7 @@ window.PembuatQR = PembuatQR;
         });
     }
     window.psnGambarTeks = gambarTeks;   // dipakai ulang (pratinjau / uji)
-    function ringkas(isi) { return String(isi || '').replace(/^\s*([-•]|\d{1,2}[.)])\s+/gm, '').replace(/\*/g, '').replace(/\s+/g, ' ').trim(); }
+    function ringkas(isi) { return String(isi || '').replace(PENANDA, ' ').replace(/^\s*([-•]|\d{1,2}[.)])\s+/gm, '').replace(/\*/g, '').replace(/\s+/g, ' ').trim(); }
     function jam(ms) {
         if (!ms) return '';
         var d = new Date(ms), kini = new Date();
@@ -24698,7 +24708,7 @@ window.PembuatQR = PembuatQR;
         var k = el('div');
         k.appendChild(el('div', 'ik', '⚠️'));
         k.appendChild(el('h3', '', x.judul || 'Peringatan kepatuhan'));
-        var isi = el('div', 'isi psn-teks'); gambarTeks(isi, x.isi); k.appendChild(isi);
+        var isi = el('div', 'isi psn-teks'); gambarTeks(isi, String(x.isi || '').replace(PENANDA, '')); k.appendChild(isi);
         var ok = el('button', '', 'Saya mengerti'); ok.type = 'button';
         ok.addEventListener('click', function () { w.remove(); tandaiDibaca([x.id]); });
         k.appendChild(ok); w.appendChild(k);
@@ -24788,21 +24798,55 @@ window.PembuatQR = PembuatQR;
         panel.appendChild(atas);
         var det = el('div', 'psn-det');
         det.appendChild(el('h3', '', m.judul || 'Pesan dari admin'));
-        if (m.gambar) {
-            var img = el('img', 'psn-gbr'); img.alt = 'Gambar pesan';
-            det.appendChild(img);
-            ambilGambar(m.id, m.gv).then(function (src) {
-                if (!src) { img.remove(); return; }
-                img.src = src;
-                img.addEventListener('click', function () { zoom(src); });
+        var teks = el('div', 'psn-teks'); det.appendChild(teks);
+        if (m.panjang) {
+            teks.appendChild(el('p', 'psn-kosong', 'Memuat pesan…'));
+            ambilIsi(m).then(function (isiPenuh) {
+                if (!teks.isConnected) return;
+                teks.replaceChildren(); renderIsi(teks, isiPenuh || m.isi, m);
             });
-        }
-        var teks = el('div', 'psn-teks'); gambarTeks(teks, m.isi); det.appendChild(teks);
+        } else renderIsi(teks, m.isi, m);
         det.appendChild(el('div', 'psn-dibaca', '✓ Sudah dibaca'));
         panel.appendChild(det);
         tandaiDibaca([m.id]);
     }
+    // Isi + gambar sesuai penanda [gambar N]. Gambar tanpa penanda: di bawah (pesan lama: di atas, seperti dulu).
+    function renderIsi(w, isi, m) {
+        var n = m.n_gambar || 0, dipakai = {};
+        var pasang = function (k) {
+            if (dipakai[k] || k > n) return;
+            dipakai[k] = 1;
+            var img = el('img', 'psn-gbr'); img.alt = 'Gambar ' + k;
+            w.appendChild(img);
+            ambilGambar(docGambar(m.id, k), m.gv).then(function (src) {
+                if (!src) { img.remove(); return; }
+                img.src = src;
+                img.addEventListener('click', function () { zoom(src); });
+            });
+        };
+        var sisa = function () { for (var k = 1; k <= n; k++) pasang(k); };
+        if (m.lama) sisa();
+        String(isi || '').split(/(\[gambar [1-5]\])/).forEach(function (b) {
+            var t = /^\[gambar ([1-5])\]$/.exec(b);
+            if (t) { pasang(parseInt(t[1], 10)); return; }
+            if (b.trim()) gambarTeks(w, b);
+        });
+        sisa();
+    }
+    function ambilIsi(m) {
+        var kunci = m.id + '#' + (m.edit || 0);   // versi berganti saat admin mengedit
+        if (typeof s.isiPenuh[kunci] === 'string') return Promise.resolve(s.isiPenuh[kunci]);
+        if (!ID_PESAN.test(m.id)) return Promise.resolve('');
+        return fsMod().then(function (f) {
+            return f.getDoc(f.doc(f.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'pesan_gambar', m.id + '_isi'));
+        }).then(function (snap) {
+            var t = snap.exists() && typeof snap.data().isi === 'string' ? snap.data().isi.slice(0, MAKS_ISI) : '';
+            if (t) s.isiPenuh[kunci] = t;
+            return t;
+        }).catch(function () { return ''; });
+    }
     function ambilGambar(id, gv) {
+        if (!/^[A-Za-z0-9]{12,32}(_g[2-5])?$/.test(String(id || ''))) return Promise.resolve('');
         var kunci = id + '#' + (gv || 0);   // versi gambar naik saat admin mengganti gambar
         if (s.gambar[kunci]) return Promise.resolve(s.gambar[kunci]);
         return fsMod().then(function (m) {
