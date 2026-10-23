@@ -2165,6 +2165,30 @@
         body.dark-mode .tp-strip div i { background: #334155; } body.dark-mode .tp-strip div.ok i { background: #f0a05a; }
         body.dark-mode .tp-kartu { background: #1c2433; border-color: #33415a; color: #f0c275; } body.dark-mode .tp-kartu > b { color: #f8fafc; }
         body.dark-mode .tp-est button { background: #0f172a; border-color: #475569; color: #f0c275; } body.dark-mode .tp-est button.on { background: #ea580c; border-color: #ea580c; color: #fff; }
+        /* (23 Okt 2026, malam) Warna tombol geser & kartu tahap berbeda tiap tahap + pop up setelah menggeser */
+        #step1-swipe-track { transition: background-color .3s ease; }
+        #active-order-overlay.tp-w-menuju #step1-swipe-track { background-color: #1d4ed8 !important; }
+        #active-order-overlay.tp-w-lokasi #step1-swipe-track { background-color: #b45309 !important; }
+        #active-order-overlay.tp-w-antar #step1-swipe-track { background-color: #15803d !important; }
+        #active-order-overlay.tp-w-menuju .tp-kartu { background: #eff6ff; border-color: #bfdbfe; color: #1e3a8a; }
+        #active-order-overlay.tp-w-lokasi .tp-kartu { background: #fffbeb; border-color: #fcd34d; color: #78350f; }
+        #active-order-overlay.tp-w-antar .tp-kartu { background: #f0fdf4; border-color: #86efac; color: #14532d; }
+        body.dark-mode #active-order-overlay.tp-w-menuju .tp-kartu { background: #172554; border-color: #1e40af; color: #bfdbfe; }
+        body.dark-mode #active-order-overlay.tp-w-lokasi .tp-kartu { background: #3b2306; border-color: #92400e; color: #fde68a; }
+        body.dark-mode #active-order-overlay.tp-w-antar .tp-kartu { background: #052e16; border-color: #166534; color: #bbf7d0; }
+        .tp-pop { position: fixed; inset: 0; z-index: 2147482800; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 24px; }
+        .tp-pop > div { width: 100%; max-width: 330px; background: #fff; border-radius: 22px; padding: 20px 18px 16px; text-align: center; color: #1c1917; animation: tp-pop-masuk .2s ease-out; }
+        @keyframes tp-pop-masuk { from { transform: scale(.92); opacity: 0; } to { transform: none; opacity: 1; } }
+        .tp-pop .tp-pop-ik { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 10px; display: grid; place-items: center; font-size: 30px; }
+        .tp-pop h3 { margin: 0 0 4px; font-size: 18px; font-weight: 900; }
+        .tp-pop p { margin: 0 0 6px; font-size: 13px; color: #57534e; line-height: 1.45; }
+        .tp-pop .tp-pop-lanjut { font-size: 12px; font-weight: 800; border-radius: 10px; padding: 8px; margin: 8px 0 12px; }
+        .tp-pop .tp-pop-ok { width: 100%; min-height: 46px; border: 0; border-radius: 14px; color: #fff; font-weight: 900; font-size: 14px; }
+        .tp-pop .tp-pop-un { display: block; width: 100%; min-height: 36px; border: 0; background: none; color: #78716c; font-size: 12px; font-weight: 700; text-decoration: underline; margin-top: 6px; }
+        .tp-pop .tp-pop-bar { height: 4px; border-radius: 2px; background: #e7e5e4; margin-top: 8px; overflow: hidden; }
+        .tp-pop .tp-pop-bar i { display: block; height: 100%; width: 100%; transform-origin: left; animation: tp-pop-waktu 4s linear forwards; }
+        @keyframes tp-pop-waktu { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+        body.dark-mode .tp-pop > div { background: #1e293b; color: #f8fafc; } body.dark-mode .tp-pop p { color: #cbd5e1; }
         #step1-geser-wrap { position: sticky; bottom: 0; z-index: 5; margin-top: auto; background: inherit; box-shadow: 0 -8px 16px -10px rgba(0,0,0,.18); }
     </style>
     <!-- ===== OPTIMASI TAMPILAN (tidak mengubah logika) ===== -->
@@ -23872,6 +23896,48 @@ window.PembuatQR = PembuatQR;
             strip.appendChild(d);
         });
     }
+    // Warna tombol geser & kartu tahap: biru (menuju), oranye tua (di lokasi), hijau (mengantar)
+    var WARNA_TAHAP = { menuju: ['#1d4ed8', '#eff6ff', '#1e3a8a'], lokasi: ['#b45309', '#fffbeb', '#78350f'], antar: ['#15803d', '#f0fdf4', '#14532d'] };
+    function aturWarnaTahap(t) {
+        var ov = document.getElementById('active-order-overlay'); if (!ov) return;
+        ['menuju', 'lokasi', 'antar'].forEach(function (k) { ov.classList.toggle('tp-w-' + k, k === t); });
+    }
+    // Pop up setelah menggeser: tahap baru, yang dilihat pelanggan, langkah berikutnya, & tombol batal
+    function tampilPopTahap() {
+        var lama = document.getElementById('tp-pop'); if (lama) lama.remove();
+        var c = cfg(), w = WARNA_TAHAP[st.tahap] || WARNA_TAHAP.antar, nama = c.langkah[idxTahap()][1];
+        var judul, ket, lanjut;
+        if (st.tahap === 'lokasi') {
+            judul = st.jenis === 'food' ? 'Kamu sudah di resto' : 'Kamu sudah di lokasi';
+            ket = 'Pelanggan sekarang melihat: "' + nama + '"';
+            lanjut = (c.tanyaEst ? 'Pilih perkiraan menit, lalu ' : 'Berikutnya: ') + 'geser saat mulai mengantar';
+        } else {
+            judul = 'Mulai mengantar';
+            ket = adaLokasi() ? 'Pelanggan sekarang melihat posisimu di peta' : 'Pelanggan sekarang melihat: "' + nama + '"';
+            lanjut = 'Berikutnya: geser saat pesanan sudah sampai';
+        }
+        var latar = el('div', 'tp-pop'); latar.id = 'tp-pop';
+        latar.setAttribute('role', 'alertdialog'); latar.setAttribute('aria-modal', 'true'); latar.setAttribute('aria-label', judul);
+        var k = el('div');
+        var ik = el('div', 'tp-pop-ik', ikonTahap()); ik.style.background = w[1]; ik.style.border = '3px solid ' + w[0]; k.appendChild(ik);
+        k.appendChild(el('h3', '', judul));
+        k.appendChild(el('p', '', ket));
+        var ln = el('div', 'tp-pop-lanjut', lanjut); ln.style.background = w[1]; ln.style.color = w[2]; k.appendChild(ln);
+        var tutup = function () { clearTimeout(waktu); latar.remove(); };
+        var ok = el('button', 'tp-pop-ok', 'OK'); ok.type = 'button'; ok.style.background = w[0];
+        ok.addEventListener('click', tutup); k.appendChild(ok);
+        if (st.undo) {
+            var un = el('button', 'tp-pop-un', 'Salah geser? Kembalikan'); un.type = 'button';
+            un.addEventListener('click', function () { tutup(); batalkan(); });
+            k.appendChild(un);
+        }
+        var bar = el('div', 'tp-pop-bar'), isiBar = el('i'); isiBar.style.background = w[0]; bar.appendChild(isiBar); k.appendChild(bar);
+        latar.addEventListener('click', function (e) { if (e.target === latar) tutup(); });
+        latar.appendChild(k);
+        document.body.appendChild(latar);
+        var waktu = setTimeout(tutup, 4000);
+        ok.focus();
+    }
     function gambarGeser() {
         var wrap = document.getElementById('step1-geser-wrap');
         var span = document.querySelector('#step1-swipe-track > div:first-child span');
@@ -23879,6 +23945,7 @@ window.PembuatQR = PembuatQR;
         if (span && !span.hasAttribute('data-asli')) span.setAttribute('data-asli', span.textContent);
         var chip = document.getElementById('rv-tb-langkah');
         if (!geserAktif()) {
+            aturWarnaTahap('');
             if (kartu) kartu.remove();
             gambarStrip(false);
             if (span) span.textContent = span.getAttribute('data-asli') || 'Geser Untuk Selesai';
@@ -23887,6 +23954,7 @@ window.PembuatQR = PembuatQR;
         }
         if (span) span.textContent = labelGeser();
         if (chip) chip.textContent = window.lacakChipTeks(step2Tampil());
+        aturWarnaTahap(st.tahap);
         if (!wrap) return;
         if (!kartu) { kartu = el('div', 'tp-kartu'); kartu.id = 'tp-kartu'; wrap.prepend(kartu); }
         kartu.replaceChildren();
@@ -24327,8 +24395,8 @@ window.PembuatQR = PembuatQR;
         var a = cfg().aksi[st.tahap];
         if (geserAktif() && a) {
             if (majuKe(a[1])) {
-                try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) {}
-                toast('Tahap: ' + (cfg().langkah[idxTahap()] || ['', ''])[1] + ' (terlihat pelanggan)');
+                try { if (navigator.vibrate) navigator.vibrate([40, 60, 40]); } catch (e) {}
+                tampilPopTahap();
             }
             return false;
         }
@@ -24530,6 +24598,13 @@ window.PembuatQR = PembuatQR;
     .psn-peringatan button { width: 100%; min-height: 48px; border: 0; border-radius: 14px; background: #ea580c; color: #fff; font-weight: 800; font-size: 14px; }
     /* (23 Okt 2026) Laci pesan layar penuh; isi peringatan yang panjang bisa digulir (tombol tetap terlihat) */
     .psn-laci .psn-panel { max-width: none; height: 100%; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); }
+    /* (23 Okt 2026, malam) Anti terpotong: WebView lama tidak mengenal "dvh" -> tinggi panel jadi setinggi isi
+       dan bagian bawah terpotong tanpa bisa digulir. Tinggi dikunci ke layar + area isi boleh menyusut & digulir. */
+    .psn-laci { height: 100vh; height: 100dvh; }
+    .psn-laci .psn-panel { max-height: 100vh; max-height: 100dvh; }
+    .psn-det, .psn-isi-daftar { min-height: 0; overscroll-behavior: contain; }
+    .psn-det { padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
+    .psn-gagal { margin: 10px 0 0; border: 1px dashed #fdba74; background: #fff7ed; color: #9a3412; border-radius: 12px; padding: 10px; font-size: 12.5px; font-weight: 700; width: 100%; text-align: center; }
     .psn-peringatan > div { max-height: 100%; display: flex; flex-direction: column; }
     .psn-peringatan > div > * { flex: none; }
     .psn-peringatan .isi { flex: 0 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
@@ -24801,12 +24876,19 @@ window.PembuatQR = PembuatQR;
         var teks = el('div', 'psn-teks'); det.appendChild(teks);
         if (m.panjang) {
             teks.appendChild(el('p', 'psn-kosong', 'Memuat pesan…'));
-            ambilIsi(m).then(function (isiPenuh) {
-                if (!teks.isConnected) return;
-                teks.replaceChildren(); renderIsi(teks, isiPenuh || m.isi, m);
-            });
+            var muat = function () {
+                ambilIsi(m).then(function (isiPenuh) {
+                    if (!teks.isConnected) return;
+                    teks.replaceChildren(); renderIsi(teks, isiPenuh || m.isi, m);
+                    if (isiPenuh) return;
+                    // Isi lengkap belum bisa dimuat (sinyal) -> ringkasan + tombol coba lagi, bukan terpotong diam-diam
+                    var ulang = el('button', 'psn-gagal', '⚠️ Pesan belum tampil lengkap. Ketuk untuk memuat ulang'); ulang.type = 'button';
+                    ulang.addEventListener('click', function () { teks.replaceChildren(el('p', 'psn-kosong', 'Memuat pesan…')); muat(); });
+                    teks.appendChild(ulang);
+                });
+            };
+            muat();
         } else renderIsi(teks, m.isi, m);
-        det.appendChild(el('div', 'psn-dibaca', '✓ Sudah dibaca'));
         panel.appendChild(det);
         tandaiDibaca([m.id]);
     }
