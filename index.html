@@ -23514,9 +23514,75 @@ window.PembuatQR = PembuatQR;
     function tahapSah(t) { return cfg().langkah.some(function (x) { return x[0] === t; }); }
 
     // ---------- Tulis ke server (tanpa ditunggu layar) ----------
+    // ---------- KIRIM LANGSUNG SAAT APLIKASI DI-MINIMIZE (23 Okt 2026, malam) ----------
+    // Di latar belakang, Android memperlambat jam internal halaman. Antrean pustaka Firebase ikut
+    // tertunda (bisa beberapa menit), sehingga pelanggan masih melihat "memasak" walau rider sudah
+    // menekan "mulai antar" di bar. Saat aplikasi tidak tampil, perubahan dikirim lewat Firestore REST
+    // (satu permintaan langsung, tanpa antrean). Gagal -> otomatis cara lama (pustaka Firebase).
+    // Rules yang sama tetap berlaku: hanya order milik rider ini yang bisa diubah.
+    var REST_FS = 'https://firestore.googleapis.com/v1/projects/' + PROYEK + '/databases/(default)/documents';
+    var REST_NAMA = 'projects/' + PROYEK + '/databases/(default)/documents/artifacts/' + PROYEK + '/public/data/';
+    function diLatar() {
+        try { return !appDepan() || document.visibilityState !== 'visible'; } catch (e) { return false; }
+    }
+    function nilaiRest(v) {
+        if (v === null || v === undefined) return { nullValue: null };
+        if (typeof v === 'boolean') return { booleanValue: v };
+        if (typeof v === 'number' && isFinite(v)) return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+        return { stringValue: String(v) };
+    }
+    // waktu = kolom yang diisi waktu server. wajibAda = dokumen harus sudah ada (seperti updateDoc).
+    // ganti = timpa seluruh dokumen (seperti setDoc tanpa merge); selain itu hanya kolom yang dikirim.
+    function tulisRest(jalur, data, waktu, wajibAda, ganti) {
+        var fields = {};
+        Object.keys(data).forEach(function (kk) { fields[kk] = nilaiRest(data[kk]); });
+        var w = { update: { name: REST_NAMA + jalur, fields: fields } };
+        if (!ganti) w.updateMask = { fieldPaths: Object.keys(fields) };
+        if (waktu.length) w.updateTransforms = waktu.map(function (f) { return { fieldPath: f, setToServerValue: 'REQUEST_TIME' }; });
+        if (wajibAda) w.currentDocument = { exists: true };
+        return w;
+    }
+    async function kirimRest(writes) {
+        var t = await ambilToken();
+        if (!t) return false;
+        var ac = typeof AbortController === 'function' ? new AbortController() : null;
+        var batas = setTimeout(function () { if (ac) ac.abort(); }, 12000);
+        try {
+            var r = await fetch(REST_FS + ':commit', {
+                method: 'POST', cache: 'no-store', credentials: 'omit',
+                headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ writes: writes }), signal: ac ? ac.signal : undefined
+            });
+            return r.ok;
+        } catch (e) { return false; } finally { clearTimeout(batas); }
+    }
+    // Sama isinya dengan cara lama di tulis(): data order + dokumen lacak pelanggan, satu kali kirim.
+    async function tulisLangsung(id, kode, k, uid, dataOrder, dataLacak) {
+        var writes = [];
+        if (dataOrder) {
+            var o = Object.assign({}, dataOrder), wo = [];
+            if ('tahap' in o) { if (!tahapSah(o.tahap)) return false; wo = ['tahap_at', 'tahap_log.' + o.tahap]; }
+            writes.push(tulisRest('active_orders/' + id, o, wo, true, false));
+        }
+        if (dataLacak && KODE_ORDER.test(kode) && k) {
+            var l = Object.assign({ order_id: id, uid: uid, k: k, jenis: st.jenis, tahap: st.tahap }, dataLacak), wl = [];
+            if ('tahap' in dataLacak) wl.push('tahap_at');
+            if ('estimasi_menit' in l) { if (l.estimasi_menit) wl.push('estimasi_at'); else l.estimasi_at = null; }
+            writes.push(tulisRest('lacak/' + kode, l, wl, false, false));
+        }
+        if (!writes.length) return true;
+        return kirimRest(writes);
+    }
+
     async function tulis(dataOrder, dataLacak, diam) {
         var id = st.id, kode = st.kode, k = kodeRiderKu(), uid = uidKu();
         if (!ID_SAH.test(id) || !uid) return;
+        // (23 Okt 2026, malam) Aplikasi di-minimize -> kirim langsung. Berhasil = selesai; gagal = cara lama di bawah.
+        if (diLatar()) {
+            var langsung = false;
+            try { langsung = await tulisLangsung(id, kode, k, uid, dataOrder, dataLacak); } catch (e) { langsung = false; }
+            if (langsung) return;
+        }
         var m = await fsMod(), db = m.getFirestore();
         var janji = [];
         if (dataOrder) {
@@ -24084,10 +24150,19 @@ window.PembuatQR = PembuatQR;
         if (!uid || !ID_SAH.test(uid) || (idOrder && !ID_SAH.test(idOrder))) return;
         var v = 0;
         try { v = typeof window.versiApkRider === 'function' ? (parseInt(window.versiApkRider(), 10) || 0) : 0; } catch (e) {}
-        fsMod().then(function (m) {
-            return m.setDoc(m.doc(m.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'detak_rider', uid),
-                { order_id: idOrder, at: m.serverTimestamp(), versi: v });
-        }).catch(function (e) { console.warn('[Detak]', e && e.code); });
+        var lewatPustaka = function () {
+            fsMod().then(function (m) {
+                return m.setDoc(m.doc(m.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'detak_rider', uid),
+                    { order_id: idOrder, at: m.serverTimestamp(), versi: v });
+            }).catch(function (e) { console.warn('[Detak]', e && e.code); });
+        };
+        // (23 Okt 2026, malam) Di-minimize -> kirim langsung supaya admin tidak mengira aplikasi mati
+        if (diLatar()) {
+            kirimRest([tulisRest('detak_rider/' + uid, { order_id: idOrder, versi: v }, ['at'], false, true)])
+                .then(function (ok) { if (!ok) lewatPustaka(); }, lewatPustaka);
+            return;
+        }
+        lewatPustaka();
     }
     function mulaiDetak() {
         if (detak.id === st.id && detak.timer) return;
