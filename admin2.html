@@ -2227,7 +2227,8 @@
                     <i class="fa-solid fa-envelope text-3xl text-orange-500 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Pesan<br>Rider</span>
                 </button>
-                <button id="btn-menu-kepatuhan" onclick="switchPage('kepatuhan')" class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-emerald-300 hover:shadow-md active:scale-95 transition-all group">
+                <!-- (23 Okt 2026, malam) Penilaian kepatuhan otomatis dimatikan -> menu disembunyikan. Tampilkan lagi: hapus style display:none -->
+                <button id="btn-menu-kepatuhan" style="display:none" onclick="switchPage('kepatuhan')" class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-emerald-300 hover:shadow-md active:scale-95 transition-all group">
                     <i class="fa-solid fa-clipboard-check text-3xl text-emerald-600 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Kepatuhan<br>Rider</span>
                 </button>
@@ -12282,7 +12283,14 @@
         //   dikirimi (belum mengenal notifikasi ini, bisa dianggap order masuk).
         // =====================================================================
         // (23 Okt 2026) Detak rider tiap 2 menit -> dianggap mati setelah 5 menit tanpa detak
+        // (23 Okt 2026, malam) DIMATIKAN: penilaian kepatuhan otomatis + pesan peringatan otomatis
+        // ("Order tadi tercatat bermasalah") terlalu sensitif & jadi spam di lapangan. Nyalakan lagi: true.
+        const KP_OTOMATIS = false;
         const DETAK_BASI_MS = 5 * 60000, BANGUN_JEDA_MS = 3 * 60000, BANGUN_MAKS = 10, BANGUN_VERSI_MIN = 6;
+        // (23 Okt 2026, malam) Dibuat lebih sabar supaya tidak jadi spam di HP rider:
+        // dibangunkan baru setelah 10 menit tanpa tanda hidup, jeda 10 menit, maksimal 3 kali per order.
+        // (Tanda "📵 App rider mati" di admin tetap muncul setelah 5 menit, hanya sebagai info.)
+        const BANGUN_SETELAH_MS = 10 * 60000, BANGUN_JEDA_TENANG_MS = 10 * 60000, BANGUN_MAKS_TENANG = 3;
         const detakCatat = {};   // order id -> menit terakhir yang dicatat ke data order
         const detakRider = {}, bangunCatat = {};
         let detakMulai = false;
@@ -12323,8 +12331,9 @@
                 const c = bangunCatat[o.id];
                 el.textContent = '📵 App rider mati · ' + Math.round(lama / 60000) + ' mnt' + (c && c.n ? ' · dibangunkan ' + c.n + '×' : '');
                 // Catat lama mati di data order (penilaian kepatuhan). Ditulis paling sering tiap 2 menit per order.
+                // (23 Okt 2026, malam) Tidak ditulis lagi selama penilaian otomatis dimatikan (hemat tulis).
                 const menit = Math.floor(lama / 60000);
-                if (menit >= 5 && menit >= (detakCatat[o.id] || Math.max(0, parseInt(o.app_mati_menit, 10) || 0)) + 2) {
+                if (KP_OTOMATIS && menit >= 5 && menit >= (detakCatat[o.id] || Math.max(0, parseInt(o.app_mati_menit, 10) || 0)) + 2) {
                     detakCatat[o.id] = menit;
                     updateDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', o.id), { app_mati_menit: menit }).catch(() => {});
                 }
@@ -12334,12 +12343,12 @@
         async function abBangunkanRider() {
             const kini = Date.now();
             for (const o of allGlobalOrders) {
-                if (!detakBasi(o)) continue;
+                if (detakBasi(o) < BANGUN_SETELAH_MS) continue;   // 0 = masih hidup
                 const uid = String(o.rider_uid).trim().toUpperCase();
                 const d = detakRider[uid];
                 if (!d || d.versi < BANGUN_VERSI_MIN) continue;
                 const c = bangunCatat[o.id] || (bangunCatat[o.id] = { n: 0, t: 0 });
-                if (c.n >= BANGUN_MAKS || kini - c.t < BANGUN_JEDA_MS) continue;
+                if (c.n >= Math.min(BANGUN_MAKS, BANGUN_MAKS_TENANG) || kini - c.t < Math.max(BANGUN_JEDA_MS, BANGUN_JEDA_TENANG_MS)) continue;
                 c.n++; c.t = kini;
                 try { await sendPushNotification(uid, 'Aplikasi ProjekGo tertutup', 'Order masih berjalan. Ketuk untuk membuka & update tahap.', 'BANGUNKAN_BAR'); } catch (e) {}
             }
@@ -12602,6 +12611,50 @@
             const daftar = prEl('div', 'pr-card'); daftar.appendChild(prEl('p', 'pr-h', '📋 Terkirim')); const wadah = prEl('div', '', null); wadah.appendChild(prEl('p', 'pr-mu', 'Memuat…'));
             daftar.appendChild(wadah); root.appendChild(daftar);
             prMuatTerkirim(wadah);
+            const bersih = prEl('button', 'pr-btn g', '🧹 Hapus semua peringatan otomatis'); bersih.type = 'button';
+            bersih.onclick = () => prBersihPeringatan(bersih);
+            daftar.appendChild(bersih);
+            daftar.appendChild(prEl('p', 'pr-mu', 'Menghapus semua pesan "Order tadi tercatat bermasalah" dari laci pesan rider. Pesan biasa tidak ikut terhapus.'));
+        }
+        // Bersihkan semua peringatan otomatis (jenis "peringatan" = hanya dikirim penilaian otomatis).
+        // Biaya: 1 read per peringatan + 1 read per kotak rider + tanda "dibaca"-nya.
+        async function prBersihPeringatan(tombol) {
+            let snap;
+            try { snap = await getDocs(query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'pesan_terkirim'), where('jenis', '==', 'peringatan'), limit(500))); }
+            catch (e) { return window.showAlert('Gagal', 'Daftar peringatan belum bisa dimuat. ' + ((e && e.code) || ''), 'error'); }
+            const ids = [], uids = new Set();
+            snap.forEach(d => { if (!PR_ID.test(d.id)) return; ids.push(d.id); (Array.isArray(d.data().untuk) ? d.data().untuk : []).filter(prUidSah).forEach(u => uids.add(u)); });
+            if (!ids.length) return window.showAlert('Sudah bersih', 'Tidak ada peringatan otomatis tersimpan.', 'success');
+            window.showConfirm('Hapus ' + ids.length + ' peringatan otomatis?', 'Peringatan akan hilang dari laci pesan ' + uids.size + ' rider. Pesan biasa tidak ikut terhapus. Tidak bisa dibatalkan.', async () => {
+                tombol.disabled = true; tombol.textContent = 'Menghapus…';
+                const set = new Set(ids);
+                try {
+                    for (const u of uids) {
+                        await runTransaction(db, async (tx) => {
+                            const ref = prPd('pesan_rider', u), s = await tx.get(ref);
+                            const lama = s.exists() && Array.isArray(s.data().items) ? s.data().items : [];
+                            const sisa = lama.filter(x => !(x && set.has(x.id)));
+                            if (sisa.length !== lama.length) tx.set(ref, { items: sisa, diubah_at: serverTimestamp() });
+                        });
+                    }
+                    // Tanda "dibaca" (maks 30 id per kueri) lalu catatan admin, per 450 hapus
+                    const hapus = [];
+                    for (let i = 0; i < ids.length; i += 30) {
+                        try {
+                            const sd = await getDocs(query(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'pesan_dibaca'), where('pesan_id', 'in', ids.slice(i, i + 30))));
+                            sd.forEach(d => hapus.push(d.ref));
+                        } catch (e) { console.warn('Tanda dibaca belum terhapus', e); }
+                    }
+                    ids.forEach(id => hapus.push(prPd('pesan_terkirim', id)));
+                    for (let i = 0; i < hapus.length; i += 450) { const b = writeBatch(db); hapus.slice(i, i + 450).forEach(r => b.delete(r)); await b.commit(); }
+                    window.showAlert('Bersih', ids.length + ' peringatan otomatis sudah dihapus dari HP rider.', 'success');
+                    if (prS.edit && set.has(prS.edit.id)) prSelesaiEdit();
+                    prRender();
+                } catch (e) {
+                    console.warn(e); window.showAlert('Gagal', 'Sebagian belum terhapus, coba tekan lagi. ' + ((e && e.code) || ''), 'error');
+                    tombol.disabled = false; tombol.textContent = '🧹 Hapus semua peringatan otomatis';
+                }
+            });
         }
         // Nama rider penerima (dari daftar rider yang sudah dimuat admin; tanpa read tambahan). Tidak dikenal = UID.
         function prNamaPeta() {
@@ -12847,6 +12900,7 @@
         }
         // diam = hitung ulang tanpa peringatan / hukuman (dipakai tombol "Hitung ulang minggu ini")
         async function kpEvaluasi(orderId, diam) {
+            if (!KP_OTOMATIS) return;   // dimatikan (23 Okt 2026, malam)
             if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(orderId || ''))) return;
             const s = await getDoc(prPd('active_orders', orderId));
             if (!s.exists()) return;
