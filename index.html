@@ -9951,6 +9951,11 @@
                 if (window._sedangKeluarApp) return true;
                 const kk = window.konfirmasiKeluar;
                 const tetapDiSini = () => { try { window.history.pushState({page: 'home'}, '', '#home'); } catch (e) {} };
+                if (!(kk && kk.terbuka()) && typeof window.psnTutupSatu === 'function' && window.psnTutupSatu()) {
+                    // (23 Okt 2026) laci "Pesan dari Admin" / gambar terbuka -> tombol kembali cukup menutupnya
+                    if (!dariAndroid) { try { window.history.pushState({page: 'psn'}, '', location.href); } catch (e) {} }
+                    return true;
+                }
                 if (!(kk && kk.terbuka()) && typeof window.tutupIdCard === 'function' && window.tutupIdCard()) {
                     // layar ID Card terbuka -> tombol kembali cukup menutupnya
                     if (!dariAndroid) { try { window.history.pushState({page: 'profile'}, '', '#profile'); } catch (e) {} }
@@ -24262,6 +24267,7 @@ window.PembuatQR = PembuatQR;
     .psn-dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; display: inline-block; }
     .psn-tag { font-size: 9px; font-weight: 900; padding: 1px 6px; border-radius: 99px; background: #e0f2fe; color: #0369a1; }
     .psn-tag.p { background: #fee2e2; color: #b91c1c; }
+    .psn-tag.e { background: #f5f5f4; color: #78716c; }
     .psn-w { flex: none; font-size: 10.5px; color: #a8a29e; text-align: right; }
     .psn-w i { display: block; margin-top: 4px; font-style: normal; font-size: 16px; }
     .psn-kosong { padding: 40px 20px; text-align: center; color: #a8a29e; font-size: 13px; }
@@ -24292,6 +24298,11 @@ window.PembuatQR = PembuatQR;
     .psn-peringatan h3 { margin: 0 0 6px; font-size: 17px; font-weight: 900; }
     .psn-peringatan .isi { text-align: left; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 9px 11px; margin: 10px 0 14px; }
     .psn-peringatan button { width: 100%; min-height: 48px; border: 0; border-radius: 14px; background: #ea580c; color: #fff; font-weight: 800; font-size: 14px; }
+    /* (23 Okt 2026) Laci pesan layar penuh; isi peringatan yang panjang bisa digulir (tombol tetap terlihat) */
+    .psn-laci .psn-panel { max-width: none; height: 100%; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); }
+    .psn-peringatan > div { max-height: 100%; display: flex; flex-direction: column; }
+    .psn-peringatan > div > * { flex: none; }
+    .psn-peringatan .isi { flex: 0 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
     .ks-ring { width: 96px; height: 96px; border-radius: 50%; margin: 6px auto 10px; display: grid; place-items: center; }
     .ks-ring > div { width: 76px; height: 76px; border-radius: 50%; background: #fff; display: grid; place-items: center; font-weight: 900; font-size: 22px; }
     .ks-baris { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 9px 0; border-top: 1px dashed #e7e5e4; }
@@ -24347,8 +24358,9 @@ window.PembuatQR = PembuatQR;
         return arr.filter(function (x) { return x && ID_PESAN.test(String(x.id || '')); }).slice(0, 30).map(function (x) {
             var j = String(x.jenis || jenisAsal);
             return {
-                id: String(x.id), judul: String(x.judul || '').slice(0, 80), isi: String(x.isi || '').slice(0, 500),
-                gambar: x.gambar === true, at: Number(x.at) || 0, jenis: JENIS_SAH[j] ? j : jenisAsal
+                id: String(x.id), judul: String(x.judul || '').slice(0, 80), isi: String(x.isi || '').slice(0, 1500),   // maks 1500 huruf (23 Okt 2026)
+                gambar: x.gambar === true, at: Number(x.at) || 0, jenis: JENIS_SAH[j] ? j : jenisAsal,
+                edit: Number(x.edit) || 0, gv: Math.min(9999, Math.max(0, parseInt(x.gv, 10) || 0))   // pesan diedit admin (23 Okt 2026)
             };
         });
     }
@@ -24384,7 +24396,7 @@ window.PembuatQR = PembuatQR;
     }
     function datangBaru() {
         perbaruiBadge();
-        if (s.laci) gambarLaci();
+        if (s.laci) { if (s.detail && s.detail !== 'skor') bukaDetail(s.detail); else gambarLaci(); }   // pesan yang sedang dibuka ikut diperbarui / ditutup bila dihapus admin (halaman skor dibiarkan)
         if (s.awal) return;
         var baru = semua().filter(function (x) { return !s.kenal[x.id]; });
         baru.forEach(function (x) { s.kenal[x.id] = 1; });
@@ -24468,6 +24480,14 @@ window.PembuatQR = PembuatQR;
 
     // ---------- Laci pesan ----------
     function tutupLaci() { if (s.laci) { s.laci.remove(); s.laci = null; } }
+    // Tombol kembali HP (23 Okt 2026): tutup gambar besar -> kembali ke daftar pesan -> tutup laci.
+    // Mengembalikan true kalau ada yang ditutup.
+    window.psnTutupSatu = function () {
+        var z = document.querySelector('.psn-zoom'); if (z) { z.remove(); return true; }
+        if (!s.laci) return false;
+        if (s.detail && s.detail !== 'skor') { s.detail = null; gambarLaci(); } else tutupLaci();
+        return true;
+    };
     window.psnBuka = function (idLangsung) {
         if (!s.uid) { mulai(uidKu()); }
         tutupLaci();
@@ -24511,6 +24531,7 @@ window.PembuatQR = PembuatQR;
             var b = el('b', '', m.judul || 'Pesan dari admin');
             if (m.jenis === 'khusus') b.appendChild(el('span', 'psn-tag', 'Khusus'));
             if (m.jenis === 'peringatan') b.appendChild(el('span', 'psn-tag p', 'Peringatan'));
+            if (m.edit) b.appendChild(el('span', 'psn-tag e', 'diedit'));
             if (baru) b.appendChild(el('i', 'psn-dot'));
             t.appendChild(b);
             t.appendChild(el('span', '', ringkas(m.isi)));
@@ -24534,7 +24555,7 @@ window.PembuatQR = PembuatQR;
         atas.appendChild(kembali);
         var info = el('div');
         info.appendChild(el('b', '', 'Admin PROJEKGO'));
-        info.appendChild(el('small', '', ikon(m) + ' ' + (m.jenis === 'umum' ? 'Pengumuman · semua rider' : (m.jenis === 'peringatan' ? 'Peringatan · untukmu' : 'Khusus untukmu')) + ' · ' + jam(m.at)));
+        info.appendChild(el('small', '', ikon(m) + ' ' + (m.jenis === 'umum' ? 'Pengumuman · semua rider' : (m.jenis === 'peringatan' ? 'Peringatan · untukmu' : 'Khusus untukmu')) + ' · ' + jam(m.at) + (m.edit ? ' · diedit' : '')));
         atas.appendChild(info);
         panel.appendChild(atas);
         var det = el('div', 'psn-det');
@@ -24542,7 +24563,7 @@ window.PembuatQR = PembuatQR;
         if (m.gambar) {
             var img = el('img', 'psn-gbr'); img.alt = 'Gambar pesan';
             det.appendChild(img);
-            ambilGambar(m.id).then(function (src) {
+            ambilGambar(m.id, m.gv).then(function (src) {
                 if (!src) { img.remove(); return; }
                 img.src = src;
                 img.addEventListener('click', function () { zoom(src); });
@@ -24553,14 +24574,15 @@ window.PembuatQR = PembuatQR;
         panel.appendChild(det);
         tandaiDibaca([m.id]);
     }
-    function ambilGambar(id) {
-        if (s.gambar[id]) return Promise.resolve(s.gambar[id]);
+    function ambilGambar(id, gv) {
+        var kunci = id + '#' + (gv || 0);   // versi gambar naik saat admin mengganti gambar
+        if (s.gambar[kunci]) return Promise.resolve(s.gambar[kunci]);
         return fsMod().then(function (m) {
             return m.getDoc(m.doc(m.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'pesan_gambar', id));
         }).then(function (snap) {
             var src = snap.exists() ? String(snap.data().data || '') : '';
             if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src)) return '';   // hanya gambar, bukan alamat lain
-            s.gambar[id] = src;
+            s.gambar[kunci] = src;
             return src;
         }).catch(function () { return ''; });
     }
