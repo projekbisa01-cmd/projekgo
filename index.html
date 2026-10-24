@@ -3842,6 +3842,10 @@
                             </div>
                             <span id="psn-badge-menu" class="psn-badge-menu" hidden></span>
                         </button>
+                        <!-- RESTO TUTUP HARI INI (24 Okt 2026): daftar laporan hari ini seperti di admin. Isi: blok "RESTO TUTUP HARI INI" -->
+                        <button onclick="window.toggleSidebar(); window.rtBuka && window.rtBuka()" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 text-left text-gray-700 font-bold text-sm transition-colors border border-transparent hover:border-gray-200">
+                            <div class="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-500 shadow-inner"><i class="fa-solid fa-store-slash"></i></div> Resto Tutup Hari Ini
+                        </button>
                         <!-- (23 Okt 2026, malam) Penilaian kepatuhan otomatis dimatikan -> menu disembunyikan. Tampilkan lagi: hapus style display:none -->
                         <button style="display:none" onclick="window.toggleSidebar(); window.psnBukaSkor && window.psnBukaSkor()" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 text-left text-gray-700 font-bold text-sm transition-colors border border-transparent hover:border-gray-200">
                             <div class="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600 shadow-inner"><i class="fa-solid fa-clipboard-check"></i></div> Kepatuhan Tahap
@@ -4165,9 +4169,10 @@
                         <span>Update lokasi mangkal</span>
                     </button>
                     <!-- TOMBOL LAPOR RESTO TUTUP -->
-                    <button type="button" onclick="window.openRestoTutupPopup()" class="bh-aksi-btn pointer-events-auto">
+                    <!-- (24 Okt 2026) membuka daftar "Resto Tutup Hari Ini" (tombol lapor ada di dalamnya) -->
+                    <button type="button" onclick="window.rtBuka ? window.rtBuka() : window.openRestoTutupPopup()" class="bh-aksi-btn pointer-events-auto">
                         <i class="fa-solid fa-store-slash bh-ikon-merah" aria-hidden="true"></i>
-                        <span>Lapor resto tutup</span>
+                        <span>Resto tutup hari ini</span>
                     </button>
                 </div>
 
@@ -5813,7 +5818,7 @@
                 <!-- Form Fields -->
                 <div>
                     <label class="text-xs font-bold text-gray-700 ml-1">Nama Resto / Warung</label>
-                    <input type="text" id="resto-tutup-nama" placeholder="Contoh: Soto Sedap Boyolali" class="w-full mt-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-800 focus:outline-none focus:border-red-500 transition-colors">
+                    <input type="text" id="resto-tutup-nama" maxlength="100" placeholder="Contoh: Soto Sedap Boyolali" class="w-full mt-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-800 focus:outline-none focus:border-red-500 transition-colors">
                 </div>
 
                 <div>
@@ -6503,7 +6508,9 @@
                 }
 
                 window.closeRestoTutupPopup();
-                
+                // (24 Okt 2026) daftar "Resto Tutup Hari Ini" yang sedang terbuka ikut diperbarui
+                if (typeof window.rtMuatUlang === 'function') window.rtMuatUlang();
+
             } catch (error) {
                 console.error("Gagal mengirim laporan resto tutup:", error);
                 alert("Gagal mengirim laporan. Pastikan koneksi internet stabil.");
@@ -10010,6 +10017,16 @@
                 if (!(kk && kk.terbuka()) && typeof window.psnTutupSatu === 'function' && window.psnTutupSatu()) {
                     // (23 Okt 2026) laci "Pesan dari Admin" / gambar terbuka -> tombol kembali cukup menutupnya
                     if (!dariAndroid) { try { window.history.pushState({page: 'psn'}, '', location.href); } catch (e) {} }
+                    return true;
+                }
+                if (!(kk && kk.terbuka()) && typeof window.npTutupSatu === 'function' && window.npTutupSatu()) {
+                    // (24 Okt 2026) pop up "nilai pelanggan" terbuka -> tombol kembali = Lewati
+                    if (!dariAndroid) { try { window.history.pushState({page: 'np'}, '', location.href); } catch (e) {} }
+                    return true;
+                }
+                if (!(kk && kk.terbuka()) && typeof window.rtTutupSatu === 'function' && window.rtTutupSatu()) {
+                    // (24 Okt 2026) daftar "Resto Tutup Hari Ini" (atau form lapor di atasnya) terbuka -> cukup ditutup
+                    if (!dariAndroid) { try { window.history.pushState({page: 'rt'}, '', location.href); } catch (e) {} }
                     return true;
                 }
                 if (!(kk && kk.terbuka()) && typeof window.tutupIdCard === 'function' && window.tutupIdCard()) {
@@ -23946,19 +23963,23 @@ window.PembuatQR = PembuatQR;
         k.appendChild(el('h3', '', judul));
         k.appendChild(el('p', '', ket));
         var ln = el('div', 'tp-pop-lanjut', lanjut); ln.style.background = w[1]; ln.style.color = w[2]; k.appendChild(ln);
-        var tutup = function () { clearTimeout(waktu); latar.remove(); };
+        // (24 Okt 2026) Tanpa waktu: pop up hanya tertutup lewat tombol OK (atau Kembalikan)
+        var cekUn = 0;
+        var tutup = function () { clearInterval(cekUn); latar.remove(); };
         var ok = el('button', 'tp-pop-ok', 'OK'); ok.type = 'button'; ok.style.background = w[0];
         ok.addEventListener('click', tutup); k.appendChild(ok);
         if (st.undo) {
             var un = el('button', 'tp-pop-un', 'Salah geser? Kembalikan'); un.type = 'button';
             un.addEventListener('click', function () { tutup(); batalkan(); });
             k.appendChild(un);
+            // Waktu batal (8 detik) habis -> tombol Kembalikan disembunyikan, pop up tetap menunggu OK
+            cekUn = setInterval(function () {
+                if (!latar.isConnected) { clearInterval(cekUn); return; }
+                if (!st.undo) { un.remove(); clearInterval(cekUn); }
+            }, 500);
         }
-        var bar = el('div', 'tp-pop-bar'), isiBar = el('i'); isiBar.style.background = w[0]; bar.appendChild(isiBar); k.appendChild(bar);
-        latar.addEventListener('click', function (e) { if (e.target === latar) tutup(); });
         latar.appendChild(k);
         document.body.appendChild(latar);
-        var waktu = setTimeout(tutup, 4000);
         ok.focus();
     }
     function gambarGeser() {
@@ -25040,6 +25061,333 @@ window.PembuatQR = PembuatQR;
 })();
 </script>
 <!-- ================= AKHIR PESAN ADMIN & KEPATUHAN ================= -->
+<!-- ================= RESTO TUTUP HARI INI (24 Okt 2026) =================
+     Daftar laporan resto tutup HARI INI (sama seperti menu Resto Tutup di admin), dibuka dari
+     menu samping / tombol beranda. Hemat kuota:
+       - dibaca sekali saat dibuka (tanpa pantauan terus-menerus), hanya laporan sejak jam 00.00 WIB
+       - foto TIDAK dimuat sampai rider mengetuk "Lihat foto"
+     Semua isi dari laporan dipasang sebagai TEKS (textContent), foto hanya dari alamat https / data:image. -->
+<style>
+    .rt-laci { position: fixed; inset: 0; z-index: 9999990; background: #fff; display: flex; flex-direction: column; height: 100vh; height: 100dvh; color: #1c1917; padding-top: env(safe-area-inset-top, 0px); }
+    .rt-kepala { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #f1e7e7; }
+    .rt-kepala button { flex: none; width: 38px; height: 38px; border: 0; border-radius: 50%; background: #f5f5f4; color: #44403c; font-size: 16px; }
+    .rt-kepala div { flex: 1; min-width: 0; }
+    .rt-kepala b { display: block; font-size: 16px; font-weight: 900; }
+    .rt-kepala small { display: block; font-size: 11.5px; font-weight: 700; color: #78716c; }
+    .rt-isi { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 12px 12px 8px; background: #fafaf9; }
+    .rt-kartu { display: flex; gap: 10px; background: #fff; border: 1.5px solid #fecdd3; border-radius: 16px; padding: 10px; margin-bottom: 10px; }
+    .rt-kartu.saya { border-color: #fb7185; }
+    .rt-foto { flex: none; width: 82px; height: 82px; border: 0; border-radius: 12px; background: #f1f5f9; color: #64748b; font-size: 11px; font-weight: 800; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; overflow: hidden; padding: 0; }
+    .rt-foto i { font-size: 18px; }
+    .rt-foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .rt-teks { flex: 1; min-width: 0; }
+    .rt-nama { font-size: 14px; font-weight: 900; color: #be123c; text-transform: uppercase; line-height: 1.25; overflow-wrap: anywhere; }
+    .rt-oleh { margin-top: 3px; font-size: 12px; font-weight: 600; color: #57534e; overflow-wrap: anywhere; }
+    .rt-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
+    .rt-tag { font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 99px; background: #ffe4e6; color: #be123c; text-transform: uppercase; }
+    .rt-tag.k { background: #fef3c7; color: #92400e; }
+    .rt-tag.s { background: #e0f2fe; color: #0369a1; }
+    .rt-kosong { padding: 46px 20px; text-align: center; color: #78716c; font-size: 13px; font-weight: 600; }
+    .rt-kosong i { display: block; font-size: 30px; color: #d6d3d1; margin-bottom: 10px; }
+    .rt-bawah { flex: none; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #f1e7e7; background: #fff; }
+    .rt-lapor { width: 100%; min-height: 50px; border: 0; border-radius: 14px; background: #e11d48; color: #fff; font-size: 14px; font-weight: 900; }
+    .rt-lapor:active, .rt-foto:active { transform: scale(.98); }
+    .rt-zoom { position: fixed; inset: 0; z-index: 9999995; background: rgba(0,0,0,.94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 12px; }
+    .rt-zoom img { max-width: 100%; max-height: 86vh; max-height: 86dvh; border-radius: 8px; }
+    .rt-zoom span { color: #fff; font-size: 12px; opacity: .8; }
+    body.dark-mode .rt-laci, body.dark-mode .rt-bawah, body.dark-mode .rt-kartu { background: #1c1917; color: #f5f5f4; }
+    body.dark-mode .rt-isi { background: #0c0a09; }
+    body.dark-mode .rt-kepala button { background: #292524; color: #e7e5e4; }
+    body.dark-mode .rt-oleh { color: #d6d3d1; }
+    body.dark-mode .rt-foto { background: #292524; color: #a8a29e; }
+</style>
+<script>
+(function restoTutupHariIni() {
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var PROYEK = 'onbid-2f87a';
+    var WIB = 7 * 3600 * 1000;
+    var s = { laci: null, zoom: null, muat: 0 };
+
+    function fsMod() { return import(URL_FS); }
+    function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
+    function uidKu() { try { return String((window.getRiderUid && window.getRiderUid()) || '').trim().toUpperCase(); } catch (e) { return ''; } }
+    // Jam 00.00 WIB hari ini (tidak bergantung jam/zona di HP selain jam sekarang)
+    function awalHariWib() { var t = Date.now() + WIB; return new Date(t - (t % 86400000) - WIB); }
+    function tglWib() {
+        try { return new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date()); }
+        catch (e) { return new Date().toLocaleDateString('id-ID'); }
+    }
+    function jamWib(ts) {
+        if (!ts || typeof ts.seconds !== 'number') return '--.--';
+        try { return new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' }).format(new Date(ts.seconds * 1000)); }
+        catch (e) { return '--.--'; }
+    }
+    // Foto hanya dari https (Storage) atau data:image (cadangan saat upload gagal)
+    function fotoSah(u) {
+        u = String(u || '');
+        return /^https:\/\/[A-Za-z0-9.-]+\//.test(u) || /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(u) ? u : '';
+    }
+
+    function tutupZoom() { if (s.zoom) { s.zoom.remove(); s.zoom = null; return true; } return false; }
+    function zoom(src) {
+        tutupZoom();
+        var z = el('div', 'rt-zoom');
+        var img = el('img'); img.alt = 'Foto bukti resto tutup'; img.src = src;
+        z.appendChild(img); z.appendChild(el('span', null, 'Ketuk di mana saja untuk menutup'));
+        z.addEventListener('click', tutupZoom);
+        document.body.appendChild(z); s.zoom = z;
+    }
+
+    function kartu(d, saya) {
+        var k = el('div', 'rt-kartu' + (saya ? ' saya' : ''));
+        var f = el('button', 'rt-foto'); f.type = 'button';
+        var url = fotoSah(d.foto_bukti);
+        if (url) {
+            f.appendChild(el('i', 'fa-solid fa-camera')); f.appendChild(el('span', null, 'Lihat foto'));
+            f.addEventListener('click', function () {
+                var img = f.querySelector('img');
+                if (img) { zoom(url); return; }
+                f.textContent = '';
+                var gb = el('img'); gb.alt = 'Foto bukti'; gb.loading = 'lazy';
+                gb.onerror = function () { f.textContent = ''; f.appendChild(el('i', 'fa-solid fa-image')); f.appendChild(el('span', null, 'Gagal')); };
+                gb.src = url; f.appendChild(gb);
+            });
+        } else {
+            f.disabled = true; f.appendChild(el('i', 'fa-solid fa-image')); f.appendChild(el('span', null, 'Tanpa foto'));
+        }
+        var t = el('div', 'rt-teks');
+        t.appendChild(el('div', 'rt-nama', String(d.nama_resto || 'Resto tidak diketahui').slice(0, 100)));
+        t.appendChild(el('div', 'rt-oleh', 'Info oleh: ' + String(d.rider_name || 'Rider').slice(0, 60) + ' · ' + jamWib(d.created_at)));
+        var tags = el('div', 'rt-tags');
+        var st = String(d.status_validasi || 'Tutup').slice(0, 40);
+        tags.appendChild(el('span', 'rt-tag' + (/belum buka/i.test(st) ? ' k' : ''), st));
+        if (saya) tags.appendChild(el('span', 'rt-tag s', 'Laporan kamu'));
+        t.appendChild(tags);
+        k.appendChild(f); k.appendChild(t);
+        return k;
+    }
+
+    function muat() {
+        if (!s.laci) return;
+        var isi = s.laci.querySelector('.rt-isi'), sub = s.laci.querySelector('.rt-kepala small');
+        var ke = ++s.muat;
+        isi.textContent = '';
+        isi.appendChild(el('div', 'rt-kosong', 'Memuat laporan...'));
+        fsMod().then(function (m) {
+            var db = m.getFirestore();
+            var q = m.query(m.collection(db, 'artifacts', PROYEK, 'public', 'data', 'laporan_resto_tutup'),
+                m.where('created_at', '>=', awalHariWib()), m.orderBy('created_at', 'desc'), m.limit(50));
+            return m.getDocs(q);
+        }).then(function (snap) {
+            if (ke !== s.muat || !s.laci) return;
+            isi.textContent = '';
+            var saya = uidKu(), n = 0;
+            snap.forEach(function (dok) { var d = dok.data() || {}; n++; isi.appendChild(kartu(d, saya && String(d.rider_uid || '').toUpperCase() === saya)); });
+            sub.textContent = tglWib() + ' · ' + n + ' laporan';
+            if (!n) {
+                var k = el('div', 'rt-kosong'); k.appendChild(el('i', 'fa-solid fa-store'));
+                k.appendChild(document.createTextNode('Belum ada laporan resto tutup hari ini.'));
+                isi.appendChild(k);
+            }
+        }).catch(function (e) {
+            console.warn('[Resto tutup] gagal memuat', e);
+            if (ke !== s.muat || !s.laci) return;
+            isi.textContent = '';
+            var k = el('div', 'rt-kosong', 'Gagal memuat. Periksa internet lalu ketuk muat ulang.');
+            var b = el('button', 'rt-lapor', 'Muat ulang'); b.type = 'button'; b.style.marginTop = '14px'; b.style.background = '#57534e';
+            b.addEventListener('click', muat); k.appendChild(b);
+            isi.appendChild(k);
+        });
+    }
+
+    function tutup() { tutupZoom(); if (s.laci) { s.laci.remove(); s.laci = null; } }
+
+    window.rtBuka = function () {
+        if (s.laci) { muat(); return; }
+        var l = el('div', 'rt-laci'); l.setAttribute('role', 'dialog'); l.setAttribute('aria-label', 'Resto tutup hari ini');
+        var kp = el('div', 'rt-kepala');
+        var kb = el('button'); kb.type = 'button'; kb.setAttribute('aria-label', 'Kembali'); kb.appendChild(el('i', 'fa-solid fa-arrow-left'));
+        kb.addEventListener('click', tutup);
+        var jd = el('div'); jd.appendChild(el('b', null, 'Resto Tutup Hari Ini')); jd.appendChild(el('small', null, tglWib()));
+        var mu = el('button'); mu.type = 'button'; mu.setAttribute('aria-label', 'Muat ulang'); mu.appendChild(el('i', 'fa-solid fa-rotate-right'));
+        mu.addEventListener('click', muat);
+        kp.appendChild(kb); kp.appendChild(jd); kp.appendChild(mu);
+        var bw = el('div', 'rt-bawah');
+        var lp = el('button', 'rt-lapor', '+ Laporkan resto tutup'); lp.type = 'button';
+        lp.addEventListener('click', function () { if (typeof window.openRestoTutupPopup === 'function') window.openRestoTutupPopup(); });
+        bw.appendChild(lp);
+        l.appendChild(kp); l.appendChild(el('div', 'rt-isi')); l.appendChild(bw);
+        document.body.appendChild(l); s.laci = l;
+        muat();
+    };
+    window.rtMuatUlang = function () { if (s.laci) muat(); };
+    // Tombol kembali HP: foto besar -> form lapor -> daftar
+    window.rtTutupSatu = function () {
+        if (tutupZoom()) return true;
+        if (!s.laci) return false;
+        var p = document.getElementById('resto-tutup-popup');
+        if (p && !p.classList.contains('hidden')) { if (typeof window.closeRestoTutupPopup === 'function') window.closeRestoTutupPopup(); return true; }
+        tutup(); return true;
+    };
+})();
+</script>
+<!-- ================= AKHIR RESTO TUTUP HARI INI ================= -->
+<!-- ================= NILAI PELANGGAN OLEH RIDER (24 Okt 2026) =================
+     Setelah order sah selesai di server (window.lacakSelesai), rider diminta menilai pelanggan:
+     bintang 1-5, pilihan "yang baik" (opsional), dan "yang kurang" ditulis sendiri (opsional, maks 200 huruf).
+     Boleh dilewati. Hanya admin yang melihat hasilnya (rules: rider hanya bisa MEMBUAT, 1x per order,
+     hanya order miliknya yang sudah selesai <= 24 jam). Disimpan di rating_pelanggan/<ID ORDER>.
+     Semua teks dipasang sebagai TEKS (textContent), tidak pernah innerHTML. -->
+<style>
+    .np-latar { position: fixed; inset: 0; z-index: 2147482300; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; }
+    .np-kotak { width: 100%; max-width: 520px; max-height: 92vh; max-height: 92dvh; overflow-y: auto; background: #fff; color: #1c1917; border-radius: 22px 22px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); animation: np-naik .22s ease-out; overscroll-behavior: contain; }
+    @keyframes np-naik { from { transform: translateY(40px); opacity: .5; } to { transform: none; opacity: 1; } }
+    .np-kotak h3 { margin: 0; font-size: 17px; font-weight: 900; text-align: center; }
+    .np-sub { font-size: 12px; color: #64748b; text-align: center; margin: 3px 0 10px; overflow-wrap: anywhere; }
+    .np-bin { display: flex; justify-content: center; gap: 6px; }
+    .np-bin button { border: 0; background: none; font-size: 38px; line-height: 1; padding: 2px 3px; color: #e2e8f0; }
+    .np-bin button.on { color: #f59e0b; }
+    .np-lb { text-align: center; font-size: 12.5px; font-weight: 800; color: #b45309; min-height: 18px; margin: 4px 0 10px; }
+    .np-kt { font-size: 10.5px; font-weight: 900; color: #64748b; letter-spacing: .06em; margin: 4px 0 6px; }
+    .np-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .np-chips button { font-size: 12px; font-weight: 700; padding: 7px 11px; border-radius: 99px; border: 1.5px solid #e2e8f0; background: #fff; color: #334155; }
+    .np-chips button.on { background: #dcfce7; border-color: #22c55e; color: #15803d; }
+    .np-ta { width: 100%; min-height: 70px; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 9px 10px; font: inherit; font-size: 13px; resize: vertical; color: #1c1917; background: #fff; }
+    .np-hit { font-size: 10.5px; color: #94a3b8; text-align: right; margin: 2px 0 10px; }
+    .np-err { font-size: 12px; font-weight: 700; color: #b91c1c; text-align: center; margin-bottom: 8px; }
+    .np-bt { display: flex; gap: 8px; }
+    .np-bt button { flex: 1; min-height: 48px; border: 0; border-radius: 14px; font-size: 14px; font-weight: 900; }
+    .np-bt .np-l { background: #f1f5f9; color: #64748b; }
+    .np-bt .np-k { flex: 2; background: #ea580c; color: #fff; }
+    .np-bt .np-k:disabled { opacity: .45; }
+    body.dark-mode .np-kotak { background: #1c1917; color: #f5f5f4; }
+    body.dark-mode .np-chips button, body.dark-mode .np-ta { background: #292524; color: #f5f5f4; border-color: #44403c; }
+    body.dark-mode .np-bt .np-l { background: #292524; color: #d6d3d1; }
+</style>
+<script>
+(function nilaiPelangganRider() {
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var PROYEK = 'onbid-2f87a';
+    var ID_SAH = /^[A-Za-z0-9_-]{1,64}$/;
+    var BAIK = [['ramah', 'Ramah'], ['alamat', 'Alamat jelas'], ['siap', 'Siap di lokasi'], ['uangpas', 'Uang pas']];
+    var LABEL = ['', 'Sangat kurang', 'Kurang', 'Biasa', 'Baik', 'Sangat baik'];
+    var MAKS_KURANG = 200;
+    var s = { latar: null };
+
+    function fsMod() { return import(URL_FS); }
+    function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
+    function uidKu() { try { return String((window.getRiderUid && window.getRiderUid()) || '').trim().toUpperCase(); } catch (e) { return ''; } }
+    function sudah(id) { try { return localStorage.getItem('np_' + id) === '1'; } catch (e) { return false; } }
+    function tandai(id) {
+        try {
+            localStorage.setItem('np_' + id, '1');
+            // bersihkan tanda lama (simpan maks 60)
+            var k = [], i; for (i = 0; i < localStorage.length; i++) { var n = localStorage.key(i); if (n && n.indexOf('np_') === 0) k.push(n); }
+            if (k.length > 60) k.slice(0, k.length - 60).forEach(function (n) { localStorage.removeItem(n); });
+        } catch (e) {}
+    }
+    // Buang huruf kendali, rapikan spasi, batasi panjang
+    function bersih(t) { return String(t || '').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, MAKS_KURANG); }
+
+    function tutup() { if (s.latar) { s.latar.remove(); s.latar = null; return true; } return false; }
+
+    function tampil(idOrder, o) {
+        tutup();
+        var pilih = { bintang: 0, baik: {} };
+        var latar = el('div', 'np-latar'); latar.setAttribute('role', 'dialog'); latar.setAttribute('aria-modal', 'true'); latar.setAttribute('aria-label', 'Nilai pelanggan');
+        var k = el('div', 'np-kotak');
+        k.appendChild(el('h3', '', 'Bagaimana pelanggan ini?'));
+        var nm = String(o.customer_name || '').trim().slice(0, 60);
+        k.appendChild(el('div', 'np-sub', (nm ? nm + ' · ' : '') + 'hanya admin yang melihat'));
+        var bin = el('div', 'np-bin'), lb = el('div', 'np-lb', 'Ketuk bintang');
+        var tb = [];
+        [1, 2, 3, 4, 5].forEach(function (n) {
+            var b = el('button', '', '★'); b.type = 'button'; b.setAttribute('aria-label', n + ' bintang');
+            b.addEventListener('click', function () {
+                pilih.bintang = n;
+                tb.forEach(function (x, i) { x.classList.toggle('on', i < n); });
+                lb.textContent = n + ' · ' + LABEL[n];
+                kirim.disabled = false;
+            });
+            tb.push(b); bin.appendChild(b);
+        });
+        k.appendChild(bin); k.appendChild(lb);
+        k.appendChild(el('div', 'np-kt', 'YANG BAIK (BOLEH TIDAK DIPILIH)'));
+        var ch = el('div', 'np-chips');
+        BAIK.forEach(function (x) {
+            var b = el('button', '', x[1]); b.type = 'button'; b.setAttribute('aria-pressed', 'false');
+            b.addEventListener('click', function () {
+                pilih.baik[x[0]] = !pilih.baik[x[0]];
+                b.classList.toggle('on', pilih.baik[x[0]]); b.setAttribute('aria-pressed', pilih.baik[x[0]] ? 'true' : 'false');
+            });
+            ch.appendChild(b);
+        });
+        k.appendChild(ch);
+        k.appendChild(el('div', 'np-kt', 'YANG KURANG (TULIS SENDIRI, BOLEH KOSONG)'));
+        var ta = el('textarea', 'np-ta'); ta.maxLength = MAKS_KURANG; ta.placeholder = 'Contoh: telepon tidak diangkat, menunggu 15 menit';
+        var hit = el('div', 'np-hit', '0/' + MAKS_KURANG);
+        ta.addEventListener('input', function () { hit.textContent = ta.value.length + '/' + MAKS_KURANG; });
+        k.appendChild(ta); k.appendChild(hit);
+        var err = el('div', 'np-err'); err.hidden = true; k.appendChild(err);
+        var bt = el('div', 'np-bt');
+        var lewati = el('button', 'np-l', 'Lewati'); lewati.type = 'button';
+        var kirim = el('button', 'np-k', 'Kirim penilaian'); kirim.type = 'button'; kirim.disabled = true;
+        lewati.addEventListener('click', function () { tandai(idOrder); tutup(); });
+        kirim.addEventListener('click', function () {
+            if (!pilih.bintang) return;
+            kirim.disabled = true; lewati.disabled = true; kirim.textContent = 'Mengirim...'; err.hidden = true;
+            var baik = BAIK.map(function (x) { return x[0]; }).filter(function (x) { return pilih.baik[x]; });
+            var isi = { order_id: idOrder, uid: uidKu(), hp: o.customer_phone, bintang: pilih.bintang, baik: baik, kurang: bersih(ta.value), dihitung: false };
+            if (typeof o.customer_name === 'string' && o.customer_name.length <= 100) isi.nama = o.customer_name;
+            fsMod().then(function (m) {
+                isi.at = m.serverTimestamp();
+                return m.setDoc(m.doc(m.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'rating_pelanggan', idOrder), isi);
+            }).then(function () {
+                tandai(idOrder); tutup();
+                if (typeof window.showCustomToast === 'function') window.showCustomToast('Terima kasih, penilaian terkirim');
+            }).catch(function (e) {
+                console.warn('[Nilai pelanggan] gagal', e && e.code);
+                if (e && e.code === 'permission-denied') { tandai(idOrder); }   // sudah dinilai / lewat 24 jam -> jangan ditanya lagi
+                err.textContent = e && e.code === 'permission-denied' ? 'Order ini sudah dinilai atau sudah lewat waktunya.' : 'Gagal mengirim. Periksa internet lalu coba lagi.';
+                err.hidden = false; kirim.textContent = 'Kirim penilaian'; kirim.disabled = false; lewati.disabled = false;
+            });
+        });
+        bt.appendChild(lewati); bt.appendChild(kirim); k.appendChild(bt);
+        latar.appendChild(k);
+        document.body.appendChild(latar); s.latar = latar;
+    }
+
+    function tawarkan(idOrder) {
+        idOrder = String(idOrder || '');
+        if (!ID_SAH.test(idOrder) || sudah(idOrder)) return;
+        var uid = uidKu(); if (!uid) return;
+        fsMod().then(function (m) {
+            return m.getDoc(m.doc(m.getFirestore(), 'artifacts', PROYEK, 'public', 'data', 'active_orders', idOrder));
+        }).then(function (snap) {
+            if (!snap || !snap.exists()) return;
+            var o = snap.data() || {};
+            if (String(o.rider_uid || '').trim().toUpperCase() !== uid) return;
+            if (String(o.status || '').toLowerCase() !== 'completed') return;
+            if (!o.customer_phone || !/\d{6,}/.test(String(o.customer_phone).replace(/\D/g, ''))) return;   // tanpa nomor -> tidak bisa dinilai
+            if (sudah(idOrder)) return;
+            tampil(idOrder, o);
+        }).catch(function (e) { console.warn('[Nilai pelanggan] tidak bisa menyiapkan', e && e.code); });
+    }
+
+    // Dipanggil setelah order sah selesai: bungkus lacakSelesai (dipanggil di kedua jalur "selesai")
+    var asli = window.lacakSelesai;
+    window.lacakSelesai = function (idOrder) {
+        var h;
+        try { if (typeof asli === 'function') h = asli.apply(this, arguments); } catch (e) { console.warn(e); }
+        setTimeout(function () { tawarkan(idOrder); }, 1500);
+        return h;
+    };
+    window.npTawarkan = tawarkan;
+    // Tombol kembali HP = Lewati (tidak ditanya lagi untuk order ini)
+    window.npTutupSatu = function () { if (!s.latar) return false; var b = s.latar.querySelector('.np-l'); if (b && !b.disabled) b.click(); else tutup(); return true; };
+})();
+</script>
+<!-- ================= AKHIR NILAI PELANGGAN OLEH RIDER ================= -->
 <!-- ================= WAJIB LEWAT APLIKASI (24 Okt 2026) =================
      Rider yang membuka halaman ini lewat Chrome / browser di HP Android: pop up yang tidak bisa ditutup,
      mengajak membuka aplikasi ProjekGo Rider. Di browser, tahap pesanan, bulatan pengingat, & notifikasi
