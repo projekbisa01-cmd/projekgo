@@ -936,6 +936,9 @@
         /* DETAK APLIKASI RIDER (23 Okt 2026): aplikasi rider tidak mengirim tanda hidup saat order berjalan */
         .ao-detak { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 6px; border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; font-size: 9px; font-weight: 900; }
         .ao-detak[hidden] { display: none; }
+        /* (24 Okt 2026) Diagnosa: order diproses tapi rider belum mengirim tahap */
+        .ao-diag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 6px; border: 1px solid #fcd34d; background: #fffbeb; color: #92400e; font-size: 9px; font-weight: 900; }
+        .ao-diag.x { border-color: #fecaca; background: #fef2f2; color: #b91c1c; } .ao-diag[hidden] { display: none; }
         /* PESAN RIDER & KEPATUHAN (23 Okt 2026) */
         #pr-root, #kp-root { display: flex; flex-direction: column; gap: 12px; color: var(--ad-ink); }
         .pr-card { background: var(--ad-sf); border: 1px solid var(--ad-ln); border-radius: 18px; padding: 13px; }
@@ -10387,6 +10390,7 @@
                                     ${jenisBadge}
                                     ${tahapBadge}
                                     ${isProcessing ? `<span id="detak-order-${order.id}" class="ao-detak" hidden></span>` : ''}
+                                    ${isProcessing && !teksTahap ? (() => { const dg = typeof window.aoDiagnosaTahap === 'function' ? window.aoDiagnosaTahap(order) : null; return `<span id="diag-order-${order.id}" class="ao-diag${dg && dg.x ? ' x' : ''}"${dg ? '' : ' hidden'}>⚠️ ${escDx(dg ? dg.teks : '')}</span>`; })() : ''}
                                 </div>
                                 <p class="text-[11px] font-black text-black truncate mt-1"><i class="fa-solid fa-motorcycle text-[9px] text-slate-400 mr-1"></i>${riderNama}</p>
                                 <span class="ad-cust text-[11px] font-bold text-black mt-0.5"><i class="fa-solid fa-user" aria-hidden="true"></i><span>${escDx(order.customer_name || 'Tanpa nama')}</span><span class="ad-cust-wa">· ${escDx(order.customer_phone || '-')}</span></span>
@@ -12331,8 +12335,26 @@
             const lama = Date.now() - d.at;
             return lama > DETAK_BASI_MS ? lama : 0;
         };
+        // (24 Okt 2026) Order sudah diproses > 90 detik tapi belum ada tahap dari rider: kenapa?
+        // Dari tanda hidup yang sudah dipantau (0 read tambahan). versi 0 = dibuka lewat Chrome.
+        window.aoDiagnosaTahap = (order) => {
+            if (!order || order.status !== 'processing' || typeof order.tahap === 'string' && order.tahap) return null;
+            const terima = order.accepted_at && order.accepted_at.seconds ? order.accepted_at.seconds * 1000 : 0;
+            if (terima && Date.now() - terima < 90000) return null;
+            const d = detakRider[String(order.rider_uid || '').trim().toUpperCase()];
+            if (!d || d.order_id !== order.id || !d.at) return { x: true, teks: 'Belum ada update tahap · aplikasi rider belum mengirim data order ini (versi lama / tidak dibuka)' };
+            const mnt = Math.round((Date.now() - d.at) / 60000), kapan = mnt < 1 ? 'baru saja' : mnt + ' mnt lalu';
+            if (!d.versi) return { x: true, teks: 'Belum ada update tahap · rider membuka lewat Chrome (aktif ' + kapan + ')' };
+            return { x: false, teks: 'Belum ada update tahap · App v' + d.versi + ' aktif ' + kapan + ', tahap gagal terkirim (sinyal / link ulasan rider)' };
+        };
         window.aoPerbaruiDetak = () => {
             allGlobalOrders.forEach(o => {
+                const dgEl = document.getElementById('diag-order-' + o.id);
+                if (dgEl) {
+                    const dg = window.aoDiagnosaTahap(o);
+                    dgEl.hidden = !dg;
+                    if (dg) { dgEl.textContent = '⚠️ ' + dg.teks; dgEl.classList.toggle('x', !!dg.x); }
+                }
                 const el = document.getElementById('detak-order-' + o.id);
                 if (!el) return;
                 const lama = detakBasi(o);

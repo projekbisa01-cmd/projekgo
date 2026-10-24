@@ -23650,7 +23650,7 @@ window.PembuatQR = PembuatQR;
         if (diLatar()) {
             var langsung = false;
             try { langsung = await tulisLangsung(id, kode, k, uid, dataOrder, dataLacak); } catch (e) { langsung = false; }
-            if (langsung) return;
+            if (langsung) { if (dataOrder && st.id === id) st.orderTerkirim = true; return true; }
         }
         var m = await fsMod(), db = m.getFirestore();
         var janji = [];
@@ -23676,10 +23676,14 @@ window.PembuatQR = PembuatQR;
             janji.push(m.setDoc(m.doc(db, 'artifacts', PROYEK, 'public', 'data', 'lacak', kode), l, { merge: true }));
         }
         var hasil = await Promise.allSettled(janji);
+        // (24 Okt 2026) Data order sudah sampai -> pemeriksa ulang tidak perlu mengirim lagi
+        if (dataOrder && hasil[0] && hasil[0].status === 'fulfilled' && st.id === id) st.orderTerkirim = true;
         if (hasil.some(function (h) { return h.status === 'rejected'; })) {
             console.warn('[Lacak] sebagian gagal tersimpan', hasil);
             if (!diam) toast('Tahap belum terkirim ke pelanggan. Cek sinyal, lalu ketuk lagi kalau perlu.');
+            return false;
         }
+        return true;
     }
 
     // ---------- Pemantau lacak/<kode>: lokasi dari pelanggan + memastikan dokumen milik rider ini ----------
@@ -23713,6 +23717,25 @@ window.PembuatQR = PembuatQR;
         }, function (e) { console.warn('[Lacak] pemantau berhenti', e); st.henti = null; });
     }
     function hentiPantau() { if (st.henti) { try { st.henti(); } catch (e) {} st.henti = null; } }
+
+    // ---------- Pemeriksa kiriman tahap (24 Okt 2026) ----------
+    // Tiap 30 detik selama order diproses: data order & dokumen lacak pelanggan sudah sesuai tahap rider?
+    // Belum (profil rider telat termuat, sinyal putus, ditolak server) -> kirim ulang. Gagal 3x -> rider diberi tahu.
+    function cekKirimTahap() {
+        if (!st.id || !st.proses || !KODE_ORDER.test(st.kode)) return;
+        var k = kodeRiderKu(), d = st.lacak, kunci = st.tahap + ':' + k + ':' + st.jenis;
+        var perluLacak = !!k && st.lacakOk !== kunci && (!d || d.uid !== uidKu() || d.k !== k || d.tahap !== st.tahap || d.jenis !== st.jenis);
+        var perluOrder = !st.orderTerkirim;
+        if (!perluLacak && !perluOrder) { st.gagalKirim = 0; return; }
+        var idSaat = st.id;
+        tulis(perluOrder ? { tahap: st.tahap } : null, perluLacak ? { tahap: st.tahap } : null, true).then(function (ok) {
+            if (st.id !== idSaat) return;
+            if (ok) { if (perluLacak) st.lacakOk = kunci; st.gagalKirim = 0; return; }
+            st.gagalKirim = (st.gagalKirim || 0) + 1;
+            if (st.gagalKirim === 3) toast('Tahap belum terkirim ke pelanggan. Cek sinyal internet, atau hubungi admin kalau terus begini.');
+        });
+    }
+    setInterval(cekKirimTahap, 30000);
 
     // ---------- Aksi ----------
     function majuKe(baru) {
@@ -24479,8 +24502,10 @@ window.PembuatQR = PembuatQR;
             var segarS = tS && ms(data.tahap_at) && ms(data.accepted_at) && ms(data.tahap_at) >= ms(data.accepted_at) - 5000;
             if (!segarS && !st.awalDitulis[docId] && st.tahap === 'menuju') {
                 st.awalDitulis[docId] = true;
-                tulis({ tahap: 'menuju', estimasi_menit: null }, null, true);
-            }
+                // (24 Okt 2026) Dokumen lacak pelanggan ikut ditulis saat itu juga (dulu menunggu pemantau)
+                tulis({ tahap: 'menuju', estimasi_menit: null }, { tahap: 'menuju' }, true);
+            } else if (segarS) st.orderTerkirim = true;
+            clearTimeout(st.cekAwal); st.cekAwal = setTimeout(cekKirimTahap, 8000);
             mulaiPantau();
             mulaiDetak();
             sinkronIngatNative();
@@ -25015,6 +25040,66 @@ window.PembuatQR = PembuatQR;
 })();
 </script>
 <!-- ================= AKHIR PESAN ADMIN & KEPATUHAN ================= -->
+<!-- ================= WAJIB LEWAT APLIKASI (24 Okt 2026) =================
+     Rider yang membuka halaman ini lewat Chrome / browser di HP Android: pop up yang tidak bisa ditutup,
+     mengajak membuka aplikasi ProjekGo Rider. Di browser, tahap pesanan, bulatan pengingat, & notifikasi
+     order tidak berjalan penuh. Yang tidak diblokir: aplikasi ProjekGo (ada AndroidInterface), iPhone, laptop/PC.
+     Matikan: ubah WAJIB_APLIKASI menjadi false. -->
+<style>
+    .wa-blok { position: fixed; inset: 0; z-index: 2147483647; background: #1c1917; display: flex; align-items: center; justify-content: center; padding: 20px; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .wa-blok > div { width: 100%; max-width: 360px; background: #fff; border-radius: 26px; padding: 24px 20px 20px; text-align: center; color: #1c1917; }
+    .wa-blok .ik { width: 72px; height: 72px; border-radius: 22px; margin: 0 auto 12px; display: grid; place-items: center; font-size: 34px; background: linear-gradient(135deg, #f97316, #ea580c); color: #fff; font-weight: 900; }
+    .wa-blok h2 { margin: 0 0 6px; font-size: 19px; font-weight: 900; }
+    .wa-blok p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: #57534e; }
+    .wa-blok li { list-style: disc; }
+    .wa-blok li::marker { color: #ea580c; }
+    .wa-blok ul { text-align: left; margin: 0 0 14px; padding: 10px 12px 10px 28px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 14px; font-size: 12.5px; color: #7c2d12; line-height: 1.55; }
+    .wa-blok a { display: block; width: 100%; box-sizing: border-box; min-height: 48px; line-height: 48px; border-radius: 14px; font-weight: 900; font-size: 14px; text-decoration: none; }
+    .wa-blok .utama { background: #ea580c; color: #fff; }
+    .wa-blok .kedua { margin-top: 8px; background: #f0fdf4; color: #15803d; border: 1px solid #86efac; }
+    .wa-blok small { display: block; margin-top: 12px; font-size: 11px; color: #a8a29e; }
+</style>
+<script>
+(function () {
+    'use strict';
+    var WAJIB_APLIKASI = true;
+    var WA_ADMIN = 'https://api.whatsapp.com/send?phone=6285157467216&text=' + encodeURIComponent('Halo Admin, saya mau minta file APK Aplikasi PROJEKGO Rider terbaru.');
+    function diBrowserAndroid() {
+        if (window.AndroidInterface) return false;                      // aplikasi ProjekGo
+        var ua = navigator.userAgent || '';
+        return /Android/i.test(ua);                                      // iPhone / laptop tidak diblokir
+    }
+    function pasang() {
+        if (!WAJIB_APLIKASI || !diBrowserAndroid() || document.getElementById('wa-blok')) return;
+        var el = function (t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+        var w = el('div', 'wa-blok'); w.id = 'wa-blok';
+        w.setAttribute('role', 'alertdialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-label', 'Buka lewat aplikasi ProjekGo');
+        var k = el('div');
+        k.appendChild(el('div', 'ik', 'P'));
+        k.appendChild(el('h2', '', 'Buka lewat Aplikasi ProjekGo'));
+        k.appendChild(el('p', '', 'Halaman rider tidak bisa dipakai lewat Chrome / browser. Tutup halaman ini, lalu buka aplikasi ProjekGo Rider di HP kamu.'));
+        var ul = el('ul');
+        ['Tahap pesanan terkirim ke pelanggan', 'Bulatan pengingat tahap', 'Notifikasi order & pesan admin'].forEach(function (t) { ul.appendChild(el('li', '', t + ' hanya berjalan di aplikasi')); });
+        k.appendChild(ul);
+        // Membuka aplikasi lewat link ProjekGo (App Link aplikasi). Belum terpasang -> chat admin minta APK.
+        var buka = el('a', 'utama', 'Buka Aplikasi ProjekGo');
+        buka.href = 'intent://rider.projekgo.id/u/?atur=1#Intent;scheme=https;package=com.projekgo.rider;S.browser_fallback_url=' + encodeURIComponent(WA_ADMIN) + ';end';
+        k.appendChild(buka);
+        var minta = el('a', 'kedua', 'Belum punya aplikasi? Minta APK ke admin');
+        minta.href = WA_ADMIN; minta.target = '_blank'; minta.rel = 'noopener noreferrer';
+        k.appendChild(minta);
+        k.appendChild(el('small', '', 'Pop up ini tidak bisa ditutup selama dibuka lewat browser.'));
+        w.appendChild(k);
+        // Lapisan menutupi seluruh layar, jadi halaman di belakangnya tidak bisa disentuh
+        document.body.appendChild(w);
+        try { document.documentElement.style.overflow = 'hidden'; document.body.style.overflow = 'hidden'; } catch (e) {}
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasang); else pasang();
+    // Dipasang lagi kalau sempat terhapus oleh kode lain
+    setInterval(pasang, 3000);
+})();
+</script>
+<!-- ================= AKHIR WAJIB LEWAT APLIKASI ================= -->
 
 </body>
 </html>
