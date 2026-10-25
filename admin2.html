@@ -1767,7 +1767,13 @@
         #tf-print .notes{margin-top:2mm;font-size:9.5px;border:1px solid #999;border-radius:4px;padding:6px 8px;break-inside:avoid}
         #tf-print .notes b{display:block;text-transform:uppercase;font-size:8px;color:#666;margin-bottom:3px}
         #tf-print .notes div{white-space:pre-wrap;line-height:1.4}
-        #tf-print .tot{display:flex;justify-content:space-between;margin-top:1mm;border:.25mm solid #000;background:#FFFF00;font-weight:800;font-size:10.5pt;padding:0 2mm;height:7mm;line-height:6.4mm;text-transform:uppercase}
+        #tf-print .tot{display:flex;justify-content:space-between;margin-top:1mm;border:.25mm solid #000;background:rgba(59,130,246,.22);font-weight:800;font-size:10.5pt;padding:0 2mm;height:7mm;line-height:6.4mm;text-transform:uppercase}
+        #tf-print table.sm{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:3mm}
+        #tf-print table.sm th,#tf-print table.sm td{border:.3mm solid #000;text-align:center;color:#000;padding:1mm 2mm}
+        #tf-print table.sm th{height:6.5mm;font-size:11pt;font-weight:800;background:rgba(146,208,80,.4)}
+        #tf-print table.sm.b th{background:rgba(59,130,246,.22)}
+        #tf-print table.sm td.l{height:13mm;font-size:10.5pt;font-weight:800;text-transform:uppercase;line-height:1.25}
+        #tf-print table.sm td.v{height:12mm;font-size:13pt;font-weight:800;font-style:italic;text-align:left;padding-left:4mm}
         /* TOP UP SALDO & SETORAN TABUNGAN: DAFTAR (25 Okt 2026) — semua gaya dikurung di #page-bulk */
         #page-bulk{--bk-ink:#14213d;--bk-mut:#5b6b82;--bk-ln:#c5d3e6;--bk-pri:#0a5cc2;--bk-bg:#f1f5fb;--bk-card:#fff;--bk-ok:#15803d;--bk-bad:#b91c1c;--bk-warn:#b45309;min-height:100vh;background:var(--bk-bg);color:var(--bk-ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-size:14px;padding-bottom:90px}
         #page-bulk *{box-sizing:border-box}
@@ -23671,6 +23677,7 @@
 
             /* ---------- cetak per tanggal (logika sama dengan aplikasi transfer lama) ---------- */
             const PRINT_PER_COL = 50, PRINT_PER_PAGE = 100;
+            const BARIS_KOSONG = 5;   // (25 Okt 2026) tiap tabel cetak selalu menyisakan minimal 5 baris kosong, untuk info yang telat ditulis tangan
             const angka = n => (Number(n) || 0).toLocaleString('id-ID');   // tanpa 'Rp', mis. 347.000
             // "deni prasetyo" -> "deni.p" ; "DEDI TRI KURNIAWAN" -> "DEDI.TK" ; satu kata dibiarkan.
             function shortName(nama) {
@@ -23753,11 +23760,11 @@
                     const tu = topup[day] || [];
                     [['saldo', 'TOP UP', 'Top Up'], ['tabungan', 'TABUNGAN', 'Setoran']].forEach(x => {
                         const rr = tu.filter(t => t.jenis === x[0]).sort((a, b) => (a.menit - b.menit) || (a.no - b.no))
-                            .map(t => ({kodeRider: t.kodeRider, namaRider: t.namaRider, nominal: t.nominal, pelanggan: x[2], waktuTransfer: null, jamTeks: jamStr2(t.menit), status: 'x'}));
+                            .map(t => ({kodeRider: t.kodeRider, namaRider: t.namaRider, nominal: t.nominal, pelanggan: x[1] === 'TABUNGAN' ? 'Tabungan' : x[2], waktuTransfer: null, jamTeks: jamStr2(t.menit), status: 'x'}));
                         if (rr.length) kecil.push({judul: x[1] + ' (' + tglTeks + ')', rows: rr, ket: 'KET', tot: 'TOTAL ' + x[1]});
                     });
                     const halaman = [];
-                    const rows = sortForPrint(biasa), pages = (rows.length || !kecil.length) ? Math.max(1, Math.ceil(rows.length / PRINT_PER_PAGE)) : 0;
+                    const rows = sortForPrint(biasa), pages = (rows.length || !kecil.length) ? Math.max(1, Math.ceil((rows.length + BARIS_KOSONG) / PRINT_PER_PAGE)) : 0;
                     for (let p = 0; p < pages; p++) {
                         const base = p * PRINT_PER_PAGE;
                         halaman.push('<div class="bar"><span>TRANSFERAN (' + esc(tglTeks) + ')</span><span>Hal ' + (p + 1) + '/' + pages + '</span></div>' +
@@ -23768,9 +23775,9 @@
                     const tersedia = 284 - notesH - 2;
                     let cur = '', pakai = 0;
                     kecil.forEach(k => {
-                        const potong = Math.max(1, Math.ceil(k.rows.length / PRINT_PER_PAGE));
+                        const potong = Math.max(1, Math.ceil((k.rows.length + BARIS_KOSONG) / PRINT_PER_PAGE));
                         for (let c = 0; c < potong; c++) {
-                            const part = k.rows.slice(c * PRINT_PER_PAGE, (c + 1) * PRINT_PER_PAGE), per = Math.min(PRINT_PER_COL, Math.max(3, Math.ceil(part.length / 2)));
+                            const part = k.rows.slice(c * PRINT_PER_PAGE, (c + 1) * PRINT_PER_PAGE), per = Math.min(PRINT_PER_COL, Math.max(3, Math.ceil((part.length + BARIS_KOSONG) / 2)));
                             const tinggi = 7 + 1 + 5 + per * rowH + 6 + (c === potong - 1 ? 8 : 0), b0 = c * PRINT_PER_PAGE;
                             if (cur && pakai + tinggi > tersedia) { halaman.push(cur); cur = ''; pakai = 0; }
                             cur += '<div style="margin-bottom:6mm"><div class="bar"><span>' + esc(k.judul) + '</span><span>' + (potong > 1 ? 'Bagian ' + (c + 1) + '/' + potong : '') + '</span></div>' +
@@ -23778,6 +23785,20 @@
                             pakai += tinggi;
                         }
                     });
+                    // Ringkasan TOTAL di akhir tiap tanggal (angka dari tabel; "uang keluar di BCA" dan "QRIS masuk di GoPay" diisi tulis tangan)
+                    {
+                        const tinggiRingkas = 66;
+                        if (cur && pakai + tinggiRingkas > tersedia) { halaman.push(cur); cur = ''; pakai = 0; }
+                        const sumTransfer = jmlNominal(semua), sumTopup = jmlNominal(tu.filter(t => t.jenis === 'saldo'));
+                        const sel = (l, v) => '<td class="l">' + l + '</td>';
+                        cur += '<table class="sm"><thead><tr><th colspan="2">TOTAL</th></tr></thead><tbody>' +
+                            '<tr><td class="l">TRANSFERAN<br>(transfer + pelanggan khusus + modal)</td><td class="l">TOTAL UANG KELUAR DI BCA<br>(' + esc(tglTeks) + ')</td></tr>' +
+                            '<tr><td class="v">Rp ' + esc(angka(sumTransfer)) + '</td><td class="v">Rp</td></tr></tbody></table>' +
+                            '<table class="sm b"><thead><tr><th colspan="2">TOTAL</th></tr></thead><tbody>' +
+                            '<tr><td class="l">TOTAL TOP UP SALDO DI TABEL</td><td class="l">TOTAL QRIS MASUK DI GOPAY</td></tr>' +
+                            '<tr><td class="v">Rp ' + esc(angka(sumTopup)) + '</td><td class="v">Rp</td></tr></tbody></table>';
+                        pakai += tinggiRingkas;
+                    }
                     if (cur) halaman.push(cur);
                     halaman.forEach((h, i) => {
                         html += '<div class="pg">' + h + (i === halaman.length - 1 && notes ? '<div class="notes"><b>Catatan</b><div>' + esc(notes) + '</div></div>' : '') + '</div>';
