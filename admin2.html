@@ -1674,6 +1674,11 @@
         #page-transfer .tf-last .l2{font-size:12px;color:var(--tf-mut)}
         #page-transfer .tf-cbpg{margin-top:4px;border:1px solid #f0c04a}
         #page-transfer .tf-cbpg.need{border-color:var(--tf-bad);background:var(--tf-badbg);animation:tfpop .35s}
+        /* (25 Okt 2026) Ceklis "Pelanggan khusus" di kanan judul kolom pelanggan */
+        #page-transfer .tf-pelbox{position:relative}
+        #page-transfer .tf-pelbox>label.tf-khusus{position:absolute;top:-3px;right:0;margin:0;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:800;color:#b45309;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:99px;padding:2px 10px 2px 6px;cursor:pointer;line-height:1.3}
+        #page-transfer .tf-pelbox>label.tf-khusus input{width:16px;height:16px;margin:0;padding:0;accent-color:#f59e0b}
+        #page-transfer .tf-pelbox>label.tf-khusus:has(input:checked){background:#f59e0b;color:#fff;border-color:#d97706}
         #page-transfer .badge.b-bukti{background:var(--tf-warnbg);color:var(--tf-warn)}
         #page-transfer .tf-okpop{position:fixed;inset:0;z-index:2147482000;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.35);padding:16px;animation:tfpop .2s}
         #page-transfer .tf-okpop .box{background:#fff;border-radius:16px;padding:18px 20px 16px;width:min(340px,92vw);text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.3);border-top:5px solid var(--tf-ok)}
@@ -2449,7 +2454,7 @@
                                 <label>Kode transfer rider<input id="tf-fKode" list="tf-dlRider" required maxlength="10" placeholder="mis. A01" autocapitalize="characters" autocomplete="off"></label>
                                 <label>Nama rider (otomatis)<input id="tf-fNama" readonly tabindex="-1" placeholder="terisi dari kode"></label>
                                 <label>Nominal (Rp)<input id="tf-fNominal" inputmode="numeric" required maxlength="13" placeholder="0" autocomplete="off"></label>
-                                <label>Nama pelanggan<input id="tf-fPel" required minlength="2" maxlength="80" autocomplete="off"></label>
+                                <div class="tf-pelbox"><label>Nama pelanggan<input id="tf-fPel" required minlength="2" maxlength="80" autocomplete="off"></label><label class="tf-khusus" id="tf-fKhWrap" title="Dikelompokkan di tabel sendiri saat dicetak"><input type="checkbox" id="tf-fKhusus"> Pelanggan khusus</label></div>
                                 <label>Jam transfer (di bukti)<input id="tf-fJam" data-tfjam="1" maxlength="30" autocomplete="off" placeholder="mis. 2030 (boleh kosong)"></label>
                             </div>
                             <label class="cb tf-cbpg" id="tf-fCbWrap"><input type="checkbox" id="tf-fMasuk"> Transfer ke <b>QRIS ProjekGo</b> (bukti menunjukkan uang masuk ke ProjekGo)</label>
@@ -22653,6 +22658,7 @@
                     (f.min != null ? (num ? 'min="' + f.min + '" ' : 'minlength="' + f.min + '" ') : '') +
                     (f.max != null ? (num ? 'max="' + f.max + '" ' : 'maxlength="' + f.max + '" ') : '') +
                     (f.list ? 'list="' + esc(f.list) + '" ' : '') + (f.jam ? 'data-tfjam="1" maxlength="30" placeholder="2030 atau tulisan" ' : '');
+                if (f.type === 'select') return '<label>' + esc(f.label) + '<select name="' + esc(f.name) + '"><option value="tidak"' + (f.value === 'ya' ? '' : ' selected') + '>Bukan</option><option value="ya"' + (f.value === 'ya' ? ' selected' : '') + '>Ya, pelanggan khusus</option></select></label>';
                 if (f.type === 'textarea') return '<label>' + esc(f.label) + '<textarea ' + a + ' rows="2">' + esc(f.value || '') + '</textarea></label>';
                 return '<label>' + esc(f.label) + '<input ' + a + ' type="' + esc(f.type || 'text') + '" value="' + esc(f.type === 'password' ? '' : (f.value || '')) + '" autocomplete="' + (f.type === 'password' ? 'new-password' : 'off') + '"></label>';
             }
@@ -22772,6 +22778,12 @@
                 if (t && Date.now() - t >= MENIT_TANYA_LAGI * 60000) return tanyaPenginput('Putaran transfer sebelumnya sudah tuntas. Pilih nama kamu supaya catatan berikutnya tercatat atas namamu.');
                 const ada = S.petugas.some(x => x.id === S.petugasId && x.aktif);
                 if (!ada && S.petugas.length) tanyaPenginput('Pilih nama kamu sebagai petugas pengisian sebelum mencatat transfer.');
+            }
+            // (25 Okt 2026) Setiap kali masuk halaman Transfer, petugas pengisian SELALU ditanya (tidak memakai nama lama diam-diam)
+            function tanyaPetugasMasuk(ulang) {
+                if (!S.user || !dibuka || PAGE.classList.contains('hidden-page')) return;
+                if (!S.petugas.length && !ulang) { setTimeout(() => tanyaPetugasMasuk(true), 1500); return; }   // daftar petugas belum termuat
+                tanyaPenginput('Setiap kali masuk halaman Transfer, pilih dulu nama kamu sebagai petugas pengisian.');
             }
             function setTgl(k) {
                 S.tgl = k; S.v3 = ''; S.tiket = [];
@@ -23338,6 +23350,7 @@
                         {name: 'nominal', label: 'Nominal (Rp)', value: String(t.nominal), type: 'number', min: 1, max: MAX_NOMINAL, req: 1},
                         {name: 'pel', label: 'Nama pelanggan', value: t.pelanggan, req: 1, min: 2, max: 80},
                         {name: 'jam', label: 'Jam transfer (angka 24 jam mis. 2030, atau tulisan)', value: t.waktuTransfer ? jam(t.waktuTransfer) : (t.jamTeks || ''), jam: 1, req: 1},
+                        {name: 'khusus', label: 'Pelanggan khusus (tabel terpisah saat dicetak)', type: 'select', value: t.khusus === true ? 'ya' : 'tidak'},
                         {name: 'alasan', label: 'Alasan perubahan', type: 'textarea', req: 1, min: 3, max: 300}]});
                     if (!v) return;
                     const kode = normKode(v.kode), nominal = Number(v.nominal), pel = normNama(v.pel), J = bacaJam(v.jam, t.tanggal);
@@ -23345,6 +23358,7 @@
                     if (bad) return toast(bad, 'bad');
                     const r = S.riders.find(x => x.id === kode);
                     const after = {kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks};
+                    if ((v.khusus === 'ya') !== (t.khusus === true)) after.khusus = v.khusus === 'ya';   // hanya ditulis kalau berubah
                     const data = Object.assign({}, after, locked ? {diubahOleh: S.me, diubahAt: NOW} : st('diubah'));
                     await B.commit([up(t, data), logOp(locked ? 'koreksi' : 'ubah', t.id, v.alasan, ringkas(t), ringkas(Object.assign({no: t.no}, after)))]);
                     toast('Perubahan disimpan dan dicatat di log'); await reloadHist();
@@ -23469,6 +23483,22 @@
                 const r = S.riders.find(x => x.id === kode);
                 const pool = S.tiket.concat(S.pend.filter(t => t.tanggal !== tgl));
                 const mirip = pool.filter(t => t.status !== 'batal' && t.kodeRider === kode && t.nominal === nominal && (t.tanggal === tgl || (J.ms && t.waktuTransfer && Math.abs(t.waktuTransfer - J.ms) < 864e5)));
+                // (25 Okt 2026) INDIKASI DOUBLE INPUT: kode + nominal + jam sama persis dengan data yang sudah tercatat.
+                // Jam kosong ("belum info bukti") tidak dihitung sebagai jam yang sama. Kalau lanjut, popup "mirip" di bawah dilewati.
+                {
+                    const jamTeksBaru = String(J.teks || '').trim().toLowerCase();
+                    const kembar = pool.filter(t => t.status !== 'batal' && t.kodeRider === kode && t.nominal === nominal && (J.ms
+                        ? (t.waktuTransfer && Math.floor(t.waktuTransfer / 60000) === Math.floor(J.ms / 60000))
+                        : (J.teks !== JAM_KOSONG && t.tanggal === tgl && !t.waktuTransfer && String(t.jamTeks || '').trim().toLowerCase() === jamTeksBaru)));
+                    if (kembar.length) {
+                        const vd = await ask({title: '⚠ Indikasi double transfer', ok: 'Ini transaksi berbeda, tetap catat', cancel: 'Batal, jangan dicatat', tone: 'bad', noEnter: true, info:
+                            '<p><b>Kode, nominal, dan jam SAMA</b> dengan data yang sudah tercatat:</p><ul>' +
+                            kembar.slice(0, 4).map(t => '<li><b>Baris No. ' + esc(t.no) + '</b>' + (t.tanggal !== tgl ? ' (' + esc(t.tanggal) + ')' : '') + ' · ' + esc(ringkas(t)) + ' <i>(' + esc(LBL[t.status] || t.status) + ')</i></li>').join('') +
+                            '</ul><p>Yang baru kamu isi: <b>' + esc(kode) + '</b> · <b>' + esc(rp(nominal)) + '</b> · jam <b>' + esc(J.ms ? jam(J.ms) : J.teks) + '</b></p><p class="hint">Cek bukti di grup, kemungkinan bukti yang sama dicatat dua kali.</p>'});
+                        if (!vd) return;
+                        mirip.length = 0;
+                    }
+                }
                 if (mirip.length) {
                     const persis = mirip.some(t => String(t.pelanggan).toLowerCase() === pel.toLowerCase());
                     const v = await ask({title: persis ? 'KEMUNGKINAN DOBEL' : 'Ada transaksi mirip', ok: 'Ini transaksi berbeda, tetap catat', tone: 'bad', info:
@@ -23480,9 +23510,10 @@
                     const v = await ask({title: 'Nominal besar, sudah benar?', ok: 'Ya, nominal benar', info: '<div class="big">' + esc(rp(nominal)) + '</div><p>untuk ' + esc(kode) + ' ' + esc(r.nama) + '</p>'});
                     if (!v) return;
                 }
-                const no = await B.tambahTiket(tgl, Object.assign({kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks, status: 'dicatat'}, st('dicatat')));
+                const no = await B.tambahTiket(tgl, Object.assign({kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks, status: 'dicatat'}, st('dicatat'), (g('tf-fKhusus').checked ? {khusus: true} : {})));
                 g('tf-fKode').value = ''; g('tf-fNama').value = ''; g('tf-fNominal').value = ''; g('tf-fPel').value = ''; g('tf-fJam').value = '';
                 g('tf-fMasuk').checked = false; g('tf-fCbWrap').classList.remove('need'); syncNama();
+                g('tf-fKhusus').checked = false;   // (25 Okt 2026) ceklis pelanggan khusus selalu kembali kosong
                 okPop(no, kode, r.nama, nominal, J.ms ? jam(J.ms) : J.teks);
             });
             g('tf-fBtn').addEventListener('click', kirimCatat);
@@ -23550,11 +23581,12 @@
                 grup.sort((a, b) => (a.m - b.m) || (a.t.no - b.t.no));
                 return awal.concat(...grup.map(x => [x.t].concat(x.ikut)), kosong);
             };
-            function printHalf(rows, startNo) {
+            function printHalf(rows, startNo, n) {
                 const w = [6, 10, 25, 18, 24, 14];   // mm, total 97: NO, KODE, RIDER, NOMINAL, PELANGGAN, WAKTU
                 let h = '<table class="half"><colgroup>' + w.map(x => '<col style="width:' + x + 'mm">').join('') + '</colgroup>' +
                     '<thead><tr><th>NO</th><th>KODE</th><th>RIDER</th><th>NOMINAL</th><th>PELANGGAN</th><th>WAKTU</th></tr></thead><tbody>';
-                for (let i = 0; i < PRINT_PER_COL; i++) {
+                const jml = n || PRINT_PER_COL;
+                for (let i = 0; i < jml; i++) {
                     const r = rows[i], no = startNo + i;
                     if (!r) { h += '<tr><td class="no">' + no + '</td><td></td><td></td><td></td><td></td><td></td></tr>'; continue; }
                     const ck = r.status === 'cocok' || r.status === 'beres', sl = r.status === 'selisih' || r.status === 'masalah';
@@ -23576,13 +23608,45 @@
                 const fs = Math.min(8, Math.max(5, rowH * 2.835 * 0.55));
                 let html = '';
                 days.forEach(day => {
-                    const rows = sortForPrint(by[day]), pages = Math.max(1, Math.ceil(rows.length / PRINT_PER_PAGE));
+                    // (25 Okt 2026) Urutan cetak: TRANSFERAN, lalu satu tabel per pelanggan khusus, lalu MODAL. Tiap tabel bernomor sendiri.
+                    const semua = by[day].slice().sort((a, b) => a.no - b.no), tglTeks = teksTgl(day);
+                    const jenis = t => String(t.pelanggan || '').trim().toLowerCase() === 'modal' ? 'modal' : (t.khusus === true ? 'khusus' : 'biasa');
+                    const biasa = semua.filter(t => jenis(t) === 'biasa'), modal = semua.filter(t => jenis(t) === 'modal');
+                    const gk = new Map();
+                    semua.forEach(t => {
+                        if (jenis(t) !== 'khusus') return;
+                        const nm = String(t.pelanggan || '').trim().replace(/\s+/g, ' '), key = nm.toLowerCase();
+                        if (!gk.has(key)) gk.set(key, {nama: nm, rows: []});
+                        gk.get(key).rows.push(t);
+                    });
+                    const kecil = [];
+                    gk.forEach(x => kecil.push({judul: 'PELANGGAN KHUSUS ' + x.nama.toUpperCase() + ' (' + tglTeks + ')', rows: sortForPrint(x.rows)}));
+                    if (modal.length) kecil.push({judul: 'MODAL (' + tglTeks + ')', rows: sortForPrint(modal)});
+                    const halaman = [];
+                    const rows = sortForPrint(biasa), pages = (rows.length || !kecil.length) ? Math.max(1, Math.ceil(rows.length / PRINT_PER_PAGE)) : 0;
                     for (let p = 0; p < pages; p++) {
                         const base = p * PRINT_PER_PAGE;
-                        html += '<div class="pg"><div class="bar"><span>Hari Tanggal : ' + esc(teksTgl(day)) + '</span><span>Hal ' + (p + 1) + '/' + pages + '</span></div>' +
-                            '<div class="cols">' + printHalf(rows.slice(base, base + PRINT_PER_COL), base + 1) + '<div class="sep"></div>' + printHalf(rows.slice(base + PRINT_PER_COL, base + PRINT_PER_PAGE), base + PRINT_PER_COL + 1) + '</div>' +
-                            (p === pages - 1 && notes ? '<div class="notes"><b>Catatan</b><div>' + esc(notes) + '</div></div>' : '') + '</div>';
+                        halaman.push('<div class="bar"><span>TRANSFERAN (' + esc(tglTeks) + ')</span><span>Hal ' + (p + 1) + '/' + pages + '</span></div>' +
+                            '<div class="cols">' + printHalf(rows.slice(base, base + PRINT_PER_COL), base + 1) + '<div class="sep"></div>' + printHalf(rows.slice(base + PRINT_PER_COL, base + PRINT_PER_PAGE), base + PRINT_PER_COL + 1) + '</div>');
                     }
+                    // tabel kecil: ukuran sesuai isi (minimal 3 baris tiap sisi), beberapa tabel boleh berbagi satu lembar
+                    const tersedia = 284 - notesH - 2;
+                    let cur = '', pakai = 0;
+                    kecil.forEach(k => {
+                        const potong = Math.max(1, Math.ceil(k.rows.length / PRINT_PER_PAGE));
+                        for (let c = 0; c < potong; c++) {
+                            const part = k.rows.slice(c * PRINT_PER_PAGE, (c + 1) * PRINT_PER_PAGE), per = Math.min(PRINT_PER_COL, Math.max(3, Math.ceil(part.length / 2)));
+                            const tinggi = 7 + 1 + 5 + per * rowH + 6, b0 = c * PRINT_PER_PAGE;
+                            if (cur && pakai + tinggi > tersedia) { halaman.push(cur); cur = ''; pakai = 0; }
+                            cur += '<div style="margin-bottom:6mm"><div class="bar"><span>' + esc(k.judul) + '</span><span>' + (potong > 1 ? 'Bagian ' + (c + 1) + '/' + potong : '') + '</span></div>' +
+                                '<div class="cols">' + printHalf(part.slice(0, per), b0 + 1, per) + '<div class="sep"></div>' + printHalf(part.slice(per, per * 2), b0 + per + 1, per) + '</div></div>';
+                            pakai += tinggi;
+                        }
+                    });
+                    if (cur) halaman.push(cur);
+                    halaman.forEach((h, i) => {
+                        html += '<div class="pg">' + h + (i === halaman.length - 1 && notes ? '<div class="notes"><b>Catatan</b><div>' + esc(notes) + '</div></div>' : '') + '</div>';
+                    });
                 });
                 let area = document.getElementById('tf-print');
                 if (!area) { area = document.createElement('div'); area.id = 'tf-print'; area.setAttribute('aria-hidden', 'true'); document.body.appendChild(area); }
@@ -23676,6 +23740,7 @@
                 } else { renderTop(); renderKerja(); }
                 kunciMulai();
                 setTimeout(cekTanyaPenginput, 600);   // tunggu daftar petugas termuat
+                setTimeout(tanyaPetugasMasuk, 700);   // (25 Okt 2026) selalu tanya petugas saat masuk halaman
             }
             function tutup() { kunciSelesai(); const sp = document.getElementById('tf-siapa'); if (sp) sp.remove(); }
             function keluar() { kunciSelesai(); stopSemua(); S.user = null; S.role = null; S.tiket = []; S.pend = []; S.hist = []; S.histLoaded = false; S.izin = {}; S.jamList = []; dibuka = false; renderBadgeMenu(); renderJamBadge(); }
