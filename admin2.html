@@ -1653,11 +1653,13 @@
         #page-transfer .dlgbtn{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
         #page-transfer .tf-kbadge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;background:#f59e0b;color:#fff;font-size:10px;font-weight:800;vertical-align:middle}
         #page-transfer .tf-selsum{color:#c81e3a;font-weight:800}
-        #page-transfer tr.bktrow td>div{position:sticky;left:8px;max-width:min(620px,calc(100vw - 64px));white-space:normal}   /* catatan tetap terlihat walau tabel digeser ke samping (HP) */
+        #page-transfer tr.bktrow td>div{position:sticky;left:8px;max-width:min(620px,calc(100vw - 90px));white-space:normal}   /* catatan tetap terlihat walau tabel digeser ke samping (HP) */
         #page-transfer tr.bktrow td{background:#fff7f7;padding:7px 10px;border-bottom:1px solid #f1c4c4}
         #page-transfer .bkt-info{font-size:12.5px;color:#334155}
         #page-transfer .bkt-red{margin-top:4px;color:#c81e3a;font-weight:700;font-size:15px;line-height:1.35}
         #page-transfer .bkt-red .sm{margin-left:6px;vertical-align:middle}
+        #page-transfer .bkt-pas{color:#15803d;font-weight:700}
+        #page-transfer .bkt-done{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#dcfce7;color:#15803d;font-size:12.5px;font-weight:800}
         #page-transfer .bkt-ok{margin-top:3px;color:#15803d;font-weight:700;font-size:13px}
         #page-transfer #tf-kdlg label{display:block;margin:8px 0 0;font-size:13px;font-weight:600}
         #page-transfer #tf-kdlg input,#page-transfer #tf-kdlg select{width:100%;box-sizing:border-box;min-height:42px;font-size:16px}
@@ -2604,7 +2606,7 @@
                 <div class="tf-step" data-tfstep="3" hidden><div class="card" id="tf-card3"></div></div>
                 <div class="tf-step" data-tfstep="4" hidden>
                     <div class="card" id="tf-card4"></div>
-                    <div class="card"><details><summary id="tf-tuntasSum">Sudah tuntas</summary><div class="scroll" id="tf-tuntas" style="margin-top:8px"></div></details></div>
+                    <div class="card"><details><summary id="tf-tuntasSum">Sudah tuntas</summary><input id="tf-tCari" type="search" maxlength="40" placeholder="Cari: no, kode, nama, pelanggan, jam, nominal" autocomplete="off" style="margin-top:8px;width:100%"><div class="scroll" id="tf-tuntas" style="margin-top:8px"></div></details></div>
                 </div>
                 <div id="tf-tindak"></div>
             </section>
@@ -23116,15 +23118,23 @@
                       : '<button type="button" class="sm" data-act="beres" data-id="' + esc(t.id) + '">Tandai sudah diselesaikan</button>') + '</div></div>' : '<div class="l2"><i>Menunggu keputusan owner.</i></div>')
                 })).join('') + '</ol></div>' : '';
                 const fin = T.filter(t => t.status === 'cocok' || t.status === 'beres' || t.status === 'batal');
+                // (26 Okt 2026) daftar tuntas digambar lewat renderTuntas() supaya bisa dicari tanpa menggambar ulang semua
+                S.finList = fin; renderTuntas();
+            }
+            // (26 Okt 2026) Sudah tuntas: tabel + pencarian (No, kode, nama, pelanggan, jam, status, nominal / nominal bukti)
+            function renderTuntas() {
                 // (26 Okt 2026) Edit setelah tuntas: tombol Khusus (penanda pelanggan khusus) & Bukti (nominal/jam bukti, pecah 2-4) + catatan merah selisih
+                const fin = S.finList || [], q = String((g('tf-tCari') || {}).value || '').trim().toLowerCase(), qd = digits(q);
+                const cocokCari = t => !q || [t.no, t.kodeRider, t.namaRider, t.pelanggan, jamT(t), jamT(t).replace(':', ''), LBL[t.status] || t.status].join(' ').toLowerCase().indexOf(q) >= 0 || (qd && (String(t.nominal).indexOf(qd) >= 0 || String(buktiTotal(t) || '').indexOf(qd) >= 0 || (buktiDari(t) && Number.isInteger(buktiDari(t).menitBukti) && menitStr(buktiDari(t).menitBukti).replace(':', '').indexOf(qd) >= 0)));
+                const tampil = fin.filter(cocokCari);
                 const selBuka = fin.filter(selisihTerbuka).length;
-                g('tf-tuntasSum').innerHTML = 'Sudah tuntas tanggal ini (' + fin.length + ')' + (selBuka ? ' <span class="tf-selsum">· ' + selBuka + ' selisih belum diselesaikan</span>' : '');
+                g('tf-tuntasSum').innerHTML = 'Sudah tuntas tanggal ini (' + (q ? tampil.length + ' dari ' : '') + fin.length + ')' + (selBuka ? ' <span class="tf-selsum">· ' + selBuka + ' selisih belum diselesaikan</span>' : '');
                 if (selBuka) { const dt = g('tf-tuntas').closest('details'); if (dt) dt.open = true; }
-                g('tf-tuntas').innerHTML = fin.length ? '<table><thead><tr><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Ditransfer</th><th>Status</th><th></th></tr></thead><tbody>' +
-                    fin.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td class="no">' + esc(t.no) + '</td><td>' + esc(t.kodeRider) + '</td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + (t.khusus === true ? ' <span class="tf-kbadge">KHUSUS</span>' : '') + '</td><td>' + esc(t.diteruskanAt ? jam(t.diteruskanAt) + ' ' + pNama(t.diteruskanPetugas) : '-') + '</td><td>' + badge(t) + (t.status === 'batal' ? ' ' + esc(t.batalAlasan || '') : '') + '</td>' +
+                g('tf-tuntas').innerHTML = tampil.length ? '<table><thead><tr><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam transfer</th><th>Status</th><th></th></tr></thead><tbody>' +
+                    tampil.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td class="no">' + esc(t.no) + '</td><td>' + esc(t.kodeRider) + '</td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + (t.khusus === true ? ' <span class="tf-kbadge">KHUSUS</span>' : '') + '</td><td>' + jamTuntas(t) + '</td><td>' + badge(t) + (t.status === 'batal' ? ' ' + esc(t.batalAlasan || '') : '') + '</td>' +
                         '<td class="r" style="white-space:nowrap">' + (t.status !== 'batal' && normNama(t.pelanggan).toLowerCase() !== 'modal' ? '<button type="button" class="sm" data-act="ubahkhusus" data-id="' + esc(t.id) + '">' + (t.khusus === true ? 'Bukan khusus' : 'Khusus') + '</button> ' : '') +
                         (BUKTI_STATUS.indexOf(t.status) >= 0 ? '<button type="button" class="sm" data-act="koreksibukti" data-id="' + esc(t.id) + '">Bukti</button>' : '') +
-                        (t.status === 'cocok' || t.status === 'beres' ? ' <button type="button" class="sm bad" data-act="hapustuntas" data-id="' + esc(t.id) + '">Hapus</button>' : '') + '</td></tr>' + buktiBaris(t, 8, true)).join('') + '</tbody></table>' : '<div class="empty">Belum ada.</div>';
+                        (t.status === 'cocok' || t.status === 'beres' ? ' <button type="button" class="sm bad" data-act="hapustuntas" data-id="' + esc(t.id) + '">Hapus</button>' : '') + '</td></tr>' + buktiBaris(t, 8, true)).join('') + '</tbody></table>' : '<div class="empty">' + (fin.length ? 'Tidak ada yang cocok dengan pencarian.' : 'Belum ada.') + '</div>';
             }
             // Jam di daftar: "belum info bukti" diberi badge kuning supaya mudah dicari dan dilengkapi lewat Ubah
             function jamHtml(t) { return (!t.waktuTransfer && t.jamTeks === JAM_KOSONG) ? '<span class="badge b-bukti">' + esc(JAM_KOSONG) + '</span>' : esc(jamT(t)); }
@@ -23258,6 +23268,7 @@
                 el.querySelectorAll('input[data-jamid]').forEach(i => { if (isi[i.dataset.jamid]) i.value = isi[i.dataset.jamid]; if (fokus && i.dataset.jamid === fokus) i.focus(); });
             }
             g('tf-jQ').addEventListener('input', renderJam);
+            g('tf-tCari').addEventListener('input', () => renderTuntas());   // (26 Okt 2026) pencarian di Sudah tuntas
             g('tf-jamList').addEventListener('keydown', ev => {
                 const i = ev.target; if (ev.key !== 'Enter' || !i.dataset || !i.dataset.jamid) return;
                 ev.preventDefault();
@@ -23362,14 +23373,16 @@
             function buktiBaris(t, kolom, bisaUbah) {
                 const k = buktiDari(t); if (!k || t.status === 'batal') return '';
                 const sel = buktiSelisih(t), pecah = Array.isArray(k.bagian);
-                const isi = pecah ? 'Dipecah jadi ' + k.bagian.length + ' transfer: ' + k.bagian.map(p => esc(rp(p.nominal)) + ' (' + esc(menitStr(p.menit)) + ')').join(' + ') + ' = <b>' + esc(rp(buktiTotal(t))) + '</b>'
-                    : 'Nominal bukti: <b>' + esc(rp(k.nominalBukti)) + '</b>' + (Number.isInteger(k.menitBukti) ? ', jam bukti ' + esc(menitStr(k.menitBukti)) : ', jam bukti belum diisi');
-                const tombol = bisaUbah ? '<button type="button" class="sm" data-act="selisihselesai" data-id="' + esc(t.id) + '">Tandai sudah diselesaikan</button>' : '';
-                let cat = '';
-                if (sel > 0 && !k.selesai) cat = '<div class="bkt-red">Selisih ' + esc(rp(sel)) + ': silakan transfer ke rider <b>' + esc(t.namaRider) + '</b> (' + esc(t.kodeRider) + ') sebesar <b>' + esc(rp(sel)) + '</b>. ' + tombol + '</div>';
-                else if (sel < 0 && !k.selesai) cat = '<div class="bkt-red">Kelebihan transfer ' + esc(rp(-sel)) + ': nominal bukti lebih kecil dari yang sudah ditransfer ke <b>' + esc(t.namaRider) + '</b> (' + esc(t.kodeRider) + '). Selesaikan dengan rider. ' + tombol + '</div>';
-                else if (sel !== 0) cat = '<div class="bkt-ok">&#10003; Selisih ' + esc(rp(Math.abs(sel))) + ' sudah diselesaikan.</div>';
-                return '<tr class="bktrow"><td colspan="' + (kolom || 12) + '"><div class="bkt-info">No ' + esc(t.no) + ' · ' + isi + '</div>' + cat + '</td></tr>';
+                const isi = pecah ? 'Dipecah jadi ' + k.bagian.length + ' transfer: ' + k.bagian.map(p => esc(rp(p.nominal)) + ' (' + esc(menitStr(p.menit)) + ')').join(' + ') + ' = ' + esc(rp(buktiTotal(t)))
+                    : 'Nominal bukti: ' + esc(rp(k.nominalBukti)) + (Number.isInteger(k.menitBukti) ? ', jam bukti ' + esc(menitStr(k.menitBukti)) : ', jam bukti belum diisi');
+                // Nominal yang sudah tuntas tidak berubah; selisihnya ditampilkan di sini (merah) sampai ditandai sudah ditransfer / diselesaikan
+                let kal = '', tanda = '';
+                if (sel > 0) { kal = ', admin kurang transfer <b>' + esc(rp(sel)) + '</b>'; tanda = 'sudah ditransfer ke rider'; }
+                else if (sel < 0) { kal = ', admin lebih transfer <b>' + esc(rp(-sel)) + '</b>'; tanda = 'sudah diselesaikan dengan rider'; }
+                const ujung = !sel ? ' <span class="bkt-pas">(sesuai)</span>'
+                    : (k.selesai ? ' <span class="bkt-done">&#10003; ' + tanda + '</span>'
+                        : (bisaUbah ? ' <button type="button" class="sm" data-act="selisihselesai" data-id="' + esc(t.id) + '">' + (sel > 0 ? 'Sudah ditransfer ke rider' : 'Sudah diselesaikan') + '</button>' : ''));
+                return '<tr class="bktrow"><td colspan="' + (kolom || 12) + '"><div class="' + (sel ? 'bkt-red' : 'bkt-info') + '">No ' + esc(t.no) + ' · ' + isi + kal + ujung + '</div></td></tr>';
             }
             // untuk cetak: baris dipecah jadi beberapa baris; jam bukti dipakai kalau baris belum punya jam
             function bagiBukti(rows) {
@@ -23385,6 +23398,13 @@
                 return out;
             }
             const selisihTerbuka = t => t.status !== 'batal' && buktiDari(t) && !buktiDari(t).selesai && buktiSelisih(t) !== 0;
+            // (26 Okt 2026) Kolom jam di "Sudah tuntas" = jam yang diinput di tahap 1 Catat (jam di bukti).
+            // Kalau dulu "belum info bukti" lalu jam bukti diisi lewat tombol Bukti, jam bukti itu yang tampil.
+            function jamTuntas(t) {
+                const k = buktiDari(t);
+                const j = (!t.waktuTransfer && t.jamTeks === JAM_KOSONG && k && Number.isInteger(k.menitBukti)) ? esc(menitStr(k.menitBukti)) + ' <small>(bukti)</small>' : jamHtml(t);
+                return j + (t.diteruskanPetugas ? '<br><small style="color:#64748b">' + esc(pNama(t.diteruskanPetugas)) + '</small>' : '');
+            }
             function catatanSelisihCetak(rows) {
                 return rows.filter(t => t.status !== 'batal' && buktiDari(t) && !buktiDari(t).selesai && buktiSelisih(t) !== 0)
                     .sort((a, b) => a.no - b.no)
@@ -23652,7 +23672,18 @@
                     const before = buktiDari(t) ? 'bukti ' + rp(buktiTotal(t)) : 'belum ada bukti';
                     const after = 'bukti ' + rp(v.total) + (v.koreksi.bagian ? ' (' + v.koreksi.bagian.map(p => rp(p.nominal) + ' ' + menitStr(p.menit)).join(' + ') + ')' : (Number.isInteger(v.koreksi.menitBukti) ? ' jam ' + menitStr(v.koreksi.menitBukti) : '')) + ', selisih ' + rp(v.selisih);
                     await B.commit([up(t, Object.assign({koreksi: v.koreksi}, st('koreksi'))), logOp('koreksi bukti', t.id, '', ringkas(t) + ' / ' + before, after)]);
-                    toast(v.selisih === 0 ? 'Bukti tersimpan (sesuai).' : 'Bukti tersimpan. Selisih ' + rp(v.selisih) + (v.selisih > 0 ? ': transfer ke rider.' : '.'));
+                    if (v.selisih === 0) toast('Bukti tersimpan (sesuai).');
+                    else if (!v.koreksi.selesai) {
+                        // pop up: admin diminta mentransfer kekurangannya ke rider (atau menyelesaikan kelebihan)
+                        const kurang = v.selisih > 0, x = Math.abs(v.selisih);
+                        const sudah = await ask({title: kurang ? 'Transfer kekurangan ke rider' : 'Admin lebih transfer', ok: kurang ? 'Sudah saya transfer' : 'Sudah diselesaikan', cancel: 'Nanti',
+                            info: '<p>' + (kurang ? 'Admin <b>kurang transfer</b> ke rider' : 'Admin <b>lebih transfer</b> ke rider') + ' <b>' + esc(t.namaRider) + '</b> (' + esc(t.kodeRider) + '):</p><div class="big" style="color:#c81e3a">' + esc(rp(x)) + '</div>' +
+                                '<p class="hint">No ' + esc(t.no) + ' · sudah ditransfer ' + esc(rp(t.nominal)) + ', menurut bukti ' + esc(rp(v.total)) + '. ' + (kurang ? 'Transfer ' + esc(rp(x)) + ' ke rider ini lewat BCA, lalu tekan "Sudah saya transfer".' : 'Selesaikan kelebihan ini dengan rider.') + ' Kalau "Nanti", catatan merah tetap ada di Sudah tuntas sampai ditandai.</p>'});
+                        if (sudah) {
+                            await B.commit([up(t, Object.assign({koreksi: Object.assign({}, v.koreksi, {selesai: true})}, st('koreksi'))), logOp('selisih bukti selesai', t.id, '', ringkas(t), (kurang ? 'kurang ' : 'lebih ') + rp(x) + (kurang ? ' sudah ditransfer ke rider' : ' sudah diselesaikan'))]);
+                            toast(kurang ? rp(x) + ' sudah ditransfer ke rider.' : 'Kelebihan ditandai sudah diselesaikan.');
+                        }
+                    }
                     await reloadHist();
                 },
                 async selisihselesai(t) {
@@ -23660,7 +23691,7 @@
                     if (!t || !k || k.selesai || t.status === 'batal') return;
                     if (S.role !== 'pemilik' && !needP()) return;
                     const sel = buktiSelisih(t);
-                    const v = await ask({title: 'Selisih sudah diselesaikan?', ok: 'Ya, sudah', info: '<p><b>' + esc(t.kodeRider) + '</b> ' + esc(t.namaRider) + ' · No ' + esc(t.no) + '</p><div class="big">' + esc(rp(Math.abs(sel))) + '</div><p class="hint">' + (sel > 0 ? 'Pastikan selisih ini sudah ditransfer ke rider.' : 'Pastikan kelebihan ini sudah diselesaikan dengan rider.') + '</p>',
+                    const v = await ask({title: sel > 0 ? 'Sudah ditransfer ke rider?' : 'Kelebihan sudah diselesaikan?', ok: sel > 0 ? 'Ya, sudah ditransfer' : 'Ya, sudah', info: '<p><b>' + esc(t.kodeRider) + '</b> ' + esc(t.namaRider) + ' · No ' + esc(t.no) + '</p><div class="big">' + esc(rp(Math.abs(sel))) + '</div><p class="hint">' + (sel > 0 ? 'Pastikan selisih ini sudah ditransfer ke rider.' : 'Pastikan kelebihan ini sudah diselesaikan dengan rider.') + '</p>',
                         fields: [{name: 'pin', label: 'PIN', type: 'password', req: 1, max: 12}], check: async x => pinCek(x.pin)});
                     if (!v) return;
                     await B.commit([up(t, Object.assign({koreksi: Object.assign({}, k, {selesai: true})}, st('koreksi'))), logOp('selisih bukti selesai', t.id, '', ringkas(t), 'selisih ' + rp(sel) + ' diselesaikan')]);
