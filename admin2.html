@@ -1793,6 +1793,8 @@
         #tf-print .notes{margin-top:2mm;font-size:9.5px;border:1px solid #999;border-radius:4px;padding:6px 8px;break-inside:avoid}
         #tf-print .notes b{display:block;text-transform:uppercase;font-size:8px;color:#666;margin-bottom:3px}
         #tf-print .notes div{white-space:pre-wrap;line-height:1.4}
+        #tf-print table.half td.ct{background:#FADADD;color:#000;font-size:calc(var(--fs) * .8);letter-spacing:-.1px;font-weight:700;padding:0 1.2mm}
+        #tf-print table.half td.ct.merah{color:#B00020}
         #tf-print .selnote{margin-top:2mm;border:.3mm solid #c81e3a;color:#c81e3a;padding:1mm 2mm;font-size:9.5pt;font-weight:700;line-height:1.35}
         #tf-print .selnote b{display:block;font-size:9pt;margin-bottom:.5mm}
         #tf-print .tot{display:flex;justify-content:space-between;margin-top:1mm;border:.25mm solid #000;background:rgba(59,130,246,.22);font-weight:800;font-size:10.5pt;padding:0 2mm;height:7mm;line-height:6.4mm;text-transform:uppercase}
@@ -24173,13 +24175,47 @@
                     '<thead><tr><th>NO</th><th>KODE</th><th>RIDER</th><th>NOMINAL</th><th>' + (ket || 'PELANGGAN') + '</th><th>WAKTU</th></tr></thead><tbody>';
                 const jml = n || PRINT_PER_COL;
                 for (let i = 0; i < jml; i++) {
-                    const r = rows[i], no = startNo + i;
-                    if (!r) { h += '<tr><td class="no">' + no + '</td><td></td><td></td><td></td><td></td><td></td></tr>'; continue; }
+                    const r = rows[i], no = (r && r._no) || startNo + i;
+                    // (26 Okt 2026) baris keterangan (Bukti / Gabung bayar) di bawah barisnya: satu sel gabungan, merah muda, tanpa nomor
+                    if (r && r._cat) { h += '<tr class="ct"><td colspan="6" class="ct' + (r._merah ? ' merah' : '') + '">' + esc(r._cat) + '</td></tr>'; continue; }
+                    if (!r || r._kosong) { h += '<tr><td class="no">' + no + '</td><td></td><td></td><td></td><td></td><td></td></tr>'; continue; }
                     const ck = r.status === 'cocok' || r.status === 'beres', sl = r.status === 'selisih' || r.status === 'masalah';
                     h += '<tr><td class="no">' + no + '</td><td>' + esc(r.kodeRider || '-') + '</td><td class="' + (ck ? 'ck' : '') + '">' + esc(shortName(r.namaRider) || '-') +
                         '</td><td class="num' + (sl ? ' sl' : '') + '">' + esc(angka(r.nominal)) + '</td><td>' + esc((r.pelanggan || '-') + (r._bagi ? ' ' + r._bagi : '')) + '</td><td>' + esc((!r.waktuTransfer && r.jamTeks === JAM_KOSONG) ? '' : jamT(r)) + '</td></tr>';   // belum ada jam: kolom WAKTU dikosongkan, ditulis manual oleh admin
                 }
                 return h + '</tbody></table>';
+            }
+            // (26 Okt 2026) Keterangan cetak di bawah baris (seperti di layar): Bukti (satu bukti / dipecah) & Gabung bayar.
+            // Baris keterangan memakai satu slot baris (tinggi sama), tidak bernomor; nomor transaksi tetap berurutan.
+            // Nomor yang disebut di keterangan = nomor di kolom NO cetakan (bukan No input), supaya mudah dicari di kertas.
+            function catatanCetakBaris(r, i, gbAkhir, noCetak) {
+                const k = buktiDari(r), gb = gabungDari(r);
+                const status = (sel, selesai, kurangTeks, lebihTeks) => !sel ? ' · sesuai'
+                    : (sel > 0 ? ' · ' + kurangTeks + ' ' + rp(sel) : ' · ' + lebihTeks + ' ' + rp(-sel)) + (selesai ? ' \u2713 selesai' : ' · BELUM selesai');
+                if (gb && gbAkhir[gb.id] === i) {
+                    const no = (S.cetakHari || []).filter(x => x.status !== 'batal' && gabungDari(x) && gabungDari(x).id === gb.id).map(x => (noCetak[x.id] || [])[0]).filter(Boolean).sort((a, b) => a - b), tot = (S.cetakHari || []).filter(x => x.status !== 'batal' && gabungDari(x) && gabungDari(x).id === gb.id).reduce((a, x) => a + (Number(x.nominal) || 0), 0);
+                    const sel = (Number(gb.nominal) || 0) - tot;
+                    return {teks: 'Gabung No ' + no.join('+') + ' · bayar ' + menitStr(gb.menit) + ' ' + rp(gb.nominal) + status(sel, gb.selesai, 'lebih bayar', 'kurang bayar'), merah: !!sel && !gb.selesai};
+                }
+                if (!k || r.status === 'batal') return null;
+                const sel = (buktiTotal(r) || 0) - (Number((S.cetakHari || []).find(x => x.id === r.id) ? (S.cetakHari || []).find(x => x.id === r.id).nominal : r.nominal) || 0);
+                const st = sel > 0 ? ' · kurang transfer ' + rp(sel) + (k.selesai ? ' \u2713 sudah ditransfer' : ' · BELUM ditransfer')
+                    : (sel < 0 ? ' · lebih transfer ' + rp(-sel) + (k.selesai ? ' \u2713 selesai' : ' · BELUM selesai') : ' · sesuai');
+                if (Array.isArray(k.bagian)) {
+                    if (!r._bagi || r._bagi !== k.bagian.length + '/' + k.bagian.length) return null;   // cukup sekali, di bawah pecahan terakhir
+                    return {teks: 'No ' + (noCetak[r.id] || []).join('+') + ' · dipecah dari info ' + rp((S.cetakHari || []).find(x => x.id === r.id) ? (S.cetakHari || []).find(x => x.id === r.id).nominal : 0) + ' = ' + rp(buktiTotal(r)) + st, merah: !!sel && !k.selesai};
+                }
+                return {teks: 'No ' + ((noCetak[r.id] || [])[0] || '') + ' · bukti ' + rp(k.nominalBukti) + (Number.isInteger(k.menitBukti) ? ' (' + menitStr(k.menitBukti) + ')' : '') + st, merah: !!sel && !k.selesai};
+            }
+            function sisipCatatanCetak(rows) {
+                const isi = [], gbAkhir = {}, noCetak = {}; let no = 0;
+                rows.forEach((r, i) => { const gb = gabungDari(r); if (gb) gbAkhir[gb.id] = i; (noCetak[r.id] = noCetak[r.id] || []).push(i + 1); });
+                rows.forEach((r, i) => {
+                    isi.push(Object.assign({}, r, {_no: ++no}));
+                    const c = catatanCetakBaris(r, i, gbAkhir, noCetak);
+                    if (c) isi.push({_cat: c.teks, _merah: c.merah});
+                });
+                return {isi: isi, lanjut: no + 1};
             }
             const jmlNominal = rows => rows.reduce((a, t) => a + (Number(t.nominal) || 0), 0);
             const barTotal = (label, rows) => '<div class="tot"><span>' + esc(label) + '</span><span>Rp ' + esc(angka(jmlNominal(rows))) + '</span></div>';
@@ -24207,7 +24243,7 @@
                 let html = '';
                 days.forEach(day => {
                     // (25 Okt 2026) Urutan cetak: TRANSFERAN, lalu satu tabel per pelanggan khusus, lalu MODAL. Tiap tabel bernomor sendiri.
-                    const semua = bagiBukti(by[day].slice().sort((a, b) => a.no - b.no)), tglTeks = teksTgl(day);   // (26 Okt 2026) baris yang dipecah di Bukti tampil sebagai beberapa baris
+                    S.cetakHari = by[day]; const semua = bagiBukti(by[day].slice().sort((a, b) => a.no - b.no)), tglTeks = teksTgl(day);   // (26 Okt 2026) baris yang dipecah di Bukti tampil sebagai beberapa baris
                     const jenis = t => String(t.pelanggan || '').trim().toLowerCase() === 'modal' ? 'modal' : (t.khusus === true ? 'khusus' : 'biasa');
                     const biasa = semua.filter(t => jenis(t) === 'biasa'), modal = semua.filter(t => jenis(t) === 'modal');
                     const gk = new Map();
@@ -24227,11 +24263,13 @@
                         if (rr.length) kecil.push({judul: x[1] + ' (' + tglTeks + ')', rows: rr, ket: 'KET', tot: 'TOTAL ' + x[1]});
                     });
                     const halaman = [];
-                    const rows = sortForPrint(biasa), pages = (rows.length || !kecil.length) ? Math.max(1, Math.ceil((rows.length + BARIS_KOSONG) / PRINT_PER_PAGE)) : 0;
+                    const rows = sortForPrint(biasa), sk = sisipCatatanCetak(rows), isi = sk.isi;   // (26 Okt 2026) + baris keterangan
+                    const pages = (rows.length || !kecil.length) ? Math.max(1, Math.ceil((isi.length + BARIS_KOSONG) / PRINT_PER_PAGE)) : 0;
+                    for (let nx = sk.lanjut; isi.length < pages * PRINT_PER_PAGE; nx++) isi.push({_kosong: true, _no: nx});
                     for (let p = 0; p < pages; p++) {
                         const base = p * PRINT_PER_PAGE;
                         halaman.push('<div class="bar"><span>TRANSFERAN (' + esc(tglTeks) + ')</span><span>Hal ' + (p + 1) + '/' + pages + '</span></div>' +
-                            '<div class="cols">' + printHalf(rows.slice(base, base + PRINT_PER_COL), base + 1) + '<div class="sep"></div>' + printHalf(rows.slice(base + PRINT_PER_COL, base + PRINT_PER_PAGE), base + PRINT_PER_COL + 1) + '</div>' +
+                            '<div class="cols">' + printHalf(isi.slice(base, base + PRINT_PER_COL), base + 1) + '<div class="sep"></div>' + printHalf(isi.slice(base + PRINT_PER_COL, base + PRINT_PER_PAGE), base + PRINT_PER_COL + 1) + '</div>' +
                             (p === pages - 1 ? barTotal('TOTAL TRANSFERAN' + (day === today() ? ' HARI INI' : ''), rows) : ''));
                     }
                     // tabel kecil: ukuran sesuai isi (minimal 3 baris tiap sisi), beberapa tabel boleh berbagi satu lembar
