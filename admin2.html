@@ -1652,6 +1652,12 @@
         #page-transfer #tf-dlgInfo .big{font-size:26px;font-weight:700;color:var(--tf-ink);margin:4px 0}
         #page-transfer .dlgbtn{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
         #page-transfer .tf-kbadge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;background:#f59e0b;color:#fff;font-size:10px;font-weight:800;vertical-align:middle}
+        #page-transfer .tf-gbbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px}
+        #page-transfer .tf-gbbar .hint{font-size:12px}
+        #page-transfer .tf-gbbadge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;background:#2563eb;color:#fff;font-size:10px;font-weight:800;vertical-align:middle}
+        #page-transfer tr.gbrow td{background:#eff6ff;border-bottom-color:#bfdbfe}
+        #page-transfer .tf-gbinfo{color:#1d4ed8;font-weight:700;font-size:14px;line-height:1.35}
+        #page-transfer input[data-gbpilih]{width:20px;height:20px;accent-color:#2563eb}
         #page-transfer .tf-selsum{color:#c81e3a;font-weight:800}
         #page-transfer tr.bktrow td>div{position:sticky;left:8px;max-width:min(620px,calc(100vw - 90px));white-space:normal}   /* catatan tetap terlihat walau tabel digeser ke samping (HP) */
         #page-transfer tr.bktrow td{background:#fff7f7;padding:7px 10px;border-bottom:1px solid #f1c4c4}
@@ -23123,18 +23129,23 @@
             }
             // (26 Okt 2026) Sudah tuntas: tabel + pencarian (No, kode, nama, pelanggan, jam, status, nominal / nominal bukti)
             function renderTuntas() {
-                // (26 Okt 2026) Edit setelah tuntas: tombol Khusus (penanda pelanggan khusus) & Bukti (nominal/jam bukti, pecah 2-4) + catatan merah selisih
+                // (26 Okt 2026) Edit setelah tuntas: Khusus, Bukti (nominal/jam bukti, pecah 2-4), Hapus (sandi owner), Gabung bayar + catatan merah selisih
                 const fin = S.finList || [], q = String((g('tf-tCari') || {}).value || '').trim().toLowerCase(), qd = digits(q);
                 const cocokCari = t => !q || [t.no, t.kodeRider, t.namaRider, t.pelanggan, jamT(t), jamT(t).replace(':', ''), LBL[t.status] || t.status].join(' ').toLowerCase().indexOf(q) >= 0 || (qd && (String(t.nominal).indexOf(qd) >= 0 || String(buktiTotal(t) || '').indexOf(qd) >= 0 || (buktiDari(t) && Number.isInteger(buktiDari(t).menitBukti) && menitStr(buktiDari(t).menitBukti).replace(':', '').indexOf(qd) >= 0)));
                 const tampil = fin.filter(cocokCari);
-                const selBuka = fin.filter(selisihTerbuka).length;
+                // pilihan "Gabung bayar": buang yang sudah tidak bisa digabung (mis. baru saja diubah)
+                S.gbPilih = (S.gbPilih || []).filter(id => fin.some(x => x.id === id && bisaGabung(x)));
+                const selBuka = fin.filter(selisihTerbuka).length + gabungKelompok(fin).filter(x => x.sel && !x.g.selesai).length;
                 g('tf-tuntasSum').innerHTML = 'Sudah tuntas tanggal ini (' + (q ? tampil.length + ' dari ' : '') + fin.length + ')' + (selBuka ? ' <span class="tf-selsum">· ' + selBuka + ' selisih belum diselesaikan</span>' : '');
                 if (selBuka) { const dt = g('tf-tuntas').closest('details'); if (dt) dt.open = true; }
-                g('tf-tuntas').innerHTML = tampil.length ? '<table><thead><tr><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam transfer</th><th>Status</th><th></th></tr></thead><tbody>' +
-                    tampil.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td class="no">' + esc(t.no) + '</td><td>' + esc(t.kodeRider) + '</td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + (t.khusus === true ? ' <span class="tf-kbadge">KHUSUS</span>' : '') + '</td><td>' + jamTuntas(t) + '</td><td>' + badge(t) + (t.status === 'batal' ? ' ' + esc(t.batalAlasan || '') : '') + '</td>' +
-                        '<td class="r" style="white-space:nowrap">' + (t.status !== 'batal' && normNama(t.pelanggan).toLowerCase() !== 'modal' ? '<button type="button" class="sm" data-act="ubahkhusus" data-id="' + esc(t.id) + '">' + (t.khusus === true ? 'Bukan khusus' : 'Khusus') + '</button> ' : '') +
-                        (BUKTI_STATUS.indexOf(t.status) >= 0 ? '<button type="button" class="sm" data-act="koreksibukti" data-id="' + esc(t.id) + '">Bukti</button>' : '') +
-                        (t.status === 'cocok' || t.status === 'beres' ? ' <button type="button" class="sm bad" data-act="hapustuntas" data-id="' + esc(t.id) + '">Hapus</button>' : '') + '</td></tr>' + buktiBaris(t, 8, true)).join('') + '</tbody></table>' : '<div class="empty">' + (fin.length ? 'Tidak ada yang cocok dengan pencarian.' : 'Belum ada.') + '</div>';
+                const nPilih = S.gbPilih.length;
+                const bar = fin.some(bisaGabung) ? '<div class="tf-gbbar"><button type="button" class="sm pri" data-act="gabungbayar"' + (nPilih >= 2 ? '' : ' disabled') + '>Gabung bayar' + (nPilih ? ' (' + nPilih + ' dipilih)' : '') + '</button>' +
+                    (nPilih ? ' <button type="button" class="sm" data-act="gabungkosong">Batal pilih</button>' : '') + '<span class="hint"> Centang 2 baris atau lebih dari pelanggan yang sama, yang dibayar pelanggan sekaligus.</span></div>' : '';
+                g('tf-tuntas').innerHTML = tampil.length ? bar + '<table><thead><tr><th></th><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam transfer</th><th>Status</th><th></th></tr></thead><tbody>' +
+                    tampil.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td class="c">' + (bisaGabung(t) ? '<input type="checkbox" data-gbpilih="' + esc(t.id) + '"' + (S.gbPilih.indexOf(t.id) >= 0 ? ' checked' : '') + ' aria-label="Pilih untuk gabung bayar">' : '') + '</td><td class="no">' + esc(t.no) + '</td><td>' + esc(t.kodeRider) + '</td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + (t.khusus === true ? ' <span class="tf-kbadge">KHUSUS</span>' : '') + (gabungDari(t) ? ' <span class="tf-gbbadge">GABUNG</span>' : '') + '</td><td>' + jamTuntas(t) + '</td><td>' + badge(t) + (t.status === 'batal' ? ' ' + esc(t.batalAlasan || '') : '') + '</td>' +
+                        '<td class="r" style="white-space:nowrap">' + (t.status !== 'batal' && !gabungDari(t) && normNama(t.pelanggan).toLowerCase() !== 'modal' ? '<button type="button" class="sm" data-act="ubahkhusus" data-id="' + esc(t.id) + '">' + (t.khusus === true ? 'Bukan khusus' : 'Khusus') + '</button> ' : '') +
+                        (bisaBukti(t) ? '<button type="button" class="sm" data-act="koreksibukti" data-id="' + esc(t.id) + '">Bukti</button>' : '') +
+                        ((t.status === 'cocok' || t.status === 'beres') && !gabungDari(t) ? ' <button type="button" class="sm bad" data-act="hapustuntas" data-id="' + esc(t.id) + '">Hapus</button>' : '') + '</td></tr>' + buktiBaris(t, 9, true) + gabungBaris(t, fin, 9, tampil)).join('') + '</tbody></table>' : '<div class="empty">' + (fin.length ? 'Tidak ada yang cocok dengan pencarian.' : 'Belum ada.') + '</div>';
             }
             // Jam di daftar: "belum info bukti" diberi badge kuning supaya mudah dicari dan dilengkapi lewat Ubah
             function jamHtml(t) { return (!t.waktuTransfer && t.jamTeks === JAM_KOSONG) ? '<span class="badge b-bukti">' + esc(JAM_KOSONG) + '</span>' : esc(jamT(t)); }
@@ -23268,7 +23279,13 @@
                 el.querySelectorAll('input[data-jamid]').forEach(i => { if (isi[i.dataset.jamid]) i.value = isi[i.dataset.jamid]; if (fokus && i.dataset.jamid === fokus) i.focus(); });
             }
             g('tf-jQ').addEventListener('input', renderJam);
-            g('tf-tCari').addEventListener('input', () => renderTuntas());   // (26 Okt 2026) pencarian di Sudah tuntas
+            g('tf-tCari').addEventListener('input', () => renderTuntas());
+            g('tf-tuntas').addEventListener('change', ev => {   // (26 Okt 2026) centang untuk Gabung bayar
+                const c = ev.target; if (!c || !c.dataset || !c.dataset.gbpilih) return;
+                const id = c.dataset.gbpilih, a = (S.gbPilih || []).filter(x => x !== id);
+                if (c.checked) a.push(id);
+                S.gbPilih = a; renderTuntas();
+            });   // (26 Okt 2026) pencarian di Sudah tuntas
             g('tf-jamList').addEventListener('keydown', ev => {
                 const i = ev.target; if (ev.key !== 'Enter' || !i.dataset || !i.dataset.jamid) return;
                 ev.preventDefault();
@@ -23359,6 +23376,8 @@
             // selisih = (nominal menurut bukti, atau jumlah pecahan) - nominal yang sudah ditransfer. Menit = menit sejak 00:00 WIB.
             const BUKTI_STATUS = ['diteruskan', 'cocok', 'selisih', 'beres'];
             const BUKTI_MAKS = 50000000;
+            // tombol Bukti tidak untuk pelanggan khusus dan modal (26 Okt 2026)
+            const bisaBukti = t => !!t && BUKTI_STATUS.indexOf(t.status) >= 0 && t.khusus !== true && !(t.gabung && t.gabung.id) && normNama(t.pelanggan).toLowerCase() !== 'modal';
             const buktiDari = t => (t && t.koreksi && typeof t.koreksi === 'object') ? t.koreksi : null;
             const buktiTotal = t => { const k = buktiDari(t); if (!k) return null; return Array.isArray(k.bagian) ? k.bagian.reduce((a, p) => a + (Number(p && p.nominal) || 0), 0) : (Number(k.nominalBukti) || 0); };
             const buktiSelisih = t => { const n = buktiTotal(t); return n == null ? 0 : n - (Number(t.nominal) || 0); };
@@ -23384,12 +23403,42 @@
                         : (bisaUbah ? ' <button type="button" class="sm" data-act="selisihselesai" data-id="' + esc(t.id) + '">' + (sel > 0 ? 'Sudah ditransfer ke rider' : 'Sudah diselesaikan') + '</button>' : ''));
                 return '<tr class="bktrow"><td colspan="' + (kolom || 12) + '"><div class="' + (sel ? 'bkt-red' : 'bkt-info') + '">No ' + esc(t.no) + ' · ' + isi + kal + ujung + '</div></td></tr>';
             }
+            // ===== (26 Okt 2026) GABUNG BAYAR: pelanggan membayar beberapa transaksi (rider berbeda, jam berbeda) sekaligus =====
+            // Baris tetap terpisah (transfer ke rider tetap satu-satu). Tiap baris kelompok menyimpan objek yang sama:
+            //   gabung: {id, no: [No baris], menit (jam bayar), nominal (uang yang dibayar pelanggan), selesai}
+            // Hanya tanggal yang sama, bukan pelanggan khusus/modal, dan belum punya Bukti. Selisih = dibayar - jumlah nominal baris.
+            const gabungDari = t => (t && t.gabung && typeof t.gabung === 'object' && t.gabung.id) ? t.gabung : null;
+            const bisaGabung = t => !!t && (t.status === 'cocok' || t.status === 'beres') && t.khusus !== true && normNama(t.pelanggan).toLowerCase() !== 'modal' && !gabungDari(t) && !buktiDari(t);
+            function gabungKelompok(rows) {
+                const m = {};
+                rows.forEach(t => { const gb = gabungDari(t); if (gb && t.status !== 'batal') (m[gb.id] = m[gb.id] || {g: gb, rows: []}).rows.push(t); });
+                return Object.keys(m).map(id => { const x = m[id]; x.rows.sort((a, b) => a.no - b.no); x.total = x.rows.reduce((a, t) => a + (Number(t.nominal) || 0), 0); x.sel = (Number(x.g.nominal) || 0) - x.total; return x; });
+            }
+            function gabungBaris(t, rows, kolom, tampil) {
+                const gb = gabungDari(t); if (!gb || t.status === 'batal') return '';
+                // catatan cukup sekali: di bawah baris terakhir kelompok yang sedang tampil
+                if (tampil && tampil.some(x => x.no > t.no && x.status !== 'batal' && gabungDari(x) && gabungDari(x).id === gb.id)) return '';
+                const x = gabungKelompok(rows).find(k => k.g.id === gb.id) || {rows: [t], total: t.nominal, sel: 0, g: gb};
+                const urut = x.rows.map(r => 'No ' + r.no).join(' + ');
+                let kal = '', ujung = '';
+                if (x.sel < 0) kal = ', pelanggan <b>kurang bayar ' + esc(rp(-x.sel)) + '</b>';
+                else if (x.sel > 0) kal = ', pelanggan <b>lebih bayar ' + esc(rp(x.sel)) + '</b>';
+                if (!x.sel) ujung = ' <span class="bkt-pas">(sesuai)</span>';
+                else if (gb.selesai) ujung = ' <span class="bkt-done">&#10003; sudah diselesaikan</span>';
+                else ujung = ' <button type="button" class="sm" data-act="gabungselesai" data-id="' + esc(t.id) + '">Sudah diselesaikan</button>';
+                return '<tr class="bktrow gbrow"><td colspan="' + kolom + '"><div class="' + (x.sel ? 'bkt-red' : 'tf-gbinfo') + '">Gabung bayar · dibayar sekali jam ' + esc(menitStr(gb.menit)) + ' ' + esc(rp(gb.nominal)) + ' (' + esc(urut) + ' = ' + esc(rp(x.total)) + ')' + kal + ujung +
+                    ' <button type="button" class="sm" data-act="gabungbatal" data-id="' + esc(t.id) + '">Batalkan gabung</button></div></td></tr>';
+            }
             // untuk cetak: baris dipecah jadi beberapa baris; jam bukti dipakai kalau baris belum punya jam
             function bagiBukti(rows) {
                 const out = [];
                 rows.forEach(t => {
                     const k = buktiDari(t);
-                    if (k && Array.isArray(k.bagian) && k.bagian.length >= 2 && t.status !== 'batal') {
+                    const gb = gabungDari(t);
+                    if (gb && t.status !== 'batal' && Number.isInteger(gb.menit)) {
+                        const urut = (Array.isArray(gb.no) ? gb.no : []).slice().sort((a, b) => a - b), i = urut.indexOf(t.no);
+                        out.push(Object.assign({}, t, {waktuTransfer: msDari(t.tanggal, menitStr(gb.menit)), jamTeks: '', _bagi: 'G' + (i + 1) + '/' + urut.length}));
+                    } else if (k && Array.isArray(k.bagian) && k.bagian.length >= 2 && t.status !== 'batal') {
                         k.bagian.forEach((p, i) => out.push(Object.assign({}, t, {nominal: Number(p.nominal) || 0, waktuTransfer: msDari(t.tanggal, menitStr(p.menit)), jamTeks: '', _bagi: (i + 1) + '/' + k.bagian.length})));
                     } else if (k && !t.waktuTransfer && t.jamTeks === JAM_KOSONG && Number.isInteger(k.menitBukti)) {
                         out.push(Object.assign({}, t, {waktuTransfer: msDari(t.tanggal, menitStr(k.menitBukti)), jamTeks: ''}));
@@ -23406,9 +23455,10 @@
                 return j + (t.diteruskanPetugas ? '<br><small style="color:#64748b">' + esc(pNama(t.diteruskanPetugas)) + '</small>' : '');
             }
             function catatanSelisihCetak(rows) {
-                return rows.filter(t => t.status !== 'batal' && buktiDari(t) && !buktiDari(t).selesai && buktiSelisih(t) !== 0)
+                const gab = gabungKelompok(rows).filter(x => x.sel && !x.g.selesai).map(x => 'No ' + x.rows.map(r => r.no).join('+') + ' ' + x.rows[0].pelanggan + ' (gabung bayar ' + menitStr(x.g.menit) + '): pelanggan ' + (x.sel < 0 ? 'kurang bayar ' + rp(-x.sel) : 'lebih bayar ' + rp(x.sel)));
+                return gab.concat(rows.filter(t => t.status !== 'batal' && buktiDari(t) && !buktiDari(t).selesai && buktiSelisih(t) !== 0)
                     .sort((a, b) => a.no - b.no)
-                    .map(t => { const s = buktiSelisih(t); return 'No ' + t.no + ' ' + t.kodeRider + ' ' + shortName(t.namaRider) + ': ' + (s > 0 ? 'kurang ' + rp(s) + ', transfer ke rider' : 'lebih ' + rp(-s) + ', selesaikan dengan rider'); });
+                    .map(t => { const s = buktiSelisih(t); return 'No ' + t.no + ' ' + t.kodeRider + ' ' + shortName(t.namaRider) + ': ' + (s > 0 ? 'kurang ' + rp(s) + ', transfer ke rider' : 'lebih ' + rp(-s) + ', selesaikan dengan rider'); }));
             }
             const kdAngka = v => digits(v).slice(0, 9);
             const kdFmt = v => { const d = kdAngka(v); return d ? Number(d).toLocaleString('id-ID') : ''; };
@@ -23621,10 +23671,61 @@
                 },
                 async bukajam() { setTab('jam'); window.scrollTo(0, 0); },
 
+                // (26 Okt 2026) Gabung bayar: beberapa baris (tanggal & pelanggan sama) dibayar pelanggan sekaligus
+                async gabungkosong() { S.gbPilih = []; renderTuntas(); },
+                async gabungbayar() {
+                    const rows = (S.gbPilih || []).map(id => (S.finList || []).find(x => x.id === id)).filter(bisaGabung).sort((a, b) => a.no - b.no);
+                    if (rows.length < 2) return toast('Centang minimal 2 baris yang dibayar sekaligus.', 'bad');
+                    if (rows.length > 10) return toast('Maksimal 10 baris dalam satu gabungan.', 'bad');
+                    const nm = normNama(rows[0].pelanggan).toLowerCase();
+                    if (rows.some(x => normNama(x.pelanggan).toLowerCase() !== nm)) return toast('Yang digabung harus pelanggan yang sama.', 'bad');
+                    if (rows.some(x => x.tanggal !== rows[0].tanggal)) return toast('Yang digabung harus tanggal yang sama.', 'bad');
+                    if (S.role !== 'pemilik' && !needP()) return;
+                    const total = rows.reduce((a, x) => a + (Number(x.nominal) || 0), 0);
+                    let hasil = null;
+                    const v = await ask({title: 'Gabung bayar: ' + rows[0].pelanggan, ok: 'Simpan gabungan',
+                        info: '<p>Pelanggan <b>' + esc(rows[0].pelanggan) + '</b> membayar sekaligus untuk:</p><ul style="margin:0 0 8px 18px;padding:0">' + rows.map(x => '<li>No ' + esc(x.no) + ' · ' + esc(x.kodeRider) + ' ' + esc(x.namaRider) + ' · ' + esc(rp(x.nominal)) + ' · ' + esc(jamT(x)) + '</li>').join('') + '</ul><p>Jumlah: <b>' + esc(rp(total)) + '</b></p><p class="hint">Transfer ke rider tetap satu-satu (tidak berubah). Yang dicatat hanya jam & nominal uang masuk dari pelanggan.</p>',
+                        fields: [{name: 'jam', label: 'Jam pelanggan membayar (mis. 1500)', req: 1, max: 5}, {name: 'nominal', label: 'Nominal yang dibayar pelanggan', req: 1, max: 14, value: total.toLocaleString('id-ID')}, {name: 'pin', label: 'PIN', type: 'password', req: 1, max: 12}],
+                        check: async x => {
+                            const nj = normJam(x.jam); if (!nj) return 'Jam tidak valid. Ketik 4 angka format 24 jam, mis. 1500.';
+                            if (msDari(rows[0].tanggal, nj) > Date.now() + 5 * 60000) return 'Jam bayar tidak boleh di masa depan.';
+                            const nom = Number(digits(x.nominal)); if (!Number.isInteger(nom) || nom < 1 || nom > 500000000) return 'Nominal dibayar harus 1 sampai 500.000.000.';
+                            const pm = pinCek(x.pin); if (pm) return pm;
+                            hasil = {menit: Number(nj.slice(0, 2)) * 60 + Number(nj.slice(3)), nominal: nom}; return '';
+                        }});
+                    if (!v || !hasil) return;
+                    const gb = {id: 'G' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1296).toString(36).toUpperCase(), no: rows.map(x => x.no), menit: hasil.menit, nominal: hasil.nominal, selesai: false};
+                    const sel = hasil.nominal - total;
+                    await B.commit(rows.map(x => up(x, Object.assign({gabung: gb}, st('gabung')))).concat([logOp('gabung bayar', rows[0].id, '', rows.map(x => 'No ' + x.no + ' ' + x.kodeRider + ' ' + rp(x.nominal)).join(' + ') + ' / ' + rows[0].pelanggan, 'dibayar sekali ' + menitStr(hasil.menit) + ' ' + rp(hasil.nominal) + (sel ? ', selisih ' + rp(sel) : ''))]));
+                    S.gbPilih = [];
+                    toast('Gabung bayar tersimpan' + (sel ? '. Pelanggan ' + (sel < 0 ? 'kurang' : 'lebih') + ' bayar ' + rp(Math.abs(sel)) + '.' : ' (sesuai).'));
+                },
+                async gabungbatal(t) {
+                    const gb = gabungDari(t); if (!gb) return;
+                    if (S.role !== 'pemilik' && !needP()) return;
+                    const rows = (S.finList || []).filter(x => gabungDari(x) && gabungDari(x).id === gb.id);
+                    const v = await ask({title: 'Batalkan gabung bayar?', ok: 'Ya, batalkan', tone: 'bad', info: '<p>' + rows.map(x => 'No ' + esc(x.no)).join(' + ') + ' kembali menjadi baris biasa (jam & nominal awal).</p>',
+                        fields: [{name: 'pin', label: 'PIN', type: 'password', req: 1, max: 12}], check: async x => pinCek(x.pin)});
+                    if (!v) return;
+                    await B.commit(rows.map(x => up(x, Object.assign({gabung: null}, st('gabung')))).concat([logOp('batal gabung bayar', t.id, '', rows.map(x => 'No ' + x.no).join(' + ') + ' dibayar ' + menitStr(gb.menit) + ' ' + rp(gb.nominal), 'tidak digabung')]));
+                    toast('Gabung bayar dibatalkan.');
+                },
+                async gabungselesai(t) {
+                    const gb = gabungDari(t); if (!gb || gb.selesai) return;
+                    if (S.role !== 'pemilik' && !needP()) return;
+                    const rows = (S.finList || []).filter(x => gabungDari(x) && gabungDari(x).id === gb.id);
+                    const v = await ask({title: 'Selisih gabung bayar sudah diselesaikan?', ok: 'Ya, sudah', info: '<p>' + rows.map(x => 'No ' + esc(x.no)).join(' + ') + ' · pelanggan ' + esc(t.pelanggan) + '</p>',
+                        fields: [{name: 'pin', label: 'PIN', type: 'password', req: 1, max: 12}], check: async x => pinCek(x.pin)});
+                    if (!v) return;
+                    const baru = Object.assign({}, gb, {selesai: true});
+                    await B.commit(rows.map(x => up(x, Object.assign({gabung: baru}, st('gabung')))).concat([logOp('selisih gabung selesai', t.id, '', rows.map(x => 'No ' + x.no).join(' + '), 'diselesaikan')]));
+                    toast('Selisih ditandai sudah diselesaikan.');
+                },
                 // (26 Okt 2026) Hapus transaksi yang sudah tuntas: selalu dengan SANDI AKUN OWNER (juga saat owner sendiri yang login).
                 // Tidak benar-benar dihapus: status menjadi "batal" + alasan, jadi hilang dari daftar, cetak, total, dan tagihan; jejaknya tetap di Log.
                 async hapustuntas(t) {
                     if (!t || (t.status !== 'cocok' && t.status !== 'beres')) return;
+                    if (t.gabung && t.gabung.id) return toast('Baris ini ada di Gabung bayar. Batalkan gabung dulu.', 'bad');
                     if (S.role !== 'pemilik' && !needP()) return;
                     const ops = (em, x) => [up(t, {status: 'batal', batalAlasan: x.alasan, dibatalkanOleh: em, dibatalkanAt: NOW}), logOp('hapus (sudah tuntas)', t.id, x.alasan, ringkas(t) + ' [' + t.status + ']', 'BATAL / DIHAPUS', em)];
                     const v = await ask({title: 'Hapus transaksi ini?', ok: 'Hapus', tone: 'bad',
@@ -23640,6 +23741,7 @@
                 async ubahkhusus(t) {
                     if (!t || t.status === 'batal') return;
                     if (S.role !== 'pemilik' && !needP()) return;
+                    if (t.gabung && t.gabung.id) return toast('Baris ini ada di Gabung bayar. Batalkan gabung dulu.', 'bad');
                     const nilai = t.khusus !== true, nm = normNama(t.pelanggan).toLowerCase();
                     if (nm === 'modal') return toast('Pelanggan "modal" punya tabel sendiri, tidak perlu ditandai khusus.', 'bad');
                     const v = await ask({title: nilai ? 'Jadikan pelanggan khusus?' : 'Batalkan pelanggan khusus?', ok: 'Ya, ubah',
@@ -23647,7 +23749,8 @@
                         fields: [{name: 'pin', label: 'PIN', type: 'password', req: 1, max: 12}], check: async x => pinCek(x.pin)});
                     if (!v) return;
                     let target = [t];
-                    const lain = (S.tiket.some(x => x.id === t.id) ? S.tiket : S.hist).filter(x => x.id !== t.id && x.status !== 'batal' && normNama(x.pelanggan).toLowerCase() === nm && (x.khusus === true) !== nilai);
+                    const lain = (S.tiket.some(x => x.id === t.id) ? S.tiket : S.hist)
+                        .filter(x => x.id !== t.id && x.status !== 'batal' && !(x.gabung && x.gabung.id) && normNama(x.pelanggan).toLowerCase() === nm && (x.khusus === true) !== nilai);
                     if (lain.length) {
                         const semua = await ask({title: 'Ubah baris lain juga?', ok: 'Ya, semua ' + (lain.length + 1) + ' baris', cancel: 'Hanya baris ini', info: '<p>Ada <b>' + lain.length + ' baris lain</b> atas nama <b>' + esc(t.pelanggan) + '</b> di tanggal ini yang ' + (nilai ? 'belum' : 'masih') + ' ditandai khusus.</p><p class="hint">Pilih "Ya" supaya semuanya ikut diubah.</p>'});
                         if (semua) target = target.concat(lain);
@@ -23666,6 +23769,7 @@
                 async koreksibukti(t) {
                     if (!t || t.status === 'batal') return;
                     if (BUKTI_STATUS.indexOf(t.status) < 0) return toast('Bukti hanya bisa dikoreksi setelah transfer ke rider (langkah 4 ke atas).', 'bad');
+                    if (!bisaBukti(t)) return toast('Pelanggan khusus dan modal tidak memakai Bukti.', 'bad');
                     if (S.role !== 'pemilik' && !needP()) return;
                     const v = await dialogBukti(t);
                     if (!v) return;
