@@ -1658,6 +1658,10 @@
         #page-transfer tr.gbrow td{background:#eff6ff;border-bottom-color:#bfdbfe}
         #page-transfer .tf-gbinfo{color:#1d4ed8;font-weight:700;font-size:14px;line-height:1.35}
         #page-transfer input[data-gbpilih]{width:20px;height:20px;accent-color:#2563eb}
+        #page-transfer .tf-pantaubar{position:sticky;top:0;z-index:60;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:#5b21b6;color:#fff;padding:9px 14px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+        #page-transfer .tf-pantaubar .sm{background:#fff;color:#5b21b6;border-color:#fff;font-weight:800}
+        #page-transfer.tf-pantau #tf-fCatat,#page-transfer.tf-pantau .tf-swipe,#page-transfer.tf-pantau input[data-gbpilih]{opacity:.45;pointer-events:none}
+        #page-transfer.tf-pantau [data-act]:not([data-act^="kunci"]):not([data-act="step"]):not([data-act="bukajam"]):not([data-act="bukatgl"]):not([data-act^="t3"]){opacity:.45}
         #page-transfer .tf-selsum{color:#c81e3a;font-weight:800}
         #page-transfer tr.bktrow td>div{position:sticky;left:8px;max-width:min(620px,calc(100vw - 90px));white-space:normal}   /* catatan tetap terlihat walau tabel digeser ke samping (HP) */
         #page-transfer tr.bktrow td{background:#fff7f7;padding:7px 10px;border-bottom:1px solid #f1c4c4}
@@ -1852,6 +1856,11 @@
         #page-bulk .bk-dbtn button.pri{background:var(--bk-pri);border-color:var(--bk-pri);color:#fff}#page-bulk .bk-dbtn button.bad{background:var(--bk-bad);border-color:var(--bk-bad);color:#fff}
         #page-bulk .bk-err{color:var(--bk-bad);font-weight:800;font-size:12.5px;min-height:0;margin-top:4px}
         #page-bulk input.bk-pin{text-align:center;letter-spacing:.5em;font-size:22px}
+        #page-bulk .bk-pantaubar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:#5b21b6;color:#fff;border-radius:12px;padding:9px 12px;margin:8px 0;font-size:13px}
+        #page-bulk .bk-pantaubar button{background:#fff;color:#5b21b6;border:0;border-radius:9px;padding:5px 10px;font-weight:800}
+        #page-bulk .bk-pantaubar[hidden],#page-bulk #bk-pantauBtn[hidden]{display:none}
+        #page-bulk #bk-pantauBtn{margin-left:6px}
+        #page-bulk.bk-pantau #bk-form,#page-bulk.bk-pantau [data-bkbatal],#page-bulk.bk-pantau .bk-swipe,#page-bulk.bk-pantau #bk-lanjut{opacity:.45;pointer-events:none}
         body.dark-mode #page-bulk{--bk-ink:#e5edf9;--bk-mut:#9fb0c8;--bk-ln:#334866;--bk-bg:#0f1a2b;--bk-card:#16243a}
         body.dark-mode #page-bulk input{background:#0f1a2b;color:#e5edf9}body.dark-mode #page-bulk input[readonly]{background:#1c2c45}
         body.dark-mode #page-bulk dialog,body.dark-mode #page-bulk .bk-dbtn button:not(.pri):not(.bad){background:#16243a;color:#e5edf9}
@@ -2730,6 +2739,8 @@
     <main id="page-bulk" class="hidden-page">
         <div class="bk-wrap">
             <button type="button" id="bk-kembali" class="bk-back">← Kembali</button>
+            <button type="button" id="bk-pantauBtn" class="bk-back" hidden>&#128065; Mode pantau (owner)</button>
+            <div id="bk-pantauBar" class="bk-pantaubar" hidden><span>&#128065; <b>MODE PANTAU</b> · hanya melihat, tidak bisa menginput</span><button type="button" id="bk-pantauKeluar">Keluar pantau</button></div>
             <div class="bk-head"><h1 id="bk-judul">Top Up Saldo (Daftar)</h1><p id="bk-sub"></p>
                 <p class="bk-mu">Petugas: <b id="bk-petugas">-</b> · <span id="bk-hari"></span></p></div>
             <div class="bk-tabs" role="tablist">
@@ -22783,6 +22794,7 @@
             const kunciBasi = x => !x || !x.detak || (Date.now() - x.detak) > KUNCI_BASI;
             function kunciData() { return {perangkat: PERANGKAT, petugas: String(S.petugasId || '').slice(0, 40), email: String(S.user && S.user.email || ''), sejak: NOW, detak: NOW}; }
             async function kunciAmbil(paksa) {
+                if (S.pantau) return;   // (26 Okt 2026) HP pemantau tidak mengambil kunci
                 if (K.status === 'mati' || kunciCoba || !S.user || !halamanTerbuka()) return;
                 kunciCoba = true;
                 try {
@@ -22796,6 +22808,7 @@
             }
             function kunciSnap(x) {
                 K.x = x;
+                if (S.pantau) { K.status = 'blok'; renderKunciBlok(); renderPantau(); return; }   // (26 Okt 2026) mode pantau: tidak pernah mengambil kunci
                 if (K.status === 'mati') return;
                 if (x && x.perangkat === PERANGKAT) K.status = 'punya';
                 else if (x && !kunciBasi(x)) K.status = 'blok';
@@ -22817,16 +22830,29 @@
                 else if (K.status === 'blok') renderKunciBlok();   // perbarui "aktif terakhir"
             }
             function kunciSelesai() {   // keluar dari halaman Transfer: lepas kunci milik HP ini
+                if (S.pantau) { S.pantau = false; renderPantau(); }   // (26 Okt 2026) keluar halaman = keluar mode pantau
                 if (kunciTimer) { clearInterval(kunciTimer); kunciTimer = null; }
                 if (unsubKunci) { try { unsubKunci(); } catch (e) {} unsubKunci = null; }
                 if (K.status === 'punya' && S.user) B.kunciLepas(KUNCI_ID, PERANGKAT).catch(() => {});
                 K.status = K.status === 'mati' ? 'mati' : 'cek'; K.x = null;
                 renderKunciBlok();
             }
+            // ===== (26 Okt 2026) MODE PANTAU (khusus owner): melihat halaman Transfer yang sedang dipakai di HP lain, tanpa menginput =====
+            // Masuk dari layar kunci, dengan sandi akun owner (dicek server). HP pemantau tidak mengambil kunci 1 HP,
+            // semua tombol aksi tetap terkunci (sama seperti saat terkunci), hanya tab, tanggal, cari, riwayat & cetak yang bisa dipakai.
+            function renderPantau() {
+                PAGE.classList.toggle('tf-pantau', !!S.pantau);
+                let bar = document.getElementById('tf-pantauBar');
+                if (!S.pantau) { if (bar) bar.remove(); return; }
+                if (!bar) { bar = document.createElement('div'); bar.id = 'tf-pantauBar'; bar.className = 'tf-pantaubar'; PAGE.insertBefore(bar, PAGE.firstChild); }
+                const x = K.x || {};
+                bar.innerHTML = '<span>&#128065; <b>MODE PANTAU</b> · hanya melihat' + (x.email ? ' · sedang input: <b>' + esc(pNama(x.petugas) || '-') + '</b> (' + esc(short(x.email)) + '), aktif ' + esc(jam(x.detak)) : ' · tidak ada HP lain yang sedang input') + '</span>' +
+                    '<button type="button" class="sm" data-act="kunciPantauKeluar">Keluar pantau</button>';
+            }
             function renderKunciBlok() {
                 const el = g('tf-kunciBlok'), info = g('tf-kunciInfo');
                 if (info) { info.hidden = !(K.status === 'mati' && S.role === 'pemilik'); info.textContent = 'Kunci 1 HP belum aktif: Firestore Rules transfer_kunci belum dipasang. Halaman tetap bisa dipakai, tapi bisa dibuka di beberapa HP sekaligus.'; }
-                const blok = K.status === 'blok' && halamanTerbuka();
+                const blok = K.status === 'blok' && halamanTerbuka() && !S.pantau;   // (26 Okt 2026) mode pantau: layar kunci disembunyikan
                 if (!blok) { el.hidden = true; el.innerHTML = ''; return; }
                 if (el.hidden) {   // baru terkunci: tutup popup yang sedang terbuka supaya tidak ada yang tersimpan setengah jalan
                     try { if (dlg.open) dlg.close(); } catch (e) {}
@@ -22840,7 +22866,8 @@
                     '<p class="hint" style="margin:0">Supaya tidak ada input dobel, tunggu sampai petugas itu keluar dari halaman Transfer (tekan <b>← Menu</b>). Halaman ini akan terbuka sendiri. ' +
                     (basi ? 'HP tersebut sudah tidak aktif lebih dari 10 menit.' : 'Kalau HP itu mati atau tertutup, halaman bebas otomatis sekitar <b>' + sisa + ' menit</b> lagi.') + '</p>' +
                     '<div class="acts"><button type="button" data-act="kunciMenu">← Menu</button><button type="button" data-act="kunciCoba">Coba lagi</button>' +
-                    (S.role === 'pemilik' || basi ? '<button type="button" class="bad solid" data-act="kunciAlih">Ambil alih</button>' : '') + '</div></div>';
+                    (S.role === 'pemilik' || basi ? '<button type="button" class="bad solid" data-act="kunciAlih">Ambil alih</button>' : '') + '</div>' +
+                    (S.role === 'pemilik' ? '<div class="acts" style="margin-top:8px"><button type="button" class="pri" data-act="kunciPantau">&#128065; Mode pantau (hanya melihat)</button></div>' : '') + '</div>';
                 el.hidden = false;
             }
             document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && unsubKunci) kunciDetak(); });
@@ -22970,6 +22997,7 @@
             // Pop up wajib pilih penginput: belum ada petugas, atau putaran sebelumnya tuntas >= 10 menit lalu
             function tanyaPenginput(alasan) {
                 if (document.getElementById('tf-siapa')) return;
+                if (S.pantau) return;   // (26 Okt 2026) mode pantau tidak menginput
                 const w = document.createElement('div'); w.className = 'tf-siapa'; w.id = 'tf-siapa';
                 w.setAttribute('role', 'alertdialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-label', 'Siapa yang menginput');
                 const k = document.createElement('div');
@@ -23376,6 +23404,10 @@
             // selisih = (nominal menurut bukti, atau jumlah pecahan) - nominal yang sudah ditransfer. Menit = menit sejak 00:00 WIB.
             const BUKTI_STATUS = ['diteruskan', 'cocok', 'selisih', 'beres'];
             const BUKTI_MAKS = 50000000;
+            // (26 Okt 2026) Pengingat "belum ada jam" hanya untuk pelanggan biasa. Pelanggan khusus & modal tidak perlu jam bukti;
+            // baris yang jamnya sudah diketahui lewat Bukti (jam bukti / pecahan) atau Gabung bayar juga tidak diingatkan lagi.
+            const perluJamBukti = t => t.khusus !== true && normNama(t.pelanggan).toLowerCase() !== 'modal' && !(t.gabung && t.gabung.id)
+                && !(t.koreksi && (Number.isInteger(t.koreksi.menitBukti) || Array.isArray(t.koreksi.bagian)));
             // tombol Bukti tidak untuk pelanggan khusus dan modal (26 Okt 2026)
             const bisaBukti = t => !!t && BUKTI_STATUS.indexOf(t.status) >= 0 && t.khusus !== true && !(t.gabung && t.gabung.id) && normNama(t.pelanggan).toLowerCase() !== 'modal';
             const buktiDari = t => (t && t.koreksi && typeof t.koreksi === 'object') ? t.koreksi : null;
@@ -23660,6 +23692,23 @@
                     renderKerja();
                 },
                 async kunciMenu() { if (O.kembali) O.kembali(); },
+                async kunciPantau() {
+                    if (S.role !== 'pemilik') return toast('Mode pantau hanya untuk owner.', 'bad');
+                    const v = await ask({title: 'Masuk mode pantau?', ok: 'Masuk pantau',
+                        info: '<p>Melihat halaman Transfer yang sedang dipakai di HP lain secara langsung, <b>tanpa bisa menginput</b>. Admin di HP itu tidak terganggu.</p><p class="hint">Sandi akun owner dicek server dan tidak disimpan.</p>',
+                        fields: [{name: 'oPass', label: 'Sandi akun owner', type: 'password', req: 1, max: 120}],
+                        check: async x => { await B.ownerDo(O.pemilikEmail, x.oPass, () => []); return ''; }});
+                    if (!v) return;
+                    S.pantau = true;
+                    const sp = document.getElementById('tf-siapa'); if (sp) sp.remove();
+                    K.status = 'blok'; renderKunciBlok(); renderPantau(); renderKerja();
+                    toast('Mode pantau aktif: hanya melihat.');
+                },
+                async kunciPantauKeluar() {
+                    S.pantau = false; renderPantau();
+                    kunciSnap(K.x);   // cek ulang kunci: masih dipakai HP lain = layar kunci muncul lagi
+                    if (K.status !== 'blok') setTimeout(tanyaPetugasMasuk, 300);
+                },
                 async kunciCoba() { await kunciAmbil(false); if (K.status === 'blok') toast('Halaman masih dipakai di HP lain.', 'bad'); },
                 async kunciAlih() {
                     const x = K.x || {};
@@ -23922,7 +23971,7 @@
                 const b = ev.target.closest('[data-act]');
                 if (!b || !PAGE.contains(b) || b.tagName === 'INPUT' || b.disabled) return;
                 const a = b.dataset.act;
-                if (K.status === 'blok' && !/^kunci/.test(a)) return;   // halaman dipakai HP lain: hanya tombol di layar kunci yang jalan
+                if (K.status === 'blok' && !/^kunci/.test(a) && !(S.pantau && ['step', 'bukajam', 'bukatgl', 't3back', 't3next', 'gabungkosong'].indexOf(a) >= 0)) return;   // halaman dipakai HP lain: hanya tombol di layar kunci yang jalan (mode pantau: juga tombol pindah tampilan)
                 if (ACT[a]) run(() => ACT[a](b.dataset.id ? findT(b.dataset.id) : null, b));
             });
             /* ---------- tombol geser tahap 3 (sentuh & mouse) ---------- */
@@ -24005,7 +24054,9 @@
                 if (bad0) return toast(bad0, 'bad');
                 // Jam kosong: tanya dulu. "Pelanggan belum info bukti" = tetap simpan; "Isi kembali" = kembali ke kolom jam.
                 let J;
-                if (!String(g('tf-fJam').value || '').trim()) {
+                if (!String(g('tf-fJam').value || '').trim() && (g('tf-fKhusus').checked || normNama(pel).toLowerCase() === 'modal')) {
+                    J = {ms: null, teks: JAM_KOSONG};   // (26 Okt 2026) pelanggan khusus & modal tidak perlu jam bukti: langsung disimpan tanpa ditanya
+                } else if (!String(g('tf-fJam').value || '').trim()) {
                     const v = await ask({title: 'Jam transfer masih kosong', ok: 'Pelanggan belum info bukti', cancel: 'Isi kembali', noEnter: true,
                         info: '<p><b>' + esc(kode) + '</b> ' + esc(g('tf-fNama').value) + ' · <b>' + esc(rp(nominal)) + '</b> · ' + esc(pel) + '</p><p class="hint">Kalau pelanggan belum mengirim bukti, data tetap disimpan dengan jam "' + esc(JAM_KOSONG) + '". Jamnya bisa dilengkapi nanti lewat tombol Ubah.</p>'});
                     if (!v) { setTimeout(() => g('tf-fJam').focus(), 0); return; }
@@ -24304,7 +24355,7 @@
                 unsubLuar.push(B.watch(C.tiket, {whereIn: ['status', BELUM]}, a => { S.pend = a; renderKerja(); }, eh));
                 // Transfer yang jamnya "belum info bukti" (semua tanggal). Biasanya hanya sedikit dokumen, jadi hemat read.
                 unsubLuar.push(B.watch(C.tiket, {eq: ['jamTeks', JAM_KOSONG], limit: 300}, a => {
-                    S.jamList = a.filter(t => t.status !== 'batal' && !t.waktuTransfer).sort((x, y) => x.tanggal < y.tanggal ? 1 : x.tanggal > y.tanggal ? -1 : x.no - y.no);
+                    S.jamList = a.filter(t => t.status !== 'batal' && !t.waktuTransfer && perluJamBukti(t)).sort((x, y) => x.tanggal < y.tanggal ? 1 : x.tanggal > y.tanggal ? -1 : x.no - y.no);
                     renderJam(); renderKerja();
                 }, eh));
             }
@@ -24394,9 +24445,17 @@
                     let done = false;
                     const fin = v => { if (done) return; done = true; try { dlg.close(); } catch (e) {} g('bk-db').innerHTML = ''; res(v); };
                     const pin = o.pin ? g('bk-pin') : null;
+                    const sandi = o.sandi ? g('bk-opass') : null;   // (26 Okt 2026) sandi akun owner (mode pantau)
                     const kirim = async () => {
                         if (ok.disabled) return;
                         if (o.valid) { const m = o.valid(); if (m) { er.textContent = m; return; } }
+                        if (sandi) {
+                            const v = sandi.value; if (!v) { er.textContent = 'Isi sandi akun owner.'; return; }
+                            ok.disabled = true; let m = '';
+                            try { m = await o.cek(v); } catch (e) { m = 'Sandi owner salah atau koneksi gagal.'; }
+                            if (m) { er.textContent = m; ok.disabled = false; sandi.value = ''; sandi.focus(); return; }
+                            return fin(true);
+                        }
                         if (pin) {
                             const v = pin.value; if (!/^\d{6}$/.test(v)) { er.textContent = 'PIN 6 angka.'; return; }
                             ok.disabled = true; const m = await o.cek(v); if (m) { er.textContent = m; ok.disabled = false; pin.value = ''; pin.focus(); return; }
@@ -24541,6 +24600,7 @@
 
             /* ---------- aksi ---------- */
             async function pilihPetugas() {
+                if (S.pantau) return false;   // (26 Okt 2026) mode pantau tidak menginput
                 const akt = S.petugas.filter(x => x.aktif);
                 if (!akt.length) { await tanya({title: 'Belum ada nama petugas', body: '<p>Nama petugas pengisian ditambahkan owner lewat menu Transfer, tab Petugas.</p>', cancel: null}); return false; }
                 return new Promise(res => {
@@ -24566,6 +24626,7 @@
                 g('bk-nama').classList.toggle('bad', !!kode && !uid);
             }
             async function catat() {
+                if (pantauTolak()) return;
                 if (S.busy) return; S.busy = true;
                 try {
                     if (!S.user) return;
@@ -24604,6 +24665,7 @@
                 finally { S.busy = false; }
             }
             async function batalBaris(id) {
+                if (pantauTolak()) return;
                 const t = S.pend.find(x => x.id === id); if (!t || S.busy) return;
                 if (!perluPetugas()) return;
                 let alasan = '';
@@ -24624,6 +24686,7 @@
                     }});
             }
             async function jalankan() {
+                if (pantauTolak()) return;
                 if (S.busy) return; S.busy = true;
                 try {
                     const rows = barisSiap(), ok = rows.filter(r => r.c.ok);
@@ -24676,6 +24739,7 @@
             /* ---------- event ---------- */
             g('bk-kode').addEventListener('input', () => { g('bk-kode').value = normKode(g('bk-kode').value); syncNama(); });
             function bukaDaftar(kode) {
+                if (pantauTolak()) return;
                 if (!O.riders || !O.simpanKode) return;
                 const sel = g('bk-dfRider'), peta = O.kodeMap() || {};
                 sel.innerHTML = '';
@@ -24690,6 +24754,7 @@
             g('bk-dfBatal').addEventListener('click', tutupDaftar);
             g('bk-dfKode').addEventListener('input', () => { g('bk-dfKode').value = normKode(g('bk-dfKode').value).slice(0, 6); });
             g('bk-dfSimpan').addEventListener('click', async () => {
+                    if (pantauTolak()) return;
                 if (S.busy) return; S.busy = true;
                 try {
                     const uid = g('bk-dfRider').value, kode = normKode(g('bk-dfKode').value);
@@ -24720,6 +24785,23 @@
             g('bk-rTgl').addEventListener('change', e => { if (isKey(e.target.value)) { bukaHist(e.target.value); renderR(); } });
 
             /* ---------- daur hidup ---------- */
+            // ===== (26 Okt 2026) MODE PANTAU (khusus owner): melihat daftar yang sedang diinput admin lain secara langsung, tanpa menginput =====
+            const pantauTolak = () => { if (!S.pantau) return false; toast('Mode pantau: hanya melihat.', 'bad'); return true; };
+            function renderPantau() {
+                PAGE.classList.toggle('bk-pantau', !!S.pantau);
+                g('bk-pantauBar').hidden = !S.pantau;
+                g('bk-pantauBtn').hidden = !!S.pantau || !(O.pemilik && O.pemilik());
+            }
+            g('bk-pantauBtn').addEventListener('click', async () => {
+                if (!(O.pemilik && O.pemilik()) || !O.cekOwner) return;
+                const v = await tanya({title: 'Masuk mode pantau?', ok: 'Masuk pantau', sandi: true,
+                    body: '<p>Melihat daftar ' + esc(J().judul || '') + ' yang sedang diinput admin lain secara langsung, <b>tanpa bisa menginput</b>.</p><label class="bk-lb">Sandi akun owner<input id="bk-opass" type="password" maxlength="120" autocomplete="new-password"></label><p class="hint">Sandi dicek server dan tidak disimpan.</p>',
+                    cek: v => O.cekOwner(v)});
+                if (!v) return;
+                S.pantau = true; const w = document.getElementById('bk-siapa'); if (w) w.remove();
+                renderPantau(); render(); toast('Mode pantau aktif: hanya melihat.');
+            });
+            g('bk-pantauKeluar').addEventListener('click', () => { S.pantau = false; renderPantau(); render(); if (S.dibuka && !S.petugasId) pilihPetugas(); });
             function masuk(u) {
                 keluar();
                 S.user = true; S.me = String(u.email || '').toLowerCase();
@@ -24735,8 +24817,9 @@
                 render();
                 window.scrollTo(0, 0);
                 setTimeout(() => { if (S.dibuka && !S.petugasId) pilihPetugas(); }, 500);
+                renderPantau();
             }
-            function tutup() { S.dibuka = false; unsubs.forEach(u => { try { u(); } catch (e) {} }); unsubs = []; const w = document.getElementById('bk-siapa'); if (w) w.remove(); try { if (dlg.open) dlg.close(); } catch (e) {} }
+            function tutup() { S.pantau = false; try { renderPantau(); } catch (e) {} S.dibuka = false; unsubs.forEach(u => { try { u(); } catch (e) {} }); unsubs = []; const w = document.getElementById('bk-siapa'); if (w) w.remove(); try { if (dlg.open) dlg.close(); } catch (e) {} }
             function keluar() { tutup(); unsubLuar.forEach(u => { try { u(); } catch (e) {} }); unsubLuar = []; S.user = false; S.pend = []; S.hist = []; S.petugas = []; S.petugasId = ''; }
             return {masuk: masuk, buka: buka, tutup: tutup, keluar: keluar, _S: S, _render: render};
         }
@@ -25153,7 +25236,7 @@
             const roleOf = email => { const r = window.roleFromEmail(email); return r === 'owner' ? 'pemilik' : (r === 'admin' ? 'admin' : null); };
             const emailSaya = () => String((auth.currentUser && auth.currentUser.email) || '').toLowerCase();
             const B = buatBackendBulk({db: db, P: P, doc: doc, collection: collection, query: query, where: where, onSnapshot: onSnapshot, getDoc: getDoc, getDocs: getDocs, runTransaction: runTransaction, serverTimestamp: serverTimestamp, increment: increment, email: emailSaya});
-            let kodeMap = {}, izinMap = {}, peran = null, unDaftar = null, unIzin = null;
+            let kodeMap = {}, izinMap = {}, peran = null, unDaftar = null, unIzin = null, bkOwnerAuth = null;
             const O = {
                 kodeMap: () => kodeMap,
                 nama: uid => tpNamaRider(uid),
@@ -25175,6 +25258,15 @@
                     } catch (e) { return String(e && e.message) === 'KODE_DIPAKAI' ? 'dipakai' : 'gagal'; }
                 },
                 pin: v => window.cekPinTransaksi(v),
+                // (26 Okt 2026) mode pantau: hanya owner; sandi akun owner dicek lewat sesi terpisah (tidak disimpan), lalu langsung keluar
+                pemilik: () => peran === 'pemilik',
+                cekOwner: async pass => {
+                    if (!bkOwnerAuth) bkOwnerAuth = initializeAuth(initializeApp(firebaseConfig, 'bk-pantau-owner'), {persistence: inMemoryPersistence});
+                    const cred = await signInWithEmailAndPassword(bkOwnerAuth, 'projekbisa01@gmail.com', pass);
+                    const ok = window.roleFromEmail(String(cred.user.email || '').toLowerCase()) === 'owner';
+                    try { await signOut(bkOwnerAuth); } catch (e) {}
+                    return ok ? '' : 'Bukan akun owner.';
+                },
                 kembali: j => window.switchPage(j === 'saldo' ? 'saldo' : 'tabungan')
             };
             const T = pasangBulk(B, O);
