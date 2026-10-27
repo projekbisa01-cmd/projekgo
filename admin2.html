@@ -2878,19 +2878,16 @@
     <main id="page-fk" class="hidden-page">
         <div class="fk-wrap">
             <button type="button" id="fk-kembali" class="fk-back">&larr; Menu</button>
-            <div class="fk-head"><h1>Filter Rider Konsisten</h1><p>Daftar rencana dua kontainer: <b>Konsisten</b> (calon antrean prioritas) dan <b>Cadangan</b>. Halaman ini hanya untuk melihat, antrean tidak berubah.</p></div>
-            <div class="fk-tabs">
-                <button type="button" id="fk-tab-lalu" class="on"><span id="fk-tl-t">Minggu lalu</span><small id="fk-tl-s"></small></button>
-                <button type="button" id="fk-tab-ini"><span>Minggu ini</span><small id="fk-ti-s"></small></button>
-            </div>
+            <div class="fk-head"><h1>Filter Rider Konsisten</h1><p>Daftar rencana dua kontainer: <b>Utama</b> (Suhu &amp; Pendekar, calon antrean prioritas) dan <b>Cadangan</b> (Prajurit &amp; part-time). Halaman ini hanya untuk melihat, antrean tidak berubah.</p></div>
+            <div class="fk-card fk-prog" id="fk-periode">-</div>
             <div class="fk-card"><div class="fk-prog" id="fk-prog">-</div><div class="fk-bar"><i id="fk-bar"></i></div>
                 <div class="fk-aksi"><span class="fk-prog" id="fk-ring"></span><button type="button" class="fk-btn" id="fk-ulang">Hitung ulang</button></div></div>
             <details><summary>Cara membaca halaman ini</summary><div class="fk-info"><ul>
-                <li><b>Konsisten</b>: rider shift pagi/siang yang hadir minimal 5 dari 7 hari (Senin sampai Minggu), level apa pun.</li>
-                <li><b>Cadangan</b>: semua yang lain, termasuk part-time dan rider yang shift-nya belum diatur.</li>
-                <li><b>Hadir (sementara)</b> = hari itu rider punya minimal 1 order. Ini pengganti sebelum catatan jam ON/OFF dipasang, jadi belum menilai jam 06.30 dan closing 21.00.</li>
-                <li><b>Level</b> memakai batas baru rencana Anda: Prajurit 0-95, Pendekar 96-129, Suhu 130 ke atas, dari jumlah order selesai minggu lalu. Lencana level di antrean masih memakai batas lama.</li>
-                <li>Data minggu lalu dibaca dari database satu kali lalu disimpan di HP/komputer ini. Minggu ini memakai data jadwal shift yang sudah ada.</li>
+                <li><b>Kontainer Utama</b>: rider level Suhu dan Pendekar (bukan part-time).</li>
+                <li><b>Kontainer Cadangan</b>: rider level Prajurit dan semua rider part-time (level apa pun).</li>
+                <li><b>Level</b> memakai batas baru: Prajurit 0-95, Pendekar 96-129, Suhu 130 ke atas, dari jumlah order selesai minggu lalu (Senin-Minggu). Lencana level di antrean masih memakai batas lama.</li>
+                <li>Kehadiran (jam 06.30 / closing 21.00) <b>belum</b> dipakai.</li>
+                <li>Jumlah order minggu lalu dibaca dari database satu kali (1 bacaan per rider) lalu disimpan di HP/komputer ini.</li>
             </ul></div></details>
             <div id="fk-hasil"></div>
         </div>
@@ -25554,9 +25551,9 @@
             };
         })();
         // ===================== FILTER RIDER KONSISTEN (27 Okt 2026) =====================
-        // HANYA TAMPILAN: membagi rider ke dua kontainer (Konsisten / Cadangan) untuk dilihat dulu. Tidak menulis ke Firebase
-        // dan tidak mengubah antrean. Konsisten = shift pagi/siang yang hadir >= 5 dari 7 hari (Senin-Minggu).
-        // Hadir (sementara) = hari itu rider punya minimal 1 order. Level memakai batas baru: Prajurit 0-95, Pendekar 96-129, Suhu 130+.
+        // HANYA TAMPILAN: membagi rider ke dua kontainer untuk dilihat dulu. Tidak menulis ke Firebase dan tidak mengubah antrean.
+        // (27 Okt 2026, sementara TANPA kehadiran) Utama = Suhu & Pendekar (bukan part-time). Cadangan = Prajurit & semua part-time.
+        // Level dari jumlah order selesai minggu lalu (Senin-Minggu), batas baru: Prajurit 0-95, Pendekar 96-129, Suhu 130+.
         (function filterKonsisten() {
             const g = id => document.getElementById(id);
             const esc = s => String(s == null ? '' : s).replace(/[&<>"'`]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;'}[c]));
@@ -25663,9 +25660,10 @@
                 try {
                     await pool(t1, async t => { S.cache.orders[t.r.U] = await hitungOrder(t.r, w); }, token);
                     if (token !== S.token) return;
-                    // Tahap 2: kehadiran hanya untuk rider shift pagi/siang yang punya order minggu lalu
+                    // Tahap 2 (kehadiran) DIMATIKAN sementara: logika kontainer hanya memakai level. Set ke true untuk menghidupkan lagi.
+                    const PAKAI_HADIR = false;
                     const t2 = [];
-                    S.riders.forEach(r => {
+                    if (PAKAI_HADIR) S.riders.forEach(r => {
                         if (!r.fulltime) return;
                         const o = S.cache.orders[r.U];
                         if (o == null) return;
@@ -25700,29 +25698,15 @@
                     return t === hi ? {t: t, s: 'p'} : {t: t, s: 'n'};
                 });
             }
-            function nilai(r, tab) {
+            function nilai(r) {
                 const o = S.cache.orders[r.U];
                 const x = {r: r, order: o, level: o == null ? null : levelBaru(o), dots: [], hadir: 0, kontainer: '', alasan: ''};
                 if (o == null) { x.kontainer = 'tunggu'; return x; }
-                if (r.fulltime) {
-                    x.dots = titik(r, tab);
-                    x.hadir = x.dots.filter(d => d.s === 'y').length;
-                    if (x.dots.some(d => d.s === '?')) { x.kontainer = 'tunggu'; return x; }
-                }
-                if (r.fulltime) {
-                    if (x.hadir >= MIN_HADIR) { x.kontainer = 'k'; return x; }
-                    x.kontainer = 'c';
-                    if (tab === 'lalu') x.alasan = 'Hadir ' + x.hadir + ' dari 7 hari, kurang ' + (MIN_HADIR - x.hadir) + ' hari';
-                    else {
-                        const hi = hariIni();
-                        const sisa = x.dots.filter(d => d.s === 'f' || d.s === 'p').length;
-                        x.alasan = x.hadir + ' hari sejauh ini, sisa ' + sisa + ' hari' + (x.hadir + sisa < MIN_HADIR ? ' (tidak cukup untuk 5 hari)' : '');
-                    }
-                    return x;
-                }
                 if (r.shift === 'parttime') { x.kontainer = 'c'; x.alasan = 'Part-time (bantuan)'; return x; }
-                if (o === 0) { x.kontainer = 'nonaktif'; return x; }
-                x.kontainer = 'c'; x.alasan = 'Shift belum diatur';
+                if (!r.shift && o === 0) { x.kontainer = 'nonaktif'; return x; }
+                if (x.level === 'suhu' || x.level === 'pendekar') { x.kontainer = 'k'; return x; }
+                x.kontainer = 'c';
+                x.alasan = 'Prajurit, kurang ' + (BATAS_PENDEKAR - o) + ' order untuk Pendekar';
                 return x;
             }
 
@@ -25733,13 +25717,13 @@
             }
             function baris(x, tab) {
                 const r = x.r;
-                const shiftTeks = r.shift === 'pagi' ? 'Pagi' : (r.shift === 'siang' ? 'Siang' : (r.shift === 'parttime' ? 'Part-time' : 'Shift -'));
+                const shiftTeks = r.shift === 'pagi' ? 'Pagi' : (r.shift === 'siang' ? 'Siang' : (r.shift === 'parttime' ? 'Part-time' : 'Shift belum diatur'));
                 const dots = x.dots.length ? '<div class="fk-dots">' + x.dots.map(d => {
                     const hr = HRI[utc(d.t).getUTCDay()];
                     const tip = hr + ' ' + tglPendek(d.t) + (d.s === 'y' ? ' · order pertama ' + d.jam : (d.s === 'n' ? ' · tidak ada order' : (d.s === 'p' ? ' · hari ini, belum ada order' : (d.s === 'f' ? ' · belum terjadi' : ' · data belum terbaca'))));
                     return '<span class="fk-d ' + d.s + '" title="' + esc(tip) + '">' + esc(hr) + '</span>';
                 }).join('') + '</div>' : '';
-                const hadirTeks = r.fulltime ? ' · Hadir ' + x.hadir + (tab === 'lalu' ? '/7' : ' hari') : '';
+                const hadirTeks = '';
                 return '<div class="fk-r"><div class="fk-r1"><b>' + esc(r.nama) + '</b><span class="fk-lv ' + x.level + '">' + esc(LV_NAMA[x.level]) + '</span></div>'
                     + '<div class="fk-r2">' + esc(shiftTeks) + ' · ' + esc(x.order) + ' order minggu lalu' + esc(hadirTeks) + '</div>' + dots
                     + (x.alasan ? '<div class="fk-al">' + esc(x.alasan) + '</div>' : '') + '</div>';
@@ -25748,30 +25732,27 @@
             function kotak(kelas, judul, daftar, tab, kosong) {
                 const hitungLv = {suhu: 0, pendekar: 0, prajurit: 0};
                 daftar.forEach(x => { hitungLv[x.level]++; });
-                const ket = 'Suhu ' + hitungLv.suhu + ' · Pendekar ' + hitungLv.pendekar + ' · Prajurit ' + hitungLv.prajurit;
+                const ket = ['suhu', 'pendekar', 'prajurit'].filter(l => hitungLv[l]).map(l => LV_NAMA[l] + ' ' + hitungLv[l]).join(' · ');
                 return '<section class="fk-box ' + kelas + '"><h2><span>' + esc(judul) + ' (' + daftar.length + ')</span><small>' + esc(ket) + '</small></h2>'
                     + (daftar.length ? daftar.map(x => baris(x, tab)).join('') : '<div class="fk-kosong">' + esc(kosong) + '</div>') + '</section>';
             }
             function render() {
                 const p = g('fk-prog'); if (!p) return;
                 if (!S.lalu) return;
-                g('fk-tab-lalu').classList.toggle('on', S.tab === 'lalu');
-                g('fk-tab-ini').classList.toggle('on', S.tab === 'ini');
-                g('fk-tl-s').textContent = rentang(S.lalu.mulai, S.lalu.selesai);
-                g('fk-ti-s').textContent = rentang(S.ini.mulai, S.ini.selesai) + ' (sementara)';
+                g('fk-periode').textContent = 'Level dari order minggu lalu: ' + rentang(S.lalu.mulai, S.lalu.selesai);
                 const pr = S.prog;
                 p.textContent = pr.jalan ? ('Membaca data ' + pr.done + ' dari ' + pr.total + '...') : (S.siap ? 'Data siap.' : 'Menunggu data rider...');
                 g('fk-bar').style.width = (pr.total ? Math.min(100, Math.round(pr.done * 100 / pr.total)) : (S.siap ? 100 : 0)) + '%';
                 g('fk-ring').textContent = S.gagal ? (S.gagal + ' data gagal dibaca, ketuk "Hitung ulang" untuk mencoba lagi') : '';
                 g('fk-ulang').disabled = !!pr.jalan;
-                const hasil = S.riders.map(r => nilai(r, S.tab));
+                const hasil = S.riders.map(r => nilai(r));
                 const siap = hasil.filter(x => x.kontainer === 'k' || x.kontainer === 'c').sort(urut);
                 const k = siap.filter(x => x.kontainer === 'k'), c = siap.filter(x => x.kontainer === 'c');
                 const nonaktif = hasil.filter(x => x.kontainer === 'nonaktif').sort((a, b) => a.r.nama.localeCompare(b.r.nama, 'id'));
                 const tunggu = hasil.filter(x => x.kontainer === 'tunggu').length;
                 let h = '<div class="fk-cols">'
-                    + kotak('k', 'Rider Konsisten', k, S.tab, S.tab === 'ini' ? 'Belum ada yang mencapai 5 hari minggu ini.' : 'Tidak ada rider yang memenuhi syarat.')
-                    + kotak('c', 'Rider Cadangan', c, S.tab, 'Kosong.') + '</div>';
+                    + kotak('k', 'Kontainer Utama', k, S.tab, 'Belum ada Suhu / Pendekar.')
+                    + kotak('c', 'Kontainer Cadangan', c, S.tab, 'Kosong.') + '</div>';
                 if (tunggu) h += '<div class="fk-card fk-prog">' + tunggu + ' rider belum selesai dihitung.</div>';
                 if (nonaktif.length) h += '<details><summary>Tanpa shift dan tanpa order minggu lalu (' + nonaktif.length + ')</summary><div class="fk-info">' + nonaktif.map(x => esc(x.r.nama)).join(', ') + '</div></details>';
                 g('fk-hasil').innerHTML = h;
@@ -25794,8 +25775,6 @@
             }
             function pasang() {
                 g('fk-kembali').addEventListener('click', () => window.switchPage('lainnya'));
-                g('fk-tab-lalu').addEventListener('click', () => { S.tab = 'lalu'; render(); });
-                g('fk-tab-ini').addEventListener('click', () => { S.tab = 'ini'; S.riders = daftarRider(); render(); });
                 g('fk-ulang').addEventListener('click', () => { S.siap = false; hitung(true); });
             }
             pasang();
