@@ -6951,22 +6951,93 @@
                   else lastOrderDate = new Date(rider.tanggal_order_pertama);
              }
 
-             const today = new Date();
-             return lastOrderDate.getDate() === today.getDate() &&
-                    lastOrderDate.getMonth() === today.getMonth() &&
-                    lastOrderDate.getFullYear() === today.getFullYear();
+             // (27 Okt 2026) dibandingkan dengan TANGGAL WIB, bukan zona/jam perangkat admin (laptop berzona UTC dulu
+             // menganggap order sebelum jam 07:00 WIB sebagai "kemarin" lalu menghapusnya)
+             if (isNaN(lastOrderDate.getTime())) return false;
+             return kunciTglWib(lastOrderDate) === kunciTglWib(new Date());
+        }
+        const _fmtTglWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+        function kunciTglWib(d) { return _fmtTglWib.format(d); }
+
+        // (27 Okt 2026) Tanda lain bahwa rider SUDAH dapat order hari ini (selain kolom tanggal_order_pertama):
+        // sedang memegang order aktif, atau tercatat di riwayat order hari ini (listener riwayat hari ini, 0 read).
+        function riderAdaOrderHariIni(uid) {
+            const u = String(uid || '').trim().toUpperCase();
+            if (allGlobalOrders.some(o => String(o.rider_uid || '').trim().toUpperCase() === u && (o.status === 'assigned' || o.status === 'processing'))) return true;
+            if (window._todayHistoryDateKey === kunciTglWib(new Date()) && Array.isArray(window._todayHistoryLiveOrders)) {
+                return window._todayHistoryLiveOrders.some(o => String(o.rider_uid || '').trim().toUpperCase() === u);
+            }
+            return false;
         }
 
-        async function resetRiderOrderDateIfOutdated(uid, rider) {
+        // (27 Okt 2026) CEK JAM PERANGKAT ADMIN. Jam server diambil dari header "Date" halaman ini (tanpa Firebase).
+        // Kalau jam/tanggal perangkat meleset > 10 menit, perangkat ini TIDAK BOLEH mengubah antrean
+        // (menghapus tanggal order / mengeluarkan rider), supaya satu perangkat yang jamnya salah tidak merusak antrean semua admin.
+        window.__jamAdmin = { selisihMs: null, wajar: true };
+        window.jamAdminWajar = () => window.__jamAdmin.wajar !== false;
+        async function cekJamAdmin() {
+            try {
+                const t0 = Date.now();
+                const r = await fetch(location.pathname + '?jam=' + t0, { method: 'HEAD', cache: 'no-store' });
+                const t1 = Date.now(), h = r.headers.get('date');
+                if (!h || t1 - t0 > 15000) return;
+                const server = Date.parse(h); if (isNaN(server)) return;
+                const selisih = Math.round((t0 + t1) / 2) - server;
+                window.__jamAdmin = { selisihMs: selisih, wajar: Math.abs(selisih) <= 10 * 60000 };
+            } catch (e) { return; }
+            let b = document.getElementById('ad-jam-salah');
+            if (window.__jamAdmin.wajar) { if (b) b.remove(); return; }
+            if (!b) { b = document.createElement('div'); b.id = 'ad-jam-salah'; b.setAttribute('role', 'alert'); b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483600;background:#b91c1c;color:#fff;font:700 13px/1.4 system-ui,sans-serif;padding:8px 12px;text-align:center'; document.body.appendChild(b); }
+            const m = Math.round(Math.abs(window.__jamAdmin.selisihMs) / 60000);
+            b.textContent = '⚠ Jam/tanggal perangkat ini salah (' + (window.__jamAdmin.selisihMs > 0 ? 'lebih cepat ' : 'lebih lambat ') + (m >= 1440 ? Math.round(m / 1440) + ' hari' : m + ' menit') + '). Perbaiki tanggal & jam (otomatis). Selama belum benar, perangkat ini tidak mengubah antrean rider.';
+        }
+        cekJamAdmin(); setInterval(cekJamAdmin, 30 * 60000);
+
+        const _resetTglJalan = new Set();
+        async function resetRiderOrderDateIfOutdated(uid, rider, dariCache) {
              if (rider.tanggal_order_pertama && !checkRiderOrderDate(rider)) {
+                 // (27 Okt 2026) Dulu langsung ditimpa dari data di memori HP. HP/laptop yang lama tertidur atau jamnya salah
+                 // bisa menghapus tanggal order HARI INI milik rider -> rider terlempar ke daftar shift saat ON lagi.
+                 // Sekarang: dicek ulang ke server dalam transaksi, dan dilewati bila datanya dari cache / jam perangkat salah.
+                 if (dariCache || !window.jamAdminWajar() || _resetTglJalan.has(uid) || riderAdaOrderHariIni(uid)) return;
+                 _resetTglJalan.add(uid);
                  try {
                      const ref = doc(db, 'status_rider_aktif', uid);
-                     await updateDoc(ref, {
-                         tanggal_order_pertama: null,
-                         in_main_queue: false
+                     await runTransaction(db, async (tx) => {
+                         const s = await tx.get(ref);
+                         if (!s.exists()) return;
+                         const x = s.data() || {};
+                         if (!x.tanggal_order_pertama || checkRiderOrderDate(x)) return;   // di server ternyata sudah hari ini
+                         tx.update(ref, { tanggal_order_pertama: null, in_main_queue: false });
                      });
-                 } catch(e) { }
+                 } catch(e) { } finally { _resetTglJalan.delete(uid); }
              }
+        }
+
+        // (27 Okt 2026) Mengeluarkan rider dari antrean utama ke daftar shift: dicek ulang ke server dulu (transaksi).
+        const _keluarkanJalan = new Set();
+        async function keluarkanKeShiftAman(uid) {
+            if (!window.jamAdminWajar() || _keluarkanJalan.has(uid) || riderAdaOrderHariIni(uid)) return;
+            _keluarkanJalan.add(uid);
+            try {
+                const ref = doc(db, 'status_rider_aktif', uid);
+                await runTransaction(db, async (tx) => {
+                    const s = await tx.get(ref);
+                    if (!s.exists()) return;
+                    const x = s.data() || {};
+                    const aktif = (x.is_online === true || x.is_online === 'true') && (x.is_available === true || x.is_available === 'true');
+                    const diUtama = x.in_main_queue === true || x.in_main_queue === 'true';
+                    if (!aktif || !diUtama || checkRiderOrderDate(x)) return;   // server: tidak perlu dikeluarkan
+                    tx.update(ref, { in_main_queue: false, last_drop_time: serverTimestamp() });
+                });
+            } catch (e) { } finally { _keluarkanJalan.delete(uid); }
+        }
+        // (27 Okt 2026) Rider punya order hari ini (order aktif / riwayat) tapi tanggal_order_pertama kosong: isi lagi.
+        const _pulihkanTgl = new Set();
+        function pulihkanTanggalOrder(uid) {
+            if (!window.jamAdminWajar() || _pulihkanTgl.has(uid)) return;
+            _pulihkanTgl.add(uid); setTimeout(() => _pulihkanTgl.delete(uid), 60000);
+            updateDoc(doc(db, 'status_rider_aktif', uid), { tanggal_order_pertama: serverTimestamp(), in_main_queue: true }).catch(e => {});
         }
 
         function autoCleanUpOldData() {
@@ -7831,7 +7902,7 @@
                             const wasOnline = prevRider.is_online === true || prevRider.is_online === 'true';
                             const isNowOnline = data.is_online === true || data.is_online === 'true';
 
-                            const hasOrderToday = checkRiderOrderDate(data);
+                            const hasOrderToday = checkRiderOrderDate(data) || riderAdaOrderHariIni(uid);   // (27 Okt 2026) + order aktif / riwayat hari ini
 
                             // Kasus 1: Sengaja kembali dari Istirahat (Tersedia OFF lalu ON)
                             if (!wasAvailable && isNowAvailable) {
@@ -7842,7 +7913,7 @@
                             }
                             
                             // Kasus 2: Kembali Online karena sinyal pulih (Tersedia tetap ON)
-                            if (!wasOnline && isNowOnline && isNowAvailable && wasAvailable) {
+                            if (!wasOnline && isNowOnline && isNowAvailable && wasAvailable && !snapshot.metadata.fromCache && (hasOrderToday || window.jamAdminWajar())) {
                                 // Sinyal jelek -> Posisi diamankan! Jangan sentuh last_drop_time.
                                 // Tapi pastikan tetap di queue yang benar.
                                 const ref = doc(db, 'status_rider_aktif', uid);
@@ -7869,12 +7940,15 @@
                     const isAvailable = data.is_available === true || data.is_available === 'true';
                     let inMainQueue = data.in_main_queue === true || data.in_main_queue === 'true';
 
-                    resetRiderOrderDateIfOutdated(uid, data);
+                    resetRiderOrderDateIfOutdated(uid, data, snapshot.metadata.fromCache);
                     // Saat order baru dibagikan, "tanggal_order_pertama" masih serverTimestamp yang belum
                     // dikonfirmasi server, sehingga terbaca kosong sesaat. Rider yang sudah ditandai
                     // masuk antrean utama lewat tulisan yang sama (hasPendingWrites) tetap dianggap
                     // punya order hari ini, supaya tidak sempat "terlempar" ke antrean shift baru.
-                    const hasOrderToday = checkRiderOrderDate(data) || (docSnap.metadata && docSnap.metadata.hasPendingWrites === true && inMainQueue);
+                    const adaOrderLain = riderAdaOrderHariIni(uid);   // (27 Okt 2026) order aktif / riwayat hari ini
+                    const hasOrderToday = checkRiderOrderDate(data) || (docSnap.metadata && docSnap.metadata.hasPendingWrites === true && inMainQueue) || adaOrderLain;
+                    // kolom tanggal hilang padahal rider jelas sudah dapat order hari ini: isi lagi (tidak dilempar ke daftar shift)
+                    if (adaOrderLain && !checkRiderOrderDate(data) && !snapshot.metadata.fromCache && !(docSnap.metadata && docSnap.metadata.hasPendingWrites)) pulihkanTanggalOrder(uid);
 
                     const isNowActive = isOnline && isAvailable;
 
@@ -7885,20 +7959,17 @@
                              // Jika mereka masih di main queue (misal dari sisa kemarin), keluarkan
                              inMainQueue = false;
                              data.in_main_queue = false;
-                             const ref = doc(db, 'status_rider_aktif', uid);
                              // Saat dikeluarkan dari antrean utama untuk masuk antrean shift,
-                             // RESET last_drop_time ke waktu saat ini agar antreannya adil nanti
-                             updateDoc(ref, { 
-                                 in_main_queue: false,
-                                 last_drop_time: serverTimestamp() 
-                             }).catch(e => {});
+                             // RESET last_drop_time ke waktu saat ini agar antreannya adil nanti.
+                             // (27 Okt 2026) Ditulis lewat transaksi yang membaca data server terbaru (bukan data cache / jam perangkat salah).
+                             if (!snapshot.metadata.fromCache) keluarkanKeShiftAman(uid);
                          } else {
                              // Rider sudah di antrean shift. Kita perlu memastikan last_drop_time mereka
                              // di-update SATU KALI saat pertama kali masuk shift hari ini.
                              // Kita ngecek dari last_updated atau last_drop_desc untuk tahu kapan mereka masuk
                              const prevRiderState = allRiders.find(r => r.uid === uid);
                              // Deteksi perpindahan dari tidak aktif ke aktif
-                             if (prevRiderState && !(prevRiderState.is_online === true && prevRiderState.is_available === true)) {
+                             if (prevRiderState && !(prevRiderState.is_online === true && prevRiderState.is_available === true) && !snapshot.metadata.fromCache && window.jamAdminWajar()) {
                                  const ref = doc(db, 'status_rider_aktif', uid);
                                  updateDoc(ref, { 
                                      last_drop_time: serverTimestamp() 
@@ -8878,6 +8949,7 @@
                         last_drop_time: serverTimestamp(), 
                         last_drop_desc: "Masuk Manual via Admin", 
                         proof_desc: retainedLoc,
+                        tanggal_order_pertama: serverTimestamp(),   // (27 Okt 2026) tanpa ini rider langsung terlempar lagi ke daftar shift
                         last_updated: serverTimestamp()
                     }, { merge: true });
 
