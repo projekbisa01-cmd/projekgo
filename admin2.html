@@ -1620,6 +1620,12 @@
         #page-transfer ol.items>li.aktif{border:2px solid var(--tf-pri);box-shadow:0 4px 14px rgba(10,92,194,.15);padding:12px}
         #page-transfer ol.items>li.aktif .uid,#page-transfer ol.items>li.aktif .nom{font-size:22px}
         #page-transfer ol.items>li.aktif .no{color:var(--tf-pri);font-size:16px}
+        /* (27 Okt 2026) animasi kartu baru di Cek UID & Cek akhir */
+        @keyframes tfGanti{0%{transform:translateY(14px) scale(.97);opacity:.35;background:#dbeafe;box-shadow:0 0 0 0 rgba(10,92,194,0)}35%{transform:translateY(0) scale(1.025);opacity:1;background:#dbeafe;box-shadow:0 0 0 7px rgba(10,92,194,.30)}70%{background:#eff6ff;box-shadow:0 0 0 3px rgba(10,92,194,.18)}100%{transform:none;background:inherit;box-shadow:0 4px 14px rgba(10,92,194,.15)}}
+        @keyframes tfGChip{0%{opacity:0;transform:translateY(-6px)}15%{opacity:1;transform:none}85%{opacity:1}100%{opacity:0}}
+        #page-transfer ol.items>li.aktif.tf-ganti{position:relative;animation:tfGanti 1.1s ease-out}
+        #page-transfer ol.items>li .tf-gchip{position:absolute;top:-11px;right:10px;background:var(--tf-pri);color:#fff;font-size:11px;font-weight:800;padding:3px 9px;border-radius:99px;box-shadow:0 2px 6px rgba(0,0,0,.2);animation:tfGChip 2.2s ease-out forwards;pointer-events:none}
+        @media (prefers-reduced-motion: reduce){#page-transfer ol.items>li.aktif.tf-ganti{animation:none;outline:3px solid var(--tf-pri)}}
         #page-transfer ol.items>li.aktif .mk{border-color:var(--tf-pri);animation:tfpulse 1.4s infinite}
         @keyframes tfpulse{50%{box-shadow:0 0 0 6px rgba(10,92,194,.15)}}
         #page-transfer .panel{margin-top:10px;border-top:1px dashed #c5d3e6;padding-top:10px;display:grid;gap:8px}
@@ -2733,6 +2739,18 @@
                 <div class="nom" id="tf-okNom"></div>
                 <div class="jm" id="tf-okJam"></div>
                 <button type="button" class="pri" id="tf-okTutup">OK</button>
+            </div>
+        </div>
+        <!-- 27 Okt 2026: popup setelah geser "sudah ditransfer" (tahap 3). Data berikutnya baru tampil setelah OK. -->
+        <div id="tf-tfPop" class="tf-okpop" hidden role="alertdialog" aria-modal="true" aria-labelledby="tf-tfJudul">
+            <div class="box">
+                <div class="ic">&#10003;</div>
+                <div class="t" id="tf-tfJudul">Sudah ditransfer <span id="tf-tfNo"></span></div>
+                <div class="kode" id="tf-tfKode"></div>
+                <div class="nama" id="tf-tfNama"></div>
+                <div class="nom" id="tf-tfNom"></div>
+                <div class="jm" id="tf-tfInfo"></div>
+                <button type="button" class="pri" id="tf-tfOk">OK, lanjut data berikutnya</button>
             </div>
         </div>
     </main>
@@ -23164,6 +23182,38 @@
                     return {k: i + 1, sampai: k, rows: rows, phase: ph, dari: rows.length ? rows[0].no : k};
                 });
             }
+            // (27 Okt 2026) RINGAN: isi elemen hanya diganti kalau HTML-nya berubah (tidak membangun ulang DOM tiap ada data masuk)
+            function setHtml(el, h) {
+                if (!el) return false;
+                if (el.__h === h && el.firstChild === el.__f) return false;
+                el.innerHTML = h; el.__h = h; el.__f = el.firstChild;
+                return true;
+            }
+            // getaran HP (tombol geser)
+            const getar = p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} };
+            // kartu yang sedang dicek otomatis di tengah layar (tahap 2 & 4), hanya saat kartu aktif berganti
+            function pusatkan(el, kunci, id) {
+                if (!id || S[kunci] === id) return;
+                S[kunci] = id;
+                const li = el && el.querySelector('li.aktif');
+                if (!li || PAGE.classList.contains('hidden-page')) return;
+                requestAnimationFrame(() => { try { li.scrollIntoView({block: 'center', behavior: 'smooth'}); } catch (e) { li.scrollIntoView(); } });
+                // (27 Okt 2026) tanda jelas bahwa kartu sudah berganti: kartu baru berkedip biru + label "Data berikutnya"
+                tandaiKartuBaru(el, id);
+            }
+            function tandaiKartuBaru(el, id) {
+                const li = el && el.querySelector('li.aktif'); if (!li) return;
+                li.classList.remove('tf-ganti'); void li.offsetWidth;   // ulang animasi
+                li.classList.add('tf-ganti');
+                if (!li.querySelector('.tf-gchip')) { const c = document.createElement('span'); c.className = 'tf-gchip'; c.textContent = 'Data berikutnya · No ' + (li.querySelector('.no') || {}).textContent; li.appendChild(c); }
+                getar(20);
+                clearTimeout(tandaiKartuBaru.h);
+                tandaiKartuBaru.h = setTimeout(() => {
+                    const x = el.querySelector('li.aktif.tf-ganti'); if (!x) return;
+                    x.classList.remove('tf-ganti'); const c = x.querySelector('.tf-gchip'); if (c) c.remove();
+                    el.__h = null;   // gambar ulang berikutnya boleh mengganti isi (label sudah dibuang)
+                }, 2200);
+            }
             function itemHtml(t, o) {
                 const cls = [o.state || '', o.aktif ? 'aktif' : ''].join(' ');
                 const mk = o.state === 'done' ? '✓' : (o.state === 'prob' ? '!' : '');
@@ -23174,7 +23224,13 @@
                 const n = S.pend.length;
                 b.textContent = n > 99 ? '99+' : String(n); b.classList.toggle('hidden', !n);
             }
+            // (27 Okt 2026) RINGAN: banyak data masuk bersamaan = cukup satu kali gambar ulang per frame layar
+            let rkJadwal = 0;
             function renderKerja() {
+                if (rkJadwal) return;
+                rkJadwal = requestAnimationFrame(() => { rkJadwal = 0; renderKerjaLangsung(); });
+            }
+            function renderKerjaLangsung() {
                 renderBadgeMenu();
                 // (24 Okt 2026) Daftar berjalan habis (semua tuntas sampai Cek akhir) -> catat waktunya
                 try {
@@ -23206,15 +23262,17 @@
                 renderStepNav({1: c1.length, 2: c2.length, 3: c3.length, 4: c4.length});
                 const maxNo = T.reduce((m, t) => Math.max(m, t.no || 0), 0);
                 g('tf-nextNo').textContent = '— baris berikutnya: No ' + (maxNo + 1);
-                g('tf-list1').innerHTML = c1.length
+                if (S.tab === 'kerja' && S.step === 1) setHtml(g('tf-list1'), c1.length   // (27 Okt 2026) hanya digambar saat tahap 1 tampil
                     ? '<b>Daftar yang sedang dicatat (' + c1.length + ' transaksi, No ' + esc(c1[0].no) + '–' + esc(c1[c1.length - 1].no) + ', ' + esc(rp(sum(c1))) + ')</b>' +
                       (terkunci ? '<p class="hint" style="margin:8px 0">🔒 Data ini menunggu daftar sebelumnya tuntas di Cek akhir, baru bisa digeser ke tahap 2.</p>' :
                       '<div class="tf-swipe ok" data-swipe="selesai" data-sampai="' + esc(c1[c1.length - 1].no) + '" style="margin:8px 0 4px"><div class="fill"></div><div class="txt">Geser → Selesai, lanjut ke tahap 2</div><button type="button" class="knob" aria-label="Geser untuk selesai mencatat dan lanjut ke tahap 2">»</button></div>' +
                       '<p class="hint" style="margin:0 0 8px">Setelah digeser, daftar ini masuk tahap 2 (cek dari bawah ke atas). Input data baru dikunci sampai daftar ini tuntas di Cek akhir.</p>') +
                       '<div class="scroll"><table><thead><tr><th>No</th><th>Kode</th><th>Nama rider</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam</th><th></th></tr></thead><tbody>' +
                       c1.map(t => '<tr><td class="no">' + esc(t.no) + '</td><td><b>' + esc(t.kodeRider) + '</b></td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + '</td><td>' + jamHtml(t) + '</td><td class="r" style="white-space:nowrap"><button type="button" class="sm" data-act="ubah" data-id="' + esc(t.id) + '">Ubah</button> <button type="button" class="sm bad" data-act="batal" data-id="' + esc(t.id) + '">Batal</button></td></tr>').join('') + '</tbody></table></div>'
-                    : terkunci ? '' : '<p class="hint" style="margin:0">Daftar kosong. Tambahkan bukti dari grup WA, lalu geser tombol <b>Selesai</b> agar lanjut ke tahap 2. Input data baru bisa lagi setelah daftar itu tuntas di Cek akhir; nomornya melanjutkan.</p>';
-                renderStep2(d2); renderStep3(d3); renderStep4(d4);
+                    : terkunci ? '' : '<p class="hint" style="margin:0">Daftar kosong. Tambahkan bukti dari grup WA, lalu geser tombol <b>Selesai</b> agar lanjut ke tahap 2. Input data baru bisa lagi setelah daftar itu tuntas di Cek akhir; nomornya melanjutkan.</p>');
+                // (27 Okt 2026) hanya tahap yang sedang tampil yang digambar; pindah tahap = langsung digambar
+                if (S.stepGambar !== S.step) { S.stepGambar = S.step; S.pusat2 = ''; S.pusat4 = ''; }
+                if (S.tab === 'kerja') { if (S.step === 2) renderStep2(d2); if (S.step === 3) renderStep3(d3); if (S.step === 4) renderStep4(d4); }
                 const prob = T.filter(t => t.status === 'masalah' || t.status === 'selisih');
                 g('tf-tindak').innerHTML = prob.length ? '<div class="card" style="border-color:#f5b5c0"><h2>⚠ Perlu tindak lanjut owner <small>' + prob.length + ' transaksi</small></h2><ol class="items">' + prob.map(t => itemHtml(t, {state: 'prob', body:
                     '<div class="l1"><span class="uid">' + esc(t.kodeRider) + ' · ' + esc(t.namaRider) + '</span><span class="nom">' + esc(rp(t.nominal)) + '</span>' + badge(t) + '</div><div class="l2">' + esc(t.pelanggan) + ' · ' + esc(jamT(t)) + '</div>' +
@@ -23227,7 +23285,7 @@
                 })).join('') + '</ol></div>' : '';
                 const fin = T.filter(t => t.status === 'cocok' || t.status === 'beres' || t.status === 'batal');
                 // (26 Okt 2026) daftar tuntas digambar lewat renderTuntas() supaya bisa dicari tanpa menggambar ulang semua
-                S.finList = fin; renderTuntas();
+                S.finList = fin; if (S.tab === 'kerja' && S.step === 4) renderTuntas();
             }
             // (26 Okt 2026) Sudah tuntas: tabel + pencarian (No, kode, nama, pelanggan, jam, status, nominal / nominal bukti)
             function renderTuntas() {
@@ -23243,12 +23301,13 @@
                 const nPilih = S.gbPilih.length;
                 const bar = fin.some(bisaGabung) ? '<div class="tf-gbbar"><button type="button" class="sm pri" data-act="gabungbayar"' + (nPilih >= 2 ? '' : ' disabled') + '>Gabung bayar' + (nPilih ? ' (' + nPilih + ' dipilih)' : '') + '</button>' +
                     (nPilih ? ' <button type="button" class="sm" data-act="gabungkosong">Batal pilih</button>' : '') + '<span class="hint"> Centang 2 baris atau lebih dari pelanggan yang sama, yang dibayar pelanggan sekaligus.</span></div>' : '';
-                g('tf-tuntas').innerHTML = tampil.length ? bar + '<table><thead><tr><th></th><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam transfer</th><th>Status</th><th></th></tr></thead><tbody>' +
+                g('tf-tuntas').__baru = tampil.length ? bar + '<table><thead><tr><th></th><th>No</th><th>Kode</th><th>Nama</th><th class="r">Nominal</th><th>Pelanggan</th><th>Jam transfer</th><th>Status</th><th></th></tr></thead><tbody>' +
                     tampil.map(t => '<tr class="' + (t.status === 'batal' ? 'batal' : '') + '"><td class="c">' + (bisaGabung(t) ? '<input type="checkbox" data-gbpilih="' + esc(t.id) + '"' + (S.gbPilih.indexOf(t.id) >= 0 ? ' checked' : '') + ' aria-label="Pilih untuk gabung bayar">' : '') + '</td><td class="no">' + esc(t.no) + '</td><td>' + esc(t.kodeRider) + '</td><td>' + esc(t.namaRider) + '</td><td class="r">' + esc(rp(t.nominal)) + '</td><td>' + esc(t.pelanggan) + (t.khusus === true ? ' <span class="tf-kbadge">KHUSUS</span>' : '') + (gabungDari(t) ? ' <span class="tf-gbbadge">GABUNG</span>' : '') + '</td><td>' + jamTuntas(t) + '</td><td>' + badge(t) + (t.status === 'batal' ? ' ' + esc(t.batalAlasan || '') : '') + '</td>' +
                         '<td class="r" style="white-space:nowrap">' + (t.status !== 'batal' && !gabungDari(t) && normNama(t.pelanggan).toLowerCase() !== 'modal' ? '<button type="button" class="sm" data-act="ubahkhusus" data-id="' + esc(t.id) + '">' + (t.khusus === true ? 'Bukan khusus' : 'Khusus') + '</button> ' : '') +
                         (bisaBukti(t) ? '<button type="button" class="sm" data-act="koreksibukti" data-id="' + esc(t.id) + '">Bukti</button>' : '') +
                         ((t.status === 'cocok' || t.status === 'beres') ? ' <button type="button" class="sm" data-act="keterangan" data-id="' + esc(t.id) + '">' + (String(t.keterangan || '').trim() ? 'Ubah ket' : 'Ket') + '</button>' : '') +
                         ((t.status === 'cocok' || t.status === 'beres') && !gabungDari(t) ? ' <button type="button" class="sm bad" data-act="hapustuntas" data-id="' + esc(t.id) + '">Hapus</button>' : '') + '</td></tr>' + buktiBaris(t, 9, true) + gabungBaris(t, fin, 9, tampil) + ketBaris(t, 9)).join('') + '</tbody></table>' : '<div class="empty">' + (fin.length ? 'Tidak ada yang cocok dengan pencarian.' : 'Belum ada.') + '</div>';
+                setHtml(g('tf-tuntas'), g('tf-tuntas').__baru); g('tf-tuntas').__baru = '';
             }
             // Jam di daftar: "belum info bukti" diberi badge kuning supaya mudah dicari dan dilengkapi lewat Ubah
             function jamHtml(t) { return (!t.waktuTransfer && t.jamTeks === JAM_KOSONG) ? '<span class="badge b-bukti">' + esc(JAM_KOSONG) + '</span>' : esc(jamT(t)); }
@@ -23287,7 +23346,7 @@
                 if (!d) { el.className = 'card lock'; el.innerHTML = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas') + '<div class="empty">Belum ada daftar. Geser tombol Selesai di tahap 1.</div>'; return; }
                 el.className = 'card';
                 const act = d.rows.filter(t => t.status === 'siapcek').pop();
-                el.innerHTML = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas', 'Daftar ' + d.k + ' (No ' + d.dari + '–' + d.sampai + ') · cocokkan dengan pesan rider di grup, lalu tandai di grup') +
+                el.__baru = head(2, 'Cek UID & nominal', '⬆ dari BAWAH ke atas', 'Daftar ' + d.k + ' (No ' + d.dari + '–' + d.sampai + ') · cocokkan dengan pesan rider di grup, lalu tandai di grup') +
                     '<ol class="items">' + d.rows.map(t => {
                         const a = act && t.id === act.id;
                         const state = t.status === 'siapcek' ? '' : (t.status === 'masalah' ? 'prob' : 'done');
@@ -23296,6 +23355,8 @@
                             panel: a ? '<div class="panel">' +
                                 '<div class="acts"><button type="button" class="pri big" data-act="c2ok" data-id="' + esc(t.id) + '">✓ Cocok, sudah ditandai di grup</button><button type="button" class="sm" data-act="c2fix" data-id="' + esc(t.id) + '">✎ Salah, perbaiki</button><button type="button" class="sm bad" data-act="masalah" data-fase="cek" data-id="' + esc(t.id) + '">⚠ Masalah</button></div></div>' : ''});
                     }).join('') + '</ol>';
+                setHtml(el, el.__baru); el.__baru = '';
+                pusatkan(el, 'pusat2', act ? act.id : '');   // (27 Okt 2026) kartu yang dicek otomatis di tengah
             }
 
             // Tahap 3 (21 Okt 2026): satu kartu saja — UID, nama rider, nominal, nama pelanggan.
@@ -23307,7 +23368,7 @@
             }
             function renderStep3(d) {
                 const el = g('tf-card3');
-                if (S.drag3) { S.pend3 = true; return; }   // jangan gambar ulang saat tombol sedang digeser
+                if (S.drag3 || S.tahan3) { S.pend3 = true; return; }   // jangan gambar ulang saat tombol digeser / popup "sudah ditransfer" masih terbuka
                 S.pend3 = false;
                 const done = sudahTf3();
                 const act = d ? d.rows.find(t => t.status === 'dicek') : null;
@@ -23315,6 +23376,7 @@
                 if (vi < 0) S.v3 = '';
                 const lihat = vi >= 0 ? done[vi] : act;
                 const baru = lihat && lihat.id !== S.l3; S.l3 = lihat ? lihat.id : '';   // animasi hanya saat data yang tampil berganti
+                if (baru && act && lihat && lihat.id === act.id) S.t3Sejak = Date.now();   // (27 Okt 2026) mulai hitung 10 detik untuk data baru
                 const kartu = t => '<div class="t3box' + (vi >= 0 ? ' done' : '') + (baru ? ' baru' : '') + '">' +
                     [['UID', t.kodeRider, ''], ['Nama rider', t.namaRider, ''], ['Nominal', rp(t.nominal), 'nom'], ['Nama pelanggan', t.pelanggan, '']]
                         .map(x => '<div class="rw ' + x[2] + '"><span>' + esc(x[0]) + '</span><b>' + esc(x[1]) + '</b></div>').join('') + '</div>';
@@ -23339,7 +23401,7 @@
                         (done.length ? '<div class="t3nav">' + kembali + '</div>' : '');
                 }
                 el.className = 'card' + (!act && vi < 0 ? ' lock' : '');
-                el.innerHTML = head(3, 'Transfer ke rider', '⬇ dari ATAS ke bawah', esc(sub)) + body;
+                setHtml(el, head(3, 'Transfer ke rider', '⬇ dari ATAS ke bawah', esc(sub)) + body);
             }
 
             function renderStep4(d) {
@@ -23347,12 +23409,14 @@
                 if (!d) { el.className = 'card lock'; el.innerHTML = head(4, 'Cek akhir nominal', '⬆ dari BAWAH ke atas') + '<div class="empty">Menunggu daftar yang semua transfernya sudah selesai.</div>'; return; }
                 el.className = 'card';
                 const act = d.rows.filter(t => t.status === 'diteruskan').pop();
-                el.innerHTML = head(4, 'Cek akhir nominal', '⬆ dari BAWAH ke atas', 'Daftar ' + d.k + ' · hanya nominal, bandingkan dengan riwayat transfer BCA mobile') +
+                el.__baru = head(4, 'Cek akhir nominal', '⬆ dari BAWAH ke atas', 'Daftar ' + d.k + ' · hanya nominal, bandingkan dengan riwayat transfer BCA mobile') +
                     '<ol class="items">' + d.rows.map(t => {
                         const a = act && t.id === act.id, state = t.status === 'diteruskan' ? '' : ((t.status === 'masalah' || t.status === 'selisih') ? 'prob' : 'done');
                         return itemHtml(t, {aktif: a, state: state, body: (a ? '<div class="bignom">' + esc(rp(t.nominal)) + '</div>' : '<div class="l1"><span class="nom">' + esc(rp(t.nominal)) + '</span></div>') + '<div class="l2">' + esc(t.kodeRider) + ' · ' + esc(t.namaRider) + (t.diteruskanAt ? ' · ditransfer ' + esc(jam(t.diteruskanAt)) : '') + (t.status === 'selisih' ? ' · <b>BCA: ' + esc(rp(t.nominalBca)) + '</b>' : '') + '</div>',
                             panel: a ? '<div class="panel"><p class="hint" style="margin:0">Cari nominal ini di riwayat transfer BCA mobile (dari yang paling baru).</p><div class="acts"><button type="button" class="pri big" data-act="c4ok" data-id="' + esc(t.id) + '">✓ Cocok dengan riwayat BCA</button><button type="button" class="sm bad" data-act="c4beda" data-id="' + esc(t.id) + '">✗ Beda</button></div></div>' : ''});
                     }).join('') + '</ol>';
+                setHtml(el, el.__baru); el.__baru = '';
+                pusatkan(el, 'pusat4', act ? act.id : '');   // (27 Okt 2026) kartu yang dicek otomatis di tengah
             }
 
             /* ---------- halaman "Belum ada jam" ---------- */
@@ -23756,9 +23820,21 @@
                 async geser3(t) {
                     try {
                         if (!cekLokal(t, 'dicek')) return;
+                        // (27 Okt 2026) Data baru tampil < 10 detik lalu: tanya dulu, supaya tidak tergeser dua kali tanpa ditransfer
+                        const umur = Date.now() - (S.t3Sejak || 0);
+                        if (umur < 10000) {
+                            getar([40, 60, 40]);
+                            const v = await ask({title: 'Pastikan sudah ditransfer', ok: 'Ya, sudah ditransfer', cancel: 'Belum', noEnter: true,
+                                info: '<p>Data ini baru tampil <b>' + Math.max(1, Math.round(umur / 1000)) + ' detik</b> lalu.</p><div class="big">' + esc(rp(t.nominal)) + '</div><p><b>' + esc(t.kodeRider) + '</b> ' + esc(t.namaRider) + ' · No ' + esc(t.no) + '</p><p class="hint">Pastikan data <b>INI</b> benar-benar sudah ditransfer di BCA. Kalau belum, tekan Belum.</p>'});
+                            if (!v) return;
+                        }
                         await B.commit([up(t, Object.assign({status: 'diteruskan', cekDuaKali: true}, st('diteruskan')))]);
-                        S.v3 = '';   // tanpa toast: kartu langsung berganti ke data berikutnya (toast bisa menutupi tombol geser)
-                    } finally { renderKerja(); }   // tombol geser kembali ke awal kalau gagal, atau pindah ke data berikutnya
+                        getar(80);
+                        S.v3 = '';
+                        // (27 Okt 2026) Data berikutnya BARU tampil setelah OK ditekan
+                        S.tahan3 = true;
+                        await popupSudahTf(t);
+                    } finally { S.tahan3 = false; renderKerja(); }   // tombol geser kembali ke awal kalau gagal, atau pindah ke data berikutnya
                 },
                 async t3back() {
                     const done = sudahTf3(), vi = S.v3 ? done.findIndex(x => x.id === S.v3) : -1;
@@ -24076,7 +24152,7 @@
                 if (!k || busy || geser || K.status === 'blok') return;
                 const tr = k.parentElement;
                 geser = {k: k, tr: tr, fill: tr.querySelector('.fill'), x0: ev.clientX, dx: 0, max: Math.max(1, tr.clientWidth - k.offsetWidth - 8), id: tr.dataset.id, act: tr.dataset.swipe === 'selesai' ? 'selesai' : 'geser3', pid: ev.pointerId};
-                S.drag3 = true; tr.classList.add('drag');
+                S.drag3 = true; tr.classList.add('drag'); getar(15);   // (27 Okt 2026) getaran kecil saat mulai geser
                 try { k.setPointerCapture(ev.pointerId); } catch (e) {}
                 ev.preventDefault();
             });
@@ -24090,6 +24166,7 @@
                 if (!geser || (ev && ev.pointerId !== geser.pid)) return;
                 const x = geser; geser = null; S.drag3 = false; x.tr.classList.remove('drag');
                 if (ev && ev.type === 'pointerup' && x.dx >= x.max * 0.85) {
+                    getar(40);   // (27 Okt 2026) getaran saat geser berhasil
                     x.k.style.transform = 'translateX(' + x.max + 'px)'; x.fill.style.width = '100%'; x.tr.classList.add('busy');
                     const t = x.id ? findT(x.id) : null;
                     run(() => ACT[x.act](t, x.tr)).then(() => { if (S.pend3 || x.tr.isConnected) renderKerja(); });
@@ -24130,6 +24207,23 @@
                 try { g('tf-okTutup').focus({preventScroll: true}); } catch (e) {}
             }
             g('tf-okTutup').addEventListener('click', tutupOkPop);
+            // (27 Okt 2026) popup "Sudah ditransfer" (tahap 3): menunggu OK sebelum data berikutnya tampil
+            function popupSudahTf(t) {
+                return new Promise(res => {
+                    const p = g('tf-tfPop');
+                    g('tf-tfNo').textContent = 'No ' + t.no; g('tf-tfKode').textContent = t.kodeRider; g('tf-tfNama').textContent = t.namaRider;
+                    g('tf-tfNom').textContent = rp(t.nominal); g('tf-tfInfo').textContent = 'Pelanggan: ' + t.pelanggan;
+                    g('tf-toast').hidden = true;
+                    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+                    p.hidden = false;
+                    const ok = g('tf-tfOk');
+                    const tutup = () => { p.hidden = true; ok.onclick = null; document.removeEventListener('keydown', kunciTombol, true); res(); };
+                    const kunciTombol = e => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') { e.preventDefault(); tutup(); } };
+                    ok.onclick = tutup;
+                    document.addEventListener('keydown', kunciTombol, true);
+                    try { ok.focus({preventScroll: true}); } catch (e) {}
+                });
+            }
             const kirimCatat = () => run(async () => {
                 if (K.status === 'blok') return;
                 if (okPopBuka()) return;   // popup Tercatat masih terbuka: tekan OK dulu
@@ -24464,6 +24558,7 @@
                 if (t === 'kode') renderKode();
                 if (t === 'log') renderLog();
                 if (t === 'jam') renderJam();
+                if (t === 'kerja') renderKerja();   // (27 Okt 2026) daftar kerja hanya digambar saat tab ini tampil
             }
             g('tf-tabs').addEventListener('click', ev => { const b = ev.target.closest('button[data-tftab]'); if (b) setTab(b.dataset.tftab); });
 
@@ -25121,7 +25216,8 @@
             window.switchPage = (page) => {
                 const dl = document.getElementById('tf-dlg');
                 if (page !== 'transfer' && dl && dl.open) dl.close();   // dialog jangan tertinggal terbuka (layar bisa terkunci)
-                const dk = document.getElementById('tf-kdlg'); if (page !== 'transfer' && dk && dk.open) dk.close();   // dialog bukti juga jangan tertinggal
+                const dk = document.getElementById('tf-kdlg'); if (page !== 'transfer' && dk && dk.open) dk.close();
+                const tp = document.getElementById('tf-tfOk'); if (page !== 'transfer' && tp && !document.getElementById('tf-tfPop').hidden) tp.click();   // popup sudah-ditransfer ikut ditutup   // dialog bukti juga jangan tertinggal
                 const hasil = asliSwitch(page);   // menyembunyikan halaman lain
                 const pt = document.getElementById('page-transfer');
                 if (pt) pt.classList.toggle('hidden-page', page !== 'transfer');
