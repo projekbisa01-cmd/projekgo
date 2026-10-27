@@ -2118,6 +2118,12 @@
         #page-pesan-rider .pr-hp .psn-t .psn-fst.ok { background: #dcfce7; color: #166534; }
         #page-pesan-rider .pr-hp .psn-t .psn-fst.lewat { background: #fee2e2; color: #b91c1c; }
     </style>
+    <style>
+        /* (27 Okt 2026) Strip atas ikut tampil di halaman Pantauan & Histori */
+        main:not(#page-dispatch) > .ad-strip { margin: -16px -16px 6px; }
+        main:not(#page-dispatch) > .ad-strip > button:not(.ab-spk) { display: flex !important; }
+        .ad-strip > button.ad-strip-on { box-shadow: inset 0 -3px 0 var(--ad-acc); background: var(--ad-sf2); }
+    </style>
 </head>
 <body class="pb-24">
 
@@ -8789,11 +8795,20 @@
         // Statistik order selesai HARI INI per rider, dari listener riwayat hari ini (0 read tambahan).
         // Ongkir bersih = ongkir kotor - potongan admin 16% (tambahan tidak dihitung).
         // (27 Okt 2026) Angka di kotak Histori (strip atas) = order selesai hari ini. Dari listener riwayat hari ini (0 read tambahan).
+        // (27 Okt 2026, revisi) Angka = TOTAL ORDER hari ini, rumus sama dengan kotak "Total Order" di Histori:
+        // order selesai hari ini + order di Pantauan + order Pending. Akun admin melihat **** (sama seperti di Histori).
         window.adAngkaHistori = () => {
             const el = document.getElementById('ad-stat-histori'); if (!el) return;
-            const st = dxStatHariIni();
-            el.textContent = st ? String(st.totOrder) : '–';
-            el.title = st ? st.totOrder + ' order selesai hari ini' : 'Buka Histori tanggal hari ini untuk melihat jumlahnya';
+            const n = new Date();
+            const hariIni = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+            if (window._todayHistoryDateKey !== hariIni || !Array.isArray(window._todayHistoryLiveOrders)) {
+                el.textContent = '–'; el.title = 'Data order hari ini sedang dimuat'; return;
+            }
+            if (window.userRole === 'admin') { el.textContent = '****'; el.title = 'Total order hari ini hanya tampil untuk akun owner'; return; }
+            const jalan = (Array.isArray(allGlobalOrders) ? allGlobalOrders : []).filter(o => o && ['assigned', 'processing', 'missed', 'unassigned'].includes(o.status)).length;
+            const total = window._todayHistoryLiveOrders.length + jalan;
+            el.textContent = String(total);
+            el.title = total + ' order hari ini (selesai + pantauan + pending), sama dengan Total Order di Histori';
         };
         setInterval(() => { try { window.adAngkaHistori(); } catch (e) {} }, 15000);
         function dxStatHariIni() {
@@ -10273,18 +10288,22 @@
             }
             terapkanHal();
 
-            // ---------- Angka di kotak Pantauan = angka di menu bawah Pantauan ----------
-            const navBadge = $('nav-badge-active'), pantauN = $('ab-pantau-n');
+            // ---------- Angka di kotak Pantauan = jumlah order di halaman Pantauan ----------
+            // (27 Okt 2026) Dulu disalin dari badge menu bawah. Badge itu sengaja disembunyikan setelah halaman Pantauan
+            // dibuka, sehingga kotak ikut menjadi 0 padahal masih ada order berjalan. Sekarang dari hitungan order aktif.
+            const statAktif = $('stat-active-orders'), pantauN = $('ab-pantau-n'), statPending = $('stat-pending-orders');
             const salinPantau = () => {
-                if (!navBadge || !pantauN) return;
-                const t = (navBadge.textContent || '').trim();
-                const kosong = navBadge.classList.contains('hidden') || !t || t === '0';
-                // (24 Okt 2026) kotak Pantauan berupa angka -> selalu tampil, 0 bila tidak ada
-                pantauN.textContent = kosong ? '0' : t;
+                if (!statAktif || !pantauN) return;
+                const nAktif = parseInt((statAktif.textContent || '').trim(), 10) || 0;
+                pantauN.textContent = String(nAktif);
                 pantauN.hidden = false;
-                const kotak = $('ab-pantau'); if (kotak) kotak.classList.toggle('nol', kosong);
+                const kotak = $('ab-pantau'); if (kotak) kotak.classList.toggle('nol', !nAktif);
+                if (typeof window.adAngkaHistori === 'function') window.adAngkaHistori();
             };
-            if (navBadge && typeof MutationObserver === 'function') new MutationObserver(salinPantau).observe(navBadge, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+            if (typeof MutationObserver === 'function') {
+                if (statAktif) new MutationObserver(salinPantau).observe(statAktif, { childList: true, characterData: true, subtree: true });
+                if (statPending) new MutationObserver(() => { if (typeof window.adAngkaHistori === 'function') window.adAngkaHistori(); }).observe(statPending, { childList: true, characterData: true, subtree: true });
+            }
             salinPantau();
 
             window.dxUpdateTombolKirim();
@@ -26749,6 +26768,75 @@
         var t = document.getElementById('btn-install-pwa');
         if (t) t.style.display = 'none';
     });
+})();
+</script>
+<!-- ================= STRIP ATAS DI HALAMAN PANTAUAN & HISTORI (27 Okt 2026) =================
+     Strip "Antri · Shift · Pending · Pantau · Histori" dipindahkan (bukan disalin) ke atas halaman Pantauan / Histori
+     saat halaman itu dibuka, lalu dikembalikan ke Dispatch. Hanya tampilan: tidak ada baca/tulis data. -->
+<script>
+(function () {
+    var strip = null, tanda = null;
+    var HAL = { 'page-active': 'ab-pantau', 'page-history': 'ad-histori-btn' };
+    function tampil(id) { var e = document.getElementById(id); return !!e && !e.classList.contains('hidden-page'); }
+    function atur() {
+        if (!strip || !tanda) return;
+        var tujuan = null;
+        for (var id in HAL) if (tampil(id)) tujuan = id;
+        var on = tujuan ? HAL[tujuan] : null;
+        var btn = strip.querySelectorAll(':scope > button');
+        for (var i = 0; i < btn.length; i++) btn[i].classList.toggle('ad-strip-on', !!on && btn[i].id === on);
+        if (tujuan) {
+            var hal = document.getElementById(tujuan);
+            if (strip.parentNode !== hal) hal.insertBefore(strip, hal.firstChild);
+        } else if (strip.parentNode !== tanda.parentNode || strip.previousSibling !== tanda) {
+            tanda.parentNode.insertBefore(strip, tanda.nextSibling);
+        }
+    }
+    function mulai() {
+        strip = document.querySelector('#page-dispatch > .ad-strip') || document.querySelector('.ad-strip');
+        if (!strip || !strip.parentNode) return;
+        tanda = document.createComment(' tempat asal strip atas ');
+        strip.parentNode.insertBefore(tanda, strip);
+        // Antri / Shift / Pending dari halaman lain: buka Dispatch dulu, lalu jalankan tombolnya
+        strip.addEventListener('click', function (e) {
+            var b = e.target && e.target.closest ? e.target.closest('button') : null;
+            if (!b || strip.parentNode === tanda.parentNode) return;
+            if (b.id === 'ab-pantau' || b.id === 'ad-histori-btn' || b.classList.contains('ab-spk')) return;
+            e.stopPropagation(); e.preventDefault();
+            if (typeof window.switchPage === 'function') window.switchPage('dispatch');
+            setTimeout(function () { atur(); b.click(); }, 60);
+        }, true);
+        if (typeof MutationObserver === 'function') {
+            ['page-active', 'page-history', 'page-dispatch'].forEach(function (id) {
+                var e = document.getElementById(id);
+                if (e) new MutationObserver(atur).observe(e, { attributes: true, attributeFilter: ['class'] });
+            });
+        }
+        // Keluar dari Histori yang sedang membuka tanggal lain -> kembalikan ke hari ini,
+        // supaya angka Histori (order hari ini) tetap terisi. Biaya: memuat ulang order selesai hari ini.
+        var asli = window.switchPage;
+        if (typeof asli === 'function') {
+            window.switchPage = function (page) {
+                var hasil = asli.apply(this, arguments);
+                try {
+                    var inp = document.getElementById('history-date');
+                    if (page !== 'history' && inp && inp.value) {
+                        var n = new Date();
+                        var hi = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+                        if (inp.value !== hi && typeof window.renderHistoryOrders === 'function') {
+                            inp.value = hi;
+                            if (typeof window.updateDayName === 'function') window.updateDayName();
+                            window.renderHistoryOrders();
+                        }
+                    }
+                } catch (err) {}
+                atur();
+                return hasil;
+            };
+        }
+        atur();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mulai); else mulai();
 })();
 </script>
 <!-- ================= KONFIRMASI KELUAR (TOMBOL KEMBALI HP) ================= -->
