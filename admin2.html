@@ -2124,6 +2124,15 @@
         main:not(#page-dispatch) > .ad-strip > button:not(.ab-spk) { display: flex !important; }
         .ad-strip > button.ad-strip-on { box-shadow: inset 0 -3px 0 var(--ad-acc); background: var(--ad-sf2); }
     </style>
+    <style>
+        /* (27 Okt 2026) Transfer tahap 3: seluruh halaman bergeser saat pindah ke data berikutnya */
+        #tf-sec-kerja { overflow-x: clip; }
+        #page-transfer .tf-step.tf-keluar { animation: tfHalKeluar .23s ease-in forwards; }
+        #page-transfer .tf-step.tf-masuk { animation: tfHalMasuk .34s cubic-bezier(.2, .8, .2, 1); }
+        #page-transfer .tf-step.tf-masuk .t3box.baru { animation: none; }
+        @keyframes tfHalKeluar { to { transform: translateX(-75%); opacity: 0; } }
+        @keyframes tfHalMasuk { from { transform: translateX(75%); opacity: 0; } to { transform: none; opacity: 1; } }
+    </style>
 </head>
 <body class="pb-24">
 
@@ -2853,7 +2862,7 @@
             <section class="tf-sec" id="tf-sec-jam" hidden>
                 <div class="card">
                     <h2>Transfer belum ada jam</h2>
-                    <p class="hint" style="margin:0 0 8px">Daftar transfer yang disimpan dengan jam "belum info bukti", dari semua tanggal dan semua tahap. Kalau pelanggan sudah mengirim bukti, cari datanya, ketik jam di bukti (format 24 jam, mis. 2030 = 20:30), lalu tekan Simpan. Data yang sudah diisi jamnya hilang dari daftar ini. Setiap pengisian tercatat di log.</p>
+                    <p class="hint" style="margin:0 0 8px">Daftar transfer yang disimpan dengan jam "belum info bukti", hanya tanggal hari ini (data hari sebelumnya sudah dicetak), dari semua tahap. Kalau pelanggan sudah mengirim bukti, cari datanya, ketik jam di bukti (format 24 jam, mis. 2030 = 20:30), lalu tekan Simpan. Data yang sudah diisi jamnya hilang dari daftar ini. Setiap pengisian tercatat di log.</p>
                     <label style="margin:0">Cari<input id="tf-jQ" maxlength="40" placeholder="kode / nama rider / pelanggan / nominal" autocomplete="off"></label>
                 </div>
                 <div id="tf-jamList"></div>
@@ -23855,7 +23864,7 @@
                 if (!li || PAGE.classList.contains('hidden-page')) return;
                 requestAnimationFrame(() => { try { li.scrollIntoView({block: 'center', behavior: 'smooth'}); } catch (e) { li.scrollIntoView(); } });
                 // (27 Okt 2026) tanda jelas bahwa kartu sudah berganti: kartu baru berkedip biru + label "Data berikutnya"
-                tandaiKartuBaru(el, id);
+                if (!S.geserHal) tandaiKartuBaru(el, id);   // saat seluruh halaman bergeser, kartu tidak perlu berkedip
             }
             function tandaiKartuBaru(el, id) {
                 const li = el && el.querySelector('li.aktif'); if (!li) return;
@@ -23869,6 +23878,24 @@
                     x.classList.remove('tf-ganti'); const c = x.querySelector('.tf-gchip'); if (c) c.remove();
                     el.__h = null;   // gambar ulang berikutnya boleh mengganti isi (label sudah dibuang)
                 }, 2200);
+            }
+            // (27 Okt 2026) Pindah ke data berikutnya di tahap 3 & 4: seluruh halaman bergeser ke kiri, data baru masuk dari kanan
+            const geserHalaman3 = () => geserHalaman(3);
+            function geserHalaman(n) {
+                return new Promise(res => {
+                    const box = PAGE.querySelector('.tf-step[data-tfstep="' + n + '"]');
+                    const halus = !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+                    if (!box || box.hidden || PAGE.classList.contains('hidden-page') || !halus) { renderKerjaLangsung(); return res(); }
+                    box.classList.remove('tf-masuk'); box.classList.add('tf-keluar');
+                    S.tahanGeser = n;   // selama halaman lama bergeser keluar, isinya tidak boleh berganti
+                    setTimeout(() => {
+                        S.tahanGeser = 0;
+                        S.geserHal = true; renderKerjaLangsung(); S.geserHal = false;   // kartu tidak berkedip: yang bergeser seluruh halaman
+                        box.classList.remove('tf-keluar'); void box.offsetWidth; box.classList.add('tf-masuk');
+                        getar(20);
+                        setTimeout(() => { box.classList.remove('tf-masuk'); res(); }, 360);
+                    }, 230);
+                });
             }
             function itemHtml(t, o) {
                 const cls = [o.state || '', o.aktif ? 'aktif' : ''].join(' ');
@@ -24024,7 +24051,7 @@
             }
             function renderStep3(d) {
                 const el = g('tf-card3');
-                if (S.drag3 || S.tahan3) { S.pend3 = true; return; }   // jangan gambar ulang saat tombol digeser / popup "sudah ditransfer" masih terbuka
+                if (S.drag3 || S.tahan3 || S.tahanGeser === 3) { S.pend3 = true; return; }   // jangan gambar ulang saat tombol digeser / popup "sudah ditransfer" masih terbuka
                 S.pend3 = false;
                 const done = sudahTf3();
                 const act = d ? d.rows.find(t => t.status === 'dicek') : null;
@@ -24062,6 +24089,7 @@
 
             function renderStep4(d) {
                 const el = g('tf-card4');
+                if (S.tahan4 || S.tahanGeser === 4) return;   // (27 Okt 2026) jangan berganti sebelum halaman bergeser
                 if (!d) { el.className = 'card lock'; el.innerHTML = head(4, 'Cek akhir nominal', '⬆ dari BAWAH ke atas') + '<div class="empty">Menunggu daftar yang semua transfernya sudah selesai.</div>'; return; }
                 el.className = 'card';
                 const act = d.rows.filter(t => t.status === 'diteruskan').pop();
@@ -24102,6 +24130,12 @@
                 el.querySelectorAll('input[data-jamid]').forEach(i => { if (isi[i.dataset.jamid]) i.value = isi[i.dataset.jamid]; if (fokus && i.dataset.jamid === fokus) i.focus(); });
             }
             g('tf-jQ').addEventListener('input', renderJam);
+            // (27 Okt 2026) ganti hari (lewat tengah malam): daftar "Belum ada jam" ikut pindah ke tanggal baru
+            setInterval(() => {
+                if (!Array.isArray(S.jamSemua) || S.jamHari === today()) return;
+                S.jamHari = today(); S.jamList = S.jamSemua.filter(t => t.tanggal === S.jamHari);
+                renderJam(); renderKerja();
+            }, 60000);
             g('tf-tCari').addEventListener('input', () => renderTuntas());
             g('tf-tuntas').addEventListener('change', ev => {   // (26 Okt 2026) centang untuk Gabung bayar
                 const c = ev.target; if (!c || !c.dataset || !c.dataset.gbpilih) return;
@@ -24474,6 +24508,8 @@
                 // Tahap 3: tombol geser sampai ujung = sudah ditransfer di BCA. Data yang ditulis sama dengan versi lama
                 // (status diteruskan + cekDuaKali), jadi Firestore Rules tidak perlu diubah.
                 async geser3(t) {
+                    let pindah = false;
+                    S.tahan3 = true;   // (27 Okt 2026) kartu TIDAK berganti selama proses & popup, baru berganti setelah OK
                     try {
                         if (!cekLokal(t, 'dicek')) return;
                         // (27 Okt 2026) Data baru tampil < 10 detik lalu: tanya dulu, supaya tidak tergeser dua kali tanpa ditransfer
@@ -24488,9 +24524,12 @@
                         getar(80);
                         S.v3 = '';
                         // (27 Okt 2026) Data berikutnya BARU tampil setelah OK ditekan
-                        S.tahan3 = true;
                         await popupSudahTf(t);
-                    } finally { S.tahan3 = false; renderKerja(); }   // tombol geser kembali ke awal kalau gagal, atau pindah ke data berikutnya
+                        pindah = true;
+                    } finally {
+                        S.tahan3 = false;
+                        if (pindah) await geserHalaman3(); else renderKerja();   // gagal / batal: tombol geser kembali ke awal
+                    }
                 },
                 async t3back() {
                     const done = sudahTf3(), vi = S.v3 ? done.findIndex(x => x.id === S.v3) : -1;
@@ -24719,7 +24758,10 @@
                 },
                 async c4ok(t) {
                     if (!cekLokal(t, 'diteruskan')) return;
-                    await B.commit([up(t, Object.assign({status: 'cocok'}, st('akhir')))]);
+                    let pindah = false;
+                    S.tahan4 = true;   // (27 Okt 2026) data berikutnya tampil dengan seluruh halaman bergeser, seperti tahap Transfer
+                    try { await B.commit([up(t, Object.assign({status: 'cocok'}, st('akhir')))]); pindah = true; }
+                    finally { S.tahan4 = false; if (pindah) await geserHalaman(4); else renderKerja(); }
                 },
                 async c4beda(t) {
                     if (!cekLokal(t, 'diteruskan')) return;
@@ -24728,7 +24770,10 @@
                     const n = Number(v.bca);
                     if (!(n > 0) || n > MAX_NOMINAL || Math.floor(n) !== n) return toast('Nominal tidak valid.', 'bad');
                     if (n === t.nominal) return toast('Sama dengan catatan. Pakai tombol Cocok.', 'bad');
-                    await B.commit([up(t, Object.assign({status: 'selisih', nominalBca: n}, st('akhir'))), logOp('selisih', t.id, '', rp(t.nominal), 'BCA ' + rp(n))]);
+                    let pindah = false;
+                    S.tahan4 = true;   // (27 Okt 2026) halaman bergeser ke data berikutnya
+                    try { await B.commit([up(t, Object.assign({status: 'selisih', nominalBca: n}, st('akhir'))), logOp('selisih', t.id, '', rp(t.nominal), 'BCA ' + rp(n))]); pindah = true; }
+                    finally { S.tahan4 = false; if (pindah) await geserHalaman(4); else renderKerja(); }
                     toast('Selisih dicatat, owner akan menindaklanjuti.', 'bad');
                 },
                 async kembalikan(t) {
@@ -25246,7 +25291,9 @@
                 unsubLuar.push(B.watch(C.tiket, {whereIn: ['status', BELUM]}, a => { S.pend = a; renderKerja(); }, eh));
                 // Transfer yang jamnya "belum info bukti" (semua tanggal). Biasanya hanya sedikit dokumen, jadi hemat read.
                 unsubLuar.push(B.watch(C.tiket, {eq: ['jamTeks', JAM_KOSONG], limit: 300}, a => {
-                    S.jamList = a.filter(t => t.status !== 'batal' && !t.waktuTransfer && perluJamBukti(t)).sort((x, y) => x.tanggal < y.tanggal ? 1 : x.tanggal > y.tanggal ? -1 : x.no - y.no);
+                    S.jamSemua = a.filter(t => t.status !== 'batal' && !t.waktuTransfer && perluJamBukti(t)).sort((x, y) => x.tanggal < y.tanggal ? 1 : x.tanggal > y.tanggal ? -1 : x.no - y.no);
+                    // (27 Okt 2026) hanya data HARI INI; data hari sebelumnya sudah dicetak
+                    S.jamHari = today(); S.jamList = S.jamSemua.filter(t => t.tanggal === S.jamHari);
                     renderJam(); renderKerja();
                 }, eh));
             }
