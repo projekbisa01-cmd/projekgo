@@ -25889,7 +25889,23 @@ window.PembuatQR = PembuatQR;
   .ah-kini .ah-pat { font-size: 13px; color: #6B6258; margin-top: 2px; }
   .ah-est { margin-top: 10px; padding: 10px; border-radius: 12px; background: #F8F3ED; border: 1px solid #F0E2D4; }
   .ah-est p { margin: 0 0 6px; font-size: 11px; font-weight: 800; color: #8A8178; letter-spacing: .04em; }
-  .ah-chips { display: flex; gap: 6px; }
+  .ah-estinfo { font-size: 13px; font-weight: 800; color: #1C1C1E; }
+  .ah-btn:disabled { opacity: .6; }
+  .ah-tagih.lunas { color: #1E7A34; background: #E6F6EC; }
+  .ah-kecil-tagih { color: #8A5A00 !important; font-weight: 800 !important; }
+  .ah-petawrap { margin: 10px 10px 0; }
+  .ah-peta { height: 240px; border-radius: 14px; overflow: hidden; border: 1px solid #F0E2D4; background: #EDF1E4; position: relative; }
+  .ah-peta-muat { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12.5px; font-weight: 700; color: #8A8178; text-align: center; padding: 10px; }
+  .ah-legenda { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11.5px; font-weight: 700; color: #6B6258; }
+  .ah-legenda .j, .ah-legenda .n { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 10px; font-weight: 800; }
+  .ah-legenda .j { background: #1D4ED8; } .ah-legenda .n { background: #1C1C1E; margin-left: 6px; }
+  .ah-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ah-chips button { white-space: nowrap; }
+  .ah-chips button:first-child { flex: 1 1 100%; }
+  .ah-bayar { padding: 8px 12px; font-size: 12.5px; font-weight: 800; color: #1E7A34; background: #E6F6EC; border-bottom: 1px solid #F6DCC4; }
+  .ah-bayar.tagih { color: #8A5A00; background: #FFF4D6; }
+  .ah-tagih { display: inline-block; margin-top: 6px; font-size: 13px; font-weight: 800; color: #8A5A00; background: #FFF4D6; padding: 4px 10px; border-radius: 99px; }
+  .ah-est .ah-chips + p { margin: 8px 0 0; font-size: 12px; font-weight: 700; color: #6B6258; letter-spacing: 0; }
   .ah-chips button { flex: 1; min-height: 38px; border-radius: 10px; background: #fff; border: 1px solid #F0E2D4; font-size: 13px; font-weight: 700; color: #3A3A3C; }
   .ah-chips button.on { background: #FF6600; border-color: #FF6600; color: #fff; font-weight: 800; }
   .ah-btns { display: flex; gap: 8px; margin-top: 8px; }
@@ -25940,9 +25956,9 @@ window.PembuatQR = PembuatQR;
     'use strict';
     var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
     var ID_SAH = /^[A-Za-z0-9_-]{1,64}$/;
-    var ESTIMASI = [5, 10, 15, 20];
+    var MAPS_KEY = 'AIzaSyAAgPz5iVt7kEcd_gH2hmtHfHg2s8gJMZY';   // kunci Maps yang sama dengan aplikasi katalog (dibatasi ke domain ProjekGo)
     var JENIS = [['penerima', 'Penerima sendiri'], ['keluarga', 'Keluarga'], ['tetangga', 'Tetangga'], ['lainnya', 'Lainnya']];
-    var st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, henti: null, diambil: false };
+    var st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, estAuto: {}, hitung: false, henti: null, diambil: false, asal: null, peta: null, petaWrap: null, petaMuat: false };
     var form = null;   // isi form bukti yang sedang terbuka
 
     function fsMod() { return import(URL_FS); }
@@ -25955,6 +25971,7 @@ window.PembuatQR = PembuatQR;
     function pad(n) { return String(n).padStart(2, '0'); }
     function hariIni() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
     function jamDari(t) { var ms = t && typeof t.toMillis === 'function' ? t.toMillis() : 0; if (!ms) return ''; var d = new Date(ms); return pad(d.getHours()) + '.' + pad(d.getMinutes()); }
+    function rpKu(n) { return 'Rp' + Math.max(0, Math.round(Number(n) || 0)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
     function teksAman(s, n) { return String(s == null ? '' : s).slice(0, n || 200); }
 
     function bersihkanTitik(arr) {
@@ -25962,9 +25979,12 @@ window.PembuatQR = PembuatQR;
         return arr.slice(0, 25).map(function (t) {
             t = t || {};
             return { kirimId: teksAman(t.kirimId, 64), nama: teksAman(t.nama, 60) || 'Penerima', hp: String(t.hp || '').replace(/[^0-9]/g, '').slice(0, 20),
-                     patokan: teksAman(t.patokan, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0 };
+                     patokan: teksAman(t.patokan, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0,
+                     bayar: t.bayar === 'penerima' ? 'penerima' : (t.bayar === 'pengirim' ? 'pengirim' : '') };
         });
     }
+    function tagih(t) { return t.bayar ? t.bayar === 'penerima' : st.bayar === 'penerima'; }   // true = rider menagih penerima
+    function sahKoord(o) { return o && isFinite(o.lat) && isFinite(o.lng) && Math.abs(o.lat) <= 90 && Math.abs(o.lng) <= 180; }
     function sudah(i) { return !!st.bukti[i]; }
     function jumlahSelesai() { var n = 0; for (var i = 0; i < st.titik.length; i++) if (sudah(i)) n++; return n; }
     function titikBerikut() { for (var i = 0; i < st.titik.length; i++) if (!sudah(i)) return i; return -1; }
@@ -25977,15 +25997,167 @@ window.PembuatQR = PembuatQR;
         if (window.AndroidInterface) window.location.href = 'geo:' + q + '?q=' + q;
         else window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(q) + '&travelmode=driving', '_blank', 'noopener');
     }
-    function kabariWa(i) {
+    // ---------- Estimasi otomatis: posisi rider sekarang -> titik penerima lewat Google Maps ----------
+    // 1 permintaan rute per ketukan (disimpan 3 menit). Kalau Maps gagal, pakai perkiraan jarak lurus.
+    function jarakLurusKm(a, b) {
+        var R = 6371, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+        var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        return 2 * R * Math.asin(Math.sqrt(x));
+    }
+    function muatMaps() {
+        if (window.google && google.maps && google.maps.DirectionsService && google.maps.Map && google.maps.Marker) return Promise.resolve();
+        if (muatMaps.janji) return muatMaps.janji;
+        muatMaps.janji = new Promise(function (ok, gagal) {
+            var batas = setTimeout(function () { muatMaps.janji = null; gagal(new Error('maps-timeout')); }, 12000);
+            window.__ahMapsSiap = function () {
+                clearTimeout(batas);
+                // loading=async: pastikan pustaka peta, pin, dan rute sudah siap sebelum dipakai
+                var imp = google.maps.importLibrary;
+                if (typeof imp !== 'function') return ok();
+                Promise.all([imp('maps'), imp('marker'), imp('routes')]).then(function () { ok(); }, function (e) { muatMaps.janji = null; gagal(e); });
+            };
+            var sc = document.createElement('script');
+            sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + MAPS_KEY + '&callback=__ahMapsSiap&loading=async&v=weekly';
+            sc.async = true;
+            sc.onerror = function () { clearTimeout(batas); muatMaps.janji = null; gagal(new Error('maps-gagal')); };
+            document.head.appendChild(sc);
+        });
+        return muatMaps.janji;
+    }
+    async function estimasiOtomatis(i) {
+        var t = st.titik[i]; if (!t) return null;
+        var c = st.estAuto[i];
+        if (c && Date.now() - c.at < 180000) return c;
+        if (!isFinite(t.lat) || !isFinite(t.lng)) return null;
+        var pos = await posisiSekarang(), dari = 'posisimu';
+        if (!pos) {
+            // GPS tidak didapat: hitung dari penerima terakhir yang sudah diterima, atau dari titik jemput
+            var akhir = -1; for (var k = 0; k < st.titik.length; k++) if (k !== i && sudah(k)) akhir = k;
+            if (akhir >= 0 && sahKoord(st.titik[akhir])) { pos = { lat: st.titik[akhir].lat, lng: st.titik[akhir].lng }; dari = 'penerima sebelumnya'; }
+            else if (sahKoord(st.asal)) { pos = { lat: st.asal.lat, lng: st.asal.lng }; dari = 'titik jemput'; }
+            else return null;
+        }
+        var hasil;
+        try {
+            await muatMaps();
+            var r = await new Promise(function (ok, gagal) {
+                new google.maps.DirectionsService().route({ origin: { lat: pos.lat, lng: pos.lng }, destination: { lat: t.lat, lng: t.lng }, travelMode: google.maps.TravelMode.DRIVING, avoidTolls: true },
+                    function (res, s) { if (s === 'OK') ok(res); else gagal(new Error(s)); });
+            });
+            var leg = r.routes[0].legs[0];
+            // Waktu Google untuk mobil; motor biasanya sedikit lebih cepat (x0,9), minimal 2 menit
+            hasil = { menit: Math.max(2, Math.ceil(leg.duration.value / 60 * 0.9)), km: leg.distance.value / 1000, sumber: 'maps', dari: dari, at: Date.now() };
+        } catch (e) {
+            var km = jarakLurusKm(pos, t) * 1.35;
+            hasil = { menit: Math.max(2, Math.ceil(km / 25 * 60) + 2), km: km, sumber: 'perkiraan', dari: dari, at: Date.now() };
+        }
+        st.estAuto[i] = hasil;
+        return hasil;
+    }
+    async function kabariWa(i) {
         var t = st.titik[i]; if (!t) return;
-        var est = st.est[i] || 10;
         if (!t.hp) { toast('Nomor penerima tidak ada. Hubungi admin.'); return; }
+        if (st.hitung) return;
+        st.hitung = true; gambar();
+        var h = null;
+        try { h = await estimasiOtomatis(i); } finally { st.hitung = false; gambar(); }
+        // Estimasi selalu otomatis. Kalau benar-benar tidak bisa dihitung, pesan dikirim tanpa angka menit.
+        var kalimat = h ? 'sedang saya antar, estimasi tiba ±' + h.menit + ' menit ya.' : 'sedang dalam perjalanan ke lokasi kakak.';
+        var ongkirTeks = tagih(t) && t.ongkir > 0 ? 'Ongkir ' + rpKu(t.ongkir) + ' dibayar saat paket sampai ya kak.\n' : '';
         var pesan = 'Halo kak ' + t.nama + ', saya ' + namaRider() + ' dari ProjekGo 🙏\n' +
-            'Paket dari ' + (st.mitra || 'pengirim') + ' sedang saya antar, estimasi tiba ±' + est + ' menit ya.\n' +
+            'Paket dari ' + (st.mitra || 'pengirim') + ' ' + kalimat + '\n' + ongkirTeks +
             'Mohon ditunggu dan pastikan ada yang menerima di rumah. Terima kasih.';
         if (typeof window.openWaSelector === 'function') window.openWaSelector(hp62(t.hp), pesan);
         else window.open('https://wa.me/' + hp62(t.hp) + '?text=' + encodeURIComponent(pesan), '_blank', 'noopener');
+    }
+
+    // ---------- Peta rute: titik jemput (J) + pin bernomor tiap penerima ----------
+    // 1 peta per order (tidak dibuat ulang saat panel diperbarui), garis rute dihitung sekali lalu disimpan.
+    var PIN = 'M12 0C5.4 0 0 5.4 0 12c0 8.6 10.4 22.4 11.2 23.5a1 1 0 0 0 1.6 0C13.6 34.4 24 20.6 24 12 24 5.4 18.6 0 12 0z';
+    function buatPetaWrap() {
+        var w = el('div', 'ah-petawrap');
+        var m = el('div', 'ah-peta'); m.setAttribute('role', 'img'); m.setAttribute('aria-label', 'Peta rute antar');
+        m.appendChild(el('div', 'ah-peta-muat', 'Memuat peta rute…'));
+        w.appendChild(m);
+        var leg = el('div', 'ah-legenda');
+        leg.appendChild(el('span', 'j', 'J')); leg.appendChild(el('span', '', 'titik jemput'));
+        leg.appendChild(el('span', 'n', '1')); leg.appendChild(el('span', '', 'urutan antar · ketuk pin untuk memilih'));
+        w.appendChild(leg);
+        return w;
+    }
+    function warnaTitik(j) { return sudah(j) ? '#2E9E44' : (j === st.kini ? '#FF6600' : '#1C1C1E'); }
+    function ikonPin(warna) {
+        return { path: PIN, fillColor: warna, fillOpacity: 1, strokeColor: '#FFFFFF', strokeWeight: 2, scale: 1.25,
+                 anchor: new google.maps.Point(12, 36), labelOrigin: new google.maps.Point(12, 12) };
+    }
+    function simpanRute(id, path) { try { sessionStorage.setItem('ah_rute_' + id, JSON.stringify(path)); } catch (e) {} }
+    function bacaRute(id) {
+        try { var a = JSON.parse(sessionStorage.getItem('ah_rute_' + id) || 'null'); if (Array.isArray(a) && a.length > 1 && a.length < 5000) return a.filter(function (x) { return Array.isArray(x) && isFinite(x[0]) && isFinite(x[1]); }); } catch (e) {}
+        return null;
+    }
+    async function gambarPeta() {
+        if (!st.petaWrap) return;
+        var titik = st.titik.filter(sahKoord);
+        if (!titik.length) { st.petaWrap.hidden = true; return; }
+        st.petaWrap.hidden = false;
+        if (st.peta) { warnaiPin(); return; }
+        if (st.petaMuat) return;
+        st.petaMuat = true;
+        var id = st.id, kotak = st.petaWrap.firstChild;
+        try { await muatMaps(); } catch (e) { st.petaMuat = false; if (st.id === id) kotak.replaceChildren(el('div', 'ah-peta-muat', 'Peta tidak bisa dimuat. Pakai tombol Navigasi.')); return; }
+        if (st.id !== id || st.peta) { st.petaMuat = false; return; }
+        kotak.replaceChildren();
+        var peta = new google.maps.Map(kotak, { disableDefaultUI: true, zoomControl: true, clickableIcons: false, gestureHandling: 'cooperative', mapTypeId: 'roadmap' });
+        st.peta = { map: peta, pin: [], jemput: null, garis: null };
+        var batas = new google.maps.LatLngBounds();
+        if (sahKoord(st.asal)) {
+            st.peta.jemput = new google.maps.Marker({ map: peta, position: st.asal, icon: ikonPin('#1D4ED8'), label: { text: 'J', color: '#FFFFFF', fontWeight: '800', fontSize: '12px' }, title: 'Titik jemput: ' + (st.mitra || 'mitra'), zIndex: 50 });
+            batas.extend(st.asal);
+        }
+        st.titik.forEach(function (t, j) {
+            if (!sahKoord(t)) { st.peta.pin.push(null); return; }
+            var mk = new google.maps.Marker({ map: peta, position: { lat: t.lat, lng: t.lng }, icon: ikonPin(warnaTitik(j)), label: { text: String(j + 1), color: '#FFFFFF', fontWeight: '800', fontSize: '12px' }, title: (j + 1) + '. ' + t.nama, zIndex: 100 + j });
+            mk.addListener('click', function () { if (!sudah(j)) { st.kini = j; gambar(); } });
+            st.peta.pin.push(mk); batas.extend({ lat: t.lat, lng: t.lng });
+        });
+        st.peta.batas = batas;
+        pasPeta();
+        st.petaMuat = false;
+        gambarGarisRute(id);
+    }
+    function warnaiPin() {
+        if (!st.peta) return;
+        st.peta.pin.forEach(function (mk, j) { if (mk) { mk.setIcon(ikonPin(warnaTitik(j))); mk.setZIndex(j === st.kini ? 400 : 100 + j); } });
+    }
+    function pasPeta() {
+        if (!st.peta || !st.peta.batas) return;
+        try { google.maps.event.trigger(st.peta.map, 'resize'); } catch (e) {}
+        var titikAda = st.peta.pin.filter(Boolean).length + (st.peta.jemput ? 1 : 0);
+        if (titikAda <= 1) { st.peta.map.setCenter(st.peta.batas.getCenter()); st.peta.map.setZoom(15); }
+        else st.peta.map.fitBounds(st.peta.batas, 36);
+    }
+    async function gambarGarisRute(id) {
+        var urut = st.titik.filter(sahKoord).map(function (t) { return { lat: t.lat, lng: t.lng }; });
+        var mulai = sahKoord(st.asal) ? { lat: st.asal.lat, lng: st.asal.lng } : urut.shift();
+        if (!mulai || !urut.length) return;
+        var path = bacaRute(id);
+        if (!path) {
+            try {
+                var r = await new Promise(function (ok, gagal) {
+                    new google.maps.DirectionsService().route({ origin: mulai, destination: urut[urut.length - 1],
+                        waypoints: urut.slice(0, -1).map(function (p) { return { location: p, stopover: true }; }),
+                        optimizeWaypoints: false, travelMode: google.maps.TravelMode.DRIVING, avoidTolls: true },
+                        function (res, s) { if (s === 'OK') ok(res); else gagal(new Error(s)); });
+                });
+                path = (r.routes[0].overview_path || []).map(function (ll) { return [Math.round(ll.lat() * 1e5) / 1e5, Math.round(ll.lng() * 1e5) / 1e5]; });
+                if (path.length > 1) simpanRute(id, path); else path = null;
+            } catch (e) { path = null; }
+        }
+        if (st.id !== id || !st.peta) return;
+        var lurus = !path;
+        if (lurus) path = [[mulai.lat, mulai.lng]].concat(urut.map(function (p) { return [p.lat, p.lng]; }));
+        st.peta.garis = new google.maps.Polyline({ map: st.peta.map, path: path.map(function (x) { return { lat: x[0], lng: x[1] }; }), strokeColor: '#FF6600', strokeOpacity: lurus ? 0 : 0.9, strokeWeight: 5,
+            icons: lurus ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, strokeColor: '#FF6600', scale: 3 }, offset: '0', repeat: '14px' }] : [] });
     }
 
     // ---------- Tampilan panel di Tugas Berjalan ----------
@@ -25996,10 +26168,14 @@ window.PembuatQR = PembuatQR;
         if (!panel) {
             panel = el('div', 'ah-panel'); panel.id = 'ah-panel';
             wadah.insertBefore(panel, wadah.firstChild);
-            var lbl = el('p', 'ah-rincian', 'RINCIAN LENGKAP DARI ADMIN'); lbl.id = 'ah-rincian-lbl';
-            wadah.insertBefore(lbl, panel.nextSibling);
         }
-        panel.replaceChildren();
+        // Order Antar Hemat: rincian teks dari admin tidak ditampilkan (semua info sudah ada di panel ini)
+        // (Order lama tanpa data pembayaran tetap menampilkan rincian teks supaya info tagihan tidak hilang)
+        if (st.bayar) Array.prototype.forEach.call(wadah.children, function (c) { if (c !== panel && !c.hasAttribute('data-ah-sembunyi')) { c.setAttribute('data-ah-sembunyi', '1'); c.style.display = 'none'; } });
+        if (!st.petaWrap) st.petaWrap = buatPetaWrap();
+        Array.prototype.slice.call(panel.children).forEach(function (c) { if (c !== st.petaWrap) c.remove(); });
+        if (st.petaWrap.parentNode !== panel) { panel.appendChild(st.petaWrap); setTimeout(pasPeta, 60); }
+        function atas(node) { panel.insertBefore(node, st.petaWrap); }
         var n = st.titik.length, sel = jumlahSelesai();
         if (st.kini < 0 || sudah(st.kini)) st.kini = titikBerikut();
 
@@ -26007,12 +26183,20 @@ window.PembuatQR = PembuatQR;
         var hk = el('div'); hk.appendChild(el('b', '', 'Antar Hemat · ' + (st.mitra || 'Mitra')));
         hk.appendChild(el('small', '', n + ' penerima · kabari tiap penerima lewat WA'));
         head.appendChild(hk); head.appendChild(el('span', 'ah-prog', sel + '/' + n + ' diterima'));
-        panel.appendChild(head);
+        atas(head);
 
         var amb = el('div', 'ah-ambil');
-        amb.appendChild(el('span', '', st.diambil ? '✓ Paket sudah diambil di ' + (st.mitra || 'tempat mitra') : '1) Ambil ' + n + ' paket di ' + (st.mitra || 'tempat mitra') + ' dulu'));
+        var tempat = (st.mitra || 'tempat mitra') + (st.alamat && !st.diambil ? ' (' + st.alamat + ')' : '');
+        amb.appendChild(el('span', '', st.diambil ? '✓ Paket sudah diambil di ' + (st.mitra || 'tempat mitra') : '1) Ambil ' + n + ' paket di ' + tempat + ' dulu'));
         if (!st.diambil) amb.appendChild(tombol('', 'Sudah diambil', function () { st.diambil = true; try { localStorage.setItem('ah_diambil_' + st.id, '1'); } catch (e) {} gambar(); }));
-        panel.appendChild(amb);
+        atas(amb);
+        if (st.bayar) {
+            var nTagih = 0, rpTagih = 0, rpToko = 0;
+            st.titik.forEach(function (t) { if (tagih(t)) { nTagih++; rpTagih += t.ongkir; } else rpToko += t.ongkir; });
+            atas(el('div', 'ah-bayar' + (nTagih ? ' tagih' : ''), !nTagih ? '✓ Ongkir dibayar pengirim (' + rpKu(rpToko) + '). JANGAN menagih penerima.'
+                : (nTagih === n ? '💰 Tagih ongkir ke tiap penerima · total ' + rpKu(rpTagih) : '💰 Tagih ' + nTagih + ' penerima (' + rpKu(rpTagih) + ') · sisanya dibayar pengirim')));
+        }
+        gambarPeta();
 
         if (st.kini >= 0) {
             var i = st.kini, t = st.titik[i];
@@ -26020,16 +26204,17 @@ window.PembuatQR = PembuatQR;
             kini.appendChild(el('div', 'ah-lbl', 'PENERIMA ' + (i + 1) + ' DARI ' + n));
             kini.appendChild(el('div', 'ah-nama', t.nama));
             if (t.patokan) kini.appendChild(el('div', 'ah-pat', t.patokan));
+            if (st.bayar) kini.appendChild(tagih(t) ? el('div', 'ah-tagih', '💰 TAGIH ONGKIR: ' + rpKu(t.ongkir)) : el('div', 'ah-tagih lunas', '✓ Ongkir dibayar pengirim · jangan ditagih'));
             var est = el('div', 'ah-est');
-            est.appendChild(el('p', '', 'KABARI PENERIMA · ESTIMASI TIBA'));
-            var chips = el('div', 'ah-chips');
-            ESTIMASI.forEach(function (m) {
-                var b = tombol((st.est[i] || 10) === m ? 'on' : '', m + ' mnt', function () { st.est[i] = m; gambar(); });
-                chips.appendChild(b);
-            });
-            est.appendChild(chips);
+            est.appendChild(el('p', '', 'KABARI PENERIMA · ESTIMASI OTOMATIS'));
+            var ae = st.estAuto[i];
+            est.appendChild(el('div', 'ah-estinfo', st.hitung ? 'Menghitung estimasi lewat Google Maps…'
+                : (ae ? '±' + ae.menit + ' menit · ' + ae.km.toFixed(1).replace('.', ',') + ' km dari ' + ae.dari + (ae.sumber === 'maps' ? ' (Google Maps)' : ' (perkiraan)')
+                      : 'Dihitung otomatis dari posisi HP kamu saat menekan tombol WA.')));
             var b1 = el('div', 'ah-btns');
-            b1.appendChild(tombol('ah-btn wa', 'Kirim kabar via WA', function () { kabariWa(i); }));
+            var bw = tombol('ah-btn wa', st.hitung ? 'Menghitung…' : 'Kirim kabar via WA', function () { kabariWa(i); });
+            if (st.hitung) bw.disabled = true;
+            b1.appendChild(bw);
             b1.appendChild(tombol('ah-btn', 'Navigasi', function () { bukaPeta(t); }));
             est.appendChild(b1);
             kini.appendChild(est);
@@ -26051,6 +26236,7 @@ window.PembuatQR = PembuatQR;
             it.appendChild(el('span', 'ah-num', b ? '✓' : String(j + 1)));
             var isi = el('span', 'ah-isi'); isi.appendChild(el('b', '', t.nama));
             isi.appendChild(el('small', '', b ? ('Diterima ' + (b.penerimaNama || '') + (jamDari(b.diterimaAt) ? ' · ' + jamDari(b.diterimaAt) : '')) : (t.patokan || 'Ketuk untuk antar ke penerima ini dulu')));
+            if (st.bayar && !b) isi.appendChild(el('small', tagih(t) ? 'ah-kecil-tagih' : '', tagih(t) ? 'Tagih ' + rpKu(t.ongkir) : 'Dibayar pengirim'));
             it.appendChild(isi);
             it.appendChild(el('span', 'ah-tag', b ? 'Diterima' : (j === st.kini ? 'Sekarang' : 'Menunggu')));
             it.addEventListener('click', function () { if (!b) { st.kini = j; gambar(); } });
@@ -26225,10 +26411,14 @@ window.PembuatQR = PembuatQR;
         if (docId !== st.id) {
             hentiPantau();
             var diambil = false; try { diambil = localStorage.getItem('ah_diambil_' + docId) === '1'; } catch (e) {}
-            st = { id: docId, pid: teksAman(data.antar_id, 128), mitra: teksAman(data.antar_mitra, 60), mitraId: teksAman(data.antar_mitra_id, 64), titik: titik, bukti: {}, kini: -1, est: {}, henti: null, diambil: diambil };
+            st = { id: docId, pid: teksAman(data.antar_id, 128), mitra: teksAman(data.antar_mitra, 60), mitraId: teksAman(data.antar_mitra_id, 64), bayar: (data.antar_bayar === 'penerima' || data.antar_bayar === 'campur') ? data.antar_bayar : ((data.antar_bayar === 'mitra' || data.antar_bayar === 'pengirim') ? 'pengirim' : ''), alamat: teksAman(data.antar_alamat, 160), titik: titik, bukti: {}, kini: -1, est: {}, estAuto: {}, hitung: false, henti: null, diambil: diambil,
+                   asal: (data.antar_asal && sahKoord({ lat: Number(data.antar_asal.lat), lng: Number(data.antar_asal.lng) })) ? { lat: Number(data.antar_asal.lat), lng: Number(data.antar_asal.lng) } : null, peta: null, petaWrap: null, petaMuat: false };
             mulaiPantau();
         } else {
             st.titik = titik; st.mitra = teksAman(data.antar_mitra, 60) || st.mitra;
+            if (data.antar_bayar === 'penerima' || data.antar_bayar === 'campur') st.bayar = data.antar_bayar;
+            else if (data.antar_bayar === 'mitra' || data.antar_bayar === 'pengirim') st.bayar = 'pengirim';
+            if (data.antar_alamat) st.alamat = teksAman(data.antar_alamat, 160);
         }
         // Isi Detail Pesanan baru saja ditulis ulang oleh showActiveOrderOverlay -> pasang panel lagi
         var p = document.getElementById('ah-panel'); if (p) p.remove();
@@ -26239,7 +26429,8 @@ window.PembuatQR = PembuatQR;
         hentiPantau(); tutupForm();
         var p = document.getElementById('ah-panel'); if (p) p.remove();
         var l = document.getElementById('ah-rincian-lbl'); if (l) l.remove();
-        st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, henti: null, diambil: false };
+        document.querySelectorAll('[data-ah-sembunyi]').forEach(function (c) { c.removeAttribute('data-ah-sembunyi'); c.style.display = ''; });
+        st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, estAuto: {}, hitung: false, henti: null, diambil: false, asal: null, peta: null, petaWrap: null, petaMuat: false };
     };
     // Gerbang sebelum foto bukti akhir: semua penerima wajib sudah diisi buktinya
     window.antarCekSelesai = function () {

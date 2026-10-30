@@ -11026,7 +11026,7 @@
                     const rute = akLinkAman(p.ruteLink);
                     return `<div class="ak-kartu">
                         <div class="ak-k-atas"><span class="ak-ik" aria-hidden="true"><i class="fa-solid fa-box"></i></span>
-                            <span class="ak-k-judul"><b>${escDx(p.mitraNama || 'Mitra')} · ${p.jenis === 'gabungan' ? 'Gabungan ' + escDx(p.jam || '') : 'Instan'}</b><small>Dikirim mitra ${jam}${p.pembayar === 'penerima' ? ' · ongkir ditagih ke penerima' : ' · ongkir ditagih ke mitra'}</small></span>
+                            <span class="ak-k-judul"><b>${escDx(p.mitraNama || 'Mitra')} · ${p.jenis === 'gabungan' ? 'Gabungan ' + escDx(p.jam || '') : 'Instan'}</b><small>Dikirim mitra ${jam}${p.pembayar === 'penerima' ? ' · ongkir ditagih ke penerima' : (p.pembayar === 'campur' ? ' · ongkir sebagian ditagih ke penerima' : ' · ongkir ditagih ke mitra')}</small></span>
                             <span class="ak-st ${st[1]}">${st[0]}</span></div>
                         <div class="ak-k-angka"><div><b>${titik.length} titik</b><small>urut otomatis</small></div><div><b>${escDx(akKm(p.jarakKm))}</b><small>jarak rute</small></div><div><b class="ak-oranye">${escDx(akRp(p.totalOngkir))}</b><small>ongkir rider</small></div></div>
                         <ol class="ak-k-titik">${titik.map(t => `<li><b>${escDx(t.nama || '-')}</b>${t.patokan ? ' · ' + escDx(t.patokan) : ''}</li>`).join('')}</ol>
@@ -11039,6 +11039,8 @@
                 }).join('');
             };
 
+            // Pembayar ongkir per titik: 'penerima' (rider menagih) atau 'pengirim' (ditotal ke mitra)
+            const akBayarTitik = (t, p) => (t && (t.bayar === 'penerima' || t.bayar === 'pengirim')) ? t.bayar : (p && p.pembayar === 'penerima' ? 'penerima' : 'pengirim');
             const akRincian = (p) => {
                 const titik = Array.isArray(p.titik) ? p.titik : [];
                 const asalLink = (isFinite(Number(p.asalLat)) && isFinite(Number(p.asalLng))) ? akLinkTitik({ lat: p.asalLat, lng: p.asalLng }) : '';
@@ -11047,14 +11049,17 @@
                     'Ambil paket di: ' + (p.mitraAlamat || p.mitraNama || '-'),
                     asalLink ? 'Titik ambil: ' + asalLink : '',
                     titik.length + ' titik · ' + akKm(p.jarakKm) + (akLinkAman(p.ruteLink) ? ' · rute: ' + akLinkAman(p.ruteLink) : ''),
-                    p.pembayar === 'penerima' ? 'Tagih ongkir ke tiap penerima sesuai daftar.' : 'Ongkir ditagih ke mitra. JANGAN menagih penerima.',
+                    (() => { const pen = titik.filter(t => akBayarTitik(t, p) === 'penerima'); const tokoRp = titik.filter(t => akBayarTitik(t, p) !== 'penerima').reduce((a, t) => a + (Number(t.ongkir) || 0), 0);
+                        if (!pen.length) return 'Ongkir dibayar pengirim (mitra) ' + akRp(tokoRp) + '. JANGAN menagih penerima.';
+                        if (pen.length === titik.length) return 'Tagih ongkir ke tiap penerima sesuai daftar.';
+                        return 'Tagih ongkir hanya ke penerima yang bertanda TAGIH. Sisanya dibayar mitra ' + akRp(tokoRp) + '.'; })(),
                     ''
                 ];
                 titik.forEach((t, i) => {
                     baris.push((i + 1) + '. ' + (t.nama || '-') + (t.hp ? ' · ' + akHp(t.hp) : ''));
                     if (t.patokan) baris.push('Patokan: ' + t.patokan);
                     const l = akLinkTitik(t); if (l) baris.push('Titik: ' + l);
-                    if (p.pembayar === 'penerima') baris.push('Tagih ongkir: ' + akRp(t.ongkir));
+                    baris.push(akBayarTitik(t, p) === 'penerima' ? 'TAGIH ongkir: ' + akRp(t.ongkir) : 'Ongkir dibayar mitra (jangan ditagih)');
                     baris.push('');
                 });
                 baris.push('Kabari penerima lewat WA sebelum tiba. Foto rumah/penerima sebagai bukti.');
@@ -11096,9 +11101,10 @@
                 const p = akData.find(x => x.id === akAktif); if (!p) { akAktif = null; return; }
                 const titik = (Array.isArray(p.titik) ? p.titik : []).slice(0, 25).map(t => ({
                     kirimId: String(t.kirimId || ''), nama: String(t.nama || '').slice(0, 60), hp: akHp(t.hp).slice(0, 20),
-                    patokan: String(t.patokan || '').slice(0, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0
+                    patokan: String(t.patokan || '').slice(0, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0, bayar: akBayarTitik(t, p)
                 }));
-                batch.set(orderRef, { antar_id: p.id, antar_mitra: String(p.mitraNama || '').slice(0, 60), antar_mitra_id: String(p.mitraId || ''), antar_titik: titik, antar_rute: akLinkAman(p.ruteLink) }, { merge: true });
+                const asalOk = isFinite(Number(p.asalLat)) && isFinite(Number(p.asalLng)) && p.asalLat !== null && p.asalLng !== null;
+                batch.set(orderRef, { antar_id: p.id, antar_mitra: String(p.mitraNama || '').slice(0, 60), antar_mitra_id: String(p.mitraId || ''), antar_titik: titik, antar_rute: akLinkAman(p.ruteLink), antar_bayar: (p.pembayar === 'penerima' || p.pembayar === 'campur') ? p.pembayar : 'pengirim', antar_alamat: String(p.mitraAlamat || '').slice(0, 160), antar_asal: asalOk ? { lat: Number(p.asalLat), lng: Number(p.asalLng) } : null }, { merge: true });
                 batch.update(doc(db, 'antar_permintaan', p.id), {
                     status: riderUid ? 'dibawa' : 'diproses', orderId: orderRef.id, riderUid: riderUid || null, riderNama: riderName || null,
                     diprosesOleh: akEmail(), diprosesAt: serverTimestamp(), dilihatAdmin: true
@@ -11119,7 +11125,20 @@
                     akTulisTerakhir[p.id] = kunci;
                     updateDoc(doc(db, 'antar_permintaan', p.id), { status: mau, riderNama: nama, riderUid: o.rider_uid || null, orderId: o.id }).catch(e => console.warn('Selaras permintaan:', e));
                 });
+                (orders || []).forEach(o => { if (o && o.antar_id && (o.status === 'assigned' || o.status === 'processing')) akIsiFotoRider(o.antar_id, o.rider_uid); });
             };
+            // Foto kecil rider (±5 KB) disalin ke permintaan supaya mitra bisa melihat siapa yang mengantar.
+            // Sekali per rider per permintaan; mitra tidak bisa membaca data rider mana pun.
+            const akFotoCoba = {};
+            async function akIsiFotoRider(pid, uid) {
+                uid = String(uid || ''); if (!uid || !/^[A-Za-z0-9_-]{1,64}$/.test(uid) || typeof window.akFotoRider !== 'function') return;
+                const p = akData.find(x => x.id === pid); if (!p || p.riderFotoUid === uid) return;
+                const kunci = pid + '|' + uid; if (akFotoCoba[kunci]) return; akFotoCoba[kunci] = 1;
+                try {
+                    const f = await window.akFotoRider(uid);
+                    await updateDoc(doc(db, 'antar_permintaan', pid), { riderFoto: f || '', riderFotoUid: uid });
+                } catch (e) { console.warn('Foto rider antar:', e); }
+            }
             // Order antar hilang dari daftar aktif: selesai -> permintaan selesai; dihapus admin -> kembali ke "menunggu"
             window.akOrderHilang = (orderId, data) => {
                 const pid = data && data.antar_id; if (!pid || !/^[A-Za-z0-9_-]{1,128}$/.test(String(orderId))) return;
@@ -11131,7 +11150,7 @@
                             const titik = Array.isArray(data.antar_titik) ? data.antar_titik : [];
                             const tanpaHp = titik.map(t => Object.assign({}, t, { hp: '' }));
                             const wb = writeBatch(db);
-                            wb.update(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp(), titik: tanpaHp.map(t => ({ kirimId: t.kirimId || '', nama: t.nama || '', hp: '', patokan: t.patokan || '', lat: t.lat, lng: t.lng, ongkir: t.ongkir || 0 })) });
+                            wb.update(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp(), titik: tanpaHp.map(t => ({ kirimId: t.kirimId || '', nama: t.nama || '', hp: '', patokan: t.patokan || '', lat: t.lat, lng: t.lng, ongkir: t.ongkir || 0, bayar: t.bayar === 'penerima' ? 'penerima' : 'pengirim' })) });
                             wb.update(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId), { antar_titik: tanpaHp });
                             titik.forEach(t => { if (/^[A-Za-z0-9_-]{1,128}$/.test(String(t.kirimId || ''))) wb.update(doc(db, 'antar_kirim', t.kirimId), { hp: '' }); });
                             await wb.commit();
@@ -21939,6 +21958,8 @@
                 } catch (e) { return null; }
             }
             const fotoSah = (f) => typeof f === 'string' && f.length <= 20000 && FOTO_KECIL_SAH.test(f);
+            // Antar Hemat: foto kecil rider untuk ditampilkan di aplikasi mitra (memakai simpanan foto yang sama)
+            window.akFotoRider = async (uid) => { const f = await fotoKecilRider(uid); return fotoSah(f) ? f : ''; };
 
             async function simpanForm() {
                 const edit = !!v.uid;
