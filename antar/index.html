@@ -140,6 +140,7 @@
   .ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .jalan-atas b { font-size: 17px; font-weight: 800; display: block; letter-spacing: -.01em; }
   .jalan-atas .sub { font-size: 12px; font-weight: 600; opacity: .92; margin-top: 1px; }
+  .jalan-eta { display: inline-block; margin-top: 5px; font-size: 12px; font-weight: 800; background: rgba(255,255,255,.22); padding: 4px 10px; border-radius: 99px; }
   .jalan-atas .rp { margin-left: auto; text-align: right; font-size: 15px; }
   .jalan-atas .rp small { display: block; font-size: 10.5px; font-weight: 700; opacity: .85; }
   .jalan-jalur { position: relative; height: 46px; margin: 8px 16px 0; }
@@ -353,7 +354,7 @@ const $ = (id) => document.getElementById(id);
 const S = {
   user: null, role: null, tab: 'input',
   mitraId: null, mitra: null, semuaMitra: [],
-  kirim: [], permintaan: [], lokasiMasuk: [], bukti: {}, buktiAwal: true, dipilih: new Set(), batalDipulihkan: new Set(),
+  kirim: [], permintaan: [], lokasiMasuk: [], bukti: {}, kabar: {}, buktiAwal: true, dipilih: new Set(), batalDipulihkan: new Set(),
   draft: { sumber: 'link', bayar: null, lat: null, lng: null, jarakKm: null, ongkirInstan: null, nonce: 0 },
   unsubData: [], unsubAkun: [], prosesLokasi: new Set(), statusLama: {},
   mfId: null, mfAkun: [], unsubMfAkun: null, menyimpan: false
@@ -657,10 +658,16 @@ function avatarRider(p) {
   const f = fotoAman(p.riderFoto);
   return `<span class="ava">${f ? `<img src="${esc(f)}" alt="Foto rider ${esc(p.riderNama || '')}">` : esc(inisial(p.riderNama))}</span>`;
 }
+function estimasiTiba(t) {
+  const k = S.kabar[t.kirimId]; if (!k) return '';
+  const tiba = new Date(k.at + k.menit * 60000);
+  return 'tiba ±' + k.menit + ' menit (sekitar ' + String(tiba.getHours()).padStart(2, '0') + '.' + String(tiba.getMinutes()).padStart(2, '0') + ')';
+}
 function itemTitikJalan(t, i, kiniIdx, p) {
   const b = S.bukti[t.kirimId];
   const kini = !b && i === kiniIdx;
-  const ket = b ? 'Diterima ' + (b.penerimaNama || '') + (jamBukti(b) ? ' · ' + jamBukti(b) : '') : (kini ? 'Rider sedang menuju ke sini' : 'Antrean berikutnya');
+  const est = !b ? estimasiTiba(t) : '';
+  const ket = b ? 'Diterima ' + (b.penerimaNama || '') + (jamBukti(b) ? ' · ' + jamBukti(b) : '') : (kini ? 'Rider sedang menuju ke sini' + (est ? ' · ' + est : '') : 'Antrean berikutnya');
   return `<div class="item">
     <span class="num ${b ? 'ok' : (kini ? 'kini' : '')}">${b ? '✓' : i + 1}</span>
     <div class="isi"><b>${esc(t.nama)}</b>
@@ -685,7 +692,8 @@ function kartuJalan(p) {
     <div class="jalan-label"><span class="denyut" aria-hidden="true"></span>Sedang diantar · ${p.jenis === 'gabungan' ? 'Gabungan' : 'Instan'} ${esc(p.jam || jamDari(p.dibuatAt))}</div>
     <div class="jalan-atas">${avatarRider(p)}
       <div style="min-width:0;"><b>${esc(p.riderNama || 'Rider ProjekGo')}</b>
-        <div class="sub">${kini ? esc('Menuju ' + kini.nama + (n > 1 ? ' (' + (kiniIdx + 1) + ' dari ' + n + ')' : '')) : 'Semua paket sudah diterima'}</div></div>
+        <div class="sub">${kini ? esc('Menuju ' + kini.nama + (n > 1 ? ' (' + (kiniIdx + 1) + ' dari ' + n + ')' : '')) : 'Semua paket sudah diterima'}</div>
+        ${kini && estimasiTiba(kini) ? `<div class="jalan-eta">${esc(estimasiTiba(kini).replace(/^tiba/, 'Tiba'))}</div>` : ''}</div>
       <span class="rp">${esc(done + '/' + n)}<small>diterima</small></span>
     </div>
     <div class="jalan-jalur" aria-hidden="true"><span class="jalan-isi" style="width:${(done / Math.max(1, n)) * 100}%"></span>${ujung}<span class="motor" style="left:${Math.max(4, posisi)}%">🛵</span></div>
@@ -727,7 +735,7 @@ function renderDaftar() {
     h.push(`<section class="card bayar-ringkas"><span class="lbl" style="margin-bottom:2px;">Ongkir hari ini</span><div><span>Total dibayar toko</span><b>${esc(rp(tot.toko))}</b></div><div><span>Ditagih rider ke penerima</span><b style="color:#8A5A00;">${esc(rp(tot.pen))}</b></div></section>`);
   }
   const m = M();
-  h.push(`<div class="info">Ongkir instan: ${esc(rp(m.tarifKm))}/km. Gabungan: ${esc(rp(m.tarifKm))}/km × jarak rute + ${esc(rp(m.tarifTitik))} per paket, dibagi ke tiap penerima sesuai jarak, dan tidak pernah lebih mahal dari instan.</div>`);
+  if (S.role === 'admin') h.push(`<div class="info">Ongkir instan: ${esc(rp(m.tarifKm))}/km. Gabungan: ${esc(rp(m.tarifKm))}/km × jarak rute + ${esc(rp(m.tarifTitik))} per paket, dibagi ke tiap penerima sesuai jarak, dan tidak pernah lebih mahal dari instan.</div>`);
   $('daftar').innerHTML = h.join('');
   renderBawahDaftar(siap);
 }
@@ -744,7 +752,7 @@ function renderSetelan() {
   $('set-info').innerHTML = `<span class="lbl">Data mitra</span>
     <div style="font-size:14px; font-weight:800;">${esc(m.nama || '-')}</div>
     <div class="bantu" style="margin-top:2px;">Titik ambil: ${esc(m.alamat || '-')}${asal() ? '' : ' (pin belum diatur)'}</div>
-    <div class="chips"><span class="chip">${esc(rp(m.tarifKm))}/km</span><span class="chip">${esc(rp(m.tarifTitik))}/paket gabungan</span><span class="chip">Bawaan ongkir: ${m.pembayar === 'penerima' ? 'penerima' : 'toko'}</span></div>
+    <div class="chips">${S.role === 'admin' ? `<span class="chip">${esc(rp(m.tarifKm))}/km</span><span class="chip">${esc(rp(m.tarifTitik))}/paket gabungan</span>` : ''}<span class="chip">Bawaan ongkir: ${m.pembayar === 'penerima' ? 'penerima' : 'toko'}</span></div>
     <div class="bantu">Pembayar ongkir bisa dipilih per paket di tab Input, dan diganti di Daftar sebelum diantar.</div>
     <div class="bantu">Tarif dan titik ambil diatur oleh admin ProjekGo.</div>`;
 }
@@ -1123,7 +1131,7 @@ async function lihatFoto(bid) {
 
 /* ---------- FIREBASE ---------- */
 const app = initializeApp(FIREBASE_CONFIG); const auth = getAuth(app); const db = getFirestore(app);
-function hentiData() { S.unsubData.forEach((f) => f()); S.unsubData = []; S.kirim = []; S.permintaan = []; S.lokasiMasuk = []; S.statusLama = {}; S.bukti = {}; S.buktiAwal = true; S.dipilih = new Set(); }
+function hentiData() { S.unsubData.forEach((f) => f()); S.unsubData = []; S.kirim = []; S.permintaan = []; S.lokasiMasuk = []; S.statusLama = {}; S.bukti = {}; S.kabar = {}; S.buktiAwal = true; S.dipilih = new Set(); }
 function hentiAkun() { S.unsubAkun.forEach((f) => f()); S.unsubAkun = []; if (S.unsubMfAkun) { S.unsubMfAkun(); S.unsubMfAkun = null; } }
 
 onAuthStateChanged(auth, (u) => {
@@ -1189,6 +1197,16 @@ function pilihMitra(id) {
     if (!S.buktiAwal) Object.values(baru).forEach((b) => { if (!S.bukti[b.kirimId]) kabarBukti(b, baru); });
     S.bukti = baru; S.buktiAwal = false; render();
   }, gagal));
+  // Estimasi tiba dari rider (dicatat saat rider mengabari penerima lewat WA)
+  S.unsubData.push(onSnapshot(query(collection(db, 'antar_kabar'), where('mitraId', '==', id), where('tanggal', '==', hariIni())), (snap) => {
+    const baru = {};
+    snap.docs.forEach((d) => {
+      const x = d.data() || {};
+      const menit = Number(x.menit), at = msDari(x.at);
+      if (x.kirimId && isFinite(menit) && menit > 0 && menit <= 240 && at) baru[x.kirimId] = { menit: Math.round(menit), at };
+    });
+    S.kabar = baru; render();
+  }, (e) => console.warn('antar_kabar', e)));
   S.unsubData.push(onSnapshot(query(collection(db, 'antar_lokasi'), where('mitraId', '==', id), where('status', '==', 'terkirim')), (snap) => {
     S.lokasiMasuk = snap.docs.map((d) => Object.assign({ id: d.id }, d.data())); prosesLokasiMasuk();
   }, gagal));
