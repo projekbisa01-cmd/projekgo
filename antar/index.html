@@ -124,6 +124,17 @@
   .sheet .duo { display: flex; gap: 10px; }
   .sheet .duo .btn { flex: 1; }
   .peng-kartu .item { padding: 10px 0; }
+  .ket-instan { font-size: 11px; font-weight: 700; color: var(--teks-3); }
+  .ket-hemat { font-size: 10.5px; font-weight: 700; color: var(--hijau); max-width: 96px; text-align: right; line-height: 1.3; }
+  .rincian { border: 1.5px solid #F2C6A6; }
+  .r-baris { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--garis-2); }
+  .r-baris:first-child { border-top: 0; }
+  .r-baris .isi { flex: 1; min-width: 0; }
+  .r-baris b { font-size: 13.5px; font-weight: 800; }
+  .r-baris .kanan { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+  .rincian-total { margin-top: 8px; padding-top: 10px; border-top: 1px dashed var(--garis); }
+  .peringatan { margin-top: 10px; padding: 11px 12px; border-radius: 12px; background: #FFF4D6; border: 1px solid #F1D48A; color: #6B4A00; font-size: 12.5px; font-weight: 600; line-height: 1.5; }
+  .peringatan b { display: block; font-size: 13px; font-weight: 800; color: #8A5A00; margin-bottom: 2px; }
   .hemat { margin-top: 10px; padding: 12px 14px; border-radius: 14px; background: var(--hijau-bg); border: 1px solid #BFE3C9; color: #1F4D2B; font-size: 12.5px; font-weight: 600; line-height: 1.5; }
   .hemat > b { display: block; font-size: 13px; font-weight: 800; color: var(--hijau); }
   .hemat ul { margin: 6px 0; padding-left: 18px; }
@@ -189,6 +200,7 @@
     <nav class="tabs" id="tabs" role="tablist" hidden>
       <button type="button" role="tab" data-tab="input" aria-selected="true">Input</button>
       <button type="button" role="tab" data-tab="daftar" aria-selected="false">Daftar<span class="badge" id="badge-daftar" hidden>0</span><span class="titik-jalan" id="titik-jalan" title="Ada paket sedang diantar" hidden></span></button>
+      <button type="button" role="tab" data-tab="riwayat" aria-selected="false">Riwayat</button>
       <button type="button" role="tab" data-tab="setelan" aria-selected="false">Setelan</button>
       <button type="button" role="tab" data-tab="mitra" aria-selected="false" id="tab-mitra" hidden>Mitra</button>
     </nav>
@@ -266,6 +278,9 @@
 
   <!-- ===== DAFTAR ===== -->
   <main id="v-daftar" hidden><div id="daftar" style="display:flex; flex-direction:column; gap:12px;"></div></main>
+
+  <!-- ===== RIWAYAT ===== -->
+  <main id="v-riwayat" hidden><div id="riwayat" style="display:flex; flex-direction:column; gap:12px;"></div></main>
 
   <!-- ===== SETELAN ===== -->
   <main id="v-setelan" hidden>
@@ -581,7 +596,7 @@ function render() {
   $('pilih-mitra').hidden = !(ok && S.role === 'admin');
   const adaMitra = !!S.mitraId && !!S.mitra;
   if (ok && S.role === 'admin' && !adaMitra && S.tab !== 'mitra') S.tab = 'mitra';
-  ['input', 'daftar', 'setelan', 'mitra'].forEach((t) => { $('v-' + t).hidden = !ok || S.tab !== t || (t !== 'mitra' && !adaMitra); });
+  ['input', 'daftar', 'riwayat', 'setelan', 'mitra'].forEach((t) => { $('v-' + t).hidden = !ok || S.tab !== t || (t !== 'mitra' && !adaMitra); });
   $('bawah-input').hidden = !ok || S.tab !== 'input' || !adaMitra;
   $('bawah-daftar').hidden = !ok || S.tab !== 'daftar' || !adaMitra;
   document.querySelectorAll('#tabs [data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === S.tab)));
@@ -598,6 +613,7 @@ function render() {
   else info.hidden = true;
   if (S.tab === 'input' && adaMitra) renderInput();
   if (S.tab === 'daftar' && adaMitra) renderDaftar();
+  if (S.tab === 'riwayat' && adaMitra) renderRiwayat();
   if (S.tab === 'setelan' && adaMitra) renderSetelan();
   if (S.tab === 'mitra') renderKelolaMitra();
 }
@@ -628,7 +644,7 @@ function itemSiap(k) {
       <div class="sub">${esc(km1(k.jarakKm))} dari titik ambil${k.patokan ? ' · ' + esc(k.patokan) : ''}</div>
       <div class="baris-btn" style="margin-top:6px;"><a class="btn btn-hantu btn-kecil" href="${esc(linkTitik(k.lat, k.lng))}" target="_blank" rel="noopener noreferrer" data-stop="1">Lihat titik</a><button type="button" class="btn btn-merah btn-kecil" data-aksi="batal" data-id="${esc(k.id)}" data-stop="1">Hapus</button></div>
     </div>
-    <div class="kanan"><span class="rp">${esc(rp(k.ongkirInstan))}</span><span class="coret" style="text-decoration:none;">instan</span></div>
+    <div class="kanan"><span class="rp">${esc(rp(k.ongkirInstan))}</span><span class="ket-instan">ongkir instan</span><span class="ket-hemat">digabung searah lebih hemat</span></div>
   </div>`;
 }
 function itemTunggu(k) {
@@ -743,26 +759,43 @@ function renderDaftar() {
   peng.filter((p) => p.status === 'menunggu' || p.status === 'diproses').forEach((p) => h.push(kartuTungguRider(p)));
   h.push(`<section class="card"><div class="grup-head"><div><h2>Siap diantar</h2><div class="sub">${siap.length} paket · ceklis yang mau diantar sekarang</div></div>${siap.length > 1 ? `<button type="button" class="pilih-semua" data-aksi="pilih-semua">${semuaDipilih ? 'Batal pilih' : 'Pilih semua'}</button>` : ''}</div>
     <div style="margin-top:6px;">${siap.length ? siap.map(itemSiap).join('') : '<div class="kosong">Belum ada paket yang siap. Simpan paket di tab Input, atau tunggu penerima mengirim lokasi.</div>'}</div></section>`);
+  const dipilihList = siap.filter((k) => S.dipilih.has(k.id));
+  if (dipilihList.length >= 2 && dipilihList.length <= MAKS_TITIK && asal()) jadwalHitung(dipilihList);
+  if (dipilihList.length) h.push(rincianHTML(dipilihList));
   if (tunggu.length) h.push(`<section class="card"><div class="grup-head"><div><h2>Menunggu lokasi penerima</h2><div class="sub">${tunggu.length} paket · pindah ke "Siap diantar" begitu lokasi masuk</div></div></div><div style="margin-top:6px;">${tunggu.map(itemTunggu).join('')}</div></section>`);
-  const riwayat = peng.filter((p) => p.status === 'selesai' || p.status === 'batal');
-  if (riwayat.length) h.push(`<details class="card riwayat"${S.riwayatBuka ? ' open' : ''}><summary><div><h2 style="margin:0;font-size:16px;font-weight:800;">Riwayat hari ini</h2><div class="sub" style="font-size:12px;color:var(--teks-3);font-weight:600;">${riwayat.filter((p) => p.status === 'selesai').length} selesai${riwayat.some((p) => p.status === 'batal') ? ' · ' + riwayat.filter((p) => p.status === 'batal').length + ' dibatalkan' : ''} · ketuk untuk lihat bukti</div></div><span class="panah" aria-hidden="true">›</span></summary>${riwayat.map(kartuPengantaran).join('')}</details>`);
-  const aktifHari = peng.filter((p) => p.status !== 'batal');
-  if (aktifHari.length) {
-    const tot = aktifHari.reduce((a, p) => { const t = totalBayar(p.titik, p); a.toko += t.toko; a.pen += t.penerima; return a; }, { toko: 0, pen: 0 });
-    h.push(`<section class="card bayar-ringkas"><span class="lbl" style="margin-bottom:2px;">Ongkir hari ini</span><div><span>Total dibayar toko</span><b>${esc(rp(tot.toko))}</b></div><div><span>Ditagih rider ke penerima</span><b style="color:#8A5A00;">${esc(rp(tot.pen))}</b></div></section>`);
-  }
   const m = M();
   if (S.role === 'admin') h.push(`<div class="info">Ongkir instan: ${esc(rp(m.tarifKm))}/km. Gabungan: ${esc(rp(m.tarifKm))}/km × jarak rute + ${esc(rp(m.tarifTitik))} per paket, dibagi ke tiap penerima sesuai jarak, dan tidak pernah lebih mahal dari instan.</div>`);
   $('daftar').innerHTML = h.join('');
   renderBawahDaftar(siap);
 }
+function renderRiwayat() {
+  const peng = S.permintaan.slice().sort((a, b) => msDari(b.dibuatAt) - msDari(a.dibuatAt));
+  const riwayat = peng.filter((p) => p.status === 'selesai' || p.status === 'batal');
+  const aktifHari = peng.filter((p) => p.status !== 'batal');
+  const h = [];
+  if (aktifHari.length) {
+    const tot = aktifHari.reduce((a, p) => { const t = totalBayar(p.titik, p); a.toko += t.toko; a.pen += t.penerima; return a; }, { toko: 0, pen: 0 });
+    h.push(`<section class="card bayar-ringkas"><span class="lbl" style="margin-bottom:2px;">Ongkir hari ini</span><div><span>Total dibayar toko</span><b>${esc(rp(tot.toko))}</b></div><div><span>Ditagih rider ke penerima</span><b style="color:#8A5A00;">${esc(rp(tot.pen))}</b></div></section>`);
+  }
+  h.push(`<div class="grup-head" style="padding:0 4px;"><div><h2>Riwayat hari ini</h2><div class="sub">${riwayat.filter((p) => p.status === 'selesai').length} selesai${riwayat.some((p) => p.status === 'batal') ? ' · ' + riwayat.filter((p) => p.status === 'batal').length + ' dibatalkan' : ''} · ketuk "Lihat foto bukti" untuk bukti serah terima</div></div></div>`);
+  h.push(riwayat.length ? riwayat.map(kartuPengantaran).join('') : '<div class="card kosong">Belum ada pengantaran yang selesai hari ini.</div>');
+  $('riwayat').innerHTML = h.join('');
+}
+$('riwayat').addEventListener('click', (e) => { const el = e.target.closest('[data-aksi="foto"]'); if (el) lihatFoto(el.dataset.bid); });
 function renderBawahDaftar(siap) {
   const pilih = (siap || S.kirim.filter((k) => k.status === 'baru')).filter((k) => S.dipilih.has(k.id));
   const n = pilih.length;
   $('pilih-n').textContent = n + ' paket dipilih';
-  $('pilih-ket').textContent = n === 0 ? 'Ceklis paket yang mau diantar' : (n === 1 ? 'Diantar instan · ' + rp(pilih[0].ongkirInstan) : 'Diantar gabungan · lebih hemat');
+  const rc = n >= 2 && S.rc && S.rc.kunci === kunciPilih(pilih) ? S.rc : null;
+  const tdk = rc && rc.status === 'ok' && rc.r.tidakSearah;
+  $('pilih-ket').textContent = n === 0 ? 'Ceklis paket yang mau diantar'
+    : n === 1 ? 'Ongkir instan · ' + rp(pilih[0].ongkirInstan)
+    : !rc || rc.status === 'hitung' ? 'Menghitung ongkir gabungan…'
+    : rc.status === 'gagal' ? 'Ongkir gabungan belum terhitung'
+    : tdk ? 'Rute tidak searah · instan ' + rp(rc.r.instanSum)
+    : 'Gabungan ' + rp(rc.r.total) + ' · hemat ' + rp(Math.max(0, rc.r.instanSum - rc.r.total));
   $('btn-antar').disabled = n === 0 || n > MAKS_TITIK || !asal();
-  $('btn-antar').textContent = n === 1 ? 'Antar instan' : (n > 1 ? 'Antar gabungan' : 'Antar sekarang');
+  $('btn-antar').textContent = n === 1 ? 'Antar instan' : (n > 1 ? (tdk ? 'Pilih cara kirim' : 'Antar gabungan') : 'Antar sekarang');
 }
 function renderSetelan() {
   const m = M();
@@ -915,6 +948,7 @@ $('btn-simpan').addEventListener('click', async () => {
 $('sheet-isi').addEventListener('click', (e) => {
   if (e.target.closest('[data-salin-sheet]')) { salin(S.salinSheet || ''); return; }
   if (e.target.closest('[data-pesan]')) { pesanSekarang(e.target.closest('[data-pesan]')); return; }
+  if (e.target.closest('[data-pesan-instan]')) { pesanInstanSemua(e.target.closest('[data-pesan-instan]')); return; }
   if (e.target.closest('[data-tutup-sheet]')) { setTimeout(tutupSheet, 50); }
 });
 
@@ -941,6 +975,79 @@ function bagiOngkir(totalRumus, anggota, bulat) {
     return bagian;
   });
 }
+function kunciPilih(pilih) { const m = M(); return pilih.map((k) => k.id + ':' + k.lat + ',' + k.lng).sort().join('|') + '#' + m.tarifKm + ',' + m.tarifTitik + ',' + m.pembulatan + ',' + (S.mitraId || ''); }
+async function lengkapiInstan(a, k) {
+  if (k.jarakKm != null && k.ongkirInstan != null) return k;
+  const r = await rute(a, { lat: k.lat, lng: k.lng });
+  const jarak = r.routes[0].legs.reduce((x, l) => x + l.distance.value, 0) / 1000;
+  return Object.assign({}, k, { jarakKm: jarak, ongkirInstan: ongkirInstan(jarak) });
+}
+// Rencana kirim: 1 paket = instan; >=2 = gabungan (rute dioptimalkan Google Maps).
+// tidakSearah = rumus gabungan lebih mahal dari total instan masing-masing.
+async function hitungRencana(pilih) {
+  const a = asal(); if (!a) throw new Error('Titik ambil belum diatur admin');
+  await tungguMaps();
+  const m = M();
+  const anggota = [];
+  for (const k of pilih) anggota.push(await lengkapiInstan(a, k));
+  const instanSum = anggota.reduce((x, k) => x + (k.ongkirInstan || 0), 0);
+  if (anggota.length === 1) {
+    const k = anggota[0];
+    return { jenis: 'instan', urut: [k], bagian: [k.ongkirInstan], total: k.ongkirInstan, instanSum, tidakSearah: false, jarakKm: k.jarakKm, ruteLink: ruteLink(a, [k]) };
+  }
+  const urutJauh = [...anggota].sort((x, y) => haversineKm(a, y) - haversineKm(a, x));
+  const akhir = urutJauh[0], tengah = urutJauh.slice(1);
+  const r = await rute(a, { lat: akhir.lat, lng: akhir.lng }, tengah.map((k) => ({ lat: k.lat, lng: k.lng })), true);
+  const urut = (r.routes[0].waypoint_order || []).map((i) => tengah[i]).concat([akhir]);
+  const jarakKm = r.routes[0].legs.reduce((x, l) => x + l.distance.value, 0) / 1000;
+  const totalRumus = bulatAtas(jarakKm * m.tarifKm + m.tarifTitik * urut.length);
+  const bagian = bagiOngkir(totalRumus, urut, m.pembulatan);
+  return { jenis: 'gabungan', urut, bagian, total: bagian.reduce((x, y) => x + y, 0), totalRumus, instanSum, tidakSearah: totalRumus > instanSum, jarakKm, ruteLink: ruteLink(a, urut) };
+}
+// Rincian ongkir dihitung otomatis setiap pilihan berubah (ditunda sebentar supaya hemat permintaan Maps)
+function jadwalHitung(pilih) {
+  const kunci = kunciPilih(pilih);
+  if (S.rc && S.rc.kunci === kunci) return;
+  S.rc = { kunci, status: 'hitung' };
+  clearTimeout(S.rcTimer);
+  S.rcTimer = setTimeout(async () => {
+    try { const r = await hitungRencana(pilih); if (S.rc && S.rc.kunci === kunci) S.rc = { kunci, status: 'ok', r }; }
+    catch (e) { if (S.rc && S.rc.kunci === kunci) S.rc = { kunci, status: 'gagal' }; }
+    if (S.tab === 'daftar') renderDaftar();
+  }, 700);
+}
+function barisOngkir(k, nominal, coret, no) {
+  return `<div class="r-baris"><span class="num">${no ? no : '•'}</span><div class="isi"><b>${esc(k.nama)}</b><div style="margin-top:3px;">${tagBayar(bayarPaket(k))}</div></div><div class="kanan"><span class="rp">${esc(rp(nominal))}</span>${coret != null && coret > nominal ? `<span class="coret">${esc(rp(coret))}</span>` : ''}</div></div>`;
+}
+function barisBayar(tb) {
+  return `<div><span>Dibayar toko</span><b>${esc(rp(tb.toko))}</b></div><div><span>Ditagih rider ke penerima${tb.nPen ? ' (' + tb.nPen + ' orang)' : ''}</span><b style="color:#8A5A00;">${esc(rp(tb.penerima))}</b></div>`;
+}
+function rincianHTML(pilih) {
+  const n = pilih.length;
+  const rc = n >= 2 && S.rc && S.rc.kunci === kunciPilih(pilih) ? S.rc : null;
+  let isi = '', total = '', peringatan = '', jenis = n === 1 ? 'Instan' : 'Gabungan';
+  if (n === 1) {
+    const k = pilih[0];
+    isi = barisOngkir(k, k.ongkirInstan, null, 1);
+    total = `<div><span>Ongkir instan · 1 rider langsung ke penerima</span><b>${esc(rp(k.ongkirInstan))}</b></div>` + barisBayar(totalBayar([{ bayar: bayarPaket(k), ongkir: k.ongkirInstan }]));
+  } else if (n > MAKS_TITIK) {
+    isi = `<div class="bantu" style="color:var(--merah);">Maksimal ${MAKS_TITIK} paket sekali antar.</div>`;
+  } else if (!rc || rc.status === 'hitung') {
+    isi = '<div class="kosong" style="padding:12px 0;">Menghitung ongkir gabungan…</div>';
+  } else if (rc.status === 'gagal') {
+    isi = '<div class="bantu" style="color:var(--merah);">Ongkir gabungan gagal dihitung. Cek sinyal, lalu ceklis ulang atau tekan tombol di bawah.</div>';
+  } else if (rc.r.tidakSearah) {
+    const r = rc.r; jenis = 'Rute tidak searah';
+    peringatan = `<div class="peringatan"><b>Ongkir gabungan lebih mahal karena rute tidak searah</b>Gabungan ${esc(rp(r.totalRumus))}, sedangkan instan masing-masing hanya ${esc(rp(r.instanSum))}. Kamu bisa menunggu paket lain yang searah, atau kirim instan saja.</div>`;
+    isi = r.urut.map((k) => barisOngkir(k, k.ongkirInstan, null, null)).join('');
+    total = `<div><span>Total instan (${n} rider)</span><b>${esc(rp(r.instanSum))}</b></div>` + barisBayar(totalBayar(r.urut.map((k) => ({ bayar: bayarPaket(k), ongkir: k.ongkirInstan }))));
+  } else {
+    const r = rc.r;
+    isi = r.urut.map((k, i) => barisOngkir(k, r.bagian[i], k.ongkirInstan, i + 1)).join('');
+    total = `<div><span>Total gabungan · ${esc(km1(r.jarakKm))}</span><b>${esc(rp(r.total))}</b></div><div><span>Hemat dibanding instan</span><b style="color:var(--hijau);">${esc(rp(Math.max(0, r.instanSum - r.total)))}</b></div>` + barisBayar(totalBayar(r.urut.map((k, i) => ({ bayar: bayarPaket(k), ongkir: r.bagian[i] }))));
+  }
+  return `<section class="card rincian"><div class="grup-head"><div><h2>Rincian ongkir</h2><div class="sub">${n} paket dipilih · ${esc(jenis)}</div></div></div>${peringatan}<div style="margin-top:4px;">${isi}</div>${total ? `<div class="bayar-ringkas rincian-total">${total}</div>` : ''}</section>`;
+}
 async function siapkanAntar() {
   const a = asal();
   if (!a) { toast('Titik ambil belum diatur admin'); return; }
@@ -948,26 +1055,20 @@ async function siapkanAntar() {
   if (!pilih.length) return;
   const btn = $('btn-antar'); btn.disabled = true; btn.textContent = 'Menghitung…';
   try {
-    await tungguMaps();
-    const m = M();
-    let rencana;
-    if (pilih.length === 1) {
-      const k = pilih[0];
-      let jarak = k.jarakKm, ongkir = k.ongkirInstan;
-      if (jarak == null || ongkir == null) { const r = await rute(a, { lat: k.lat, lng: k.lng }); jarak = r.routes[0].legs.reduce((s, l) => s + l.distance.value, 0) / 1000; ongkir = ongkirInstan(jarak); }
-      rencana = { jenis: 'instan', urut: [Object.assign({}, k, { jarakKm: jarak, ongkirInstan: ongkir })], bagian: [ongkir], total: ongkir, jarakKm: jarak, ruteLink: ruteLink(a, [k]) };
-    } else {
-      const urutJauh = [...pilih].sort((x, y) => haversineKm(a, y) - haversineKm(a, x));
-      const akhir = urutJauh[0], tengah = urutJauh.slice(1);
-      const r = await rute(a, { lat: akhir.lat, lng: akhir.lng }, tengah.map((k) => ({ lat: k.lat, lng: k.lng })), true);
-      const urut = (r.routes[0].waypoint_order || []).map((i) => tengah[i]).concat([akhir]);
-      const jarakKm = r.routes[0].legs.reduce((s, l) => s + l.distance.value, 0) / 1000;
-      const totalRumus = bulatAtas(jarakKm * m.tarifKm + m.tarifTitik * urut.length);
-      const bagian = bagiOngkir(totalRumus, urut, m.pembulatan);
-      rencana = { jenis: 'gabungan', urut, bagian, total: bagian.reduce((x, y) => x + y, 0), totalRumus, jarakKm, ruteLink: ruteLink(a, urut) };
-    }
+    const kunci = kunciPilih(pilih);
+    let rencana = S.rc && S.rc.kunci === kunci && S.rc.status === 'ok' ? S.rc.r : null;
+    if (!rencana) { rencana = await hitungRencana(pilih); if (pilih.length >= 2) S.rc = { kunci, status: 'ok', r: rencana }; }
     S.rencana = rencana;
-    const instanTotal = rencana.urut.reduce((x, k) => x + (k.ongkirInstan || 0), 0);
+    if (rencana.tidakSearah) {
+      const baris = rencana.urut.map((k) => barisOngkir(k, k.ongkirInstan, null, null)).join('');
+      bukaSheet(`<div><h3>Rute tidak searah</h3>
+          <div class="sub">Ongkir gabungan ${esc(rp(rencana.totalRumus))} lebih mahal daripada instan masing-masing ${esc(rp(rencana.instanSum))}. Kamu bisa menunggu paket lain yang searah, atau kirim instan sekarang (1 rider untuk tiap penerima).</div></div>
+        <div class="card" style="padding:12px 14px;">${baris}<div class="bayar-ringkas rincian-total">${barisBayar(totalBayar(rencana.urut.map((k) => ({ bayar: bayarPaket(k), ongkir: k.ongkirInstan }))))}</div></div>
+        <div class="duo"><button type="button" class="btn btn-sec" data-tutup-sheet="1">Tunggu yang searah</button><button type="button" class="btn btn-pri" data-pesan-instan="1">Kirim instan · ${esc(rp(rencana.instanSum))}</button></div>`);
+      return;
+    }
+    const m = M();
+    const instanTotal = rencana.instanSum;
     const hemat = Math.max(0, instanTotal - rencana.total);
     const tb = totalBayar(rencana.urut.map((k, i) => ({ bayar: bayarPaket(k), ongkir: rencana.bagian[i] })));
     const baris = rencana.urut.map((k, i) => `<div class="item"><span class="num">${i + 1}</span><div class="isi"><b>${esc(k.nama)}</b><div class="sub">${esc(km1(k.jarakKm))}${k.patokan ? ' · ' + esc(k.patokan) : ''}</div><div style="margin-top:4px;">${tagBayar(bayarPaket(k))}</div></div><div class="kanan"><span class="rp">${esc(rp(rencana.bagian[i]))}</span>${rencana.jenis === 'gabungan' && k.ongkirInstan > rencana.bagian[i] ? `<span class="coret">${esc(rp(k.ongkirInstan))}</span>` : ''}</div></div>`).join('');
@@ -983,7 +1084,30 @@ async function siapkanAntar() {
       </div>
       <div class="duo"><button type="button" class="btn btn-sec" data-tutup-sheet="1">Batal</button><button type="button" class="btn btn-pri" data-pesan="1">Pesan</button></div>`);
   } catch (e) { toast(e.code ? pesanError(e) : e.message); }
-  renderBawahDaftar();
+  finally { renderBawahDaftar(); }
+}
+// Rute tidak searah: tiap paket dipesan sebagai instan terpisah (1 permintaan per penerima)
+async function pesanInstanSemua(tombol) {
+  const r = S.rencana; if (!r || !r.urut || !r.urut.length) return;
+  const m = M(), a = asal(); if (!a) return;
+  tombol.disabled = true; tombol.textContent = 'Mengirim…';
+  const wb = writeBatch(db);
+  r.urut.forEach((k) => {
+    const ref = doc(collection(db, 'antar_permintaan'));
+    const bayar = bayarPaket(k), ongkir = Math.round(k.ongkirInstan || 0);
+    wb.set(ref, {
+      mitraId: S.mitraId, mitraNama: String(m.nama || '').slice(0, 60), mitraHp: String(m.hp || '').slice(0, 20), mitraAlamat: String(m.alamat || '').slice(0, 120),
+      asalLat: a.lat, asalLng: a.lng, jenis: 'instan', tanggal: hariIni(), jam: jamKini(), batchId: null,
+      kirimIds: [k.id],
+      titik: [{ kirimId: k.id, nama: k.nama, hp: k.hp || '', patokan: k.patokan || '', lat: k.lat, lng: k.lng, ongkir, bayar }],
+      jarakKm: Math.round((k.jarakKm || 0) * 100) / 100, totalOngkir: ongkir, ruteLink: ruteLink(a, [k]),
+      pembayar: bayar, totalToko: bayar === 'penerima' ? 0 : ongkir, totalPenerima: bayar === 'penerima' ? ongkir : 0,
+      status: 'menunggu', dilihatAdmin: false, dibuatOleh: S.user.email, dibuatAt: serverTimestamp()
+    });
+    wb.update(doc(db, 'antar_kirim', k.id), { status: 'diminta', tipe: 'instan', urutan: 1, ongkirFinal: ongkir, permintaanId: ref.id });
+  });
+  try { await wb.commit(); S.dipilih.clear(); tutupSheet(); toast(r.urut.length + ' pesanan instan terkirim ke admin ProjekGo'); }
+  catch (e) { toast(pesanError(e)); tombol.disabled = false; tombol.textContent = 'Kirim instan'; }
 }
 async function pesanSekarang(tombol) {
   const r = S.rencana; if (!r) return;
