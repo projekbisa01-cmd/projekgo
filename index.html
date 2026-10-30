@@ -25889,7 +25889,12 @@ window.PembuatQR = PembuatQR;
   .ah-kini .ah-pat { font-size: 13px; color: #6B6258; margin-top: 2px; }
   .ah-est { margin-top: 10px; padding: 10px; border-radius: 12px; background: #F8F3ED; border: 1px solid #F0E2D4; }
   .ah-est p { margin: 0 0 6px; font-size: 11px; font-weight: 800; color: #8A8178; letter-spacing: .04em; }
-  .ah-estinfo { font-size: 13px; font-weight: 800; color: #1C1C1E; }
+  .ah-popkotak { background: #fff; border-radius: 22px; padding: 22px 20px 14px; max-width: 360px; width: 100%; text-align: center; color: #3A3A3C; font-size: 14px; }
+  .ah-poplbl { font-size: 12px; font-weight: 800; letter-spacing: .06em; color: #8A5A00; }
+  .ah-popnom { font-size: 34px; font-weight: 800; color: #1C1C1E; margin: 4px 0 2px; letter-spacing: -.02em; }
+  .ah-popkotak p { margin: 6px 0 4px; line-height: 1.45; }
+  .ah-gerbang .ah-popkotak button { margin-top: 12px; width: 100%; min-height: 48px; border-radius: 12px; background: #2E9E44; color: #fff; font-weight: 800; border: 0; font-size: 14.5px; }
+  .ah-gerbang .ah-popkotak button.ah-popbatal { margin-top: 4px; background: transparent; color: #6B6258; min-height: 42px; }
   .ah-btn:disabled { opacity: .6; }
   .ah-tagih.lunas { color: #1E7A34; background: #E6F6EC; }
   .ah-kecil-tagih { color: #8A5A00 !important; font-weight: 800 !important; }
@@ -26054,6 +26059,19 @@ window.PembuatQR = PembuatQR;
         st.estAuto[i] = hasil;
         return hasil;
     }
+    // Estimasi tiba dicatat untuk aplikasi Antar (mitra melihat "tiba ±… menit"); data kecil, terhapus 15 hari
+    async function kirimEstimasi(i, h) {
+        try {
+            var t = st.titik[i], uid = uidKu();
+            if (!t || !uid || !ID_SAH.test(st.id) || !st.pid) return;
+            var m = await fsMod(), db = m.getFirestore();
+            await m.setDoc(m.doc(db, 'antar_kabar', st.id + '_' + i), {
+                orderId: st.id, idx: i, kirimId: t.kirimId, permintaanId: st.pid, mitraId: st.mitraId, riderUid: uid,
+                menit: Math.max(1, Math.min(240, Math.round(h.menit))), km: Math.max(0, Math.min(200, Math.round(h.km * 10) / 10)),
+                tanggal: hariIni(), at: m.serverTimestamp(), hapusAt: m.Timestamp.fromMillis(Date.now() + 15 * 864e5)
+            });
+        } catch (e) { console.warn('[Antar Hemat] estimasi', e); }
+    }
     async function kabariWa(i) {
         var t = st.titik[i]; if (!t) return;
         if (!t.hp) { toast('Nomor penerima tidak ada. Hubungi admin.'); return; }
@@ -26067,6 +26085,7 @@ window.PembuatQR = PembuatQR;
         var pesan = 'Halo kak ' + t.nama + ', saya ' + namaRider() + ' dari ProjekGo 🙏\n' +
             'Paket dari ' + (st.mitra || 'pengirim') + ' ' + kalimat + '\n' + ongkirTeks +
             'Mohon ditunggu dan pastikan ada yang menerima di rumah. Terima kasih.';
+        if (h) kirimEstimasi(i, h);
         if (typeof window.openWaSelector === 'function') window.openWaSelector(hp62(t.hp), pesan);
         else window.open('https://wa.me/' + hp62(t.hp) + '?text=' + encodeURIComponent(pesan), '_blank', 'noopener');
     }
@@ -26160,6 +26179,32 @@ window.PembuatQR = PembuatQR;
             icons: lurus ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, strokeColor: '#FF6600', scale: 3 }, offset: '0', repeat: '14px' }] : [] });
     }
 
+    // Kalau isi Detail Pesanan ditulis ulang tanpa memanggil antarRender, panel dipasang lagi & teks admin disembunyikan
+    function jagaRincian(wadah) {
+        if (wadah.__ahJaga || typeof MutationObserver !== 'function') return;
+        wadah.__ahJaga = new MutationObserver(function () {
+            if (!st.id) return;
+            var p = document.getElementById('ah-panel');
+            var adaTampil = Array.prototype.some.call(wadah.children, function (c) { return c !== p && !c.hasAttribute('data-ah-sembunyi'); });
+            if (!p || p.parentNode !== wadah || adaTampil) gambar();
+        });
+        wadah.__ahJaga.observe(wadah, { childList: true });
+    }
+    // Pop up tagih ongkir (penerima saat paket diserahkan, pengirim saat paket diambil)
+    function popTagih(judul, nominal, ket, labelOk, lanjut) {
+        var lama = document.getElementById('ah-gerbang'); if (lama) lama.remove();
+        var g = el('div', 'ah-gerbang'); g.id = 'ah-gerbang'; g.setAttribute('role', 'alertdialog'); g.setAttribute('aria-modal', 'true'); g.setAttribute('aria-label', judul);
+        var k = el('div', 'ah-popkotak');
+        k.appendChild(el('div', 'ah-poplbl', judul));
+        k.appendChild(el('div', 'ah-popnom', rpKu(nominal)));
+        k.appendChild(el('p', '', ket));
+        k.appendChild(tombol('', labelOk, function () { g.remove(); lanjut(); }));
+        k.appendChild(tombol('ah-popbatal', 'Nanti dulu', function () { g.remove(); }));
+        g.appendChild(k); document.body.appendChild(g);
+        try { if (navigator.vibrate) navigator.vibrate([60, 60, 60]); } catch (e) {}
+    }
+    function ongkirPengirim() { var s = 0; st.titik.forEach(function (t) { if (!tagih(t)) s += t.ongkir; }); return s; }
+
     // ---------- Tampilan panel di Tugas Berjalan ----------
     function gambar() {
         var wadah = document.getElementById('active-order-items');
@@ -26169,9 +26214,9 @@ window.PembuatQR = PembuatQR;
             panel = el('div', 'ah-panel'); panel.id = 'ah-panel';
             wadah.insertBefore(panel, wadah.firstChild);
         }
-        // Order Antar Hemat: rincian teks dari admin tidak ditampilkan (semua info sudah ada di panel ini)
-        // (Order lama tanpa data pembayaran tetap menampilkan rincian teks supaya info tagihan tidak hilang)
-        if (st.bayar) Array.prototype.forEach.call(wadah.children, function (c) { if (c !== panel && !c.hasAttribute('data-ah-sembunyi')) { c.setAttribute('data-ah-sembunyi', '1'); c.style.display = 'none'; } });
+        // Order Antar Hemat: rincian teks panjang dari admin tidak ditampilkan (semua info sudah ada di panel ini)
+        jagaRincian(wadah);
+        Array.prototype.forEach.call(wadah.children, function (c) { if (c !== panel && !c.hasAttribute('data-ah-sembunyi')) { c.setAttribute('data-ah-sembunyi', '1'); c.style.display = 'none'; } });
         if (!st.petaWrap) st.petaWrap = buatPetaWrap();
         Array.prototype.slice.call(panel.children).forEach(function (c) { if (c !== st.petaWrap) c.remove(); });
         if (st.petaWrap.parentNode !== panel) { panel.appendChild(st.petaWrap); setTimeout(pasPeta, 60); }
@@ -26188,7 +26233,12 @@ window.PembuatQR = PembuatQR;
         var amb = el('div', 'ah-ambil');
         var tempat = (st.mitra || 'tempat mitra') + (st.alamat && !st.diambil ? ' (' + st.alamat + ')' : '');
         amb.appendChild(el('span', '', st.diambil ? '✓ Paket sudah diambil di ' + (st.mitra || 'tempat mitra') : '1) Ambil ' + n + ' paket di ' + tempat + ' dulu'));
-        if (!st.diambil) amb.appendChild(tombol('', 'Sudah diambil', function () { st.diambil = true; try { localStorage.setItem('ah_diambil_' + st.id, '1'); } catch (e) {} gambar(); }));
+        if (!st.diambil) amb.appendChild(tombol('', 'Sudah diambil', function () {
+            var tandai = function () { st.diambil = true; try { localStorage.setItem('ah_diambil_' + st.id, '1'); } catch (e) {} gambar(); };
+            var rp = st.bayar ? ongkirPengirim() : 0;
+            if (rp > 0) popTagih('TAGIH ONGKIR KE PENGIRIM', rp, 'Minta ongkir ke ' + (st.mitra || 'pengirim') + ' saat mengambil paket' + (rp && st.titik.some(tagih) ? ' (penerima lain membayar sendiri saat paket sampai).' : '.'), 'Sudah ditagih, paket diambil', tandai);
+            else tandai();
+        }));
         atas(amb);
         if (st.bayar) {
             var nTagih = 0, rpTagih = 0, rpToko = 0;
@@ -26205,21 +26255,17 @@ window.PembuatQR = PembuatQR;
             kini.appendChild(el('div', 'ah-nama', t.nama));
             if (t.patokan) kini.appendChild(el('div', 'ah-pat', t.patokan));
             if (st.bayar) kini.appendChild(tagih(t) ? el('div', 'ah-tagih', '💰 TAGIH ONGKIR: ' + rpKu(t.ongkir)) : el('div', 'ah-tagih lunas', '✓ Ongkir dibayar pengirim · jangan ditagih'));
-            var est = el('div', 'ah-est');
-            est.appendChild(el('p', '', 'KABARI PENERIMA · ESTIMASI OTOMATIS'));
-            var ae = st.estAuto[i];
-            est.appendChild(el('div', 'ah-estinfo', st.hitung ? 'Menghitung estimasi lewat Google Maps…'
-                : (ae ? '±' + ae.menit + ' menit · ' + ae.km.toFixed(1).replace('.', ',') + ' km dari ' + ae.dari + (ae.sumber === 'maps' ? ' (Google Maps)' : ' (perkiraan)')
-                      : 'Dihitung otomatis dari posisi HP kamu saat menekan tombol WA.')));
-            var b1 = el('div', 'ah-btns');
-            var bw = tombol('ah-btn wa', st.hitung ? 'Menghitung…' : 'Kirim kabar via WA', function () { kabariWa(i); });
+            var b1 = el('div', 'ah-btns'); b1.style.marginTop = '12px';
+            var bw = tombol('ah-btn wa', st.hitung ? 'Menyiapkan pesan…' : 'Kirim kabar via WA', function () { kabariWa(i); });
             if (st.hitung) bw.disabled = true;
             b1.appendChild(bw);
             b1.appendChild(tombol('ah-btn', 'Navigasi', function () { bukaPeta(t); }));
-            est.appendChild(b1);
-            kini.appendChild(est);
+            kini.appendChild(b1);
             var b2 = el('div', 'ah-btns');
-            b2.appendChild(tombol('ah-btn ok', 'Isi bukti serah terima', function () { bukaForm(i); }));
+            b2.appendChild(tombol('ah-btn ok', 'Isi bukti serah terima', function () {
+                if (st.bayar && tagih(t) && t.ongkir > 0) popTagih('TAGIH ONGKIR KE PENERIMA', t.ongkir, 'Minta ongkir ke ' + t.nama + ' saat menyerahkan paket.', 'Sudah ditagih, isi bukti', function () { bukaForm(i); });
+                else bukaForm(i);
+            }));
             kini.appendChild(b2);
             panel.appendChild(kini);
         } else {
