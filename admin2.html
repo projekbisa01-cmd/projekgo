@@ -11126,7 +11126,16 @@
                 setTimeout(async () => {
                     try {
                         const s = await getDoc(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId));
-                        if (s.exists() && s.data().status === 'completed') await updateDoc(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp() });
+                        if (s.exists() && s.data().status === 'completed') {
+                            // Selesai: status permintaan "selesai" + nomor HP penerima dihapus dari order, permintaan, dan data paket mitra
+                            const titik = Array.isArray(data.antar_titik) ? data.antar_titik : [];
+                            const tanpaHp = titik.map(t => Object.assign({}, t, { hp: '' }));
+                            const wb = writeBatch(db);
+                            wb.update(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp(), titik: tanpaHp.map(t => ({ kirimId: t.kirimId || '', nama: t.nama || '', hp: '', patokan: t.patokan || '', lat: t.lat, lng: t.lng, ongkir: t.ongkir || 0 })) });
+                            wb.update(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId), { antar_titik: tanpaHp });
+                            titik.forEach(t => { if (/^[A-Za-z0-9_-]{1,128}$/.test(String(t.kirimId || ''))) wb.update(doc(db, 'antar_kirim', t.kirimId), { hp: '' }); });
+                            await wb.commit();
+                        }
                         else if (!s.exists()) await updateDoc(doc(db, 'antar_permintaan', pid), { status: 'menunggu', orderId: null, riderUid: null, riderNama: null, dilihatAdmin: true });
                     } catch (e) { console.warn('Order antar hilang:', e); }
                 }, 4000);

@@ -14197,7 +14197,8 @@
             const currentPos = parseInt(step1SwipeBtn.style.left, 10) || 4;
             
             // (22 Okt 2026) Tahap belum "Mengantar" -> tidak bisa lanjut ke foto bukti (lihat blok LACAK PESANAN)
-            const bolehSelesai = currentPos >= maxDist * 0.85 && (typeof window.lacakCekSelesai !== 'function' || window.lacakCekSelesai());
+            const bolehSelesai = currentPos >= maxDist * 0.85 && (typeof window.lacakCekSelesai !== 'function' || window.lacakCekSelesai())
+                && (typeof window.antarCekSelesai !== 'function' || window.antarCekSelesai());   // ANTAR HEMAT: semua penerima wajib ada bukti
             if (bolehSelesai) {
                 step1SwipeBtn.style.left = `${maxDist}px`;
                 step1SwipeBtn.innerHTML = '<i class="fa-solid fa-check text-xl"></i>';
@@ -18074,6 +18075,8 @@
 
               // Tahap kerja & lokasi dari pelanggan (blok LACAK PESANAN). Gagal di sini tidak boleh mengganggu order.
               try { if (typeof window.lacakRender === 'function') window.lacakRender(data, docId); } catch (eLacak) { console.warn('[Lacak]', eLacak); }
+              // ANTAR HEMAT (30 Okt 2026): order mitra dengan banyak penerima -> panel titik + bukti per penerima
+              try { if (typeof window.antarRender === 'function') window.antarRender(data, docId); } catch (eAntar) { console.warn('[Antar Hemat]', eAntar); }
 
               // Pastikan status on-bid menyala (Opsional tapi berguna agar radar tetap online)
               const toggle = document.getElementById('onbid-toggle');
@@ -18085,6 +18088,7 @@
 
           window.hideActiveOrderOverlay = function() {
               try { if (typeof window.lacakTutup === 'function') window.lacakTutup(); } catch (eLacak) {}
+              try { if (typeof window.antarTutup === 'function') window.antarTutup(); } catch (eAntar) {}
               const overlay = document.getElementById('active-order-overlay');
               if(overlay) {
                   overlay.classList.add('hidden');
@@ -25865,6 +25869,397 @@ window.PembuatQR = PembuatQR;
 })();
 </script>
 <!-- ================= AKHIR WAJIB LEWAT APLIKASI ================= -->
+
+<!-- ================= ANTAR HEMAT: ORDER KHUSUS MITRA (30 OKT 2026) ================= -->
+<!-- Order dari admin yang membawa antar_titik (daftar penerima) tampil sebagai daftar titik di Tugas Berjalan:
+     kabari penerima lewat WA + estimasi, navigasi, dan bukti serah terima per penerima (nama + foto rumah wajib).
+     Bukti disimpan di antar_bukti (data kecil) + antar_foto (gambar), dihapus otomatis 15 hari (TTL hapusAt).
+     Order biasa tidak terpengaruh sama sekali. -->
+<style>
+  .ah-panel { margin: 0 0 14px; border: 1.5px solid #FFD2AE; border-radius: 16px; background: #FFF8F1; overflow: hidden; white-space: normal; font-size: 14px; line-height: 1.45; }
+  .ah-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: #FF6600; color: #fff; }
+  .ah-head b { font-size: 14px; font-weight: 800; display: block; }
+  .ah-head small { font-size: 11.5px; font-weight: 600; opacity: .92; }
+  .ah-prog { font-size: 11px; font-weight: 800; background: rgba(255,255,255,.22); padding: 5px 10px; border-radius: 99px; white-space: nowrap; }
+  .ah-ambil { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 12.5px; font-weight: 700; color: #8A5A35; border-bottom: 1px solid #F6DCC4; }
+  .ah-ambil button { margin-left: auto; font-size: 12px; font-weight: 800; color: #E85300; background: #fff; border: 1px solid #F6DCC4; border-radius: 10px; padding: 6px 10px; min-height: 34px; }
+  .ah-kini { margin: 10px; background: #fff; border: 2px solid #FF6600; border-radius: 14px; padding: 12px; }
+  .ah-kini .ah-lbl { font-size: 11px; font-weight: 800; letter-spacing: .05em; color: #E85300; }
+  .ah-kini .ah-nama { font-size: 18px; font-weight: 800; color: #1C1C1E; margin-top: 2px; }
+  .ah-kini .ah-pat { font-size: 13px; color: #6B6258; margin-top: 2px; }
+  .ah-est { margin-top: 10px; padding: 10px; border-radius: 12px; background: #F8F3ED; border: 1px solid #F0E2D4; }
+  .ah-est p { margin: 0 0 6px; font-size: 11px; font-weight: 800; color: #8A8178; letter-spacing: .04em; }
+  .ah-chips { display: flex; gap: 6px; }
+  .ah-chips button { flex: 1; min-height: 38px; border-radius: 10px; background: #fff; border: 1px solid #F0E2D4; font-size: 13px; font-weight: 700; color: #3A3A3C; }
+  .ah-chips button.on { background: #FF6600; border-color: #FF6600; color: #fff; font-weight: 800; }
+  .ah-btns { display: flex; gap: 8px; margin-top: 8px; }
+  .ah-btn { flex: 1; min-height: 44px; border-radius: 12px; font-size: 13px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1.5px solid #FF6600; color: #E85300; background: #fff; }
+  .ah-btn.wa { background: #1E7A34; border-color: #1E7A34; color: #fff; }
+  .ah-btn.utama { background: #FF6600; color: #fff; }
+  .ah-btn.ok { background: #2E9E44; border-color: #2E9E44; color: #fff; }
+  .ah-daftar { margin: 0 10px 10px; background: #fff; border: 1px solid #F0E2D4; border-radius: 14px; }
+  .ah-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; border-top: 1px solid #F3EADF; width: 100%; text-align: left; background: none; font: inherit; color: inherit; }
+  .ah-item:first-child { border-top: 0; }
+  .ah-num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; flex-shrink: 0; background: #F4EDE5; color: #6B6258; }
+  .ah-item.kini .ah-num { background: #FF6600; color: #fff; }
+  .ah-item.done .ah-num { background: #2E9E44; color: #fff; }
+  .ah-item.done { opacity: .65; }
+  .ah-item .ah-isi { flex: 1; min-width: 0; }
+  .ah-item b { font-size: 13.5px; font-weight: 800; color: #1C1C1E; }
+  .ah-item small { display: block; font-size: 11.5px; color: #8A8178; font-weight: 600; overflow-wrap: anywhere; }
+  .ah-tag { font-size: 10.5px; font-weight: 800; padding: 3px 8px; border-radius: 99px; white-space: nowrap; background: #F4EDE5; color: #6B6258; }
+  .ah-item.done .ah-tag { background: #E6F6EC; color: #1E7A34; }
+  .ah-item.kini .ah-tag { background: #FF6600; color: #fff; }
+  .ah-rincian { margin: 6px 0 4px; font-size: 12px; font-weight: 800; color: #8A8178; letter-spacing: .04em; }
+  .ah-modal { position: fixed; inset: 0; z-index: 99990; background: rgba(15,23,42,.6); display: flex; align-items: flex-end; justify-content: center; }
+  .ah-sheet { width: 100%; max-width: 520px; max-height: 92vh; overflow-y: auto; background: #FAF5EF; border-radius: 22px 22px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); font-size: 14px; }
+  .ah-sheet h3 { margin: 0; font-size: 18px; font-weight: 800; color: #1C1C1E; }
+  .ah-sheet .ah-sub { font-size: 12.5px; color: #8A8178; font-weight: 600; margin-top: 2px; }
+  .ah-kartu { background: #fff; border: 1px solid #F0E2D4; border-radius: 16px; padding: 12px; margin-top: 12px; }
+  .ah-kartu > p { margin: 0 0 8px; font-size: 11px; font-weight: 800; color: #8A8178; letter-spacing: .05em; text-transform: uppercase; }
+  .ah-pilih { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ah-pilih button { font-size: 13px; font-weight: 700; padding: 9px 13px; border-radius: 99px; background: #fff; border: 1px solid #F0E2D4; color: #3A3A3C; min-height: 40px; }
+  .ah-pilih button.on { background: #FF6600; border-color: #FF6600; color: #fff; font-weight: 800; }
+  .ah-input { width: 100%; min-height: 46px; border-radius: 12px; background: #F8F3ED; border: 1px solid #F0E2D4; padding: 11px 14px; font-size: 15px; font-weight: 600; margin-top: 10px; box-sizing: border-box; }
+  .ah-foto { display: flex; gap: 10px; }
+  .ah-fbox { flex: 1; aspect-ratio: 1 / 1; max-width: 100%; border-radius: 14px; border: 2px dashed #F2C6A6; background: #FFF8F1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #E85300; font-size: 12px; font-weight: 800; text-align: center; position: relative; overflow: hidden; padding: 6px; }
+  .ah-fbox img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .ah-fbox small { color: #9A8F84; font-weight: 600; }
+  .ah-fbox.isi { border-style: solid; border-color: #2E9E44; }
+  .ah-catat { font-size: 11.5px; color: #9A8F84; font-weight: 600; margin-top: 8px; line-height: 1.45; }
+  .ah-simpan { width: 100%; min-height: 52px; border-radius: 14px; background: #2E9E44; color: #fff; font-size: 15px; font-weight: 800; margin-top: 14px; border: 0; }
+  .ah-simpan:disabled { opacity: .5; }
+  .ah-batal { width: 100%; min-height: 44px; border-radius: 12px; background: transparent; color: #6B6258; font-size: 13.5px; font-weight: 700; margin-top: 6px; border: 0; }
+  .ah-gerbang { position: fixed; inset: 0; z-index: 99991; background: rgba(15,23,42,.6); display: flex; align-items: center; justify-content: center; padding: 18px; }
+  .ah-gerbang > div { background: #fff; border-radius: 20px; padding: 20px; max-width: 360px; text-align: center; font-size: 14px; color: #3A3A3C; }
+  .ah-gerbang h3 { margin: 6px 0; font-size: 17px; color: #1C1C1E; }
+  .ah-gerbang button { margin-top: 12px; width: 100%; min-height: 46px; border-radius: 12px; background: #FF6600; color: #fff; font-weight: 800; border: 0; }
+</style>
+<script>
+(function () {
+    'use strict';
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var ID_SAH = /^[A-Za-z0-9_-]{1,64}$/;
+    var ESTIMASI = [5, 10, 15, 20];
+    var JENIS = [['penerima', 'Penerima sendiri'], ['keluarga', 'Keluarga'], ['tetangga', 'Tetangga'], ['lainnya', 'Lainnya']];
+    var st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, henti: null, diambil: false };
+    var form = null;   // isi form bukti yang sedang terbuka
+
+    function fsMod() { return import(URL_FS); }
+    function uidKu() { try { return String((window.getRiderUid && window.getRiderUid()) || '').trim().toUpperCase(); } catch (e) { return ''; } }
+    function namaRider() { var e = document.getElementById('display-rider-name'); var n = e ? String(e.textContent || '').trim() : ''; return n && n !== 'Memuat...' ? n : 'Rider'; }
+    function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
+    function tombol(cls, teks, fn) { var b = el('button', cls, teks); b.type = 'button'; b.addEventListener('click', fn); return b; }
+    function toast(t) { try { if (typeof window.showCustomToast === 'function') window.showCustomToast(t); } catch (e) {} }
+    function hp62(v) { var d = String(v || '').replace(/[^0-9]/g, ''); if (d.indexOf('0') === 0) d = '62' + d.slice(1); return d; }
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function hariIni() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    function jamDari(t) { var ms = t && typeof t.toMillis === 'function' ? t.toMillis() : 0; if (!ms) return ''; var d = new Date(ms); return pad(d.getHours()) + '.' + pad(d.getMinutes()); }
+    function teksAman(s, n) { return String(s == null ? '' : s).slice(0, n || 200); }
+
+    function bersihkanTitik(arr) {
+        if (!Array.isArray(arr)) return [];
+        return arr.slice(0, 25).map(function (t) {
+            t = t || {};
+            return { kirimId: teksAman(t.kirimId, 64), nama: teksAman(t.nama, 60) || 'Penerima', hp: String(t.hp || '').replace(/[^0-9]/g, '').slice(0, 20),
+                     patokan: teksAman(t.patokan, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0 };
+        });
+    }
+    function sudah(i) { return !!st.bukti[i]; }
+    function jumlahSelesai() { var n = 0; for (var i = 0; i < st.titik.length; i++) if (sudah(i)) n++; return n; }
+    function titikBerikut() { for (var i = 0; i < st.titik.length; i++) if (!sudah(i)) return i; return -1; }
+
+    function bukaPeta(t) {
+        var lat = Number(t.lat), lng = Number(t.lng);
+        if (!isFinite(lat) || !isFinite(lng)) { toast('Titik penerima belum ada'); return; }
+        var q = lat.toFixed(6) + ',' + lng.toFixed(6);
+        if (window.AndroidInterface && typeof window.AndroidInterface.bukaPeta === 'function') { try { window.AndroidInterface.bukaPeta(lat, lng); return; } catch (e) {} }
+        if (window.AndroidInterface) window.location.href = 'geo:' + q + '?q=' + q;
+        else window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(q) + '&travelmode=driving', '_blank', 'noopener');
+    }
+    function kabariWa(i) {
+        var t = st.titik[i]; if (!t) return;
+        var est = st.est[i] || 10;
+        if (!t.hp) { toast('Nomor penerima tidak ada. Hubungi admin.'); return; }
+        var pesan = 'Halo kak ' + t.nama + ', saya ' + namaRider() + ' dari ProjekGo 🙏\n' +
+            'Paket dari ' + (st.mitra || 'pengirim') + ' sedang saya antar, estimasi tiba ±' + est + ' menit ya.\n' +
+            'Mohon ditunggu dan pastikan ada yang menerima di rumah. Terima kasih.';
+        if (typeof window.openWaSelector === 'function') window.openWaSelector(hp62(t.hp), pesan);
+        else window.open('https://wa.me/' + hp62(t.hp) + '?text=' + encodeURIComponent(pesan), '_blank', 'noopener');
+    }
+
+    // ---------- Tampilan panel di Tugas Berjalan ----------
+    function gambar() {
+        var wadah = document.getElementById('active-order-items');
+        if (!wadah || !st.id) return;
+        var panel = document.getElementById('ah-panel');
+        if (!panel) {
+            panel = el('div', 'ah-panel'); panel.id = 'ah-panel';
+            wadah.insertBefore(panel, wadah.firstChild);
+            var lbl = el('p', 'ah-rincian', 'RINCIAN LENGKAP DARI ADMIN'); lbl.id = 'ah-rincian-lbl';
+            wadah.insertBefore(lbl, panel.nextSibling);
+        }
+        panel.replaceChildren();
+        var n = st.titik.length, sel = jumlahSelesai();
+        if (st.kini < 0 || sudah(st.kini)) st.kini = titikBerikut();
+
+        var head = el('div', 'ah-head');
+        var hk = el('div'); hk.appendChild(el('b', '', 'Antar Hemat · ' + (st.mitra || 'Mitra')));
+        hk.appendChild(el('small', '', n + ' penerima · kabari tiap penerima lewat WA'));
+        head.appendChild(hk); head.appendChild(el('span', 'ah-prog', sel + '/' + n + ' diterima'));
+        panel.appendChild(head);
+
+        var amb = el('div', 'ah-ambil');
+        amb.appendChild(el('span', '', st.diambil ? '✓ Paket sudah diambil di ' + (st.mitra || 'tempat mitra') : '1) Ambil ' + n + ' paket di ' + (st.mitra || 'tempat mitra') + ' dulu'));
+        if (!st.diambil) amb.appendChild(tombol('', 'Sudah diambil', function () { st.diambil = true; try { localStorage.setItem('ah_diambil_' + st.id, '1'); } catch (e) {} gambar(); }));
+        panel.appendChild(amb);
+
+        if (st.kini >= 0) {
+            var i = st.kini, t = st.titik[i];
+            var kini = el('div', 'ah-kini');
+            kini.appendChild(el('div', 'ah-lbl', 'PENERIMA ' + (i + 1) + ' DARI ' + n));
+            kini.appendChild(el('div', 'ah-nama', t.nama));
+            if (t.patokan) kini.appendChild(el('div', 'ah-pat', t.patokan));
+            var est = el('div', 'ah-est');
+            est.appendChild(el('p', '', 'KABARI PENERIMA · ESTIMASI TIBA'));
+            var chips = el('div', 'ah-chips');
+            ESTIMASI.forEach(function (m) {
+                var b = tombol((st.est[i] || 10) === m ? 'on' : '', m + ' mnt', function () { st.est[i] = m; gambar(); });
+                chips.appendChild(b);
+            });
+            est.appendChild(chips);
+            var b1 = el('div', 'ah-btns');
+            b1.appendChild(tombol('ah-btn wa', 'Kirim kabar via WA', function () { kabariWa(i); }));
+            b1.appendChild(tombol('ah-btn', 'Navigasi', function () { bukaPeta(t); }));
+            est.appendChild(b1);
+            kini.appendChild(est);
+            var b2 = el('div', 'ah-btns');
+            b2.appendChild(tombol('ah-btn ok', 'Isi bukti serah terima', function () { bukaForm(i); }));
+            kini.appendChild(b2);
+            panel.appendChild(kini);
+        } else {
+            var beres = el('div', 'ah-kini');
+            beres.appendChild(el('div', 'ah-lbl', 'SEMUA PAKET SUDAH DITERIMA'));
+            beres.appendChild(el('div', 'ah-pat', 'Lanjutkan seperti biasa: geser untuk menyelesaikan order dan kirim foto bukti akhir.'));
+            panel.appendChild(beres);
+        }
+
+        var daftar = el('div', 'ah-daftar');
+        st.titik.forEach(function (t, j) {
+            var b = st.bukti[j];
+            var it = el('button', 'ah-item' + (b ? ' done' : (j === st.kini ? ' kini' : ''))); it.type = 'button';
+            it.appendChild(el('span', 'ah-num', b ? '✓' : String(j + 1)));
+            var isi = el('span', 'ah-isi'); isi.appendChild(el('b', '', t.nama));
+            isi.appendChild(el('small', '', b ? ('Diterima ' + (b.penerimaNama || '') + (jamDari(b.diterimaAt) ? ' · ' + jamDari(b.diterimaAt) : '')) : (t.patokan || 'Ketuk untuk antar ke penerima ini dulu')));
+            it.appendChild(isi);
+            it.appendChild(el('span', 'ah-tag', b ? 'Diterima' : (j === st.kini ? 'Sekarang' : 'Menunggu')));
+            it.addEventListener('click', function () { if (!b) { st.kini = j; gambar(); } });
+            daftar.appendChild(it);
+        });
+        panel.appendChild(daftar);
+    }
+
+    // ---------- Foto: kamera aplikasi (APK) atau kamera HP lewat browser ----------
+    function kecilkan(dataUrl, maks, mutu) {
+        return new Promise(function (selesai, gagal) {
+            var img = new Image();
+            img.onload = function () {
+                var w = img.naturalWidth, h = img.naturalHeight, s = Math.min(1, maks / Math.max(w, h));
+                var c = document.createElement('canvas'); c.width = Math.round(w * s); c.height = Math.round(h * s);
+                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                var hasil = c.toDataURL('image/jpeg', mutu);
+                if (hasil.length > 700000) hasil = c.toDataURL('image/jpeg', 0.45);
+                selesai(hasil);
+            };
+            img.onerror = gagal;
+            img.src = dataUrl;
+        });
+    }
+    function bacaFile(file) { return new Promise(function (ok, gagal) { var r = new FileReader(); r.onload = function () { ok(r.result); }; r.onerror = gagal; r.readAsDataURL(file); }); }
+    function ambilFoto(slot) {
+        var AI = window.AndroidInterface;
+        if (AI && typeof AI.openCameraAndCompress === 'function') {
+            var lama = window.receiveCompressedPhotoFromAndroid;
+            window.receiveCompressedPhotoFromAndroid = function (b64) {
+                window.receiveCompressedPhotoFromAndroid = lama;
+                var full = String(b64 || ''); if (full.indexOf('data:image') !== 0) full = 'data:image/jpeg;base64,' + full;
+                if (form && form.terbuka) terimaFoto(slot, full);
+                else if (typeof lama === 'function') return lama.apply(this, arguments);
+            };
+            toast('Membuka kamera...');
+            try { AI.openCameraAndCompress(); } catch (e) { window.receiveCompressedPhotoFromAndroid = lama; toast('Kamera tidak bisa dibuka'); }
+            return;
+        }
+        var inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment');
+        inp.addEventListener('change', function () { if (inp.files && inp.files[0]) bacaFile(inp.files[0]).then(function (d) { terimaFoto(slot, d); }, function () { toast('Gagal membaca foto'); }); });
+        inp.click();
+    }
+    function terimaFoto(slot, dataUrl) {
+        kecilkan(dataUrl, 960, 0.62).then(function (kecil) {
+            if (!form || !form.terbuka) return;
+            form[slot] = kecil; gambarForm();
+        }, function () { toast('Foto gagal diproses, coba lagi'); });
+    }
+
+    // ---------- Form bukti serah terima ----------
+    function bukaForm(i) {
+        var t = st.titik[i]; if (!t) return;
+        form = { terbuka: true, i: i, jenis: 'penerima', nama: t.nama, rumah: null, penerima: null, simpan: false };
+        var lama = document.getElementById('ah-modal'); if (lama) lama.remove();
+        var m = el('div', 'ah-modal'); m.id = 'ah-modal'; m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.setAttribute('aria-label', 'Bukti serah terima');
+        m.addEventListener('click', function (e) { if (e.target === m) tutupForm(); });
+        m.appendChild(el('div', 'ah-sheet'));
+        document.body.appendChild(m);
+        gambarForm();
+    }
+    function tutupForm() { if (form) form.terbuka = false; form = null; var m = document.getElementById('ah-modal'); if (m) m.remove(); }
+    function gambarForm() {
+        var m = document.getElementById('ah-modal'); if (!m || !form) return;
+        var t = st.titik[form.i]; var sh = m.firstChild; sh.replaceChildren();
+        sh.appendChild(el('h3', '', 'Bukti serah terima'));
+        sh.appendChild(el('div', 'ah-sub', 'Penerima ' + (form.i + 1) + ' dari ' + st.titik.length + ' · ' + t.nama));
+
+        var k1 = el('div', 'ah-kartu'); k1.appendChild(el('p', '', 'Diterima oleh'));
+        var pil = el('div', 'ah-pilih');
+        JENIS.forEach(function (j) {
+            pil.appendChild(tombol(form.jenis === j[0] ? 'on' : '', j[1], function () {
+                form.jenis = j[0];
+                var inp = document.getElementById('ah-nama-penerima'); if (inp) form.nama = inp.value;
+                if (j[0] === 'penerima') form.nama = t.nama; else if (form.nama === t.nama) form.nama = '';
+                gambarForm();
+            }));
+        });
+        k1.appendChild(pil);
+        var nm = document.createElement('input'); nm.className = 'ah-input'; nm.id = 'ah-nama-penerima'; nm.maxLength = 60; nm.value = form.nama || '';
+        nm.placeholder = form.jenis === 'penerima' ? 'Nama penerima' : 'Nama yang menerima (mis. Pak Budi, anaknya)';
+        nm.setAttribute('aria-label', 'Nama penerima');
+        nm.addEventListener('input', function () { form.nama = nm.value; cekSimpan(); });
+        k1.appendChild(nm);
+        sh.appendChild(k1);
+
+        var k2 = el('div', 'ah-kartu'); k2.appendChild(el('p', '', 'Foto bukti'));
+        var fw = el('div', 'ah-foto');
+        [['rumah', 'Foto rumah', 'wajib'], ['penerima', 'Foto penerima', 'opsional']].forEach(function (f) {
+            var box = el('button', 'ah-fbox' + (form[f[0]] ? ' isi' : '')); box.type = 'button';
+            if (form[f[0]]) { var im = document.createElement('img'); im.alt = f[1]; im.src = form[f[0]]; box.appendChild(im); }
+            else { box.appendChild(el('span', '', '📷')); box.appendChild(el('span', '', f[1])); box.appendChild(el('small', '', '(' + f[2] + ')')); }
+            box.addEventListener('click', function () { ambilFoto(f[0]); });
+            fw.appendChild(box);
+        });
+        k2.appendChild(fw);
+        k2.appendChild(el('div', 'ah-catat', 'Ketuk kotak untuk memotret (ketuk lagi untuk mengulang). Jam dan titik GPS ikut tercatat untuk laporan ke mitra. Foto disimpan 15 hari.'));
+        sh.appendChild(k2);
+
+        var simpan = tombol('ah-simpan', form.simpan ? 'Menyimpan...' : 'Simpan bukti', simpanBukti); simpan.id = 'ah-simpan';
+        sh.appendChild(simpan);
+        sh.appendChild(tombol('ah-batal', 'Batal', tutupForm));
+        cekSimpan();
+    }
+    function cekSimpan() {
+        var b = document.getElementById('ah-simpan'); if (!b || !form) return;
+        b.disabled = form.simpan || !form.rumah || !String(form.nama || '').trim();
+    }
+    function posisiSekarang() {
+        return new Promise(function (ok) {
+            if (!navigator.geolocation) return ok(null);
+            var selesai = false; var batas = setTimeout(function () { if (!selesai) { selesai = true; ok(null); } }, 8000);
+            navigator.geolocation.getCurrentPosition(function (p) { if (selesai) return; selesai = true; clearTimeout(batas); ok({ lat: p.coords.latitude, lng: p.coords.longitude, akurasi: Math.round(p.coords.accuracy || 0) }); },
+                function () { if (selesai) return; selesai = true; clearTimeout(batas); ok(null); }, { enableHighAccuracy: true, timeout: 7000, maximumAge: 60000 });
+        });
+    }
+    async function simpanBukti() {
+        if (!form || form.simpan) return;
+        var f = form, t = st.titik[f.i], uid = uidKu();
+        var nama = String(f.nama || '').trim().slice(0, 60);
+        if (!f.rumah || !nama || !uid || !ID_SAH.test(st.id)) return;
+        f.simpan = true; gambarForm();
+        try {
+            var pos = await posisiSekarang();
+            var m = await fsMod(), db = m.getFirestore();
+            var hapusAt = m.Timestamp.fromMillis(Date.now() + 15 * 864e5);
+            var dasar = st.id + '_' + f.i;
+            var batch = m.writeBatch(db);
+            batch.set(m.doc(db, 'antar_foto', dasar + '_rumah'), { orderId: st.id, idx: f.i, jenis: 'rumah', mitraId: st.mitraId, riderUid: uid, data: f.rumah, hapusAt: hapusAt, at: m.serverTimestamp() });
+            if (f.penerima) batch.set(m.doc(db, 'antar_foto', dasar + '_penerima'), { orderId: st.id, idx: f.i, jenis: 'penerima', mitraId: st.mitraId, riderUid: uid, data: f.penerima, hapusAt: hapusAt, at: m.serverTimestamp() });
+            batch.set(m.doc(db, 'antar_bukti', dasar), {
+                orderId: st.id, idx: f.i, kirimId: t.kirimId, permintaanId: st.pid, mitraId: st.mitraId, riderUid: uid, riderNama: namaRider().slice(0, 60),
+                namaTitik: t.nama, penerimaJenis: f.jenis, penerimaNama: nama, adaFotoPenerima: !!f.penerima,
+                lat: pos ? Math.round(pos.lat * 1e6) / 1e6 : null, lng: pos ? Math.round(pos.lng * 1e6) / 1e6 : null, akurasi: pos ? Math.min(pos.akurasi, 100000) : null,
+                jumlahTitik: st.titik.length, tanggal: hariIni(), diterimaAt: m.serverTimestamp(), hapusAt: hapusAt
+            });
+            await batch.commit();
+            st.bukti[f.i] = { penerimaNama: nama, diterimaAt: { toMillis: function () { return Date.now(); } } };
+            tutupForm();
+            st.kini = titikBerikut();
+            gambar();
+            var berikut = st.kini >= 0 ? st.titik[st.kini] : null;
+            toast(berikut ? 'Tersimpan. Lanjut ke penerima ' + (st.kini + 1) + ': ' + berikut.nama : 'Semua paket sudah diterima. Silakan selesaikan order.');
+            try { if (navigator.vibrate) navigator.vibrate([40, 60, 40]); } catch (e) {}
+        } catch (e) {
+            console.warn('[Antar Hemat] simpan bukti', e);
+            if (form) { form.simpan = false; gambarForm(); }
+            toast(String(e && e.code || '').indexOf('permission') >= 0 ? 'Ditolak server. Pastikan order ini milikmu dan masih berjalan.' : 'Gagal menyimpan. Cek sinyal lalu coba lagi.');
+        }
+    }
+
+    // ---------- Pantau bukti yang sudah tersimpan (supaya tetap benar setelah aplikasi dibuka ulang) ----------
+    async function mulaiPantau() {
+        hentiPantau();
+        var id = st.id, uid = uidKu(); if (!id || !uid) return;
+        try {
+            var m = await fsMod(), db = m.getFirestore();
+            if (st.id !== id) return;
+            st.henti = m.onSnapshot(m.query(m.collection(db, 'antar_bukti'), m.where('orderId', '==', id), m.where('riderUid', '==', uid)), function (snap) {
+                var baru = {};
+                snap.docs.forEach(function (d) { var x = d.data(); if (typeof x.idx === 'number') baru[x.idx] = x; });
+                st.bukti = baru; gambar();
+            }, function (e) { console.warn('[Antar Hemat] pantau bukti', e); });
+        } catch (e) { console.warn('[Antar Hemat]', e); }
+    }
+    function hentiPantau() { if (typeof st.henti === 'function') { try { st.henti(); } catch (e) {} } st.henti = null; }
+
+    // ---------- Dipanggil dari showActiveOrderOverlay / hideActiveOrderOverlay ----------
+    window.antarRender = function (data, docId) {
+        var titik = data && bersihkanTitik(data.antar_titik);
+        if (!titik || !titik.length || !ID_SAH.test(String(docId || ''))) { window.antarTutup(); return; }
+        if (docId !== st.id) {
+            hentiPantau();
+            var diambil = false; try { diambil = localStorage.getItem('ah_diambil_' + docId) === '1'; } catch (e) {}
+            st = { id: docId, pid: teksAman(data.antar_id, 128), mitra: teksAman(data.antar_mitra, 60), mitraId: teksAman(data.antar_mitra_id, 64), titik: titik, bukti: {}, kini: -1, est: {}, henti: null, diambil: diambil };
+            mulaiPantau();
+        } else {
+            st.titik = titik; st.mitra = teksAman(data.antar_mitra, 60) || st.mitra;
+        }
+        // Isi Detail Pesanan baru saja ditulis ulang oleh showActiveOrderOverlay -> pasang panel lagi
+        var p = document.getElementById('ah-panel'); if (p) p.remove();
+        var l = document.getElementById('ah-rincian-lbl'); if (l) l.remove();
+        gambar();
+    };
+    window.antarTutup = function () {
+        hentiPantau(); tutupForm();
+        var p = document.getElementById('ah-panel'); if (p) p.remove();
+        var l = document.getElementById('ah-rincian-lbl'); if (l) l.remove();
+        st = { id: '', pid: '', mitra: '', mitraId: '', titik: [], bukti: {}, kini: -1, est: {}, henti: null, diambil: false };
+    };
+    // Gerbang sebelum foto bukti akhir: semua penerima wajib sudah diisi buktinya
+    window.antarCekSelesai = function () {
+        if (!st.id || !st.titik.length) return true;
+        var sisa = st.titik.length - jumlahSelesai();
+        if (sisa <= 0) return true;
+        var lama = document.getElementById('ah-gerbang'); if (lama) lama.remove();
+        var g = el('div', 'ah-gerbang'); g.id = 'ah-gerbang'; g.setAttribute('role', 'alertdialog'); g.setAttribute('aria-modal', 'true');
+        var k = el('div');
+        k.appendChild(el('div', '', '📦'));
+        k.appendChild(el('h3', '', 'Masih ada ' + sisa + ' paket belum ada buktinya'));
+        k.appendChild(el('div', '', 'Isi bukti serah terima (nama penerima + foto rumah) untuk setiap penerima dulu, baru order bisa diselesaikan.'));
+        k.appendChild(tombol('', 'Oke, isi bukti dulu', function () { g.remove(); var p = document.getElementById('ah-panel'); if (p) { try { p.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} } }));
+        g.appendChild(k); document.body.appendChild(g);
+        try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+        return false;
+    };
+})();
+</script>
+<!-- ================= AKHIR ANTAR HEMAT ================= -->
 
 </body>
 </html>
