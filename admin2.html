@@ -7341,6 +7341,66 @@
             updateDoc(doc(db, 'status_rider_aktif', uid), { tanggal_order_pertama: serverTimestamp(), in_main_queue: true }).catch(e => {});
         }
 
+        // =====================================================================
+        // (31 Okt 2026) TIKET ADMIN HANGUS BILA RIDER OFF SEBELUM DAPAT ORDER
+        // Celah lama: rider diverifikasi admin (dapat tiket = tanggal_order_pertama hari ini), langsung OFF,
+        // lalu ON lagi berjam-jam kemudian dan otomatis masuk antrean utama.
+        // Aturan baru saat rider kembali ON:
+        //   - punya tiket hari ini DAN sudah benar-benar dapat order hari ini  -> tetap antrean utama (seperti biasa)
+        //   - punya tiket hari ini TAPI belum pernah dapat order hari ini      -> tiket hangus, kembali ke antrean shift
+        // OFF singkat (<= TOLERANSI_OFF_TIKET_MENIT, mis. sinyal putus sebentar) tidak dihukum.
+        // "Sudah dapat order" dibuktikan dari order aktif di memori (0 read) atau daily_orders hari ini
+        // (ditulis admin saja, rider tidak bisa memalsukan). Hasil positif disimpan di memori per hari -> maks. 1 read per rider per hari.
+        // =====================================================================
+        const TOLERANSI_OFF_TIKET_MENIT = 5;
+        const _offSejakTiket = new Map();       // uid -> kapan perangkat ini melihat rider mulai OFF
+        const _terbuktiOrderHariIni = new Map(); // uid -> tanggal rider terbukti sudah dapat order
+        const _cekTiketJalan = new Set();
+        window.catatMulaiOffTiket = (uid) => { _offSejakTiket.set(uid, Date.now() - (window.__jamAdmin.selisihMs || 0)); };
+
+        async function riderTerbuktiDapatOrder(uid) {
+            const now = new Date();
+            const tglWib = kunciTglWib(now), tglLokal = _fmtTglShift(now);
+            if (_terbuktiOrderHariIni.get(uid) === tglWib) return true;
+            if (riderAdaOrderHariIni(uid)) { _terbuktiOrderHariIni.set(uid, tglWib); return true; }
+            const col = collection(db, 'artifacts', firebaseConfig.projectId, 'users', uid, 'daily_orders');
+            const daftarTgl = tglWib === tglLokal ? [tglWib] : [tglWib, tglLokal];
+            // Wajib dari server: hasil cache yang kosong bukan bukti rider belum dapat order
+            const snap = await getDocsFromServer(query(col, where('Tanggal', 'in', daftarTgl), limit(1)));
+            if (!snap.empty) { _terbuktiOrderHariIni.set(uid, tglWib); return true; }
+            return false;
+        }
+
+        async function cekTiketSetelahOff(uid, prevRider, data) {
+            const mulaiOff = _offSejakTiket.get(uid) || getTimestampMs(prevRider && prevRider.last_updated) || 0;
+            _offSejakTiket.delete(uid);
+            if (!window.jamAdminWajar() || _cekTiketJalan.has(uid)) return;
+            if (!checkRiderOrderDate(data)) return;   // tidak memegang tiket hari ini -> diurus logika lama
+            if (!mulaiOff) return;                    // tidak tahu kapan OFF -> jangan menghukum
+            // Order dibatalkan / ditarik admin: rider sengaja diberi prioritas, bukan rider curang
+            if (/^prioritas/i.test(String(data.last_drop_desc || ''))) return;
+            const lamaOff = (Date.now() - (window.__jamAdmin.selisihMs || 0)) - mulaiOff;
+            if (lamaOff <= TOLERANSI_OFF_TIKET_MENIT * 60000) return;
+            const tiketSaatKembali = getTimestampMs(data.tanggal_order_pertama);
+            _cekTiketJalan.add(uid);
+            try {
+                if (await riderTerbuktiDapatOrder(uid)) return;
+                const ref = doc(db, 'status_rider_aktif', uid);
+                await runTransaction(db, async (tx) => {
+                    const s = await tx.get(ref);
+                    if (!s.exists()) return;
+                    const x = s.data() || {};
+                    const aktif = (x.is_online === true || x.is_online === 'true') && (x.is_available === true || x.is_available === 'true');
+                    if (!aktif || !checkRiderOrderDate(x)) return;
+                    if (/^prioritas/i.test(String(x.last_drop_desc || ''))) return;
+                    // Tiket diperbarui setelah rider kembali ON (baru dapat order / diverifikasi ulang admin) -> biarkan
+                    if (getTimestampMs(x.tanggal_order_pertama) > tiketSaatKembali) return;
+                    if (riderAdaOrderHariIni(uid)) return;
+                    tx.update(ref, { in_main_queue: false, tanggal_order_pertama: null, last_drop_time: serverTimestamp(), last_updated: serverTimestamp() });
+                });
+            } catch (e) { /* gagal baca/tulis -> tidak menghukum, rider tetap di posisinya */ } finally { _cekTiketJalan.delete(uid); }
+        }
+
         function autoCleanUpOldData() {
             const now = Date.now();
             // Umur data diubah menjadi 5 tahun (5 tahun * 365 hari * 24 jam * 60 menit * 60 detik * 1000 ms)
@@ -8194,6 +8254,7 @@
                                 updateDoc(ref, {
                                     last_updated: serverTimestamp()
                                 }).catch(e => {});
+                                window.catatMulaiOffTiket(uid);   // (31 Okt 2026) untuk cek tiket admin saat kembali ON
                             }
 
                             // TAHAP 2: LOGIKA KEMBALI ONLINE (ISTIRAHAT VS SINYAL JELEK)
@@ -8222,6 +8283,12 @@
                                     in_main_queue: hasOrderToday, 
                                     last_updated: serverTimestamp() 
                                 }).catch(e => {});
+                            }
+
+                            // (31 Okt 2026) Kasus 3: rider kembali ON (dari OFF / aplikasi mati) sambil memegang tiket admin hari ini.
+                            // Tiket admin hanya berlaku kalau rider sudah benar-benar dapat order hari ini.
+                            if (!wasActive && isNowActive && !snapshot.metadata.fromCache && !change.doc.metadata.hasPendingWrites) {
+                                cekTiketSetelahOff(uid, prevRider, data);
                             }
                         }
                     }
