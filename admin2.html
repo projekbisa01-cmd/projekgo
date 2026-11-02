@@ -1709,7 +1709,7 @@
         #page-transfer .tf-last .l1{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin-top:2px}
         #page-transfer .tf-last .l1 b{font-size:18px}
         #page-transfer .tf-last .l2{font-size:12px;color:var(--tf-mut)}
-        #page-transfer .tf-cbpg{margin-top:4px;border:1px solid #f0c04a}
+        #page-transfer .tf-cbpg{margin:2px 0 10px;border:1px solid #f0c04a}
         #page-transfer .tf-cbpg.need{border-color:var(--tf-bad);background:var(--tf-badbg);animation:tfpop .35s}
         /* (25 Okt 2026) Ceklis "Pelanggan khusus" di kanan judul kolom pelanggan */
         #page-transfer .tf-pelbox{position:relative}
@@ -3009,6 +3009,8 @@
                     <div class="card">
                         <h2><span class="n">1</span>Catat bukti dari grup <small id="tf-nextNo"></small></h2>
                         <div id="tf-fCatat">
+                            <!-- 2 Nov 2026: ceklis QRIS ProjekGo jadi langkah pertama pencatatan -->
+                            <label class="cb tf-cbpg" id="tf-fCbWrap"><input type="checkbox" id="tf-fMasuk"><span>Transfer ke <b>QRIS ProjekGo</b> (bukti menunjukkan uang masuk ke ProjekGo)</span></label>
                             <div class="grid">
                                 <label>Kode transfer rider<input id="tf-fKode" list="tf-dlRider" required maxlength="10" placeholder="mis. A01" autocapitalize="characters" autocomplete="off"></label>
                                 <label>Nama rider (otomatis)<input id="tf-fNama" readonly tabindex="-1" placeholder="terisi dari kode"></label>
@@ -3016,9 +3018,8 @@
                                 <div class="tf-pelbox"><label>Nama pelanggan<input id="tf-fPel" required minlength="2" maxlength="80" autocomplete="off"></label><label class="tf-khusus" id="tf-fKhWrap" title="Dikelompokkan di tabel sendiri saat dicetak"><input type="checkbox" id="tf-fKhusus"> Pelanggan khusus</label></div>
                                 <label>Jam transfer (di bukti)<input id="tf-fJam" data-tfjam="1" maxlength="30" autocomplete="off" placeholder="mis. 2030 (boleh kosong)"></label>
                             </div>
-                            <label class="cb tf-cbpg" id="tf-fCbWrap"><input type="checkbox" id="tf-fMasuk"> Transfer ke <b>QRIS ProjekGo</b> (bukti menunjukkan uang masuk ke ProjekGo)</label>
                             <button class="pri big" type="button" id="tf-fBtn" style="width:100%;margin-top:10px">+ Tambah ke daftar</button>
-                            <div class="tf-keys" aria-hidden="true"><span><kbd>→</kbd> kolom berikutnya</span><span><kbd>←</kbd> kolom sebelumnya</span><span>Kode <kbd>→</kbd> langsung ke Nominal</span><span><kbd>Enter</kbd> tambah ke daftar</span><span><kbd>Spasi</kbd> centang QRIS ProjekGo</span></div>
+                            <div class="tf-keys" aria-hidden="true"><span><kbd>Spasi</kbd> centang QRIS ProjekGo lalu lanjut ke Kode</span><span><kbd>→</kbd> kolom berikutnya</span><span><kbd>←</kbd> kolom sebelumnya</span><span>Kode <kbd>→</kbd> langsung ke Nominal</span><span><kbd>Enter</kbd> tambah ke daftar</span></div>
                             <p class="hint" id="tf-fHint" style="margin:6px 0 0"></p>
                         </div>
                         <!-- 21 Okt 2026: form dikunci selama masih ada daftar yang berjalan di tahap 2-4 -->
@@ -24718,7 +24719,7 @@
                 const akt = S.petugas.filter(x => x.aktif).sort((a, b) => String(a.nama).localeCompare(String(b.nama)));
                 const pilih = (id) => {
                     S.petugasId = id; lsSet('tf_petugas', id); lsSet('tf_putaran_tuntas', '');
-                    w.remove(); renderTop(); try { g('tf-fKode').focus(); } catch (e) {}
+                    w.remove(); renderTop(); try { g('tf-fMasuk').focus(); } catch (e) {}
                 };
                 akt.forEach(x => { const b = document.createElement('button'); b.type = 'button'; b.textContent = x.nama; b.addEventListener('click', () => pilih(x.id)); k.appendChild(b); });
                 const tb = document.createElement('button'); tb.type = 'button'; tb.className = 'tb'; tb.textContent = '+ Nama belum ada? Tambah nama';
@@ -25708,7 +25709,7 @@
                     if (n !== S.step) { S.step = n; S.v3 = ''; }
                     renderKerja();
                     const nav = g('tf-stepnav'); if (nav && nav.getBoundingClientRect().top < 0) nav.scrollIntoView({block: 'start'});
-                    if (n === 1) setTimeout(() => g('tf-fKode').focus(), 0);
+                    if (n === 1) setTimeout(() => g('tf-fMasuk').focus(), 0);
                 },
                 async c4ok(t) {
                     if (!cekLokal(t, 'diteruskan')) return;
@@ -25844,11 +25845,16 @@
             /* ---------- form catat (langkah 1) ---------- */
             g('tf-fNominal').addEventListener('input', () => { const d = digits(g('tf-fNominal').value).slice(0, 10); g('tf-fNominal').value = d ? Number(d).toLocaleString('id-ID') : ''; });
             g('tf-fKode').addEventListener('input', () => { g('tf-fKode').value = normKode(g('tf-fKode').value); syncNama(); });
-            g('tf-fMasuk').addEventListener('change', () => { if (g('tf-fMasuk').checked) g('tf-fCbWrap').classList.remove('need'); });
+            // (2 Nov 2026) Ceklis adalah langkah pertama: setelah dicentang kursor lanjut ke Kode rider (kalau Kode masih kosong)
+            g('tf-fMasuk').addEventListener('change', () => {
+                if (!g('tf-fMasuk').checked) return;
+                g('tf-fCbWrap').classList.remove('need');
+                if (!g('tf-fKode').value) setTimeout(() => g('tf-fKode').focus(), 0);
+            });
             /* popup "Tercatat" */
-            // Popup tidak hilang sendiri: harus ditekan OK. Setelah OK, kursor kembali ke Kode rider untuk data berikutnya.
+            // Popup tidak hilang sendiri: harus ditekan OK. Setelah OK, kursor kembali ke ceklis QRIS ProjekGo untuk data berikutnya.
             const okPopBuka = () => !g('tf-okPop').hidden;
-            function tutupOkPop() { g('tf-okPop').hidden = true; g('tf-fKode').focus(); }
+            function tutupOkPop() { g('tf-okPop').hidden = true; g('tf-fMasuk').focus(); }
             function okPop(no, kode, nama, nominal, jamTxt) {
                 g('tf-okNo').textContent = 'No ' + no;
                 g('tf-okKode').textContent = kode;
@@ -25883,17 +25889,17 @@
                 if (K.status === 'blok') return;
                 if (okPopBuka()) return;   // popup Tercatat masih terbuka: tekan OK dulu
                 if (transaksiJalan().length) { renderKerja(); return toast('Input baru dikunci: selesaikan dulu daftar yang berjalan sampai Cek akhir.', 'bad'); }
+                // Ceklis wajib: bukti menunjukkan uang masuk ke QRIS ProjekGo (dulu ada di tahap 2). Diperiksa paling awal karena jadi langkah pertama.
+                if (!g('tf-fMasuk').checked) {
+                    g('tf-fCbWrap').classList.add('need'); g('tf-fMasuk').focus();
+                    return toast('Centang dulu "Transfer ke QRIS ProjekGo" setelah memastikan di bukti uangnya masuk ke ProjekGo.', 'bad');
+                }
                 const wajib = ['tf-fKode', 'tf-fNominal', 'tf-fPel', 'tf-fJam'].map(g).find(x => !x.checkValidity());
                 if (wajib) { wajib.reportValidity(); return; }
                 if (!needP()) return;
                 const tgl = S.tgl;
                 if (!izinOk(tgl)) return toast('Tanggal ini belum disetujui owner. Tekan "Ganti tanggal" lagi untuk minta persetujuan.', 'bad');
                 const kode = normKode(g('tf-fKode').value), nominal = Number(digits(g('tf-fNominal').value)), pel = normNama(g('tf-fPel').value);
-                // Ceklis wajib: bukti menunjukkan uang masuk ke QRIS ProjekGo (dulu ada di tahap 2)
-                if (!g('tf-fMasuk').checked) {
-                    g('tf-fCbWrap').classList.add('need'); g('tf-fMasuk').focus();
-                    return toast('Centang dulu "Transfer ke QRIS ProjekGo" setelah memastikan di bukti uangnya masuk ke ProjekGo.', 'bad');
-                }
                 const bad0 = validTransaksi(kode, nominal, pel, null);
                 if (bad0) return toast(bad0, 'bad');
                 // Jam kosong: tanya dulu. "Pelanggan belum info bukti" = tetap simpan; "Isi kembali" = kembali ke kolom jam.
@@ -25945,11 +25951,20 @@
                 okPop(no, kode, r.nama, nominal, J.ms ? jam(J.ms) : J.teks);
             });
             g('tf-fBtn').addEventListener('click', kirimCatat);
-            g('tf-fCatat').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); kirimCatat(); } });
+            g('tf-fCatat').addEventListener('keydown', ev => {
+                if (ev.key !== 'Enter') return;
+                ev.preventDefault();
+                // (2 Nov 2026) Enter di ceklis saat form masih kosong: centang lalu lanjut ke Kode, bukan menyimpan
+                if (ev.target === g('tf-fMasuk') && !g('tf-fKode').value) {
+                    if (!g('tf-fMasuk').checked) g('tf-fMasuk').click(); else g('tf-fKode').focus();
+                    return;
+                }
+                kirimCatat();
+            });
             // (24 Okt 2026) Mode komputer: panah kanan / kiri pindah kolom. Nama rider (otomatis) dilewati.
             g('tf-fCatat').addEventListener('keydown', ev => {
                 if (!PAGE.classList.contains('tf-pc') || (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
-                const urut = ['tf-fKode', 'tf-fNominal', 'tf-fPel', 'tf-fJam', 'tf-fMasuk', 'tf-fBtn'].map(g).filter(Boolean);
+                const urut = ['tf-fMasuk', 'tf-fKode', 'tf-fNominal', 'tf-fPel', 'tf-fJam', 'tf-fBtn'].map(g).filter(Boolean);
                 const i = urut.indexOf(ev.target); if (i < 0) return;
                 const j = i + (ev.key === 'ArrowRight' ? 1 : -1); if (j < 0 || j >= urut.length) return;
                 ev.preventDefault();
