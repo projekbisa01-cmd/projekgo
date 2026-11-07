@@ -13707,6 +13707,7 @@
 
                 await batch.commit();
                 if (typeof window.akSesudahKirim === 'function') window.akSesudahKirim();   // ANTAR HEMAT
+                try { if (typeof window.cpaOrderTerkirim === 'function') window.cpaOrderTerkirim(orderRef.id, { kode: kodeUlasan, jenis: jenisOrder, phone, details, fee: feeParsed.real, tambahan: tamParsed.real, riderUid: riderUid || null, riderName: riderName || null }); } catch (e) {}   // AKTIVITAS & CHAT RIDER (tahap 3)
 
                 // PERBAIKAN LANGKAH 2: Eksekusi FCM *setelah* Firestore benar-benar menyimpan data
                 if (riderUid) {
@@ -13802,6 +13803,7 @@
 
                 await batch.commit();
                 if (typeof window.akSesudahKirim === 'function') window.akSesudahKirim();   // ANTAR HEMAT
+                try { if (typeof window.cpaOrderTerkirim === 'function') window.cpaOrderTerkirim(orderRef.id, { kode: kodeUlasan, jenis: jenisOrder, phone, details, fee: feeParsed.real, tambahan: tamParsed.real, riderUid: null, riderName: null }); } catch (e) {}   // AKTIVITAS & CHAT RIDER (tahap 3)
                 if (typeof window.abUcap === 'function') window.abUcap('Di pending');
 
                 // Catat ongkir ke histori nomor ini (terpisah dari order; kalau gagal, order tetap aman)
@@ -15187,6 +15189,7 @@
                 const kode = order && order.ulasan_kode;
                 if (!/^[A-Za-z0-9]{12,32}$/.test(String(kode || ''))) return;
                 if (!['selesai', 'batal', 'menunggu'].includes(tahap)) return;
+                try { if (typeof window.cpaTahapAdmin === 'function') window.cpaTahapAdmin(order, tahap); } catch (e) {}   // AKTIVITAS PELANGGAN (tahap 3)
                 const isi = { tahap, tahap_at: serverTimestamp() };
                 if (tahap !== 'menunggu') isi.titik = null;   // lokasi pelanggan dihapus saat order berakhir
                 isi.posisi = null;   // (22 Okt 2026) posisi rider (lokasi live) dihapus: order berakhir / dialihkan
@@ -28411,6 +28414,7 @@
     <!-- ===================================================================
          CHAT PELANGGAN (7 Nov 2026) — TAMBAHAN SAJA, tampilan Dispatch tidak diubah.
          Tombol chat mengambang + pemberitahuan + kotak masuk + ruang balas.
+         Tahap 3: pantau chat rider ↔ pelanggan, hubungkan nomor WA, order masuk Aktivitas pelanggan.
          Data: chat_pelanggan/{uid} dan chat_pelanggan/{uid}/pesan. Semua isi
          ditampilkan dengan textContent (tidak pernah sebagai HTML).
          =================================================================== -->
@@ -28533,6 +28537,27 @@
         .cpa-lihat img { max-width: 100%; max-height: 100%; object-fit: contain; }
         .cpa-lihat button { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; width: 44px; height: 44px; border-radius: 99px; border: 0; background: rgba(255,255,255,.15); color: #FFFFFF; font-size: 20px; cursor: pointer; }
         .cpa-lihat-buka { position: absolute; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); color: #FFFFFF; font-size: 13px; font-weight: 800; background: rgba(255,255,255,.15); padding: 8px 14px; border-radius: 99px; text-decoration: none; }
+        /* ---- TAHAP 3 (7 Nov 2026): pantau chat rider, hubungkan nomor WA ---- */
+        .cpa-ch.hijau { background: #E8F3E6; color: #2F6B3E; border-color: #E8F3E6; }
+        .cpa-bub.rdr { align-self: flex-end; background: #FFE7D3; border-top-right-radius: 4px; }
+        .cpa-bub .cpa-nmp { display: block; font-size: 11px; font-weight: 800; margin-bottom: 2px; color: #2B5A8A; }
+        .cpa-bub.rdr .cpa-nmp { color: #C2410C; }
+        .cpa-pantau-info { align-self: center; max-width: 92%; text-align: center; font-size: 12px; font-weight: 700; line-height: 1.45; color: #6B4E12; background: #FFF4D6; padding: 7px 12px; border-radius: 10px; margin: 2px 0 6px; }
+        .cpa-qris { display: block; width: 200px; max-width: 100%; border-radius: 10px; margin-top: 4px; background: #FFFFFF; }
+        .cpa-pantau-kaki { margin: 0; padding: 12px 16px calc(14px + env(safe-area-inset-bottom, 0px)); font-size: 12.5px; font-weight: 700; color: #6B5E52; text-align: center; background: #F3ECE2; }
+        .cpa-verif { position: absolute; inset: 0; z-index: 7; background: rgba(42,32,24,.35); display: flex; align-items: flex-end; }
+        .cpa-verif[hidden] { display: none; }
+        .cpa-verif form { width: 100%; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); margin: 0; }
+        .cpa-verif h3 { margin: 0 0 6px; font-size: 17px; font-weight: 800; }
+        .cpa-verif p { margin: 0 0 12px; font-size: 13px; line-height: 1.5; color: #5C4E42; font-weight: 600; }
+        .cpa-verif label { display: block; font-size: 12.5px; font-weight: 800; color: #4A3F35; }
+        .cpa-verif input { display: block; width: 100%; box-sizing: border-box; height: 48px; margin-top: 6px; border-radius: 12px; border: 1.5px solid #E8DFD1; padding: 0 14px; font: inherit; font-size: 16px; color: #2A2018; }
+        .cpa-verif input:focus { outline: 2px solid #F4BE95; outline-offset: 0; }
+        .cpa-verif .cpa-salin { margin-top: 14px; }
+        .cpa-verif .lepas { margin-top: 8px; width: 100%; min-height: 46px; border-radius: 12px; border: 1.5px solid #F3C8C3; background: #FFFFFF; color: #9B2C2C; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
+        .cpa-verif .lepas[hidden] { display: none; }
+        .cpa-verif .batal { margin-top: 8px; width: 100%; min-height: 44px; border: 0; background: transparent; color: #6B5E52; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
+        .cpa-verif small { display: block; min-height: 18px; margin-top: 6px; font-size: 12px; font-weight: 700; color: #9B2C2C; }
     </style>
 
     <button type="button" id="cpa-fab" class="cpa-fab" hidden aria-label="Chat pelanggan"><i class="fa-solid fa-comment-dots" aria-hidden="true"></i><span id="cpa-fab-n" class="cpa-fab-n" hidden>0</span></button>
@@ -28562,6 +28587,7 @@
                     <button type="button" class="cpa-fc" data-f="belum">Belum dibalas <em id="cpa-n-belum">0</em></button>
                     <button type="button" class="cpa-fc" data-f="pesanan">Ada pesanan</button>
                     <button type="button" class="cpa-fc" data-f="selesai">Selesai</button>
+                    <button type="button" class="cpa-fc" data-f="rider">🛵 Rider ↔ Pelanggan</button>
                 </div>
                 <div class="cpa-daftar" id="cpa-daftar" aria-live="polite"></div>
                 <p class="cpa-catatan">Chat lewat aplikasi: nomor WA pelanggan tidak ikut terkirim ke rider.</p>
@@ -28580,6 +28606,7 @@
                 </div>
                 <div class="cpa-menu" id="cpa-menu" hidden role="menu">
                     <button type="button" role="menuitem" id="cpa-m-salin"><i class="fa-solid fa-copy" aria-hidden="true"></i>Salin chat terbaru ke Data order</button>
+                    <button type="button" role="menuitem" id="cpa-m-verif"><i class="fa-solid fa-link" aria-hidden="true"></i>Hubungkan nomor WA (Aktivitas)</button>
                     <button type="button" role="menuitem" id="cpa-m-wa"><i class="fa-brands fa-whatsapp" aria-hidden="true"></i>Ingatkan lewat WhatsApp</button>
                     <button type="button" role="menuitem" id="cpa-m-selesai"><i class="fa-solid fa-check" aria-hidden="true"></i>Tandai selesai</button>
                     <button type="button" role="menuitem" id="cpa-m-kosong"><i class="fa-solid fa-broom" aria-hidden="true"></i><span>Kosongkan chat</span></button>
@@ -28593,6 +28620,7 @@
                     <button type="button" class="cpa-qr">Boleh kirim lokasinya Kak? Ketuk tombol "Kirim lokasi saya" ya.</button>
                     <button type="button" class="cpa-qr">Rider sedang menuju lokasi ya Kak.</button>
                     <button type="button" class="cpa-qr">Pesanan sudah diterima rider ya Kak. Terima kasih 🙏</button>
+                    <button type="button" class="cpa-qr">Pesanan sudah diteruskan ke rider ya Kak. Pantau &amp; chat rider di menu Aktivitas 🙏</button>
                 </div>
                 <div class="cpa-edit" id="cpa-edit" hidden>
                     <span><b>Edit pesan</b><span id="cpa-edit-asal"></span></span>
@@ -28601,11 +28629,35 @@
                 <div class="cpa-aksi" id="cpa-aksi" hidden role="dialog" aria-modal="true" aria-label="Pilihan pesan">
                     <div class="cpa-aksi-isi"><div class="cpa-aksi-pr" id="cpa-aksi-pr"></div><div id="cpa-aksi-daftar"></div><button type="button" class="batal" id="cpa-aksi-batal">Batal</button></div>
                 </div>
+                <div class="cpa-verif" id="cpa-verif" hidden role="dialog" aria-modal="true" aria-labelledby="cpa-v-judul">
+                    <form id="cpa-v-form" autocomplete="off">
+                        <h3 id="cpa-v-judul">Hubungkan nomor WA</h3>
+                        <p>Pesanan lewat WhatsApp dari nomor ini akan ikut tampil di menu Aktivitas aplikasi pelanggan ini. Simpan hanya kalau nomornya sudah kamu pastikan milik pelanggan ini (misalnya sudah ditelepon atau pernah order dari nomor itu).</p>
+                        <label for="cpa-v-nomor">Nomor WA pelanggan</label>
+                        <input type="tel" id="cpa-v-nomor" inputmode="tel" maxlength="20" placeholder="08xxxxxxxxxx">
+                        <small id="cpa-v-pesan" role="status"></small>
+                        <button type="submit" class="cpa-salin" id="cpa-v-simpan"><i class="fa-solid fa-link" aria-hidden="true"></i> Simpan &amp; hubungkan</button>
+                        <button type="button" class="lepas" id="cpa-v-lepas" hidden>Lepas nomor yang terhubung</button>
+                        <button type="button" class="batal" id="cpa-v-batal">Batal</button>
+                    </form>
+                </div>
                 <form class="cpa-tulis" id="cpa-form" autocomplete="off">
                     <label for="cpa-input" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Balasan untuk pelanggan</label>
                     <textarea id="cpa-input" rows="1" maxlength="1000" placeholder="Tulis balasan..."></textarea>
                     <button type="submit" class="cpa-kirim" id="cpa-kirim" aria-label="Kirim balasan" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
                 </form>
+            </section>
+            <!-- PANTAU CHAT RIDER ↔ PELANGGAN (tahap 3, hanya membaca) -->
+            <section class="cpa-hal" id="cpa-pantau" hidden>
+                <div class="cpa-kepala">
+                    <div class="cpa-baris">
+                        <button type="button" class="cpa-ik polos" id="cpa-p-kembali" aria-label="Kembali ke daftar"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+                        <span class="cpa-av" id="cpa-p-av" style="width:40px;height:40px;background:#FFFFFF;" aria-hidden="true">R</span>
+                        <div class="cpa-judul"><b id="cpa-p-judul">Rider ↔ Pelanggan</b><span id="cpa-p-sub"></span></div>
+                    </div>
+                </div>
+                <div class="cpa-isi" id="cpa-p-isi" role="log" aria-live="polite"></div>
+                <p class="cpa-pantau-kaki"><i class="fa-solid fa-eye" aria-hidden="true"></i> Mode pantau: admin hanya melihat. Nomor HP pelanggan tidak tampil ke rider.</p>
             </section>
         </div>
     </div>
@@ -28619,7 +28671,7 @@
     <script type="module">
         import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, onSnapshot, query, orderBy, limit, writeBatch, serverTimestamp, increment, updateDoc, getDoc, deleteField } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, onSnapshot, query, orderBy, limit, writeBatch, serverTimestamp, increment, updateDoc, getDoc, deleteField, where, getDocs } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
         import { getStorage, ref as sRef, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
 
         const app = getApp();
@@ -28690,6 +28742,7 @@
             fab.hidden = nBaca === 0; fab.textContent = nBaca > 9 ? '9+' : String(nBaca);
             $('cpa-fab').setAttribute('aria-label', 'Chat pelanggan' + (nBaca ? ', ' + nBaca + ' belum dibaca' : ''));
             if (!panelBuka() || !$('cpa-ruang').hidden) return;
+            if (filter === 'rider') { renderPantauDaftar(); return; }   // tahap 3: daftar chat rider ↔ pelanggan
             const q = cari.trim().toLowerCase();
             const tampil = daftar.filter((c) => {
                 if (filter === 'belum' && !belumDibalas(c)) return false;
@@ -28768,6 +28821,7 @@
         function bukaPanel() {
             $('cpa-panel').hidden = false;
             document.body.classList.add('cpa-buka');
+            if (filter === 'rider') mulaiPantauDaftar();
             $('cpa-toast').hidden = true;
             renderMasuk();
         }
@@ -28775,6 +28829,7 @@
             $('cpa-panel').hidden = true;
             document.body.classList.remove('cpa-buka');
             tutupRuang();
+            hentiPantauSemua();
         }
 
         // ---------- RUANG BALAS ----------
@@ -28795,6 +28850,7 @@
                 else if (infoPel._totalOrder === 0) ch(n > 1 ? 'Pelanggan baru · ' + n + ' pesanan aplikasi' : 'Pelanggan baru');
                 else if (n > 0) ch(n + ' pesanan dari aplikasi');
                 if (infoPel.diblokir === true) ch('Diblokir', 'merah');
+                if (typeof infoPel.wa_verif === 'string' && /^62\d{8,13}$/.test(infoPel.wa_verif)) ch('✓ WA terhubung · 0' + infoPel.wa_verif.slice(2), 'hijau');
             }
             ch('Nomor privat');
             const blok = $('cpa-m-blokir').querySelector('span');
@@ -28937,6 +28993,7 @@
             hentiRuang = null; ruangUid = null; pesan = []; infoPel = null;
             $('cpa-menu').hidden = true; $('cpa-menu-btn').setAttribute('aria-expanded', 'false');
             $('cpa-ruang').hidden = true; $('cpa-masuk').hidden = false;
+            $('cpa-verif').hidden = true;
             if (aksiSiap) { tutupAksiA(); batalEditAdmin(); }
         }
 
@@ -29000,6 +29057,8 @@
                 return;
             }
             let teks = String(o.teks || '').replace(/^Halo Admin Projekgo,[^\n]*\n+/i, '').replace(/\n*Terima kasih!?\s*$/i, '').trim();
+            // Tahap 3: order berikutnya yang dikirim dari form ini dihubungkan ke akun pelanggan ini (Aktivitas + chat rider)
+            window.__cpaChatOrder = { uid: c.id, nama: c.nama, at: Date.now() };
             teks = '💬 PESAN LEWAT CHAT APLIKASI — nomor pelanggan privat, hubungi lewat admin (nomor ini).\n' + teks;
             tutupPanel();
             if (typeof window.switchPage === 'function') window.switchPage('dispatch');
@@ -29087,6 +29146,7 @@
         $('cpa-cari').addEventListener('input', (e) => { cari = e.target.value; renderMasuk(); });
         document.querySelectorAll('.cpa-fc').forEach((b) => b.addEventListener('click', () => {
             filter = b.dataset.f;
+            if (filter === 'rider') mulaiPantauDaftar(); else hentiPantauSemua();
             document.querySelectorAll('.cpa-fc').forEach((x) => x.classList.toggle('on', x === b));
             renderMasuk();
         }));
@@ -29187,12 +29247,236 @@
         };
         aksiSiap = true;
 
+        // =====================================================================
+        // TAHAP 3 (7 Nov 2026): AKTIVITAS PELANGGAN + CHAT RIDER ↔ PELANGGAN
+        // - Order dari "Salin ke Data order" -> tampil di menu Aktivitas aplikasi pelanggan + ruang chat rider.
+        // - Order WhatsApp dari nomor yang sudah DIVERIFIKASI admin -> ikut tampil di Aktivitas (tanpa chat rider).
+        // Semua ditulis SETELAH order tersimpan (kiriman terpisah). Kalau bagian ini gagal, order tetap aman.
+        // =====================================================================
+        const KODE_ORDER_OK = /^[A-Za-z0-9]{12,32}$/, ID_ORDER_OK = /^[A-Za-z0-9_-]{1,64}$/, UID_OK = /^[A-Za-z0-9]{10,128}$/;
+        const PROYEK = app.options.projectId;
+        const nomor62 = (v) => (typeof window.nomorWaNormalDx === 'function' ? window.nomorWaNormalDx(v) : null);
+        const tandaChat = 'PESAN LEWAT CHAT APLIKASI';
+        const rapikanDetail = (t) => String(t || '').split('\n').filter((b) => b.indexOf(tandaChat) < 0).join('\n').trim().slice(0, 1500);
+        const judulDari = (t) => {
+            const b = String(t || '').split('\n').map((x) => x.replace(/[*_~`]/g, '').replace(/^[\s\-•·]+/, '').replace(/\s+/g, ' ').trim())
+                .find((x) => x.length > 1 && !/^(halo|terima kasih|atas nama|nama|alamat|catatan|lokasi|ongkir|kontak|no\.? ?(hp|wa))\b/i.test(x));
+            return (b || '').slice(0, 60);
+        };
+        const cacheWa = new Map();   // 62xxx -> { uid, t }
+        async function akunDariWa(p62) {
+            const c = cacheWa.get(p62);
+            if (c && Date.now() - c.t < 10 * 60 * 1000) return c.uid;
+            const s = await getDocs(query(collection(db, 'users'), where('wa_verif', '==', p62), limit(2)));
+            const uid = s.size === 1 ? s.docs[0].id : null;   // dua akun dengan nomor sama = tidak dihubungkan
+            cacheWa.set(p62, { uid, t: Date.now() });
+            return uid;
+        }
+        // Dipanggil Dispatch tepat setelah order tersimpan (submitOrder & submitPendingOrder)
+        window.cpaOrderTerkirim = (orderId, info) => {
+            try {
+                const ctx = window.__cpaChatOrder; window.__cpaChatOrder = null;
+                if (!emailAdmin || !info) return;
+                const kode = String(info.kode || ''), oid = String(orderId || '');
+                if (!KODE_ORDER_OK.test(kode) || !ID_ORDER_OK.test(oid)) return;
+                const p62 = nomor62(info.phone), adm62 = nomor62(NOMOR_ADMIN);
+                const dariChat = !!(ctx && UID_OK.test(String(ctx.uid || '')) && Date.now() - ctx.at < 3 * 3600 * 1000
+                    && p62 && p62 === adm62 && String(info.details || '').indexOf(tandaChat) >= 0);
+                const jenis = ['food', 'ojek', 'kirim', 'lain'].includes(info.jenis) ? info.jenis : 'lain';
+                const fee = Math.max(0, Math.round(Number(info.fee) || 0)), tambahan = Math.max(0, Math.round(Number(info.tambahan) || 0));
+                const riderNama = info.riderName ? String(info.riderName).slice(0, 60) : null;
+                (async () => {
+                    let uidP = null;
+                    if (dariChat) uidP = ctx.uid;
+                    else if (p62 && p62 !== adm62) uidP = await akunDariWa(p62);
+                    if (!uidP) return;
+                    const det = rapikanDetail(info.details);
+                    const b = writeBatch(db);
+                    b.set(doc(db, 'aktivitas_pelanggan', uidP, 'order', kode), {
+                        kode, order_id: oid, jenis, judul: judulDari(det), pesanan: det, fee, tambahan,
+                        lewat: dariChat ? 'chat' : 'wa', chat: dariChat, rider_nama: riderNama, dibuat_at: serverTimestamp()
+                    });
+                    if (dariChat) {
+                        b.set(doc(db, 'chat_rider', kode), {
+                            pelanggan_uid: uidP, pelanggan_nama: String(ctx.nama || 'Pelanggan').split(' ')[0].slice(0, 30), order_id: oid, jenis,
+                            rider_uid: info.riderUid ? String(info.riderUid).trim().toUpperCase().slice(0, 64) : null, rider_nama: riderNama,
+                            terakhir: '', terakhir_dari: '', terakhir_at: serverTimestamp(), belum_rider: 0, belum_pelanggan: 0, dibuat_at: serverTimestamp()
+                        });
+                    }
+                    // update (bukan set): kalau order sudah dihapus, tidak membuat order "hantu"
+                    b.update(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', oid), dariChat ? { akt_uid: uidP, cr: true } : { akt_uid: uidP });
+                    await b.commit();
+                    tost(dariChat ? 'Terhubung ke aplikasi pelanggan' : 'Masuk Aktivitas pelanggan',
+                        dariChat ? 'Pesanan tampil di menu Aktivitas & rider bisa chat pelanggan di aplikasi.' : 'Nomor WA ini terhubung ke akun aplikasi. Pesanan tampil di menu Aktivitas.');
+                })().catch((e) => {
+                    console.warn('[Aktivitas] belum terhubung:', e && e.code, e);
+                    if (dariChat) tost('Order terkirim, tapi belum masuk Aktivitas', e && e.code === 'permission-denied' ? 'Rules tahap 3 belum dipasang.' : 'Periksa internet.');
+                });
+            } catch (e) { console.warn('[Aktivitas]', e); }
+        };
+        // Dipanggil saat admin menyelesaikan / membatalkan order (lacakTandaiAdmin)
+        window.cpaTahapAdmin = (order, tahap) => {
+            try {
+                const kode = String((order && order.ulasan_kode) || ''), u = String((order && order.akt_uid) || '');
+                if (!KODE_ORDER_OK.test(kode) || !UID_OK.test(u) || !['selesai', 'batal'].includes(tahap)) return;
+                updateDoc(doc(db, 'aktivitas_pelanggan', u, 'order', kode), { akhir: tahap, akhir_at: serverTimestamp() }).catch(() => {});
+            } catch (e) {}
+        };
+
+        // ---------- HUBUNGKAN NOMOR WA (verifikasi admin) ----------
+        function bukaVerif() {
+            $('cpa-menu').hidden = true;
+            const c = chatIni(); if (!c) return;
+            const ada = infoPel && typeof infoPel.wa_verif === 'string' ? infoPel.wa_verif : '';
+            $('cpa-v-nomor').value = ada ? '0' + ada.slice(2) : String((infoPel && infoPel.phone) || '').replace(/[^\d+]/g, '').slice(0, 20);
+            $('cpa-v-pesan').textContent = '';
+            $('cpa-v-lepas').hidden = !ada;
+            $('cpa-verif').hidden = false;
+            setTimeout(() => $('cpa-v-nomor').focus(), 60);
+        }
+        const tutupVerif = () => { $('cpa-verif').hidden = true; };
+        $('cpa-m-verif').onclick = bukaVerif;
+        $('cpa-v-batal').onclick = tutupVerif;
+        $('cpa-verif').addEventListener('click', (e) => { if (e.target.id === 'cpa-verif') tutupVerif(); });
+        $('cpa-v-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const c = chatIni(); if (!c) return;
+            const p62 = nomor62($('cpa-v-nomor').value);
+            if (!p62) { $('cpa-v-pesan').textContent = 'Nomor belum benar. Contoh: 081234567890'; return; }
+            if (p62 === nomor62(NOMOR_ADMIN)) { $('cpa-v-pesan').textContent = 'Itu nomor admin, bukan nomor pelanggan.'; return; }
+            const btn = $('cpa-v-simpan'); btn.disabled = true;
+            try {
+                const s = await getDocs(query(collection(db, 'users'), where('wa_verif', '==', p62), limit(3)));
+                const lain = s.docs.filter((d) => d.id !== c.id);
+                if (lain.length) { $('cpa-v-pesan').textContent = 'Nomor ini sudah terhubung ke akun lain (' + String(lain[0].data().email || lain[0].data().name || 'pelanggan lain').slice(0, 60) + '). Lepas dulu di chat akun itu.'; return; }
+                await updateDoc(doc(db, 'users', c.id), { wa_verif: p62, wa_verif_at: serverTimestamp(), wa_verif_oleh: emailAdmin.slice(0, 120) });
+                infoPel = Object.assign({}, infoPel, { wa_verif: p62 }); cacheWa.delete(p62);
+                renderKepalaRuang(); tutupVerif();
+                tost('Nomor WA terhubung', 'Order WhatsApp dari 0' + p62.slice(2) + ' akan tampil di Aktivitas aplikasi ' + c.nama.split(' ')[0] + '.');
+            } catch (er) {
+                console.warn(er);
+                $('cpa-v-pesan').textContent = er && er.code === 'permission-denied' ? 'Akun ini tidak berhak / rules belum dipasang.' : 'Belum tersimpan. Periksa internet.';
+            } finally { btn.disabled = false; }
+        });
+        $('cpa-v-lepas').onclick = async () => {
+            const c = chatIni(), b = $('cpa-v-lepas'); if (!c) return;
+            if (b.dataset.yakin !== '1') { b.dataset.yakin = '1'; b.textContent = 'Ketuk lagi untuk melepas'; return; }
+            delete b.dataset.yakin; b.textContent = 'Lepas nomor yang terhubung';
+            const lama = infoPel && infoPel.wa_verif;
+            try {
+                await updateDoc(doc(db, 'users', c.id), { wa_verif: deleteField(), wa_verif_at: deleteField(), wa_verif_oleh: deleteField() });
+                infoPel = Object.assign({}, infoPel); delete infoPel.wa_verif; if (lama) cacheWa.delete(lama);
+                renderKepalaRuang(); tutupVerif(); tost('Nomor WA dilepas', 'Order WhatsApp dari nomor itu tidak lagi masuk Aktivitas akun ini.');
+            } catch (er) { $('cpa-v-pesan').textContent = 'Belum tersimpan. Periksa internet.'; }
+        };
+
+        // ---------- PANTAU CHAT RIDER ↔ PELANGGAN (hanya membaca) ----------
+        let hentiPantauDaftar = null, hentiPantauRuang = null, pantauDaftar = [], pantauKode = null, pantauPesan = [];
+        function mulaiPantauDaftar() {
+            if (hentiPantauDaftar) return;
+            $('cpa-daftar').textContent = '';
+            $('cpa-daftar').appendChild(el('div', 'cpa-kosong', 'Memuat chat rider...'));
+            hentiPantauDaftar = onSnapshot(query(collection(db, 'chat_rider'), orderBy('terakhir_at', 'desc'), limit(30)), (s) => {
+                pantauDaftar = s.docs.map((d) => {
+                    const x = d.data({ serverTimestamps: 'estimate' }) || {};
+                    return { id: d.id, pel: String(x.pelanggan_nama || 'Pelanggan').slice(0, 30), rider: String(x.rider_nama || x.rider_uid || 'Belum ada rider').slice(0, 60), terakhir: String(x.terakhir || '').slice(0, 200), dari: x.terakhir_dari === 'rider' ? 'rider' : (x.terakhir_dari === 'pelanggan' ? 'pelanggan' : ''), t: ms(x.terakhir_at), jenis: String(x.jenis || '') };
+                });
+                if (filter === 'rider') renderMasuk();
+            }, (e) => {
+                console.warn('[Pantau rider]', e && e.code);
+                $('cpa-daftar').textContent = '';
+                $('cpa-daftar').appendChild(el('div', 'cpa-kosong', e && e.code === 'permission-denied' ? 'Rules tahap 3 belum dipasang.' : 'Belum bisa memuat. Periksa internet.'));
+            });
+        }
+        function hentiPantauSemua() {
+            if (hentiPantauDaftar) { try { hentiPantauDaftar(); } catch (e) {} }
+            hentiPantauDaftar = null; pantauDaftar = [];
+            tutupPantauRuang();
+        }
+        function renderPantauDaftar() {
+            const wadah = $('cpa-daftar');
+            wadah.textContent = '';
+            const q = cari.trim().toLowerCase();
+            const tampil = pantauDaftar.filter((c) => !q || c.pel.toLowerCase().includes(q) || c.rider.toLowerCase().includes(q));
+            if (!hentiPantauDaftar) return;
+            if (!tampil.length) { wadah.appendChild(el('div', 'cpa-kosong', pantauDaftar.length ? 'Tidak ada yang cocok.' : 'Belum ada chat rider dengan pelanggan.')); return; }
+            const frag = document.createDocumentFragment();
+            tampil.forEach((c) => {
+                const b = el('button', 'cpa-rw'); b.type = 'button';
+                const tengah = el('span'); tengah.style.minWidth = '0';
+                tengah.append(el('span', 'cpa-nm', c.pel + ' ↔ ' + c.rider),
+                    el('span', 'cpa-ms', c.terakhir ? (c.dari === 'rider' ? 'Rider: ' : 'Pelanggan: ') + c.terakhir : 'Belum ada pesan'));
+                b.append(el('span', 'cpa-av', '🛵'), tengah, el('span', 'cpa-kn', waktuDaftar(c.t)));
+                b.setAttribute('aria-label', 'Chat ' + c.pel + ' dengan rider ' + c.rider);
+                b.onclick = () => bukaPantauRuang(c.id);
+                frag.appendChild(b);
+            });
+            wadah.appendChild(frag);
+        }
+        function bukaPantauRuang(kode) {
+            const c = pantauDaftar.find((x) => x.id === kode); if (!c) return;
+            tutupPantauRuang();
+            pantauKode = kode;
+            $('cpa-masuk').hidden = true; $('cpa-pantau').hidden = false;
+            $('cpa-p-judul').textContent = c.pel + ' ↔ ' + c.rider;
+            $('cpa-p-sub').textContent = 'Chat rider dengan pelanggan · ' + ({ food: 'Food', ojek: 'Ngojek', kirim: 'Kirim barang' }[c.jenis] || 'Order');
+            renderPantauRuang();
+            hentiPantauRuang = onSnapshot(query(collection(db, 'chat_rider', kode, 'pesan'), orderBy('dibuat_at', 'desc'), limit(80)), (s) => {
+                if (pantauKode !== kode) return;
+                pantauPesan = s.docs.map((d) => {
+                    const x = d.data({ serverTimestamps: 'estimate' }) || {};
+                    return { id: d.id, dari: x.dari === 'rider' ? 'rider' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, qris: typeof x.qris === 'string' ? x.qris : '', t: ms(x.dibuat_at) };
+                }).sort((a, b) => a.t - b.t);
+                renderPantauRuang();
+            }, (e) => console.warn('[Pantau rider] pesan', e && e.code));
+        }
+        function tutupPantauRuang() {
+            if (hentiPantauRuang) { try { hentiPantauRuang(); } catch (e) {} }
+            hentiPantauRuang = null; pantauKode = null; pantauPesan = [];
+            if ($('cpa-pantau').hidden === false) { $('cpa-pantau').hidden = true; $('cpa-masuk').hidden = false; }
+        }
+        function renderPantauRuang() {
+            const isi = $('cpa-p-isi');
+            const c = pantauDaftar.find((x) => x.id === pantauKode) || { pel: 'Pelanggan', rider: 'Rider' };
+            const diBawah = isi.scrollHeight - isi.scrollTop - isi.clientHeight < 90;
+            const frag = document.createDocumentFragment();
+            frag.appendChild(el('div', 'cpa-pantau-info', 'Mode pantau. Chat ini otomatis ditutup 1 jam setelah order selesai.'));
+            let hariSblm = '';
+            pantauPesan.forEach((p) => {
+                const h = labelHari(p.t);
+                if (h !== hariSblm) { hariSblm = h; frag.appendChild(el('div', 'cpa-hari', h)); }
+                const b = el('div', 'cpa-bub ' + (p.dari === 'rider' ? 'rdr' : 'plg'));
+                b.appendChild(el('span', 'cpa-nmp', p.dari === 'rider' ? c.rider + ' (rider)' : c.pel + ' (pelanggan)'));
+                const lat = Number(p.lat), lng = Number(p.lng);
+                if (p.jenis === 'lokasi' && isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+                    const a = el('a', '', '📍 Lokasi · buka di Google Maps'); a.href = 'https://www.google.com/maps?q=' + lat.toFixed(6) + ',' + lng.toFixed(6); a.target = '_blank'; a.rel = 'noopener noreferrer';
+                    b.appendChild(a);
+                } else if (p.jenis === 'qris' && /^https:\/\/[^\s"'<>`\\]+$/i.test(p.qris)) {
+                    b.appendChild(el('b', '', 'QRIS pembayaran'));
+                    // Gambar hanya dari penyimpanan gambar yang dikenal; selain itu cukup tautan
+                    if (/^https:\/\/(i\.ibb\.co(\.com)?|firebasestorage\.googleapis\.com|lh[0-9]\.googleusercontent\.com|storage\.googleapis\.com)\//i.test(p.qris)) {
+                        const im = el('img', 'cpa-qris'); im.alt = 'QRIS dari rider'; im.loading = 'lazy'; im.referrerPolicy = 'no-referrer'; im.src = p.qris;
+                        b.appendChild(im);
+                    } else { const a = el('a', '', 'Buka QRIS'); a.href = p.qris; a.target = '_blank'; a.rel = 'noopener noreferrer'; b.appendChild(el('div')).appendChild(a); }
+                    if (p.teks) { const t = el('div'); isiTeks(t, p.teks); b.appendChild(t); }
+                } else { isiTeks(b, p.teks); }
+                b.appendChild(el('span', 'cpa-wk', jam(p.t)));
+                frag.appendChild(b);
+            });
+            if (!pantauPesan.length) frag.appendChild(el('div', 'cpa-kosong', 'Belum ada pesan.'));
+            isi.textContent = ''; isi.appendChild(frag);
+            if (diBawah || pantauPesan.length < 12) isi.scrollTop = isi.scrollHeight;
+        }
+        $('cpa-p-kembali').onclick = () => { tutupPantauRuang(); renderMasuk(); };
+
         document.addEventListener('visibilitychange', tandaiDibaca);
         $('cpa-lihat-x').onclick = tutupLihat;
         $('cpa-lihat').addEventListener('click', (e) => { if (e.target.id === 'cpa-lihat') tutupLihat(); });
         // Tombol Back HP (dipanggil dari penjaga tombol kembali Dispatch): true = sudah ditangani
         window.cpaKembali = () => {
             if (!$('cpa-lihat').hidden) { tutupLihat(); return true; }
+            if (!$('cpa-verif').hidden) { tutupVerif(); return true; }
+            if (!$('cpa-pantau').hidden) { tutupPantauRuang(); renderMasuk(); return true; }
             if (!$('cpa-aksi').hidden) { tutupAksiA(); return true; }
             if (!$('cpa-menu').hidden) { $('cpa-menu').hidden = true; return true; }
             if (sedangEditA) { batalEditAdmin(); return true; }
