@@ -28496,6 +28496,25 @@
         .cpa-menu button i { width: 18px; color: #C2410C; }
         .cpa-menu button.bahaya, .cpa-menu button.bahaya i { color: #9B2C2C; }
         body.cpa-buka { overflow: hidden; }
+        .cpa-foto { padding: 4px; }
+        .cpa-foto-g { position: relative; display: block; width: 230px; max-width: 100%; border: 0; padding: 0; border-radius: 9px; overflow: hidden; background: #E8D9C6; cursor: zoom-in; }
+        .cpa-foto-g img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .cpa-foto-t { position: absolute; right: 8px; bottom: 8px; font-size: 11px; font-weight: 800; color: #FFFFFF; background: rgba(0,0,0,.5); padding: 3px 8px; border-radius: 99px; }
+        .cpa-foto-st { position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #6B5E52; }
+        .cpa-foto .cpa-wk { padding: 0 4px 2px; }
+        .cpa-kontak { min-width: 240px; padding: 10px 12px 6px; }
+        .cpa-kontak-k { display: flex; align-items: center; gap: 10px; white-space: normal; }
+        .cpa-kontak-k b { display: block; font-size: 14px; }
+        .cpa-kontak-k > div span { display: block; font-size: 13px; color: #4A5568; }
+        .cpa-kontak-av { width: 42px; height: 42px; border-radius: 99px; background: #E7EEF8; color: #2B5A8A; display: grid; place-items: center; font-weight: 800; flex: none; }
+        .cpa-kontak-tb { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; white-space: normal; }
+        .cpa-tb { min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1.5px solid #E8DFD1; background: #FFFFFF; color: #4A3F35; font: inherit; font-size: 12.5px; font-weight: 800; cursor: pointer; }
+        .cpa-tb.oranye { border-color: #F4BE95; color: #C2410C; }
+        .cpa-lihat { position: fixed; inset: 0; z-index: 9100; background: rgba(15,10,6,.94); display: flex; align-items: center; justify-content: center; }
+        .cpa-lihat[hidden] { display: none; }
+        .cpa-lihat img { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .cpa-lihat button { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; width: 44px; height: 44px; border-radius: 99px; border: 0; background: rgba(255,255,255,.15); color: #FFFFFF; font-size: 20px; cursor: pointer; }
+        .cpa-lihat-buka { position: absolute; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); color: #FFFFFF; font-size: 13px; font-weight: 800; background: rgba(255,255,255,.15); padding: 8px 14px; border-radius: 99px; text-decoration: none; }
     </style>
 
     <button type="button" id="cpa-fab" class="cpa-fab" hidden aria-label="Chat pelanggan"><i class="fa-solid fa-comment-dots" aria-hidden="true"></i><span id="cpa-fab-n" class="cpa-fab-n" hidden>0</span></button>
@@ -28564,14 +28583,23 @@
         </div>
     </div>
 
+    <div id="cpa-lihat" class="cpa-lihat" hidden role="dialog" aria-modal="true" aria-label="Foto dari pelanggan">
+        <img id="cpa-lihat-img" alt="Foto dari pelanggan">
+        <a id="cpa-lihat-buka" class="cpa-lihat-buka" target="_blank" rel="noopener noreferrer">Buka di tab baru</a>
+        <button type="button" id="cpa-lihat-x" aria-label="Tutup foto"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+    </div>
+
     <script type="module">
         import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, doc, onSnapshot, query, orderBy, limit, writeBatch, serverTimestamp, increment, updateDoc, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getStorage, ref as sRef, getDownloadURL } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
 
         const app = getApp();
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const storage = getStorage(app);
+        const urlFoto = {}, mintaFoto = {};   // foto chat: path Storage -> URL
         const $ = (id) => document.getElementById(id);
         // Nomor admin dipakai di kolom "Nomor WA" order dari chat: rider menghubungi admin, bukan pelanggan.
         const NOMOR_ADMIN = '0882008667068';
@@ -28742,6 +28770,31 @@
             delete $('cpa-m-blokir').dataset.yakin;
         }
 
+        // Foto chat: URL diambil dari Storage (rules: hanya admin & pemilik chat)
+        function ambilUrlFoto(path) {
+            if (urlFoto[path] || mintaFoto[path]) return;
+            mintaFoto[path] = getDownloadURL(sRef(storage, path))
+                .then((u) => { urlFoto[path] = u; if (ruangUid) renderRuang(); })
+                .catch((e) => { console.warn('[Chat] foto belum terbaca:', e && e.code); urlFoto[path] = 'gagal'; if (ruangUid) renderRuang(); });
+        }
+        function bukaLihat(src) { $('cpa-lihat-img').src = src; $('cpa-lihat-buka').href = src; $('cpa-lihat').hidden = false; }
+        function tutupLihat() { $('cpa-lihat').hidden = true; $('cpa-lihat-img').removeAttribute('src'); }
+        function salinTeks(t, pesanOk) {
+            const cadangan = () => { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e) {} a.remove(); };
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => tost(pesanOk, t), () => { cadangan(); tost(pesanOk, t); });
+            else { cadangan(); tost(pesanOk, t); }
+        }
+        // Kontak dari pelanggan (biasanya penerima paket) ditambahkan ke isi pesanan Data order
+        function kontakKeOrder(nama, nomor) {
+            const det = $('order-details');
+            if (!det) { tost('Form Data order tidak ditemukan'); return; }
+            const baris = 'Kontak: ' + (nama || 'Kontak') + ' – ' + nomor;
+            if (det.value.includes(baris)) { tost('Kontak sudah ada di Data order'); return; }
+            det.value = (det.value.trim() ? det.value.replace(/\s+$/, '') + '\n' : '') + baris;
+            det.dispatchEvent(new Event('input', { bubbles: true }));
+            tost('Kontak ditambahkan ke Data order', baris);
+        }
+
         function renderRuang(paksaBawah) {
             const isi = $('cpa-isi');
             const diBawah = isi.scrollHeight - isi.scrollTop - isi.clientHeight < 90;
@@ -28756,6 +28809,33 @@
                     const j = el('div', '', '📍 Lokasi pelanggan'); j.style.fontWeight = '800';
                     const a = el('a', '', 'Buka di Google Maps'); a.href = 'https://www.google.com/maps?q=' + lat.toFixed(6) + ',' + lng.toFixed(6); a.target = '_blank'; a.rel = 'noopener noreferrer';
                     b.append(j, a);
+                } else if (p.jenis === 'foto' && p.foto) {
+                    b.classList.add('cpa-foto');
+                    if (!urlFoto[p.foto]) ambilUrlFoto(p.foto);
+                    const src = urlFoto[p.foto];
+                    const f = el('button', 'cpa-foto-g'); f.type = 'button';
+                    const rasio = (p.w > 0 && p.h > 0) ? Math.min(1.4, Math.max(0.6, p.h / p.w)) : 0.75;
+                    f.style.height = Math.round(230 * rasio) + 'px';
+                    if (src && src !== 'gagal') {
+                        const img = el('img'); img.alt = 'Foto dari pelanggan'; img.loading = 'lazy'; img.src = src;
+                        f.append(img, el('span', 'cpa-foto-t', 'Ketuk untuk perbesar'));
+                        f.onclick = () => bukaLihat(src);
+                    } else {
+                        f.appendChild(el('span', 'cpa-foto-st', src === 'gagal' ? 'Foto tidak bisa dibuka' : 'Memuat foto...'));
+                    }
+                    b.appendChild(f);
+                } else if (p.jenis === 'kontak' && p.kontak_nomor) {
+                    b.classList.add('cpa-kontak');
+                    const k = el('div', 'cpa-kontak-k');
+                    const t = el('div'); t.append(el('b', '', p.kontak_nama || 'Kontak'), el('span', '', p.kontak_nomor));
+                    k.append(el('span', 'cpa-kontak-av', huruf(p.kontak_nama)), t);
+                    const tb = el('div', 'cpa-kontak-tb');
+                    const salin = el('button', 'cpa-tb'); salin.type = 'button'; salin.append(ikon('fa-solid fa-copy'), document.createTextNode(' Salin nomor'));
+                    salin.onclick = () => salinTeks(p.kontak_nomor, 'Nomor disalin');
+                    const ke = el('button', 'cpa-tb oranye'); ke.type = 'button'; ke.append(ikon('fa-solid fa-plus'), document.createTextNode(' Ke Data order'));
+                    ke.onclick = () => kontakKeOrder(p.kontak_nama, p.kontak_nomor);
+                    tb.append(salin, ke);
+                    b.append(k, tb);
                 } else if (p.jenis === 'pesanan' && p.dari === 'pelanggan') {
                     b.className = 'cpa-bub cpa-psn';
                     const k = el('div', 'cpa-psn-k'); k.append(ikon('fa-solid fa-receipt'), document.createTextNode('Pesanan' + (p.layanan ? ' · ' + p.layanan : '') + (p.ongkir ? ' · ongkir Rp' + Number(p.ongkir).toLocaleString('id-ID') : '')));
@@ -28795,7 +28875,7 @@
                 if (ruangUid !== uid) return;
                 pesan = s.docs.map((d) => {
                     const x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, dari: x.dari === 'admin' ? 'admin' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, layanan: x.layanan ? String(x.layanan).slice(0, 40) : '', ongkir: Number(x.ongkir) > 0 ? Math.round(Number(x.ongkir)) : 0, t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites) };
+                    return { id: d.id, dari: x.dari === 'admin' ? 'admin' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, layanan: x.layanan ? String(x.layanan).slice(0, 40) : '', ongkir: Number(x.ongkir) > 0 ? Math.round(Number(x.ongkir)) : 0, foto: typeof x.foto === 'string' ? x.foto : '', w: Number(x.w) || 0, h: Number(x.h) || 0, kontak_nama: x.kontak_nama ? String(x.kontak_nama).slice(0, 60) : '', kontak_nomor: x.kontak_nomor ? String(x.kontak_nomor).replace(/[^\d+]/g, '').slice(0, 20) : '', t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites) };
                 }).sort((a, b) => a.t - b.t);
                 renderRuang();
                 tandaiDibaca();
@@ -28891,7 +28971,12 @@
             const batas = Date.now() - 3 * 3600 * 1000;
             const dariPlg = pesan.filter((p) => p.dari === 'pelanggan' && p.t >= batas);
             if (!dariPlg.length) { tost('Belum ada pesan pelanggan dalam 3 jam terakhir'); return; }
-            const teks = dariPlg.map((p) => (p.jenis === 'lokasi' && isFinite(Number(p.lat)) && isFinite(Number(p.lng))) ? 'Lokasi: https://www.google.com/maps?q=' + Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6) : p.teks).join('\n');
+            const teks = dariPlg.map((p) => {
+                if (p.jenis === 'lokasi' && isFinite(Number(p.lat)) && isFinite(Number(p.lng))) return 'Lokasi: https://www.google.com/maps?q=' + Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6);
+                if (p.jenis === 'kontak' && p.kontak_nomor) return 'Kontak: ' + (p.kontak_nama || 'Kontak') + ' – ' + p.kontak_nomor;
+                if (p.jenis === 'foto') return '(pelanggan mengirim foto di chat)';
+                return p.teks;
+            }).join('\n');
             const psn = [...dariPlg].reverse().find((p) => p.jenis === 'pesanan');
             salinKeOrder({ teks, layanan: psn ? psn.layanan : '', ongkir: psn ? psn.ongkir : 0 }, null);
         };
@@ -28958,8 +29043,11 @@
             renderMasuk();
         }));
         document.addEventListener('visibilitychange', tandaiDibaca);
+        $('cpa-lihat-x').onclick = tutupLihat;
+        $('cpa-lihat').addEventListener('click', (e) => { if (e.target.id === 'cpa-lihat') tutupLihat(); });
         // Tombol Back HP (dipanggil dari penjaga tombol kembali Dispatch): true = sudah ditangani
         window.cpaKembali = () => {
+            if (!$('cpa-lihat').hidden) { tutupLihat(); return true; }
             if (!$('cpa-menu').hidden) { $('cpa-menu').hidden = true; return true; }
             if (!panelBuka()) return false;
             if (!$('cpa-ruang').hidden) { tutupRuang(); renderMasuk(); return true; }
