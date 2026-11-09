@@ -18475,7 +18475,7 @@
                 }
 
                 await batch.commit();
-                try { if (typeof window.cpaOrderDiedit === 'function') window.cpaOrderDiedit(id, { isDaily, details, fee: feeParsed.real, tambahan: tamParsed.real }); } catch (e) {}   // AKTIVITAS PELANGGAN ikut diperbarui (9 Nov 2026)
+                try { if (typeof window.cpaOrderDiedit === 'function') window.cpaOrderDiedit(id, { isDaily, riderUid, details, fee: feeParsed.real, tambahan: tamParsed.real }); } catch (e) {}   // AKTIVITAS PELANGGAN ikut diperbarui (9 Nov 2026)
                 // Susulan jenis order: kode ulasan + halaman pantau pelanggan. Dokumen lacak bisa belum ada
                 // (rider belum membuka order) -> updateDoc gagal & diabaikan; rider menulisnya nanti dengan jenis baru.
                 if (jenisUbahSusulan && /^[A-Za-z0-9]{12,32}$/.test(String(jenisUbahSusulan.kode || ''))) {
@@ -29337,6 +29337,13 @@
                     // update (bukan set): kalau order sudah dihapus, tidak membuat order "hantu"
                     b.update(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', oid), dariChat ? { akt_uid: uidP, cr: true } : { akt_uid: uidP });
                     await b.commit();
+                    // Catatan harian rider (dipakai saat order diedit dari Riwayat). Terpisah: kalau gagal, tidak apa-apa.
+                    if (info.riderUid && /^[A-Za-z0-9_-]{1,64}$/.test(String(info.riderUid))) {
+                        getDoc(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', oid)).then((so) => {
+                            const did = so.exists() ? String(so.data().daily_order_id || '') : '';
+                            if (ID_ORDER_OK.test(did)) return updateDoc(doc(db, 'artifacts', PROYEK, 'users', String(info.riderUid), 'daily_orders', did), { akt_uid: uidP, akt_kode: kode });
+                        }).catch(() => {});
+                    }
                     tost(dariChat ? 'Terhubung ke aplikasi pelanggan' : 'Masuk Aktivitas pelanggan',
                         dariChat ? 'Pesanan tampil di menu Aktivitas & rider bisa chat pelanggan di aplikasi.' : 'Nomor WA ini terhubung ke akun aplikasi. Pesanan tampil di menu Aktivitas.');
                 })().catch((e) => {
@@ -29358,12 +29365,23 @@
         window.cpaOrderDiedit = (orderId, info) => {
             try {
                 const oid = String(orderId || '');
-                if (!emailAdmin || !info || info.isDaily || !ID_ORDER_OK.test(oid)) return;
+                if (!emailAdmin || !info || !ID_ORDER_OK.test(oid)) return;
                 (async () => {
-                    const s = await getDoc(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', oid));
-                    if (!s.exists()) return;
-                    const o = s.data() || {};
-                    const kode = String(o.ulasan_kode || ''), u = String(o.akt_uid || '');
+                    let o = null, kode = '', u = '';
+                    if (info.isDaily) {
+                        // Edit dari Riwayat: tautan ke Aktivitas disimpan di catatan harian rider saat order dikirim
+                        const ru = String(info.riderUid || '');
+                        if (!/^[A-Za-z0-9_-]{1,64}$/.test(ru)) return;
+                        const s = await getDoc(doc(db, 'artifacts', PROYEK, 'users', ru, 'daily_orders', oid));
+                        if (!s.exists()) return;
+                        o = s.data() || {};
+                        kode = String(o.akt_kode || ''); u = String(o.akt_uid || '');
+                    } else {
+                        const s = await getDoc(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', oid));
+                        if (!s.exists()) return;
+                        o = s.data() || {};
+                        kode = String(o.ulasan_kode || ''); u = String(o.akt_uid || '');
+                    }
                     if (!KODE_ORDER_OK.test(kode) || !UID_OK.test(u)) return;   // bukan order pelanggan aplikasi
                     const det = rapikanDetail(info.details);
                     const ubah = { fee: Math.max(0, Math.round(Number(info.fee) || 0)), tambahan: Math.max(0, Math.round(Number(info.tambahan) || 0)), pesanan: det, judul: judulDari(det), diubah_at: serverTimestamp() };
@@ -29491,7 +29509,7 @@
             const c = pantauDaftar.find((x) => x.id === pantauKode) || { pel: 'Pelanggan', rider: 'Rider' };
             const diBawah = isi.scrollHeight - isi.scrollTop - isi.clientHeight < 90;
             const frag = document.createDocumentFragment();
-            frag.appendChild(el('div', 'cpa-pantau-info', 'Mode pantau. Chat ini ditutup otomatis begitu order selesai / dibatalkan.'));
+            frag.appendChild(el('div', 'cpa-pantau-info', 'Mode pantau. Chat ini ditutup otomatis 1 jam setelah order selesai, atau langsung saat dibatalkan.'));
             let hariSblm = '';
             pantauPesan.forEach((p) => {
                 const h = labelHari(p.t);
@@ -29552,6 +29570,18 @@
             if (!c || c.kode || sedangBuatKode.has(uid) || !emailAdmin) return c ? c.kode : '';
             sedangBuatKode.add(uid);
             try {
+                // Sudah punya kode dari aplikasi pelanggan (menu Profil) -> pakai yang sama, jangan buat baru
+                let lama = infoPel && ruangUid === uid && /^PG[2-9A-HJ-NP-Z]{5}$/.test(String(infoPel.kode_pg || '')) ? infoPel.kode_pg : '';
+                if (!lama) {
+                    const q = await getDocs(query(collection(db, 'kode_pelanggan'), where('uid', '==', uid), limit(1)));
+                    if (!q.empty && /^PG[2-9A-HJ-NP-Z]{5}$/.test(q.docs[0].id)) lama = q.docs[0].id;
+                }
+                if (lama) {
+                    await updateDoc(doc(db, 'chat_pelanggan', uid), { kode: lama });
+                    c.kode = lama; cacheKode.set(lama, { uid, nama: c.nama });
+                    if (ruangUid === uid) renderKepalaRuang();
+                    return lama;
+                }
                 for (let i = 0; i < 5; i++) {
                     const k = buatKodeAcak();
                     try {
