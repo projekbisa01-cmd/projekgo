@@ -26516,7 +26516,9 @@ window.PembuatQR = PembuatQR;
      di order tertulis nomor admin). Untuk order seperti itu:
      - tombol "Chat WA" di Tugas Berjalan berubah menjadi "Chat pelanggan" (chat di dalam aplikasi),
      - pesan yang biasanya dibuka ke WhatsApp (pesan pembuka, nota, link ulasan) diarahkan ke chat ini,
-     - rider bisa kirim QRIS / info transfer, dan dapat bunyi + notifikasi saat pelanggan membalas.
+     - rider bisa kirim QRIS / info transfer / foto dari kamera, memanggil pelanggan (notifikasi khusus),
+       dan dapat bunyi + notifikasi saat pelanggan membalas.
+     - (9 Nov 2026) Chat ditutup begitu pesanan selesai. Kendala setelah selesai ditangani admin.
      Order biasa (nomor pelanggan asli) TIDAK berubah sama sekali: tetap lewat WhatsApp seperti sekarang.
      Data: chat_rider/{kode order} + chat_rider/{kode}/pesan. Semua isi ditampilkan dengan textContent. -->
 <style>
@@ -26552,17 +26554,25 @@ window.PembuatQR = PembuatQR;
     .cr-tulis button:disabled { opacity: .45; }
     .cr-tutup-info { padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px)); background: #F5F0EA; text-align: center; font-size: 13.5px; font-weight: 700; color: #57534E; }
     .cr-tutup-info[hidden], .cr-tulis[hidden], .cr-cepat[hidden] { display: none; }
-    .cr-chip { position: fixed; left: 12px; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 9970; height: 48px; padding: 0 16px 0 12px; border-radius: 99px; border: 0; background: #EA580C; color: #FFFFFF; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px; box-shadow: 0 10px 22px rgba(194,65,12,.35); }
-    .cr-chip[hidden] { display: none; }
-    .cr-chip .cr-n { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 99px; background: #FFFFFF; color: #C2410C; font-size: 11.5px; line-height: 20px; text-align: center; }
-    .cr-chip .cr-n[hidden] { display: none; }
-    .cr-ruang button:focus-visible, .cr-chip:focus-visible { outline: 3px solid #FDBA74; outline-offset: 2px; }
+    .cr-ruang button:focus-visible { outline: 3px solid #FDBA74; outline-offset: 2px; }
+    .cr-kepala .cr-panggil { width: auto; padding: 0 12px; gap: 6px; display: flex; font-size: 14px; font-weight: 800; background: #EA580C; border-radius: 99px; height: 40px; }
+    .cr-kepala .cr-panggil:disabled { background: #57534E; opacity: .8; }
+    .cr-tulis .cr-kamera { background: #FFFFFF; color: #C2410C; border: 1.5px solid #E7DCCF; }
+    .cr-foto { display: block; padding: 0; border: 0; background: #F5F0EA; border-radius: 9px; margin-top: 2px; cursor: zoom-in; overflow: hidden; }
+    .cr-foto img { display: block; width: 220px; max-width: 100%; height: auto; margin: 0; border-radius: 9px; }
+    .cr-foto span { display: block; width: 220px; max-width: 100%; padding: 30px 10px; font-size: 12.5px; color: #57534E; text-align: center; }
+    .cr-bub.panggil { align-self: center; background: #FFF4D6; color: #6B4E12; font-size: 13px; font-weight: 700; text-align: center; }
+    .cr-lihat { position: fixed; inset: 0; z-index: 9997; background: rgba(12,10,9,.94); display: flex; align-items: center; justify-content: center; }
+    .cr-lihat[hidden] { display: none; }
+    .cr-lihat img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .cr-lihat button { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 12px; width: 48px; height: 48px; border-radius: 99px; border: 0; background: rgba(255,255,255,.18); color: #FFFFFF; font-size: 22px; }
 </style>
 <div id="cr-ruang" class="cr-ruang" hidden role="dialog" aria-modal="true" aria-labelledby="cr-nama">
     <div class="cr-kepala">
         <button type="button" id="cr-kembali" aria-label="Tutup chat"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i></button>
         <span class="cr-av" id="cr-av" aria-hidden="true">P</span>
         <div class="cr-id"><b id="cr-nama">Pelanggan</b><span id="cr-sub">Pelanggan · nomor disembunyikan</span></div>
+        <button type="button" class="cr-panggil" id="cr-panggil" aria-label="Panggil pelanggan lewat notifikasi"><i class="fa-solid fa-phone-volume" aria-hidden="true"></i><span id="cr-panggil-t">Panggil</span></button>
     </div>
     <div class="cr-isi" id="cr-isi" role="log" aria-live="polite"></div>
     <div class="cr-cepat" id="cr-cepat">
@@ -26575,24 +26585,28 @@ window.PembuatQR = PembuatQR;
     </div>
     <form class="cr-tulis" id="cr-form" autocomplete="off">
         <label for="cr-input" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Pesan untuk pelanggan</label>
+        <button type="button" class="cr-kamera" id="cr-kamera" aria-label="Kirim foto dari kamera"><i class="fa-solid fa-camera" aria-hidden="true"></i></button>
         <textarea id="cr-input" rows="1" maxlength="3000" placeholder="Tulis pesan ke pelanggan..."></textarea>
         <button type="submit" id="cr-kirim" aria-label="Kirim pesan" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
     </form>
-    <div class="cr-tutup-info" id="cr-tutup-info" hidden>Chat sudah ditutup. Chat pelanggan otomatis berakhir 1 jam setelah pesanan selesai.</div>
+    <div class="cr-tutup-info" id="cr-tutup-info" hidden>Pesanan sudah selesai, chat ditutup. Kalau ada kendala, pelanggan menghubungi admin.</div>
 </div>
-<button type="button" id="cr-chip" class="cr-chip" hidden aria-label="Buka chat pelanggan"><i class="fa-solid fa-comment-dots" aria-hidden="true"></i><span>Chat pelanggan</span><span class="cr-n" id="cr-chip-n" hidden>0</span></button>
+<div id="cr-lihat" class="cr-lihat" hidden role="dialog" aria-modal="true" aria-label="Foto"><img id="cr-lihat-img" alt="Foto di chat"><button type="button" id="cr-lihat-x" aria-label="Tutup foto"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
 <script>
 (function chatPelangganRider() {
     var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var URL_ST = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
     var KODE = /^[A-Za-z0-9]{12,32}$/, ID_SAH = /^[A-Za-z0-9_-]{1,64}$/;
     var ADMIN62 = '62882008667068';          // nomor admin yang dipakai di order dari chat aplikasi
-    var SISA_MS = 60 * 60 * 1000;            // chip chat tetap ada 1 jam setelah tugas ditutup
+    var JEDA_PANGGIL = 2 * 60 * 1000;        // panggil pelanggan paling sering 2 menit sekali (rules juga menjaga)
+    var selesaiBaru = 0;                     // waktu tugas chat terakhir ditutup (untuk link ulasan)
     var COBA = [2000, 4000, 8000, 15000, 30000];
     var st = baru();
     var asliWa = null;
 
-    function baru() { return { id: '', kode: '', nama: '', aktif: false, info: null, henti: null, hentiPesan: null, coba: 0, timer: 0, pesan: [], ruang: false, belum: -1, tutup: false, selesaiMs: 0, sembuh: false, tunda: [] }; }
+    function baru() { return { id: '', kode: '', nama: '', aktif: false, info: null, henti: null, hentiPesan: null, coba: 0, timer: 0, pesan: [], ruang: false, belum: -1, tutup: false, sembuh: false, tunda: [], panggilMs: 0 }; }
     function fsMod() { return import(URL_FS); }
+    function stMod() { return import(URL_ST); }
     function $(id) { return document.getElementById(id); }
     function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
     function ms(t) { return typeof t === 'number' ? t : (t && typeof t.toMillis === 'function' ? t.toMillis() : (t && typeof t.seconds === 'number' ? t.seconds * 1000 : Date.now())); }
@@ -26659,13 +26673,7 @@ window.PembuatQR = PembuatQR;
         else { var i = el('i', 'fa-brands fa-whatsapp'); b.append(i, document.createTextNode(' Chat WA')); }
     }
     function overlayTampil() { var o = $('active-order-overlay'); return !!(o && !o.classList.contains('hidden')); }
-    function gambarChip() {
-        var c = $('cr-chip'); if (!c) return;
-        var masih = st.aktif && !st.tutup && (!st.selesaiMs || Date.now() - st.selesaiMs < SISA_MS);
-        c.hidden = !masih || overlayTampil() || st.ruang;
-        var n = $('cr-chip-n'), belum = Math.max(0, st.belum);
-        n.hidden = belum === 0; n.textContent = belum > 9 ? '9+' : String(belum);
-    }
+    function gambarChip() {}   // (9 Nov 2026) tombol chat setelah selesai dihapus: chat tutup saat selesai
 
     // ---------- Dengarkan ringkasan chat (1 dokumen) ----------
     function mulaiDengar() {
@@ -26726,7 +26734,6 @@ window.PembuatQR = PembuatQR;
             st.id = docId; st.kode = kode; st.nama = String(data.customer_name || 'Pelanggan');
             mulaiDengar();
         } else if (st.kode) {
-            st.selesaiMs = 0;
             if (data.customer_name) st.nama = String(data.customer_name);
         }
         tombolChat(); gambarChip();
@@ -26734,12 +26741,9 @@ window.PembuatQR = PembuatQR;
     // ---------- Dipanggil dari hideActiveOrderOverlay ----------
     window.crTutup = function () {
         pulihkanTombol();
-        if (st.kode && st.aktif && !st.tutup) {
-            st.selesaiMs = Date.now();   // chat tetap bisa dibuka lewat chip sampai 1 jam
-            clearTimeout(st.timer);
-            st.timer = setTimeout(function () { if (st.ruang) tutupRuang(true); hentiSemua(); st = baru(); gambarChip(); }, SISA_MS);
-        } else if (!st.ruang) { hentiSemua(); st = baru(); }
-        setTimeout(gambarChip, 50);
+        if (st.kode && st.aktif) selesaiBaru = Date.now();
+        if (st.ruang) tutupRuang(true);
+        hentiSemua(); st = baru();
     };
 
     // ---------- Pesan WhatsApp untuk pelanggan order chat -> masuk chat aplikasi ----------
@@ -26753,7 +26757,15 @@ window.PembuatQR = PembuatQR;
         if (typeof window.openWaSelector !== 'function' || window.openWaSelector._cr) return;
         asliWa = window.openWaSelector;
         var f = function (phone, text) {
-            try { if (chatSiapUntuk(phone)) { bukaRuang(rapikanDraf(text)); return; } } catch (e) { console.warn('[Chat pelanggan]', e); }
+            try {
+                // Link ulasan untuk order chat aplikasi: pelanggan menilai langsung di aplikasinya, jadi tidak perlu dikirim
+                if (no62(phone) === ADMIN62 && /projekgo\.id\/u\//.test(String(text || '')) && (st.aktif || Date.now() - selesaiBaru < 30 * 60 * 1000)) {
+                    toast('Pelanggan memberi ulasan langsung di aplikasi ProjekGo 👍');
+                    lanjutBayar();
+                    return;
+                }
+                if (chatSiapUntuk(phone)) { bukaRuang(rapikanDraf(text)); return; }
+            } catch (e) { console.warn('[Chat pelanggan]', e); }
             return asliWa.apply(this, arguments);
         };
         f._cr = true;
@@ -26779,6 +26791,7 @@ window.PembuatQR = PembuatQR;
         $('cr-av').textContent = (nm.charAt(0) || 'P').toUpperCase();
         $('cr-sub').textContent = st.tutup ? 'Chat sudah ditutup' : 'Pelanggan · nomor disembunyikan';
         $('cr-form').hidden = st.tutup; $('cr-cepat').hidden = st.tutup; $('cr-tutup-info').hidden = !st.tutup;
+        $('cr-panggil').hidden = st.tutup; gambarPanggil();
     }
     function bukaRuang(draf) {
         if (!st.kode || !st.aktif) return;
@@ -26810,7 +26823,7 @@ window.PembuatQR = PembuatQR;
                 if (st.kode !== kode) return;
                 st.pesan = s.docs.map(function (d) {
                     var x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, dari: x.dari === 'rider' ? 'rider' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, qris: typeof x.qris === 'string' ? x.qris : '', t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites) };
+                    return { id: d.id, dari: x.dari === 'rider' ? 'rider' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, qris: typeof x.qris === 'string' ? x.qris : '', foto: typeof x.foto === 'string' ? x.foto : '', w: Number(x.w) || 0, h: Number(x.h) || 0, t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites) };
                 }).sort(function (a, b) { return a.t - b.t; });
                 gambarPesan();
             }, function (e) { console.warn('[Chat pelanggan] pesan', e && e.code); });
@@ -26855,6 +26868,11 @@ window.PembuatQR = PembuatQR;
                 });
                 a.target = '_blank'; a.rel = 'noopener noreferrer';
                 b.appendChild(a);
+            } else if (p.jenis === 'panggil') {
+                b.className = 'cr-bub panggil';
+                b.appendChild(document.createTextNode(p.dari === 'rider' ? '📞 Kamu memanggil pelanggan' : '📞 Panggilan'));
+            } else if (p.jenis === 'foto') {
+                b.appendChild(kotakFoto(p));
             } else if (p.jenis === 'qris') {
                 b.appendChild(el('b', '', 'QRIS pembayaran'));
                 if (/^https:\/\/[^\s"'<>`\\]+$/i.test(p.qris)) { var im = el('img'); im.alt = 'QRIS'; im.loading = 'lazy'; im.src = p.qris; b.appendChild(im); }
@@ -26876,12 +26894,115 @@ window.PembuatQR = PembuatQR;
         }).catch(function () {}).then(function () { tandaJalan = false; });
     }
 
+    // ---------- Foto (kamera APK, atau pilih file di browser) ----------
+    var urlFoto = {}, mintaFoto = {};
+    function kotakFoto(p) {
+        var tb = el('button', 'cr-foto'); tb.type = 'button'; tb.setAttribute('aria-label', 'Perbesar foto');
+        var src = p.lokal || urlFoto[p.foto];
+        if (src && src !== 'gagal') {
+            var im = el('img'); im.alt = p.dari === 'rider' ? 'Foto yang kamu kirim' : 'Foto dari pelanggan'; im.src = src;
+            if (p.w && p.h) { im.width = 220; im.height = Math.round(220 * p.h / p.w); }
+            tb.appendChild(im); tb.addEventListener('click', function () { bukaLihat(src); });
+        } else {
+            tb.appendChild(el('span', '', src === 'gagal' ? 'Foto tidak bisa dibuka' : (p.tunda ? 'Mengirim foto…' : 'Memuat foto…')));
+            if (!src && p.foto) ambilUrlFoto(p.foto);
+        }
+        return tb;
+    }
+    function ambilUrlFoto(path) {
+        if (urlFoto[path] || mintaFoto[path] || !/^chat_rider\/[A-Za-z0-9]{12,32}\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}\.jpg$/.test(path)) return;
+        mintaFoto[path] = stMod().then(function (sm) { return sm.getDownloadURL(sm.ref(sm.getStorage(), path)); })
+            .then(function (u) { urlFoto[path] = u; gambarPesan(); }, function (e) { console.warn('[Chat pelanggan] foto', e && e.code); urlFoto[path] = 'gagal'; gambarPesan(); });
+    }
+    function bukaLihat(src) { $('cr-lihat-img').src = src; $('cr-lihat').hidden = false; }
+    function tutupLihat() { $('cr-lihat').hidden = true; $('cr-lihat-img').removeAttribute('src'); }
+    function kecilkan(dataUrl, maks, mutu) {
+        return new Promise(function (ok, gagal) {
+            var img = new Image();
+            img.onload = function () {
+                var w = img.naturalWidth, h = img.naturalHeight, r = Math.min(1, maks / Math.max(w, h));
+                w = Math.max(1, Math.round(w * r)); h = Math.max(1, Math.round(h * r));
+                var c = document.createElement('canvas'); c.width = w; c.height = h;
+                c.getContext('2d').drawImage(img, 0, 0, w, h);
+                var q = mutu;
+                (function coba() {
+                    c.toBlob(function (bl) {
+                        if (!bl) { gagal(new Error('blob')); return; }
+                        if (bl.size > 450 * 1024 && q > 0.4) { q -= 0.12; coba(); return; }
+                        ok({ blob: bl, w: w, h: h, url: c.toDataURL('image/jpeg', 0.5) });
+                    }, 'image/jpeg', q);
+                })();
+            };
+            img.onerror = gagal; img.src = dataUrl;
+        });
+    }
+    function ambilFoto() {
+        if (!st.kode || !st.aktif || st.tutup) return;
+        var AI = window.AndroidInterface;
+        if (AI && typeof AI.openCameraAndCompress === 'function') {
+            var lama = window.receiveCompressedPhotoFromAndroid;
+            window.receiveCompressedPhotoFromAndroid = function (b64) {
+                window.receiveCompressedPhotoFromAndroid = lama;
+                var full = String(b64 || ''); if (full.indexOf('data:image') !== 0) full = 'data:image/jpeg;base64,' + full;
+                if (st.ruang) kirimFoto(full);
+                else if (typeof lama === 'function') return lama.apply(this, arguments);
+            };
+            toast('Membuka kamera...');
+            try { AI.openCameraAndCompress(); } catch (e) { window.receiveCompressedPhotoFromAndroid = lama; toast('Kamera tidak bisa dibuka'); }
+            return;
+        }
+        var inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment');
+        inp.addEventListener('change', function () {
+            var f = inp.files && inp.files[0]; if (!f) return;
+            var r = new FileReader(); r.onload = function () { kirimFoto(r.result); }; r.onerror = function () { toast('Gagal membaca foto'); }; r.readAsDataURL(f);
+        });
+        inp.click();
+    }
+    function kirimFoto(dataUrl) {
+        var kode = st.kode, oid = st.id;
+        if (!kode || !ID_SAH.test(oid)) return;
+        kecilkan(dataUrl, 1280, 0.72).then(function (k) {
+            return fsMod().then(function (m) {
+                var idPesan = m.doc(m.collection(m.getFirestore(), 'chat_rider', kode, 'pesan')).id;
+                var path = 'chat_rider/' + kode + '/' + oid + '/' + idPesan + '.jpg';
+                toast('Mengirim foto...');
+                return stMod().then(function (sm) {
+                    return sm.uploadBytes(sm.ref(sm.getStorage(), path), k.blob, { contentType: 'image/jpeg' });
+                }).then(function () {
+                    urlFoto[path] = k.url;   // tampil langsung dari HP sendiri
+                    return kirim({ jenis: 'foto', teks: 'Foto', foto: path, w: k.w, h: k.h, idPesan: idPesan, lokal: k.url });
+                });
+            });
+        }).catch(function (e) { console.warn('[Chat pelanggan] foto gagal', e && e.code, e); toast(e && /unauthorized|permission/.test(String(e.code)) ? 'Foto ditolak (chat sudah ditutup / rules belum dipasang)' : 'Foto belum terkirim. Cek sinyal lalu coba lagi.'); });
+    }
+
+    // ---------- Panggil pelanggan (notifikasi khusus ke HP pelanggan) ----------
+    function sisaPanggil() {
+        var akhir = Math.max(st.panggilMs || 0, st.info && st.info.panggil_at ? ms(st.info.panggil_at) : 0);
+        return Math.max(0, akhir + JEDA_PANGGIL - Date.now());
+    }
+    function gambarPanggil() {
+        var b = $('cr-panggil'); if (!b) return;
+        var sisa = sisaPanggil();
+        b.disabled = sisa > 0;
+        $('cr-panggil-t').textContent = sisa > 0 ? Math.ceil(sisa / 60000) + ' mnt' : 'Panggil';
+    }
+    function panggil() {
+        if (!st.kode || !st.aktif || st.tutup) return;
+        if (sisaPanggil() > 0) { toast('Tunggu sebentar sebelum memanggil lagi'); return; }
+        st.panggilMs = Date.now(); gambarPanggil();
+        kirim({ jenis: 'panggil', teks: '📞 Rider memanggilmu. Mohon buka chat ya Kak 🙏' }).then(function (ok) {
+            if (ok) toast('Panggilan terkirim. HP pelanggan mendapat notifikasi khusus.');
+            else { st.panggilMs = 0; gambarPanggil(); }
+        });
+    }
+
     // ---------- Kirim ----------
     var antrean = Promise.resolve(), kirimTerakhir = 0;
-    function ringkas(isi) { return isi.jenis === 'qris' ? '🔳 QRIS pembayaran' : isi.teks.replace(/\s+/g, ' ').slice(0, 200); }
+    function ringkas(isi) { return isi.jenis === 'qris' ? '🔳 QRIS pembayaran' : (isi.jenis === 'foto' ? '📷 Foto' : (isi.jenis === 'panggil' ? '📞 Memanggil' : isi.teks.replace(/\s+/g, ' ').slice(0, 200))); }
     function kirim(isi) {
         if (!st.kode || !st.aktif || st.tutup) return Promise.resolve(false);
-        var kode = st.kode, sementara = { id: 't' + Date.now(), dari: 'rider', teks: isi.teks, jenis: isi.jenis, qris: isi.qris || '', t: Date.now(), tunda: true };
+        var kode = st.kode, sementara = { id: 't' + Date.now(), dari: 'rider', teks: isi.teks, jenis: isi.jenis, qris: isi.qris || '', foto: '', lokal: isi.lokal || '', t: Date.now(), tunda: true };
         st.tunda.push(sementara); gambarPesan(true);
         var tugas = antrean.then(function () {
             var tunggu = kirimTerakhir + 1200 - Date.now();
@@ -26890,9 +27011,12 @@ window.PembuatQR = PembuatQR;
             var db = m.getFirestore(), ref = m.doc(db, 'chat_rider', kode);
             var data = { dari: 'rider', teks: isi.teks, jenis: isi.jenis, dibuat_at: m.serverTimestamp() };
             if (isi.jenis === 'qris') data.qris = isi.qris;
+            if (isi.jenis === 'foto') { data.foto = isi.foto; data.w = isi.w; data.h = isi.h; }
             var b = m.writeBatch(db);
-            b.set(m.doc(m.collection(db, 'chat_rider', kode, 'pesan')), data);
-            b.update(ref, { terakhir: ringkas(isi), terakhir_dari: 'rider', terakhir_at: m.serverTimestamp(), at_rider: m.serverTimestamp(), belum_pelanggan: m.increment(1), belum_rider: 0 });
+            b.set(isi.idPesan ? m.doc(db, 'chat_rider', kode, 'pesan', isi.idPesan) : m.doc(m.collection(db, 'chat_rider', kode, 'pesan')), data);
+            var ub = { terakhir: ringkas(isi), terakhir_dari: 'rider', terakhir_at: m.serverTimestamp(), at_rider: m.serverTimestamp(), belum_pelanggan: m.increment(1), belum_rider: 0 };
+            if (isi.jenis === 'panggil') ub.panggil_at = m.serverTimestamp();
+            b.update(ref, ub);
             kirimTerakhir = Date.now();
             return b.commit();
         }).then(function () { return true; }, function (e) {
@@ -26941,11 +27065,18 @@ window.PembuatQR = PembuatQR;
         var i = $('cr-input'); i.value = b.textContent.trim(); aturInput(); i.focus();
     });
     $('cr-kembali').addEventListener('click', function () { tutupRuang(false); });
-    $('cr-chip').addEventListener('click', function () { bukaRuang(''); });
+    $('cr-kamera').addEventListener('click', ambilFoto);
+    $('cr-panggil').addEventListener('click', panggil);
+    $('cr-lihat-x').addEventListener('click', tutupLihat);
+    $('cr-lihat').addEventListener('click', function (e) { if (e.target.id === 'cr-lihat') tutupLihat(); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden && st.ruang) tandaiDibaca(); });
     // Tombol Back HP (dipanggil dari penjaga tombol kembali): true = ruang chat ditutup
-    window.crTutupSatu = function () { if (st.ruang) { tutupRuang(false); return true; } return false; };
-    setInterval(gambarChip, 30000);
+    window.crTutupSatu = function () {
+        if (!$('cr-lihat').hidden) { tutupLihat(); return true; }
+        if (st.ruang) { tutupRuang(false); return true; }
+        return false;
+    };
+    setInterval(gambarPanggil, 15000);
 })();
 </script>
 <!-- ================= AKHIR CHAT PELANGGAN DI APLIKASI ================= -->
