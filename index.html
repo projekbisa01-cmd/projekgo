@@ -2475,6 +2475,61 @@
         body.dark-mode .lv-target { background: #0f172a; }
         body.dark-mode .lv-bar { background: #334155; }
     </style>
+
+<!-- ===== FORMAT TEKS CHAT seperti WhatsApp (10 Nov 2026) — sama di aplikasi pelanggan, rider, dan admin =====
+     *tebal* / **tebal**, _miring_ / __miring__, ~coret~ / ~~coret~~, ```kode```, baris "- " atau "* " jadi titik.
+     Hanya https:// yang dijadikan link. Semua dibangun sebagai elemen DOM + teks biasa (tidak pernah innerHTML),
+     jadi tanda format tidak bisa dipakai menyisipkan kode. -->
+<style>
+    .pg-kode { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; background: rgba(0, 0, 0, .06); padding: 1px 5px; border-radius: 5px; white-space: pre-wrap; }
+</style>
+<script>
+(function () {
+    var SUMBER = "(https:\\/\\/[^\\s<>\"']+)|```([^`]{1,2000}?)```|(\\*\\*|__|~~|\\*|_|~)(\\S(?:[^\\n]{0,400}?\\S)?)\\3";
+    var HURUF = /[A-Za-z0-9À-ɏ]/;
+    function alamatAman(u) { try { var x = new URL(u); return x.protocol === 'https:' ? x.href : null; } catch (e) { return null; } }
+    function isi(w, teks, lv) {
+        var re = new RegExp(SUMBER, 'g'), i = 0, m;
+        while ((m = re.exec(teks))) {
+            var s = m.index;
+            if (m[3]) {
+                // Seperti WhatsApp: tanda harus di tepi kata (snake_case, 2*3*4 tidak berubah)
+                var pre = s > 0 ? teks.charAt(s - 1) : ' ', post = teks.charAt(re.lastIndex) || ' ';
+                if (HURUF.test(pre) || HURUF.test(post) || m[4].charAt(0) === m[3].charAt(0)) { re.lastIndex = s + 1; continue; }
+            }
+            if (m[1]) {
+                var url = m[1].replace(/[),.;!?]+$/, ''), h = alamatAman(url);
+                if (!h) { re.lastIndex = s + 1; continue; }
+                if (s > i) w.appendChild(document.createTextNode(teks.slice(i, s)));
+                var a = document.createElement('a');
+                a.href = h; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = url;
+                w.appendChild(a);
+                i = s + url.length; re.lastIndex = i;
+                continue;
+            }
+            if (s > i) w.appendChild(document.createTextNode(teks.slice(i, s)));
+            if (m[2] != null) {
+                var c = document.createElement('code'); c.className = 'pg-kode'; c.textContent = m[2]; w.appendChild(c);
+            } else {
+                var k = m[3].charAt(0), e = document.createElement(k === '*' ? 'b' : (k === '_' ? 'i' : 's'));
+                if (lv < 3) isi(e, m[4], lv + 1); else e.textContent = m[4];
+                w.appendChild(e);
+            }
+            i = re.lastIndex;
+        }
+        if (i < teks.length) w.appendChild(document.createTextNode(teks.slice(i)));
+    }
+    window.pgFormat = function (w, teks) {
+        teks = String(teks == null ? '' : teks).slice(0, 5000);
+        teks = teks.replace(/^([ \t]*)[-*][ \t]+(?=\S)/gm, '$1• ');
+        isi(w, teks, 0);
+    };
+    // Pratinjau 1 baris (daftar chat, notifikasi): tanda format dibuang
+    window.pgPolos = function (teks) {
+        return String(teks == null ? '' : teks).replace(/```([^`]*)```/g, '$1').replace(/(\*\*|__|~~|\*|_|~)(\S(?:[^\n]*?\S)?)\1/g, '$2');
+    };
+})();
+</script>
 </head>
 <body class="pb-24"> 
 
@@ -23591,7 +23646,7 @@ window.PembuatQR = PembuatQR;
     var JENIS = {
         food:  { langkah: [['menuju', 'Menuju resto'], ['lokasi', 'Di resto'], ['antar', 'Mengantar']],
                  aksi: { menuju: ['Sudah di resto', 'lokasi'], lokasi: ['Pesanan diambil, mulai antar', 'antar'] },
-                 tanyaEst: 'Lama masak (menit):', kataLok: 'antar' },
+                 kataLok: 'antar' },
         ojek:  { langkah: [['menuju', 'Menuju jemput'], ['antar', 'Mengantar penumpang']],
                  aksi: { menuju: ['Penumpang naik, mulai antar', 'antar'] }, kataLok: 'jemput' },
         kirim: { langkah: [['menuju', 'Menuju pengambilan'], ['antar', 'Mengantar barang']],
@@ -26607,7 +26662,7 @@ window.PembuatQR = PembuatQR;
     <div class="cr-tutup-info" id="cr-tutup-info" hidden>Chat sudah ditutup (1 jam setelah pesanan selesai). Kalau ada kendala, pelanggan menghubungi admin.</div>
 </div>
 <button type="button" id="cr-chip" class="cr-chip" hidden aria-label="Buka chat pelanggan"><i class="fa-solid fa-comment-dots" aria-hidden="true"></i><span id="cr-chip-t">Chat pelanggan</span><span class="cr-n" id="cr-chip-n" hidden>0</span></button>
-<div id="cr-pilih" class="cr-pilih" hidden role="dialog" aria-modal="true" aria-labelledby="cr-pilih-j"><div class="cr-pilih-isi"><h3 id="cr-pilih-j">Pilih chat pelanggan</h3><div id="cr-pilih-daftar"></div><button type="button" class="batal" id="cr-pilih-batal">Tutup</button></div></div>
+<div id="cr-pilih" class="cr-pilih" hidden role="dialog" aria-modal="true" aria-labelledby="cr-pilih-j"><div class="cr-pilih-isi"><div class="cr-pilih-kepala"><button type="button" class="batal" id="cr-pilih-batal" aria-label="Kembali"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i></button><h3 id="cr-pilih-j">Chat</h3></div><div id="cr-pilih-daftar"></div><p class="cr-pilih-cat">Chat pelanggan tetap bisa dibalas sampai 1 jam setelah order selesai, lalu tertutup otomatis dan menjadi abu-abu.</p></div></div>
 <div id="cr-lihat" class="cr-lihat" hidden role="dialog" aria-modal="true" aria-label="Foto"><img id="cr-lihat-img" alt="Foto di chat"><button type="button" id="cr-lihat-x" aria-label="Tutup foto"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
 <script>
 (function chatPelangganRider() {
@@ -26710,23 +26765,71 @@ window.PembuatQR = PembuatQR;
         $('cr-chip-t').textContent = atas ? 'Pelanggan sebelumnya' : (daftar.length > 1 ? daftar.length + ' chat pelanggan' : 'Chat Kak ' + namaDepan(daftar[0] || {}));
         var n = $('cr-chip-n'); n.hidden = belum === 0; n.textContent = belum > 9 ? '9+' : String(belum);
     }
+    var KUNCI_TUTUP = 'cr_riwayat_tutup';
+    function riwayatTutup() {
+        try {
+            var a = JSON.parse(localStorage.getItem(KUNCI_TUTUP) || '[]');
+            return Array.isArray(a) ? a.filter(function (x) { return x && typeof x.k === 'string' && typeof x.n === 'string' && Date.now() - Number(x.t) < 86400000; }).slice(0, 8) : [];
+        } catch (e) { return []; }
+    }
+    function catatTutup(c) {
+        try {
+            if (!c || !c.kode) return;
+            var a = riwayatTutup().filter(function (x) { return x.k !== c.kode; });
+            a.unshift({ k: c.kode, n: namaDepan(c), t: Date.now() });
+            localStorage.setItem(KUNCI_TUTUP, JSON.stringify(a.slice(0, 8)));
+        } catch (e) {}
+    }
+    function barisPilih(o) {
+        var b = el(o.mati ? 'div' : 'button', 'cr-baris' + (o.mati ? ' mati' : ''));
+        if (!o.mati) b.type = 'button';
+        var av = el('span', 'cr-b-av' + (o.adm ? ' adm' : ''), o.av); av.setAttribute('aria-hidden', 'true');
+        if (o.on) av.appendChild(el('i', 'on'));
+        var isi = el('span', 'cr-b-isi');
+        var atas = el('span', 'cr-b-atas');
+        atas.appendChild(el('b', '', o.nama));
+        if (o.jam) atas.appendChild(el('small', o.belum > 0 ? 'baru' : '', o.jam));
+        isi.appendChild(atas);
+        if (o.label) isi.appendChild(el('span', 'cr-b-lbl ' + (o.kelas || ''), o.label));
+        var bawah = el('span', 'cr-b-bawah');
+        bawah.appendChild(el('span', 'cr-b-teks', o.teks || ''));
+        if (o.belum > 0) bawah.appendChild(el('span', 'cr-b-n', o.belum > 9 ? '9+' : String(o.belum)));
+        isi.appendChild(bawah);
+        b.appendChild(av); b.appendChild(isi);
+        return b;
+    }
+    function terakhirDari(c) {
+        var t = c && c.info && typeof c.info.terakhir === 'string' ? c.info.terakhir : '';
+        t = (typeof window.pgPolos === 'function' ? window.pgPolos(t) : t).replace(/\s+/g, ' ').trim();
+        if (!t) return 'Ketuk untuk membuka chat';
+        return (c.info.terakhir_dari === 'rider' ? 'Kamu: ' : '') + t;
+    }
     function bukaPilih() {
-        var daftar = chatSelesai();
-        if (daftar.length === 1) { bukaRuang(daftar[0].kode, ''); return; }
-        if (!daftar.length) return;
         var w = $('cr-pilih-daftar'); kosongkan(w);
-        daftar.forEach(function (c) {
-            var b = el('button'); b.type = 'button';
-            var av = el('span', 'cr-av', namaDepan(c).charAt(0).toUpperCase()); av.setAttribute('aria-hidden', 'true');
-            var t = el('span'); t.style.flex = '1';
-            t.appendChild(el('b', '', 'Kak ' + namaDepan(c)));
+        var tutupPilih = function () { $('cr-pilih').hidden = true; gambarChip(); };
+        // Admin ProjekGo (lewat WhatsApp admin, tidak dialihkan ke chat pelanggan)
+        var adm = barisPilih({ adm: true, av: 'PG', nama: 'Admin ProjekGo', teks: 'Lewat WhatsApp admin' });
+        adm.addEventListener('click', function () { tutupPilih(); try { (asliWa || window.openWaSelector)(ADMIN62, ''); } catch (e) {} });
+        w.appendChild(adm);
+        var c0 = chats[kodeAktif];
+        if (masihBuka(c0)) {
+            var b0 = barisPilih({ av: namaDepan(c0).charAt(0).toUpperCase(), on: true, nama: namaDepan(c0) + ' · Pelanggan', label: 'Order berjalan', kelas: 'jalan',
+                                  teks: terakhirDari(c0), belum: Math.max(0, c0.belum), jam: c0.info && c0.info.terakhir_at ? jam(ms(c0.info.terakhir_at)) : '' });
+            b0.addEventListener('click', function () { tutupPilih(); bukaRuang(c0.kode, ''); });
+            w.appendChild(b0);
+        }
+        chatSelesai().forEach(function (c) {
             var sisa = Math.max(1, Math.ceil((c.selesaiMs + SISA_MS - Date.now()) / 60000));
-            t.appendChild(el('small', '', 'Selesai ' + jam(c.selesaiMs) + ' · chat tutup ' + sisa + ' menit lagi'));
-            b.appendChild(av); b.appendChild(t);
-            if (c.belum > 0) { var n = el('span', 'cr-n', c.belum > 9 ? '9+' : String(c.belum)); n.style.cssText = 'background:#EA580C;color:#FFF;min-width:22px;height:22px;border-radius:99px;font-size:12px;font-weight:800;display:grid;place-items:center;'; b.appendChild(n); }
-            b.addEventListener('click', function () { $('cr-pilih').hidden = true; bukaRuang(c.kode, ''); });
+            var b = barisPilih({ av: namaDepan(c).charAt(0).toUpperCase(), nama: namaDepan(c) + ' · Pelanggan', label: 'Selesai ' + jam(c.selesaiMs) + ' · chat tutup ' + sisa + ' menit lagi', kelas: 'buka',
+                                 teks: terakhirDari(c), belum: Math.max(0, c.belum), jam: c.info && c.info.terakhir_at ? jam(ms(c.info.terakhir_at)) : '' });
+            b.addEventListener('click', function () { tutupPilih(); bukaRuang(c.kode, ''); });
             w.appendChild(b);
         });
+        var lama = riwayatTutup().filter(function (x) { return !chats[x.k] || chats[x.k].tutup; });
+        if (lama.length) {
+            w.appendChild(el('div', 'cr-b-sub', 'SUDAH TIDAK AKTIF'));
+            lama.forEach(function (x) { w.appendChild(barisPilih({ mati: true, av: x.n.charAt(0).toUpperCase(), nama: x.n + ' · Pelanggan', label: 'Chat sudah tidak aktif', kelas: 'mati', jam: jam(Number(x.t)) })); });
+        }
         $('cr-pilih').hidden = false; gambarChip();
     }
 
@@ -26779,6 +26882,7 @@ window.PembuatQR = PembuatQR;
         segarkan();
     }
     function tandaiTutup(c) {
+        catatTutup(c);
         c.tutup = true;
         berhentiChat(c);
         if (ruang === c.kode) { if (hentiPesan) { try { hentiPesan(); } catch (e) {} hentiPesan = null; } }
@@ -26929,7 +27033,8 @@ window.PembuatQR = PembuatQR;
         return s === 0 ? 'Hari ini' : (s === 1 ? 'Kemarin' : new Date(t).toLocaleDateString('id-ID', { day: 'numeric', month: 'long' }));
     };
     // Tautan https saja yang dijadikan link; sisanya teks biasa
-    function isiTeks(w, teks) {
+    function isiTeks(w, teks) { return window.pgFormat(w, teks); }
+    function isiTeksLama(w, teks) {
         var re = /https:\/\/[^\s<>"']+/g, i = 0, m;
         while ((m = re.exec(teks))) {
             if (m.index > i) w.appendChild(document.createTextNode(teks.slice(i, m.index)));
@@ -27176,5 +27281,54 @@ window.PembuatQR = PembuatQR;
 })();
 </script>
 <!-- ================= AKHIR CHAT PELANGGAN DI APLIKASI ================= -->
+
+<style id="gaya-chat-rider-10nov">
+    /* ===== 10 Nov 2026: chat rider sama dengan aplikasi pelanggan ===== */
+    .cr-ruang { background: #E6DED3; }
+    .cr-isi { background-color: #E6DED3; background-image: radial-gradient(circle at 12px 12px, rgba(120, 98, 76, .11) 2px, transparent 2.5px), radial-gradient(circle at 38px 32px, rgba(120, 98, 76, .08) 3.5px, transparent 4px); background-size: 52px 52px; }
+    .cr-kepala { background: #FFFFFF; color: #1C1C1E; border-bottom: 1px solid #E2D8CC; }
+    .cr-kepala button { color: #1C1C1E; }
+    .cr-kepala .cr-panggil { background: #1E7A34; color: #FFFFFF; }
+    .cr-av { background: #FFD9BD; color: #8A3200; }
+    .cr-id b { font-size: 17.5px; }
+    .cr-id span { opacity: 1; color: #6B6258; font-size: 13px; }
+    .cr-bub { font-size: 16.5px; line-height: 1.42; padding: 8px 12px 6px; box-shadow: 0 1px 1.5px rgba(60, 40, 20, .22); }
+    .cr-bub.saya { background: #FFD9BD; }
+    .cr-bub.dia { background: #FFFFFF; }
+    .cr-bub small { font-size: 12px; color: #6B5D51; }
+    .cr-hari { font-size: 13px; padding: 4px 12px; box-shadow: 0 1px 1.5px rgba(60, 40, 20, .15); }
+    .cr-info { font-size: 13px; }
+    .cr-cepat, .cr-tulis, .cr-tutup-info { background: #E6DED3; }
+    .cr-cepat button { border: 0; box-shadow: 0 1px 1.5px rgba(60, 40, 20, .15); font-size: 14px; }
+    .cr-tulis textarea { font-size: 16.5px; box-shadow: 0 1px 1.5px rgba(60, 40, 20, .15); }
+    .cr-tulis button { background: #CC4A00; }
+
+    /* Daftar chat layar penuh */
+    .cr-pilih { background: #FFFFFF; align-items: stretch; }
+    .cr-pilih-isi { border-radius: 0; height: 100%; overflow-y: auto; box-sizing: border-box; padding: calc(env(safe-area-inset-top, 0px) + 6px) 0 calc(20px + env(safe-area-inset-bottom, 0px)); }
+    .cr-pilih-kepala { display: flex; align-items: center; gap: 4px; padding: 4px 16px 8px 6px; }
+    .cr-pilih-isi .cr-pilih-kepala .batal { width: 44px; min-height: 44px; height: 44px; padding: 0; border: 0; justify-content: center; font-size: 20px; color: #1C1C1E; }
+    .cr-pilih-isi h3 { margin: 0; font-size: 24px; font-weight: 800; }
+    .cr-pilih-isi .cr-baris { width: 100%; min-height: 0; display: flex; gap: 14px; align-items: center; padding: 12px 16px; border: 0; background: #FFFFFF; text-align: left; font: inherit; color: #1C1C1E; box-sizing: border-box; }
+    .cr-b-av { position: relative; width: 56px; height: 56px; flex: none; border-radius: 99px; background: #FFD9BD; color: #8A3200; display: grid; place-items: center; font-size: 20px; font-weight: 800; }
+    .cr-b-av.adm { background: #E8590C; color: #FFFFFF; }
+    .cr-b-av .on { position: absolute; right: 1px; bottom: 1px; width: 14px; height: 14px; border-radius: 99px; background: #1E7A34; border: 2.5px solid #FFFFFF; }
+    .cr-b-isi { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .cr-b-atas { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .cr-b-atas b { font-size: 17px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cr-b-atas small { font-size: 13px; color: #6B6258; flex: none; }
+    .cr-b-atas small.baru { color: #1E7A34; font-weight: 700; }
+    .cr-b-lbl { align-self: flex-start; max-width: 100%; padding: 2px 9px; border-radius: 99px; font-size: 12.5px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cr-b-lbl.jalan { background: #E6F4EA; color: #1E7A34; }
+    .cr-b-lbl.buka { background: #FFF1E6; color: #B84300; }
+    .cr-b-lbl.mati { background: #EFEBE6; color: #6B6258; font-weight: 700; }
+    .cr-b-bawah { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .cr-b-teks { font-size: 15px; color: #5E544C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .cr-b-n { min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border-radius: 99px; background: #1E7A34; color: #FFFFFF; font-size: 12.5px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    .cr-baris.mati .cr-b-av { background: #ECE7E1; color: #8F857C; }
+    .cr-baris.mati .cr-b-atas b { color: #6B6258; font-weight: 700; }
+    .cr-b-sub { padding: 14px 16px 4px; font-size: 13px; font-weight: 800; color: #7A6F64; letter-spacing: .04em; }
+    .cr-pilih-cat { margin: 12px 16px 0; padding: 12px 14px; border-radius: 14px; background: #F7F3EE; font-size: 13px; line-height: 1.5; color: #6B6258; }
+</style>
 </body>
 </html>
