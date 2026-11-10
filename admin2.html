@@ -25101,10 +25101,10 @@
             }
             g('tf-jQ').addEventListener('input', renderJam);
             // (27 Okt 2026) ganti hari (lewat tengah malam): daftar "Belum ada jam" ikut pindah ke tanggal baru
+            // (10 Nov 2026) daftar diambil per tanggal HARI INI, jadi saat ganti hari pendengarnya dipasang ulang ke tanggal baru
             setInterval(() => {
-                if (!Array.isArray(S.jamSemua) || S.jamHari === today()) return;
-                S.jamHari = today(); S.jamList = S.jamSemua.filter(t => t.tanggal === S.jamHari);
-                renderJam(); renderKerja();
+                if (!S.user || S.jamHari === today()) return;
+                watchJam();
             }, 60000);
             g('tf-tCari').addEventListener('input', () => renderTuntas());
             g('tf-tuntas').addEventListener('change', ev => {   // (26 Okt 2026) centang untuk Gabung bayar
@@ -26310,13 +26310,26 @@
                 unsubLuar.push(B.watch(C.rider, {}, a => { S.riderDocs = a; muatRider(); if (dibuka) renderKode(); }, eh));
                 unsubLuar.push(B.watch(C.petugas, {}, a => { S.petugas = a.sort((x, y) => String(x.nama).localeCompare(String(y.nama))); if (dibuka) { renderTop(); renderPetugas(); renderKerja(); } }, eh));
                 unsubLuar.push(B.watch(C.tiket, {whereIn: ['status', BELUM]}, a => { S.pend = a; renderKerja(); }, eh));
-                // Transfer yang jamnya "belum info bukti" (semua tanggal). Biasanya hanya sedikit dokumen, jadi hemat read.
-                unsubLuar.push(B.watch(C.tiket, {eq: ['jamTeks', JAM_KOSONG], limit: 300}, a => {
-                    S.jamSemua = a.filter(t => t.status !== 'batal' && !t.waktuTransfer && perluJamBukti(t)).sort((x, y) => x.tanggal < y.tanggal ? 1 : x.tanggal > y.tanggal ? -1 : x.no - y.no);
-                    // (27 Okt 2026) hanya data HARI INI; data hari sebelumnya sudah dicetak
-                    S.jamHari = today(); S.jamList = S.jamSemua.filter(t => t.tanggal === S.jamHari);
+                // Transfer yang jamnya "belum info bukti" — hanya HARI INI (27 Okt 2026: data hari sebelumnya sudah dicetak).
+                // (10 Nov 2026) PERBAIKAN: dulu diambil dengan jamTeks == "belum info bukti" + limit 300 dari SEMUA tanggal.
+                // Data lama yang tetap "belum info bukti" (pelanggan khusus/modal, yang jamnya ditulis manual di cetakan, batal)
+                // terus menumpuk; setelah lewat 300, Firestore mengirim 300 yang TERLAMA (urut ID = tanggal), sehingga data hari ini
+                // tidak ikut terambil dan tab "Belum ada jam" kosong. Sekarang diambil per tanggal hari ini (query yang sama dengan
+                // halaman Kerja, sudah diizinkan Rules), lalu disaring di HP.
+                unsubLuar.push(() => { if (unsubJam) { try { unsubJam(); } catch (e) {} unsubJam = null; } });
+                watchJam();
+            }
+            var unsubJam = null;
+            function watchJam() {
+                if (unsubJam) { try { unsubJam(); } catch (e) {} unsubJam = null; }
+                const hari = today();
+                S.jamHari = hari; S.jamSemua = []; S.jamList = [];
+                unsubJam = B.watch(C.tiket, {eq: ['tanggal', hari]}, a => {
+                    if (S.jamHari !== hari) return;   // pendengar tanggal lama yang masih sempat mengirim data
+                    S.jamSemua = a.filter(t => t.jamTeks === JAM_KOSONG && t.status !== 'batal' && !t.waktuTransfer && perluJamBukti(t)).sort((x, y) => x.no - y.no);
+                    S.jamList = S.jamSemua;
                     renderJam(); renderKerja();
-                }, eh));
+                }, eh);
             }
             function buka() {
                 if (!S.user) return;
