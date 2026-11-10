@@ -387,17 +387,26 @@
 <script>
   window.__mapsSiap = false;
   window.__onMaps = function () { window.__mapsSiap = true; document.dispatchEvent(new Event('maps-siap')); };
-  window.__tertanam = (function () { try { return window.self !== window.top; } catch (e) { return true; } })();
-  // Hanya boleh dibingkai oleh aplikasi Mitra di situs yang sama. Dibingkai situs lain -> halaman dikosongkan.
-  if (window.__tertanam) {
-    var asing = true;
-    try { asing = window.parent.location.origin !== location.origin; } catch (e) { asing = true; }
-    if (asing) { document.documentElement.style.display = 'none'; window.__bingkaiAsing = true; }
-  }
+  // Siapa yang membuka halaman ini:
+  //  - __modeMitra : di dalam aplikasi Mitra (bingkai dari situs yang SAMA) -> tampilan mitra, tanpa login sendiri
+  //  - dibingkai Admin Dispatch / halaman ProjekGo lain -> berdiri sendiri (login admin)
+  //  - dibingkai situs lain -> halaman dikosongkan (cegah clickjacking)
+  (function () {
+    var dibingkai = false; try { dibingkai = window.self !== window.top; } catch (e) { dibingkai = true; }
+    var asalSama = false; try { asalSama = dibingkai && window.parent.location.origin === location.origin; } catch (e) { asalSama = false; }
+    var asalInduk = '';
+    if (dibingkai && !asalSama) {
+      try { if (location.ancestorOrigins && location.ancestorOrigins.length) asalInduk = location.ancestorOrigins[0]; } catch (e) {}
+      if (!asalInduk) { try { asalInduk = new URL(document.referrer).origin; } catch (e) {} }
+    }
+    var indukProjekGo = /^https:\/\/([a-z0-9-]+\.)*projekgo\.id$/.test(asalInduk);
+    window.__tertanam = asalSama;               // = mode aplikasi Mitra
+    if (dibingkai && !asalSama && !indukProjekGo) { document.documentElement.style.display = 'none'; window.__bingkaiAsing = true; }
+  })();
   window.__diMitra = window.__tertanam || location.hostname === 'seller.projekgo.id';
   if (window.__tertanam) document.documentElement.classList.add('tertanam');
   // Dibuka langsung di seller.projekgo.id/antar/ -> pindah ke aplikasi Mitra, tab Antar
-  if (!window.__tertanam && location.hostname === 'seller.projekgo.id') location.replace('/?buka=antar');
+  if (!window.__tertanam && !window.__bingkaiAsing && window.self === window.top && location.hostname === 'seller.projekgo.id') location.replace('/?buka=antar');
   if (!window.__diMitra && 'serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); }); }
   window.__promptInstal = null;
   window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); window.__promptInstal = e; var b = document.getElementById('btn-instal'); if (b) b.hidden = false; });
