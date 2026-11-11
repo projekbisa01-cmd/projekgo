@@ -30783,25 +30783,34 @@
             const warna = { siap: '#1E8E5A', antar: '#E8590C', hilang: '#8A8F8C' };
             const label = { siap: 'Siap', antar: 'Mengantar', hilang: 'Hilang sinyal' };
             let peta = null, lapisan = null, kunciAktif = null, penanda = {}, data = {}, atur = { aktif: false, kunci: '' };
-            let hentiPos = null, hentiAtur = null, dipilih = '', ikuti = '', pertama = true, jamTimer = 0, adminOk = false;
+            let hentiPos = null, hentiAtur = null, dipilih = '', ikuti = '', pertama = true, jamTimer = 0, adminOk = false, aturSiap = false, petaGagal = false;
 
             const ms = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : 0);
             const lalu = (t) => { const d = Math.max(0, Date.now() - t); if (d < 60000) return 'baru saja'; const m = Math.floor(d / 60000); return m < 60 ? m + ' mnt lalu' : Math.floor(m / 60) + ' jam lalu'; };
             const inisial = (n) => { const k = String(n || '?').trim().split(/\s+/); return ((k[0] || '?').charAt(0) + (k[1] ? k[1].charAt(0) : '')).toUpperCase(); };
             const keadaan = (r) => Date.now() - r.t > HILANG_MS ? 'hilang' : (r.status === 'antar' ? 'antar' : 'siap');
 
+            // Pustaka peta Leaflet 1.9.4: dicoba berurutan cdnjs (server yang sudah dipakai halaman ini) -> unpkg -> jsdelivr
+            const SUMBER_LEAFLET = [
+                ['https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'],
+                ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'],
+                ['https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css', 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js']
+            ];
+            function muatSatu(css, js) {
+                return new Promise((ok, gagal) => {
+                    const c = document.createElement('link'); c.rel = 'stylesheet'; c.href = css; document.head.appendChild(c);
+                    const sc = document.createElement('script'); sc.src = js;
+                    const batas = setTimeout(() => { sc.remove(); gagal(new Error('lama')); }, 15000);
+                    sc.onload = () => { clearTimeout(batas); (window.L && window.L.map) ? ok() : gagal(new Error('kosong')); };
+                    sc.onerror = () => { clearTimeout(batas); sc.remove(); c.remove(); gagal(new Error('gagal')); };
+                    document.head.appendChild(sc);
+                });
+            }
             function muatLeaflet() {
                 if (window.L && window.L.map) return Promise.resolve();
                 if (window.__prLeaflet) return window.__prLeaflet;
-                window.__prLeaflet = new Promise((ok, gagal) => {
-                    const c = document.createElement('link'); c.rel = 'stylesheet'; c.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-                    c.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; c.crossOrigin = '';
-                    document.head.appendChild(c);
-                    const s = document.createElement('script'); s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-                    s.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; s.crossOrigin = '';
-                    s.onload = () => ok(); s.onerror = () => { window.__prLeaflet = null; gagal(new Error('leaflet')); };
-                    document.head.appendChild(s);
-                });
+                window.__prLeaflet = SUMBER_LEAFLET.reduce((p, x) => p.catch(() => muatSatu(x[0], x[1])), Promise.reject(new Error('mulai')))
+                    .catch((e) => { window.__prLeaflet = null; throw e; });
                 return window.__prLeaflet;
             }
             function pasangLapisan() {
@@ -30925,7 +30934,7 @@
             function hentiDengarPosisi() { if (hentiPos) { try { hentiPos(); } catch (e) {} hentiPos = null; } }
             function terapkanAtur() {
                 pasangLapisan();
-                if (atur.aktif) { pesan(''); dengarPosisi(); }
+                if (atur.aktif) { if (!petaGagal && peta) pesan(''); dengarPosisi(); }
                 else {
                     hentiDengarPosisi(); data = {}; gambar();
                     pesan('Peta rider sedang nonaktif. Aplikasi rider tidak mengirim posisi.', { teks: 'Aktifkan peta rider', jalan: () => bukaAtur() });
@@ -30935,25 +30944,29 @@
                 if (!adminOk) { tost('Hanya admin', 'Masuk dengan akun admin dulu.'); return; }
                 $('pr-layar').hidden = false; document.body.style.overflow = 'hidden';
                 pesan('Memuat peta...');
+                // pengaturan dibaca lebih dulu, supaya tetap tampil & bisa diubah walaupun peta gagal dimuat
+                if (!hentiAtur) hentiAtur = onSnapshot(ATUR(), (s) => {
+                    const d = s.exists() ? (s.data() || {}) : {};
+                    atur = { aktif: d.aktif === true, kunci: typeof d.carto_key === 'string' && KUNCI_OK.test(d.carto_key) ? d.carto_key : '' };
+                    aturSiap = true;
+                    terapkanAtur();
+                }, (e) => { console.warn('[Peta rider] pengaturan', e && e.code); pesan('Pengaturan peta belum bisa dibaca (' + ((e && e.code) || 'galat') + ').'); });
+                clearInterval(jamTimer); jamTimer = setInterval(gambar, 30000);
                 try { await muatLeaflet(); }
-                catch (e) { pesan('Peta belum bisa dimuat. Periksa internet lalu buka lagi.'); return; }
+                catch (e) { petaGagal = true; pesan('Peta belum bisa dimuat (jaringan memblokir server peta). Daftar rider di bawah tetap jalan. Coba ganti ke Wi-Fi lalu buka lagi.'); if (aturSiap) gambar(); return; }
+                petaGagal = false;
                 if (!peta) {
                     peta = L.map('pr-peta', { center: PUSAT, zoom: 14, zoomControl: true });
                     peta.on('dragstart', () => { if (ikuti) { ikuti = ''; gambarKartu(); } });
                 }
                 setTimeout(() => peta.invalidateSize(), 60);
-                if (!hentiAtur) hentiAtur = onSnapshot(ATUR(), (s) => {
-                    const d = s.exists() ? (s.data() || {}) : {};
-                    atur = { aktif: d.aktif === true, kunci: typeof d.carto_key === 'string' && KUNCI_OK.test(d.carto_key) ? d.carto_key : '' };
-                    terapkanAtur();
-                }, (e) => { console.warn('[Peta rider] pengaturan', e && e.code); pesan('Rules peta rider belum dipasang.'); });
-                else terapkanAtur();
-                clearInterval(jamTimer); jamTimer = setInterval(gambar, 30000);
+                if (aturSiap) terapkanAtur();
             }
             function tutup() {
                 $('pr-layar').hidden = true; document.body.style.overflow = '';
                 hentiDengarPosisi(); clearInterval(jamTimer);
                 if (hentiAtur) { try { hentiAtur(); } catch (e) {} hentiAtur = null; }
+                aturSiap = false;
                 dipilih = ''; ikuti = ''; pertama = true; $('pr-kartu').hidden = true;
             }
             function bukaAtur() {
