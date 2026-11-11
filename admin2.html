@@ -30684,9 +30684,13 @@
         .pr-judul { flex: 1; min-width: 0; }
         .pr-judul b { display: block; font-size: 18px; font-weight: 800; }
         .pr-judul span { display: block; font-size: 12.5px; font-weight: 600; color: #6B6258; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .pr-chips { flex: none; display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #EEE9E2; overflow-x: auto; font-size: 12.5px; font-weight: 800; }
-        .pr-chips span { flex: none; padding: 4px 10px; border-radius: 999px; }
-        .pr-c-siap { background: #E6F4EA; color: #1E7A34; } .pr-c-antar { background: #FFF1E6; color: #B84300; } .pr-c-hilang { background: #EFEDEA; color: #6B6258; }
+        .pr-chips { position: absolute; top: 10px; left: 10px; right: 64px; z-index: 450; display: flex; gap: 6px; overflow-x: auto; font-size: 12.5px; font-weight: 800; pointer-events: none; scrollbar-width: none; }
+        .pr-chips::-webkit-scrollbar { display: none; }
+        .pr-chips span { flex: none; padding: 6px 11px; border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,.22); }
+        .pr-layar .leaflet-top.leaflet-left { top: 46px; }
+        .pr-kosong { position: absolute; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 440; max-width: calc(100% - 32px); padding: 9px 16px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 2px 8px rgba(0,0,0,.22); font-size: 13px; font-weight: 700; color: #4A433C; text-align: center; }
+        .pr-kosong[hidden] { display: none; }
+        .pr-c-siap { background: #E9F6EC; color: #1E7A34; } .pr-c-antar { background: #FFF1E6; color: #B84300; } .pr-c-hilang { background: #EFEDEA; color: #6B6258; }
         .pr-peta-wadah { position: relative; flex: 1; min-height: 0; }
         .pr-peta { position: absolute; inset: 0; background: #F2EFE9; }
         .pr-pesan { position: absolute; inset: 0; z-index: 500; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: rgba(255,255,255,.92); font-size: 14px; line-height: 1.5; color: #4A433C; }
@@ -30701,6 +30705,7 @@
         .pr-ik.dipilih i { box-shadow: 0 0 0 4px rgba(232,89,12,.35), 0 2px 6px rgba(0,0,0,.3); }
         .leaflet-div-icon.pr-ik-l { background: transparent; border: 0; }
         .pr-semua { position: absolute; right: 12px; top: 12px; z-index: 450; width: 42px; height: 42px; border-radius: 10px; border: 0; background: #FFFFFF; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; font-size: 16px; }
+        .pr-daftar[hidden] { display: none; }
         .pr-daftar { flex: none; max-height: 34%; overflow-y: auto; padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #EEE9E2; background: #FFFFFF; }
         .pr-daftar h3 { margin: 0 0 2px; font-size: 15px; font-weight: 800; }
         .pr-baris { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 2px; border: 0; border-bottom: 1px solid #EEF2EF; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
@@ -30742,9 +30747,10 @@
             <div class="pr-judul"><b id="pr-judul">Peta rider</b><span id="pr-sub">Memuat...</span></div>
             <button type="button" id="pr-atur-btn" aria-label="Pengaturan peta rider"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
         </div>
-        <div class="pr-chips" id="pr-chips"></div>
         <div class="pr-peta-wadah">
             <div class="pr-peta" id="pr-peta"></div>
+            <div class="pr-chips" id="pr-chips" aria-live="polite"></div>
+            <div class="pr-kosong" id="pr-kosong" role="status" hidden></div>
             <button type="button" class="pr-semua" id="pr-semua" aria-label="Tampilkan semua rider"><i class="fa-solid fa-expand" aria-hidden="true"></i></button>
             <div class="pr-pesan" id="pr-pesan" hidden></div>
             <div class="pr-kartu" id="pr-kartu" hidden></div>
@@ -30761,7 +30767,8 @@
                 </form>
             </div>
         </div>
-        <div class="pr-daftar" id="pr-daftar"></div>
+        <!-- daftar rider hanya tampil kalau peta gagal dimuat (cadangan) -->
+        <div class="pr-daftar" id="pr-daftar" hidden></div>
     </section>
     <script type="module">
         import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
@@ -30857,8 +30864,14 @@
                     if (pertama && daftar.length) { pertama = false; semua(); }
                     if (ikuti && data[ikuti]) peta.panTo([data[ikuti].lat, data[ikuti].lng]);
                 }
-                // daftar
+                // keterangan kecil di atas peta kalau belum ada rider (peta tetap terlihat)
+                const ks = $('pr-kosong');
+                ks.textContent = atur.aktif ? 'Belum ada rider ON yang mengirim posisi' : '';
+                ks.hidden = !atur.aktif || daftar.length > 0 || !peta || petaGagal || !$('pr-kartu').hidden;
+                // daftar: hanya cadangan saat peta gagal dimuat
                 const w = $('pr-daftar'); w.textContent = '';
+                w.hidden = !petaGagal;
+                if (!petaGagal) { if (dipilih) gambarKartu(); return; }
                 w.appendChild(el('h3', '', daftar.length + ' rider ON'));
                 if (!daftar.length) w.appendChild(el('p', '', atur.aktif ? 'Belum ada rider ON yang mengirim posisi.' : 'Aktifkan peta rider lewat tombol pengaturan (ikon gir).'));
                 daftar.forEach((r) => {
