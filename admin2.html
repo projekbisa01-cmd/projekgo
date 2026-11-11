@@ -3063,6 +3063,7 @@
             <button data-tftab="riwayat" type="button">Riwayat &amp; cetak</button>
             <button data-tftab="ringkasan" type="button">Ringkasan &amp; tutup hari</button>
             <button data-tftab="kode" type="button">Kode rider</button>
+            <button data-tftab="modal" type="button">Modal rider<span class="tbadge" id="tf-mdBadge" hidden></span></button>
             <button data-tftab="petugas" type="button" data-tfowner="1">Petugas</button>
             <button data-tftab="log" type="button" data-tfowner="1">Log perubahan</button>
         </nav>
@@ -3164,6 +3165,14 @@
                     <button type="button" class="pri" data-act="tambahkode">+ Tambah kode transfer rider</button>
                     <div id="tf-kodeBawaan"></div>
                     <div class="scroll" id="tf-kodeList" style="margin-top:10px"></div></div>
+            </section>
+
+            <!-- MODAL RIDER (11 Nov 2026): modal yang dipinjam rider, ditandai Lunas setelah uangnya kembali -->
+            <section class="tf-sec" id="tf-sec-modal" hidden>
+                <div class="card"><h2>Modal belum lunas <small id="tf-mdRingkas"></small></h2>
+                    <p class="hint" style="margin:0 0 8px">Terisi otomatis dari baris pelanggan <b>modal</b> yang diinput di "Kerja hari ini". Selama belum lunas, rider melihat kartu berkedip di beranda aplikasinya. Tekan <b>Lunas</b> setelah uangnya diterima. Baris modal yang di-Batal otomatis hilang dari HP rider.</p>
+                    <div class="scroll" id="tf-mdList"></div></div>
+                <div class="card"><h2>Sudah lunas (7 hari terakhir)</h2><div id="tf-mdLunas"></div></div>
             </section>
 
             <!-- PETUGAS (owner) -->
@@ -24821,7 +24830,7 @@
             function setTgl(k) {
                 S.tgl = k; S.v3 = ''; S.tiket = [];
                 if (unsubTgl) { try { unsubTgl(); } catch (e) {} }
-                unsubTgl = B.watch(C.tiket, {eq: ['tanggal', k]}, a => { S.tiket = a.sort((x, y) => x.no - y.no); renderKerja(); if (S.tab === 'ringkasan' && S.ringDay === S.tgl) renderRingkasan(); }, e => toast(errMsg(e), 'bad'));
+                unsubTgl = B.watch(C.tiket, {eq: ['tanggal', k]}, a => { S.tiket = a.sort((x, y) => x.no - y.no); renderKerja(); try { if (typeof window.mdSinkron === 'function') window.mdSinkron(a); } catch (eMd) {}  if (S.tab === 'ringkasan' && S.ringDay === S.tgl) renderRingkasan(); }, e => toast(errMsg(e), 'bad'));
                 renderTop(); renderKerja();
             }
             const izinOk = k => k === today() || S.role === 'pemilik' || (S.izin[k] && S.izin[k] > Date.now() - IZIN_JAM * 36e5);
@@ -26373,7 +26382,7 @@
                 // Ringan & selalu jalan: daftar petugas + transaksi yang belum tuntas (untuk badge menu)
                 unsubLuar.push(B.watch(C.rider, {}, a => { S.riderDocs = a; muatRider(); if (dibuka) renderKode(); }, eh));
                 unsubLuar.push(B.watch(C.petugas, {}, a => { S.petugas = a.sort((x, y) => String(x.nama).localeCompare(String(y.nama))); if (dibuka) { renderTop(); renderPetugas(); renderKerja(); } }, eh));
-                unsubLuar.push(B.watch(C.tiket, {whereIn: ['status', BELUM]}, a => { S.pend = a; renderKerja(); }, eh));
+                unsubLuar.push(B.watch(C.tiket, {whereIn: ['status', BELUM]}, a => { S.pend = a; renderKerja(); try { if (typeof window.mdSinkron === 'function') window.mdSinkron(a); } catch (eMd) {} }, eh));
                 // Transfer yang jamnya "belum info bukti" — hanya HARI INI (27 Okt 2026: data hari sebelumnya sudah dicetak).
                 // (10 Nov 2026) PERBAIKAN: dulu diambil dengan jamTeks == "belum info bukti" + limit 300 dari SEMUA tanggal.
                 // Data lama yang tetap "belum info bukti" (pelanggan khusus/modal, yang jamnya ditulis manual di cetakan, batal)
@@ -29045,7 +29054,7 @@
                     s.onclick = () => salinKeOrder({ teks: p.teks, layanan: p.layanan, ongkir: p.ongkir }, s);
                     b.append(k, bd, s);
                 } else {
-                    isiTeks(b, p.teks);
+                    const tx = el('span', 'cpa-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('cpa-teks');
                 }
                 b.appendChild(el('span', 'cpa-wk', (p.diedit && !p.ditarik ? 'diedit · ' : '') + jam(p.t) + (p.dari === 'admin' && p.tunda ? ' · mengirim' : '')));
                 frag.appendChild(b);
@@ -29615,7 +29624,7 @@
                         b.appendChild(el('div', '', u === 'gagal' ? '📷 Foto tidak bisa dibuka' : '📷 Memuat foto…'));
                         if (!u && !mintaFoto[p.foto]) mintaFoto[p.foto] = getDownloadURL(sRef(storage, p.foto)).then((x) => { urlFoto[p.foto] = x; renderPantauRuang(); }, () => { urlFoto[p.foto] = 'gagal'; renderPantauRuang(); });
                     }
-                } else { isiTeks(b, p.teks); }
+                } else { const tx = el('span', 'cpa-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('cpa-teks'); }
                 b.appendChild(el('span', 'cpa-wk', jam(p.t)));
                 frag.appendChild(b);
             });
@@ -29817,6 +29826,202 @@
             return true;
         };
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && panelBuka()) window.cpaKembali(); });
+    </script>
+<style id="gaya-chat-mint-11nov">
+    /* ===== 11 Nov 2026: warna chat C "Mint segar" + motif ProjekGo (sama di rider, pelanggan, admin) ===== */
+    .cpa-isi { background-color: #E4EFEA; background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27180%27 height=%27180%27 viewBox=%270 0 180 180%27 fill=%27none%27 stroke=%27%232F3B4A%27 stroke-opacity=%270.13%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Ccircle cx=%2720%27 cy=%2738%27 r=%277%27/%3E%3Ccircle cx=%2750%27 cy=%2738%27 r=%277%27/%3E%3Cpath d=%27M20 38l9-15h9l6 15M29 23h-5M38 23l4-6h6%27/%3E%3Cpath d=%27M118 14c-7 0-12 5-12 11 0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z%27/%3E%3Ccircle cx=%27118%27 cy=%2725%27 r=%273.5%27/%3E%3Cpath d=%27M150 70h22v20h-22zM154 70v-4a7 7 0 0 1 14 0v4%27/%3E%3Cpath d=%27M70 82h26a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H82l-8 7v-7h-4a6 6 0 0 1-6-6V88a6 6 0 0 1 6-6z%27/%3E%3Cpath d=%27M20 110l3.5 7 7.5 1-5.5 5 1.5 7.5-7-3.5-7 3.5 1.5-7.5-5.5-5 7.5-1z%27/%3E%3Cpath d=%27M110 140a18 18 0 0 1 36 0zM106 140h44M128 122v-4%27/%3E%3Cpath d=%27M40 150h22l-3 18H43zM45 150v-4a6 6 0 0 1 12 0v4%27/%3E%3Cpath d=%27M150 120l10 10M160 120l-10 10%27/%3E%3Ccircle cx=%2788%27 cy=%2740%27 r=%272.5%27/%3E%3Ccircle cx=%27168%27 cy=%27160%27 r=%272.5%27/%3E%3Ccircle cx=%2710%27 cy=%2780%27 r=%272.5%27/%3E%3C/svg%3E"); background-size: 180px 180px; }
+    .cpa-bub { border-radius: 16px; box-shadow: 0 1px 2px rgba(20, 60, 40, .16); }
+    .cpa-bub.plg { background: #FFFFFF; border-top-left-radius: 4px; }
+    .cpa-bub.adm, .cpa-bub.rdr { background: #CDEFDD; color: #0F2A1E; border-top-right-radius: 4px; }
+    .cpa-bub.adm .cpa-wk, .cpa-bub.rdr .cpa-wk { color: #3F6B57; }
+    .cpa-bub.plg .cpa-wk { color: #5E6E66; }
+    .cpa-bub.rdr .cpa-nmp { color: #0E6B4A; }
+    .cpa-bub.kendala { background: #FFF8E6; }
+    .cpa-bub.ditarik { color: #5E6E66; }
+    /* jam di samping baris terakhir kalau muat (seperti WhatsApp) */
+    .cpa-bub.cpa-teks { display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 8px; }
+    .cpa-bub.cpa-teks > .cpa-nmp, .cpa-bub.cpa-teks.kendala::before { flex-basis: 100%; }
+    .cpa-bub.cpa-teks > .cpa-t { flex: 0 1 auto; min-width: 0; }
+    .cpa-bub.cpa-teks > .cpa-wk { margin: 0 0 0 auto; padding-bottom: 1px; white-space: nowrap; }
+    .cpa-hari { background: #FFFFFF; color: #4B5E55; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); }
+    .cpa-cepat, .cpa-tulis, .cpa-pantau-kaki { background: #E4EFEA; }
+    .cpa-tulis textarea { box-shadow: 0 1px 2px rgba(20, 60, 40, .14); }
+    .cpa-tulis textarea:focus { box-shadow: 0 0 0 2px #7CC5A4; }
+    .cpa-kirim { background: #12895E; }
+</style>
+<style id="gaya-modal-rider-11nov">
+    #page-transfer .md-telat { margin-top: 2px; font-size: 11.5px; font-weight: 700; color: var(--tf-bad); }
+    #page-transfer .md-pil { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    #page-transfer .md-pil.ok { background: var(--tf-okbg); color: var(--tf-ok); }
+    #page-transfer .md-pil.awas { background: var(--tf-warnbg); color: var(--tf-warn); }
+    #page-transfer .md-baris { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; padding: 7px 0; border-bottom: 1px solid var(--tf-line); font-size: 13px; }
+    #page-transfer .md-ket { color: var(--tf-mut); display: inline-flex; align-items: center; gap: 8px; }
+</style>
+    <!-- ===================== MODAL RIDER (11 Nov 2026) =====================
+         Baris pelanggan "modal" di halaman Transfer otomatis dicatat ke modal_rider/{id tiket} (kode, nama,
+         nominal, tanggal, lunas) TANPA data pelanggan. Rider hanya bisa membaca miliknya sendiri (rules) dan
+         melihat kartu berkedip di beranda sampai admin menekan "Lunas" di tab "Modal rider".
+         Hanya menambah: alur tahap 1-4 Transfer tidak diubah. Semua isi ditampilkan lewat textContent. -->
+    <script type="module">
+        import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, deleteField } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        (function modalRider() {
+            let app; try { app = getApp(); } catch (e) { console.warn('[Modal rider] Firebase belum siap'); return; }
+            const auth = getAuth(app), db = getFirestore(app);
+            const P = 'onbid-2f87a';
+            const KOL = () => collection(db, 'artifacts', P, 'public', 'data', 'modal_rider');
+            const DOKU = id => doc(db, 'artifacts', P, 'public', 'data', 'modal_rider', id);
+            const ID_OK = v => /^[A-Za-z0-9_-]{1,80}$/.test(String(v || ''));
+            const UID_OK = v => /^[A-Za-z0-9_\-]{1,64}$/.test(String(v || ''));
+            const KODE_OK = v => /^[A-Z0-9]{1,10}$/.test(String(v || ''));
+            const BARU_MS = 36 * 3600 * 1000;      // hanya tiket modal yang dicatat < 36 jam lalu yang dibuatkan kartu
+            const pad = n => String(n).padStart(2, '0');
+            const wib = ms => new Date(ms + 7 * 36e5);
+            const kunciTgl = ms => { const d = wib(ms); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); };
+            const hariIni = () => kunciTgl(Date.now());
+            const BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+            const teksTgl = k => { const p = String(k || '').split('-').map(Number); return p.length === 3 ? p[2] + ' ' + BULAN[p[1] - 1] : '-'; };
+            const rp = n => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+            const keMs = v => typeof v === 'number' ? v : (v && typeof v.toMillis === 'function' ? v.toMillis() : 0);
+            const jamDari = v => { const ms = keMs(v); if (!ms) return ''; const d = wib(ms); return teksTgl(kunciTgl(ms)) + ' ' + pad(d.getUTCHours()) + '.' + pad(d.getUTCMinutes()); };
+            const g = id => document.getElementById(id);
+            const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+            const isModal = t => String((t && t.pelanggan) || '').replace(/\s+/g, ' ').trim().toLowerCase() === 'modal';
+
+            let siap = false, petaKode = {}, data = {}, tiket = {}, sibuk = {}, henti = [];
+            const kodeKeUid = kode => Object.keys(petaKode).find(u => petaKode[u] === kode) || '';
+
+            /* ---------- sinkron: tiket Transfer -> modal_rider ---------- */
+            window.mdSinkron = function (daftar) {
+                try { (daftar || []).forEach(t => { if (t && ID_OK(t.id) && isModal(t)) tiket[t.id] = t; }); } catch (e) {}
+                jadwalSinkron();
+            };
+            let jadwal = 0;
+            function jadwalSinkron() { if (jadwal) return; jadwal = setTimeout(() => { jadwal = 0; sinkron(); }, 400); }
+            function sinkron() {
+                if (!siap) return;
+                Object.keys(tiket).forEach(id => {
+                    if (sibuk[id]) return;
+                    const t = tiket[id], d = data[id];
+                    const kode = String(t.kodeRider || '').toUpperCase();
+                    if (t.status === 'batal') {
+                        if (d && d.lunas !== true) jalan(id, () => deleteDoc(DOKU(id)));
+                        return;
+                    }
+                    const nominal = Number(t.nominal);
+                    if (!Number.isInteger(nominal) || nominal < 1 || !KODE_OK(kode) || !/^\d{4}-\d{2}-\d{2}$/.test(String(t.tanggal || ''))) return;
+                    const uid = kodeKeUid(kode);
+                    const isi = { rider_uid: UID_OK(uid) ? uid : '', kode: kode, nama: String(t.namaRider || '').slice(0, 60), nominal: nominal, tanggal: t.tanggal, no: Number(t.no) || 0 };
+                    if (!d) {
+                        // kartu hanya untuk modal yang dicatat HARI INI (tiket lama / tanggal mundur tidak dibuatkan kartu)
+                        if (t.tanggal !== hariIni() || Date.now() - Number(t.dicatatAt || 0) > BARU_MS) return;
+                        jalan(id, () => setDoc(DOKU(id), Object.assign({}, isi, { lunas: false, dibuat_at: serverTimestamp() })));
+                        return;
+                    }
+                    if (d.lunas === true) return;
+                    const beda = {};
+                    Object.keys(isi).forEach(k => { if (d[k] !== isi[k] && !(k === 'rider_uid' && !isi[k])) beda[k] = isi[k]; });
+                    if (Object.keys(beda).length) { beda.diubah_at = serverTimestamp(); jalan(id, () => updateDoc(DOKU(id), beda)); }
+                });
+            }
+            function jalan(id, f) {
+                sibuk[id] = true;
+                Promise.resolve().then(f).catch(e => console.warn('[Modal rider] simpan', id, e && e.code)).then(() => { setTimeout(() => { delete sibuk[id]; }, 1500); });
+            }
+
+            /* ---------- tab "Modal rider" ---------- */
+            function gambar() {
+                const daftar = Object.keys(data).map(id => Object.assign({ id: id }, data[id]));
+                const belum = daftar.filter(d => d.lunas !== true).sort((a, b) => (a.tanggal < b.tanggal ? -1 : a.tanggal > b.tanggal ? 1 : (a.no || 0) - (b.no || 0)));
+                const batas7 = kunciTgl(Date.now() - 7 * 864e5);
+                const sudah = daftar.filter(d => d.lunas === true && d.tanggal >= batas7).sort((a, b) => keMs(b.lunas_at) - keMs(a.lunas_at));
+                const bd = g('tf-mdBadge');
+                if (bd) { bd.hidden = !belum.length; bd.textContent = belum.length > 99 ? '99+' : String(belum.length); }
+                const rk = g('tf-mdRingkas');
+                if (rk) rk.textContent = belum.length ? belum.length + ' modal · ' + rp(belum.reduce((s, d) => s + (Number(d.nominal) || 0), 0)) : '';
+                const w = g('tf-mdList');
+                if (w) {
+                    w.textContent = '';
+                    if (!belum.length) w.appendChild(el('p', 'hint', 'Tidak ada modal yang belum lunas.'));
+                    else {
+                        const tb = el('table'), th = el('thead'), tr = el('tr');
+                        ['Tanggal', 'Kode', 'Nama rider', 'Nominal', 'Di HP rider', ''].forEach((x, i) => { const c = el('th', i === 3 ? 'r' : '', x); tr.appendChild(c); });
+                        th.appendChild(tr); tb.appendChild(th);
+                        const bo = el('tbody');
+                        const hi = hariIni();
+                        belum.forEach(d => {
+                            const r = el('tr');
+                            const c1 = el('td', '', teksTgl(d.tanggal) + (d.no ? ' · No ' + d.no : ''));
+                            if (d.tanggal < hi) { c1.appendChild(el('div', 'md-telat', 'lewat hari')); }
+                            const c2 = el('td'); c2.appendChild(el('b', '', d.kode || '-'));
+                            const c3 = el('td', '', d.nama || '-');
+                            const c4 = el('td', 'r'); c4.appendChild(el('b', '', rp(d.nominal)));
+                            const c5 = el('td');
+                            c5.appendChild(d.rider_uid ? el('span', 'md-pil ok', 'Tampil') : el('span', 'md-pil awas', 'Kode belum ada di Top Up Saldo'));
+                            const c6 = el('td', 'r');
+                            const b = el('button', 'ok sm', 'Lunas'); b.type = 'button';
+                            b.addEventListener('click', () => lunas(d, b));
+                            c6.appendChild(b);
+                            [c1, c2, c3, c4, c5, c6].forEach(c => r.appendChild(c));
+                            bo.appendChild(r);
+                        });
+                        tb.appendChild(bo); w.appendChild(tb);
+                    }
+                }
+                const w2 = g('tf-mdLunas');
+                if (w2) {
+                    w2.textContent = '';
+                    if (!sudah.length) w2.appendChild(el('p', 'hint', 'Belum ada.'));
+                    sudah.forEach(d => {
+                        const r = el('div', 'md-baris');
+                        r.appendChild(el('span', '', teksTgl(d.tanggal) + ' · ' + (d.kode || '-') + ' · ' + (d.nama || '-') + ' · ' + rp(d.nominal)));
+                        const k = el('span', 'md-ket', 'Lunas ' + jamDari(d.lunas_at) + (d.lunas_oleh ? ' oleh ' + d.lunas_oleh : ''));
+                        const b = el('button', 'sm', 'Batalkan lunas'); b.type = 'button';
+                        b.addEventListener('click', () => batalLunas(d, b));
+                        k.appendChild(b); r.appendChild(k); w2.appendChild(r);
+                    });
+                }
+            }
+            function namaPetugas() {
+                const s = g('tf-selPetugas'), o = s && s.selectedIndex >= 0 ? s.options[s.selectedIndex] : null;
+                const n = o && o.value ? String(o.textContent || '').trim() : '';
+                return (/^[A-Za-z][A-Za-z .-]{0,39}$/.test(n) ? n : 'admin');
+            }
+            function lunas(d, b) {
+                if (!window.confirm('Tandai LUNAS?\n\n' + (d.kode || '') + ' · ' + (d.nama || '') + '\n' + rp(d.nominal) + ' (modal ' + teksTgl(d.tanggal) + ')\n\nKartu modal di HP rider akan hilang.')) return;
+                b.disabled = true;
+                updateDoc(DOKU(d.id), { lunas: true, lunas_at: serverTimestamp(), lunas_oleh: namaPetugas() })
+                    .catch(e => { b.disabled = false; window.alert('Gagal menyimpan: ' + ((e && e.code) || 'coba lagi')); });
+            }
+            function batalLunas(d, b) {
+                if (!window.confirm('Batalkan tanda lunas?\n\n' + (d.kode || '') + ' · ' + rp(d.nominal) + '\nKartu modal akan tampil lagi di HP rider.')) return;
+                b.disabled = true;
+                updateDoc(DOKU(d.id), { lunas: false, lunas_at: deleteField(), lunas_oleh: deleteField() })
+                    .catch(e => { b.disabled = false; window.alert('Gagal menyimpan: ' + ((e && e.code) || 'coba lagi')); });
+            }
+
+            /* ---------- mulai setelah admin masuk ---------- */
+            function mulai() {
+                berhenti();
+                const batas = kunciTgl(Date.now() - 45 * 864e5);
+                henti.push(onSnapshot(query(KOL(), where('tanggal', '>=', batas)), snap => {
+                    const baru = {};
+                    snap.forEach(s => { if (ID_OK(s.id)) baru[s.id] = s.data() || {}; });
+                    data = baru; siap = true; gambar(); jadwalSinkron();
+                }, e => console.warn('[Modal rider] baca', e && e.code)));
+                henti.push(onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'admin_config', 'topup_daftar'), snap => {
+                    const r = (snap.exists() && snap.data().riders) || {}, p = {};
+                    Object.keys(r).forEach(u => { if (UID_OK(u) && KODE_OK(r[u])) p[u] = r[u]; });
+                    petaKode = p; jadwalSinkron();
+                }, e => console.warn('[Modal rider] kode', e && e.code)));
+            }
+            function berhenti() { henti.forEach(f => { try { f(); } catch (e) {} }); henti = []; siap = false; data = {}; tiket = {}; gambar(); }
+            onAuthStateChanged(auth, u => {
+                const peran = u && typeof window.roleFromEmail === 'function' ? window.roleFromEmail(u.email) : null;
+                if (peran) mulai(); else berhenti();
+            });
+        })();
     </script>
 </body>
 </html>

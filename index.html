@@ -26655,8 +26655,10 @@ window.PembuatQR = PembuatQR;
     </div>
     <form class="cr-tulis" id="cr-form" autocomplete="off">
         <label for="cr-input" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Pesan untuk pelanggan</label>
-        <button type="button" class="cr-kamera" id="cr-kamera" aria-label="Kirim foto dari kamera"><i class="fa-solid fa-camera" aria-hidden="true"></i></button>
+        <div class="cr-kolom">
         <textarea id="cr-input" rows="1" maxlength="3000" placeholder="Tulis pesan ke pelanggan..."></textarea>
+        <button type="button" class="cr-kamera" id="cr-kamera" aria-label="Kirim foto dari kamera"><i class="fa-solid fa-camera" aria-hidden="true"></i></button>
+        </div>
         <button type="submit" id="cr-kirim" aria-label="Kirim pesan" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
     </form>
     <div class="cr-tutup-info" id="cr-tutup-info" hidden>Chat sudah ditutup (1 jam setelah pesanan selesai). Kalau ada kendala, pelanggan menghubungi admin.</div>
@@ -26735,7 +26737,7 @@ window.PembuatQR = PembuatQR;
             kosongkan(b);
             var i = el('i', 'fa-solid fa-comment-dots'); i.setAttribute('aria-hidden', 'true');
             var n = el('span', 'cr-n'); n.id = 'cr-tombol-n'; n.hidden = true;
-            b.appendChild(i); b.appendChild(document.createTextNode(' Chat pelanggan ')); b.appendChild(n);
+            b.appendChild(i); b.appendChild(document.createTextNode(' Chat ')); b.appendChild(n);
         }
         var nn = $('cr-tombol-n'), belum = Math.max(0, c.belum);
         if (nn) { nn.hidden = belum === 0; nn.textContent = belum > 9 ? '9+' : String(belum); }
@@ -26928,6 +26930,33 @@ window.PembuatQR = PembuatQR;
             .replace(/\n+Jika kakak terbiasa dan nyaman memesan pakai aplikasi[\s\S]*$/i, '')
             .replace(/\n{3,}/g, '\n\n').trim().slice(0, 3000);
     }
+    // (11 Nov 2026) Pesan pembuka dari tombol Chat hanya mengisi kolom ketik pada ketukan PERTAMA per order.
+    // Ketukan berikutnya membuka chat dengan kolom kosong. Tombol lain (Nota, Template, link ulasan) tetap mengisi.
+    var KUNCI_PEMBUKA = 'cr_pembuka_terisi', tombolChatAt = 0, teksPembuka = {};
+    document.addEventListener('click', function (e) {
+        try { if (e.target && e.target.closest && e.target.closest('#btn-wa-customer')) tombolChatAt = Date.now(); } catch (x) {}
+    }, true);
+    function daftarPembuka() {
+        try {
+            var a = JSON.parse(localStorage.getItem(KUNCI_PEMBUKA) || '[]');
+            return Array.isArray(a) ? a.filter(function (k) { return typeof k === 'string' && KODE.test(k); }).slice(-40) : [];
+        } catch (e) { return []; }
+    }
+    function drafPembuka(kode, draf) {
+        if (Date.now() - tombolChatAt > 1500) return draf;
+        tombolChatAt = 0;
+        var a = daftarPembuka();
+        if (a.indexOf(kode) < 0) {
+            a.push(kode);
+            try { localStorage.setItem(KUNCI_PEMBUKA, JSON.stringify(a.slice(-40))); } catch (e) {}
+            teksPembuka[kode] = draf;
+            return draf;
+        }
+        // pembuka yang belum dikirim dan tidak diubah rider ikut dibersihkan
+        var i = $('cr-input');
+        if (i && teksPembuka[kode] && i.value.trim() === String(teksPembuka[kode]).trim()) i.value = '';
+        return '';
+    }
     var asliWa = null;
     function pasangPenyaring() {
         if (typeof window.openWaSelector !== 'function' || window.openWaSelector._cr) return;
@@ -26944,7 +26973,7 @@ window.PembuatQR = PembuatQR;
                         return;
                     }
                     var c = chats[kodeAktif];
-                    if (masihBuka(c)) { bukaRuang(c.kode, rapikanDraf(text)); return; }
+                    if (masihBuka(c)) { bukaRuang(c.kode, drafPembuka(c.kode, rapikanDraf(text))); return; }
                     if (c && !c.aktif && !c.tutup) {
                         if (c.coba < COBA.length) {
                             // Chat aplikasi masih dicoba disambungkan (biasanya hanya beberapa detik setelah order masuk)
@@ -27073,7 +27102,7 @@ window.PembuatQR = PembuatQR;
                 b.appendChild(el('b', '', 'QRIS pembayaran'));
                 if (/^https:\/\/[^\s"'<>`\\]+$/i.test(p.qris)) { var im = el('img'); im.alt = 'QRIS'; im.loading = 'lazy'; im.src = p.qris; b.appendChild(im); }
                 if (p.teks) { var t = el('div'); isiTeks(t, p.teks); b.appendChild(t); }
-            } else isiTeks(b, p.teks);
+            } else { var tx = el('span', 'cr-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('teks'); }
             b.appendChild(el('small', '', p.tunda ? 'mengirim…' : jam(p.t)));
             frag.appendChild(b);
         });
@@ -27330,5 +27359,293 @@ window.PembuatQR = PembuatQR;
     .cr-b-sub { padding: 14px 16px 4px; font-size: 13px; font-weight: 800; color: #7A6F64; letter-spacing: .04em; }
     .cr-pilih-cat { margin: 12px 16px 0; padding: 12px 14px; border-radius: 14px; background: #F7F3EE; font-size: 13px; line-height: 1.5; color: #6B6258; }
 </style>
+<style id="gaya-chat-mint-11nov">
+    /* ===== 11 Nov 2026: warna chat C "Mint segar" + motif ProjekGo (sama di rider, pelanggan, admin) ===== */
+    .cr-ruang { background: #E4EFEA; }
+    .cr-isi { background-color: #E4EFEA; background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27180%27 height=%27180%27 viewBox=%270 0 180 180%27 fill=%27none%27 stroke=%27%232F3B4A%27 stroke-opacity=%270.13%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Ccircle cx=%2720%27 cy=%2738%27 r=%277%27/%3E%3Ccircle cx=%2750%27 cy=%2738%27 r=%277%27/%3E%3Cpath d=%27M20 38l9-15h9l6 15M29 23h-5M38 23l4-6h6%27/%3E%3Cpath d=%27M118 14c-7 0-12 5-12 11 0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z%27/%3E%3Ccircle cx=%27118%27 cy=%2725%27 r=%273.5%27/%3E%3Cpath d=%27M150 70h22v20h-22zM154 70v-4a7 7 0 0 1 14 0v4%27/%3E%3Cpath d=%27M70 82h26a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H82l-8 7v-7h-4a6 6 0 0 1-6-6V88a6 6 0 0 1 6-6z%27/%3E%3Cpath d=%27M20 110l3.5 7 7.5 1-5.5 5 1.5 7.5-7-3.5-7 3.5 1.5-7.5-5.5-5 7.5-1z%27/%3E%3Cpath d=%27M110 140a18 18 0 0 1 36 0zM106 140h44M128 122v-4%27/%3E%3Cpath d=%27M40 150h22l-3 18H43zM45 150v-4a6 6 0 0 1 12 0v4%27/%3E%3Cpath d=%27M150 120l10 10M160 120l-10 10%27/%3E%3Ccircle cx=%2788%27 cy=%2740%27 r=%272.5%27/%3E%3Ccircle cx=%27168%27 cy=%27160%27 r=%272.5%27/%3E%3Ccircle cx=%2710%27 cy=%2780%27 r=%272.5%27/%3E%3C/svg%3E"); background-size: 180px 180px; }
+    .cr-kepala { border-bottom-color: #D7E4DE; }
+    .cr-av { background: #CDEFDD; color: #0A4F37; }
+    .cr-kepala .cr-panggil { background: #FFFFFF; color: #C2410C; border: 1.5px solid #F2B98F; }
+    .cr-kepala .cr-panggil:disabled { background: #FFFFFF; color: #8F857C; border-color: #E2D8CC; opacity: 1; }
+    .cr-bub { border-radius: 16px; box-shadow: 0 1px 2px rgba(20, 60, 40, .16); }
+    .cr-bub.saya { background: #CDEFDD; color: #0F2A1E; border-top-right-radius: 4px; }
+    .cr-bub.dia { background: #FFFFFF; border-top-left-radius: 4px; }
+    .cr-bub small { color: #5E6E66; }
+    .cr-bub.saya small { color: #3F6B57; }
+    .cr-bub.panggil { background: #FFF4D6; color: #6B4E12; border-radius: 12px; }
+    /* jam di samping baris terakhir kalau muat (seperti WhatsApp) */
+    .cr-bub.teks { display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 8px; }
+    .cr-bub.teks > .cr-t { flex: 0 1 auto; min-width: 0; }
+    .cr-bub.teks > small { margin: 0 0 0 auto; padding-bottom: 1px; white-space: nowrap; }
+    .cr-hari { background: #FFFFFF; color: #4B5E55; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); }
+    .cr-info { background: rgba(255, 255, 255, .94); color: #34493F; }
+    .cr-cepat, .cr-tulis, .cr-tutup-info { background: #E4EFEA; }
+    /* kolom ketik: satu pil putih berisi petir, teks, kamera */
+    .cr-kolom { flex: 1; min-width: 0; display: flex; align-items: flex-end; background: #FFFFFF; border-radius: 25px; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); padding: 0 2px; }
+    .cr-kolom:focus-within { box-shadow: 0 0 0 2px #7CC5A4; }
+    .cr-tulis .cr-kolom textarea { background: transparent; box-shadow: none; border-radius: 0; padding: 13px 4px 13px 14px; }
+    .cr-tulis .cr-kolom.ada-petir textarea { padding-left: 2px; }
+    .cr-tulis .cr-kolom textarea:focus { box-shadow: none; outline: none; }
+    .cr-tulis .cr-kolom button { width: 42px; height: 48px; background: transparent; border: 0; color: #5E6E66; font-size: 18px; }
+    .cr-tulis .cr-kolom .pg-petir { color: #C2410C; }
+    .cr-tulis > button[type="submit"] { background: #12895E; }
+
+    /* ===== Tugas Berjalan: Detail Pesanan kotak putih bergaris jelas, mengisi sisa layar ===== */
+    #step1 > .panel-pesanan { flex: 1 0 auto !important; }
+    #step1 > .panel-pesanan > #active-order-items { flex: 1 0 auto !important; }
+    body:not(.dark-mode) #step1 > .panel-pesanan { background: #FFFFFF; border: 2px solid #D9CFC3; border-radius: 16px; margin: 4px 12px 0; overflow: hidden; }
+    body:not(.dark-mode) #step1 .panel-pesanan-head { background: #FFFFFF; border-bottom: 1.5px solid #E6DED4; color: #1C1C1E; }
+    body:not(.dark-mode) #step1 #active-order-items { color: #1C1C1E; }
+</style>
+<!-- ===== 11 Nov 2026: PESAN CEPAT (ikon petir di kolom ketik -> lembar pilihan). Dipakai rider & pelanggan.
+     Tombol pesan cepat yang lama TIDAK dibuat ulang: wadahnya dipindah utuh ke dalam lembar, jadi semua
+     fungsi klik yang sudah ada tetap jalan. Hanya DOM, tanpa innerHTML dari data. ===== -->
+<style id="pg-cepat-css">
+    .pg-petir { width: 42px; height: 48px; flex: none; border: 0; padding: 0; background: transparent; color: #C2410C; display: grid; place-items: center; cursor: pointer; border-radius: 99px; }
+    .pg-petir svg { width: 22px; height: 22px; display: block; }
+    .pg-petir[hidden] { display: none; }
+    .pg-petir:focus-visible { outline: 2px solid #12895E; outline-offset: -4px; }
+    .pg-cepat-latar { position: absolute; inset: 0; z-index: 60; background: rgba(15, 30, 25, .32); display: flex; align-items: flex-end; }
+    .pg-cepat-latar[hidden] { display: none; }
+    .pg-cepat-lembar { width: 100%; max-height: 72%; overflow-y: auto; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 10px 16px calc(16px + env(safe-area-inset-bottom, 0px)); font-family: inherit; color: #1C1C1E; }
+    .pg-cepat-gagang { display: block; width: 40px; height: 5px; border-radius: 9px; background: #D9D4CE; margin: 0 auto 10px; }
+    .pg-cepat-kepala { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+    .pg-cepat-kepala h2 { margin: 0; font-size: 18px; font-weight: 800; }
+    .pg-cepat-kepala small { font-size: 13px; color: #5E6E66; }
+    .pg-cepat-lembar .pg-cepat-daftar { display: flex !important; flex-direction: column; gap: 0; padding: 0 !important; margin: 0; overflow: visible; background: transparent !important; }
+    .pg-cepat-lembar .pg-cepat-daftar[hidden] { display: none !important; }
+    .pg-cepat-lembar .pg-cepat-daftar > button { width: 100%; height: auto !important; min-height: 52px; flex: none; display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 8px 4px !important; border: 0 !important; border-bottom: 1px solid #EEF2EF !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; color: #1C1C1E !important; font: inherit; font-size: 15.5px !important; font-weight: 700; text-align: left; white-space: normal !important; line-height: 1.35; cursor: pointer; }
+    .pg-cepat-lembar .pg-cepat-daftar > button:last-child { border-bottom: 0 !important; }
+    .pg-cepat-lembar .pg-cepat-daftar > button i { width: 36px; height: 36px; flex: none; border-radius: 10px; background: #FFF1E6; color: #C2410C !important; display: grid; place-items: center; font-size: 16px; }
+    .pg-cepat-lembar .pg-cepat-daftar > button:active { background: #F4F8F6 !important; }
+</style>
+<script>
+(function () {
+    var SVG = 'http://www.w3.org/2000/svg';
+    function petir() {
+        var s = document.createElementNS(SVG, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+        var p = document.createElementNS(SVG, 'path'); p.setAttribute('d', 'M13.5 2 4 13.6h6.6L9.5 22 20 9.9h-6.7z'); p.setAttribute('fill', 'currentColor');
+        s.appendChild(p); return s;
+    }
+    // o = { wadah: daftar tombol lama, kolom: tempat ikon (di awal), layar: induk lembar (position fixed/relative), sub: teks kecil }
+    window.pgPasangCepat = function (o) {
+        var c = o && o.wadah, k = o && o.kolom, L = o && o.layar;
+        if (!c || !k || !L || c.__pgCepat) return null;
+        c.__pgCepat = true;
+        var bt = document.createElement('button'); bt.type = 'button'; bt.className = 'pg-petir';
+        bt.setAttribute('aria-label', 'Pesan cepat'); bt.setAttribute('aria-haspopup', 'dialog'); bt.setAttribute('aria-expanded', 'false');
+        bt.appendChild(petir());
+        k.insertBefore(bt, k.firstChild); k.classList.add('ada-petir');
+        var lat = document.createElement('div'); lat.className = 'pg-cepat-latar'; lat.hidden = true;
+        var sh = document.createElement('div'); sh.className = 'pg-cepat-lembar';
+        sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.setAttribute('aria-label', 'Pesan cepat');
+        var g = document.createElement('span'); g.className = 'pg-cepat-gagang'; g.setAttribute('aria-hidden', 'true');
+        var kp = document.createElement('div'); kp.className = 'pg-cepat-kepala';
+        var h = document.createElement('h2'); h.textContent = 'Pesan cepat';
+        var sm = document.createElement('small'); sm.textContent = o.sub || 'Ketuk salah satu';
+        kp.appendChild(h); kp.appendChild(sm);
+        sh.appendChild(g); sh.appendChild(kp);
+        c.classList.add('pg-cepat-daftar');
+        sh.appendChild(c);               // dipindah utuh: pendengar klik lama tetap menempel
+        lat.appendChild(sh); L.appendChild(lat);
+        function buka() { if (c.hidden) return; lat.hidden = false; bt.setAttribute('aria-expanded', 'true'); var f = c.querySelector('button'); if (f) { try { f.focus({ preventScroll: true }); } catch (e) {} } }
+        function tutup() { if (lat.hidden) return; lat.hidden = true; bt.setAttribute('aria-expanded', 'false'); }
+        bt.addEventListener('click', buka);
+        lat.addEventListener('click', function (e) { if (e.target === lat) tutup(); });
+        // didaftarkan SETELAH pendengar lama -> aksi lama jalan dulu, baru lembar ditutup
+        c.addEventListener('click', function (e) { if (e.target && e.target.closest && e.target.closest('button')) setTimeout(tutup, 0); });
+        lat.addEventListener('keydown', function (e) { if (e.key === 'Escape') { tutup(); bt.focus(); } });
+        function samakan() { bt.hidden = !!c.hidden; if (c.hidden) tutup(); }
+        try { new MutationObserver(samakan).observe(c, { attributes: true, attributeFilter: ['hidden'] }); } catch (e) {}
+        samakan();
+        return { buka: buka, tutup: tutup };
+    };
+})();
+</script>
+<script>
+(function () {
+    // 11 Nov 2026: pesan cepat chat rider -> ikon petir
+    function pasang() {
+        try {
+            if (typeof window.pgPasangCepat !== 'function') return;
+            window.pgPasangCepat({ wadah: document.getElementById('cr-cepat'), kolom: document.querySelector('#cr-form .cr-kolom'), layar: document.getElementById('cr-ruang'), sub: 'Ketuk salah satu' });
+        } catch (e) { console.warn('[Pesan cepat]', e); }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasang); else pasang();
+})();
+</script>
+<!-- ===================== MODAL RIDER (11 Nov 2026) =====================
+     Kartu berkedip di beranda selama ada modal ProjekGo yang belum lunas (modal_rider, dibuat admin dari
+     halaman Transfer). Tombol "Sudah dibayarkan" membuka WhatsApp admin administrasi dengan pesan siap kirim.
+     Kartu hilang setelah admin menandai Lunas. Rider hanya MEMBACA datanya sendiri (dijaga rules). -->
+<style id="modal-rider-css">
+    .md-kartu { position: absolute; left: 14px; right: 14px; top: calc(env(safe-area-inset-top, 0px) + 158px); z-index: 46; pointer-events: auto; box-sizing: border-box; max-width: 460px; margin: 0 auto; background: #FFFFFF; border: 2px solid #E8590C; border-radius: 18px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; animation: mdKedip 1.4s ease-in-out infinite; }
+    .md-kartu[hidden] { display: none; }
+    .md-atas { display: flex; gap: 12px; align-items: center; }
+    .md-ikon { width: 42px; height: 42px; flex: none; border-radius: 13px; background: #FFF1E6; color: #C2410C; display: grid; place-items: center; }
+    .md-ikon svg { width: 23px; height: 23px; }
+    .md-judul { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .md-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #C2410C; letter-spacing: .02em; }
+    .md-titik { width: 8px; height: 8px; border-radius: 50%; background: #D92D20; animation: mdTitik 1s steps(2, end) infinite; }
+    .md-nominal { font-size: 21px; font-weight: 800; line-height: 1.15; }
+    .md-teks { margin: 0; font-size: 14px; line-height: 1.5; color: #2B2722; }
+    .md-teks b { font-weight: 800; }
+    .md-tombol { min-height: 46px; border-radius: 14px; border: 0; background: #12895E; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+    .md-tombol svg { width: 20px; height: 20px; }
+    .md-catat { margin: 0; font-size: 12.5px; line-height: 1.45; color: #6B6258; }
+    .md-kartu.ringkas { padding: 10px 12px; gap: 7px; }
+    .md-kartu.ringkas .md-ikon, .md-kartu.ringkas .md-catat { display: none; }
+    .md-kartu.ringkas .md-nominal { font-size: 18px; }
+    .md-kartu.ringkas .md-teks { font-size: 13px; line-height: 1.4; }
+    .md-kartu.ringkas .md-tombol { min-height: 42px; }
+    .md-kartu.telat { border-color: #D92D20; animation-name: mdKedipMerah; }
+    .md-kartu.telat .md-label, .md-kartu.telat .md-ikon { color: #B42318; }
+    .md-kartu.telat .md-ikon { background: #FEECEB; }
+    .md-kartu.dikabari { animation: none; box-shadow: 0 6px 18px rgba(0, 0, 0, .14); }
+    .md-kartu.dikabari .md-titik { animation: none; background: #12895E; }
+    @keyframes mdKedip { 0%, 100% { box-shadow: 0 0 0 0 rgba(232, 89, 12, .55), 0 6px 18px rgba(0, 0, 0, .14); } 50% { box-shadow: 0 0 0 8px rgba(232, 89, 12, 0), 0 6px 18px rgba(0, 0, 0, .14); } }
+    @keyframes mdKedipMerah { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 45, 32, .55), 0 6px 18px rgba(0, 0, 0, .14); } 50% { box-shadow: 0 0 0 8px rgba(217, 45, 32, 0), 0 6px 18px rgba(0, 0, 0, .14); } }
+    @keyframes mdTitik { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+    @media (prefers-reduced-motion: reduce) { .md-kartu, .md-titik { animation: none; } }
+</style>
+<script>
+(function modalRider() {
+    var URL_APP = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    var URL_AUTH = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    var URL_FS = 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    var WA_ADMIN = '6285165602596';           // admin administrasi
+    var KUNCI = 'md_dikabari';               // id modal yang sudah dikabarkan rider (di HP ini saja)
+    var SVG = 'http://www.w3.org/2000/svg';
+    var daftar = [], henti = null, uidAktif = '', kartu = null;
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function kunciTgl(ms) { var d = new Date(ms + 7 * 36e5); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+    var BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    function teksTgl(k) { var p = String(k || '').split('-').map(Number); return p.length === 3 ? p[2] + ' ' + BULAN[p[1] - 1] : ''; }
+    function rp(n) { return 'Rp ' + Number(n || 0).toLocaleString('id-ID'); }
+    function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
+    function ikon(d, isi) {
+        var s = document.createElementNS(SVG, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+        d.forEach(function (x) {
+            var p = document.createElementNS(SVG, x[0]);
+            Object.keys(x[1]).forEach(function (k) { p.setAttribute(k, x[1][k]); });
+            s.appendChild(p);
+        });
+        if (isi) s.setAttribute('fill', 'currentColor');
+        else { s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); }
+        return s;
+    }
+    function dikabari() { try { var a = JSON.parse(localStorage.getItem(KUNCI) || '[]'); return Array.isArray(a) ? a.filter(function (x) { return typeof x === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(x); }).slice(-30) : []; } catch (e) { return []; } }
+    function tandaiDikabari(ids) { try { var a = dikabari(); ids.forEach(function (i) { if (a.indexOf(i) < 0) a.push(i); }); localStorage.setItem(KUNCI, JSON.stringify(a.slice(-30))); } catch (e) {} }
+
+    function siapkanKartu() {
+        if (kartu) return kartu;
+        var home = document.getElementById('page-home'); if (!home) return null;
+        kartu = el('section', 'md-kartu'); kartu.hidden = true;
+        kartu.setAttribute('role', 'status'); kartu.setAttribute('aria-live', 'polite');
+        home.appendChild(kartu);
+        return kartu;
+    }
+    function gambar() {
+        var k = siapkanKartu(); if (!k) return;
+        if (!daftar.length) { k.hidden = true; k.textContent = ''; return; }
+        var total = daftar.reduce(function (s, d) { return s + d.nominal; }, 0);
+        var hi = kunciTgl(Date.now());
+        var lama = daftar.filter(function (d) { return d.tanggal < hi; });
+        var sudah = dikabari(), semuaDikabari = daftar.every(function (d) { return sudah.indexOf(d.id) >= 0; });
+        k.textContent = '';
+        k.className = 'md-kartu' + (lama.length ? ' telat' : '') + (semuaDikabari ? ' dikabari' : '');
+        var atas = el('div', 'md-atas');
+        var ik = el('span', 'md-ikon');
+        ik.appendChild(ikon([['path', { d: 'M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z' }], ['path', { d: 'M3 7l12-3v3' }], ['circle', { cx: '16.5', cy: '13.5', r: '1.5' }]]));
+        var jd = el('div', 'md-judul');
+        var lb = el('span', 'md-label'); lb.appendChild(el('span', 'md-titik'));
+        lb.appendChild(document.createTextNode(semuaDikabari ? 'MENUNGGU DICEK ADMIN' : (lama.length ? 'MODAL BELUM DIBAYAR' : 'MODAL HARI INI')));
+        jd.appendChild(lb); jd.appendChild(el('span', 'md-nominal', rp(total)));
+        atas.appendChild(ik); atas.appendChild(jd); k.appendChild(atas);
+        var p = el('p', 'md-teks');
+        if (!lama.length) {
+            p.appendChild(document.createTextNode('Hari ini kamu meminjam modal ke ProjekGo senilai '));
+            p.appendChild(el('b', '', rp(total)));
+            p.appendChild(document.createTextNode('. Pastikan kamu bayarkan hari ini, maksimal pukul '));
+            p.appendChild(el('b', '', '23.59'));
+            p.appendChild(document.createTextNode('.'));
+        } else {
+            var tg = lama.map(function (d) { return teksTgl(d.tanggal); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+            p.appendChild(document.createTextNode('Modal ProjekGo tanggal ' + tg.join(', ') + ' belum dibayar. Total yang harus dibayar '));
+            p.appendChild(el('b', '', rp(total)));
+            p.appendChild(document.createTextNode('. Segera bayarkan ya.'));
+        }
+        k.appendChild(p);
+        var b = el('button', 'md-tombol'); b.type = 'button';
+        b.appendChild(ikon([['path', { d: 'M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.2c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .1-3.3-.8-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2 1-2.3c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.4 0 .5l-.4.6-.3.4c-.1.1-.3.3-.1.6.2.3.7 1.2 1.6 2 1.1 1 2 1.3 2.3 1.4.3.2.5.1.6-.1l.9-1.1c.2-.3.4-.2.7-.1l2 .9c.3.1.5.2.5.3.1.2.1.7-.1 1.3z' }]], true));
+        b.appendChild(document.createTextNode('Sudah dibayarkan'));
+        b.addEventListener('click', function () {
+            var teks = 'min modal sudah dibalikin ya senilai ' + rp(total) + ', nanti saya kirimkan bukti nya.';
+            tandaiDikabari(daftar.map(function (d) { return d.id; }));
+            try {
+                if (typeof window.openWaSelector === 'function') window.openWaSelector(WA_ADMIN, teks);
+                else window.open('https://wa.me/' + WA_ADMIN + '?text=' + encodeURIComponent(teks), '_blank', 'noopener');
+            } catch (e) { console.warn('[Modal rider] WA', e); }
+            gambar();
+        });
+        k.appendChild(b);
+        k.appendChild(el('p', 'md-catat', semuaDikabari
+            ? 'Sudah kamu kabari admin. Kartu ini hilang setelah admin menandai Lunas.'
+            : 'Kartu ini hilang setelah admin menandai Lunas.'));
+        k.hidden = false;
+        aturPosisi();
+    }
+    // HP layar pendek: kartu tidak boleh menutupi saklar On/Off di lembar bawah
+    function aturPosisi() {
+        var k = kartu; if (!k || k.hidden) return;
+        try {
+            k.style.top = ''; k.classList.remove('ringkas');
+            var sh = document.getElementById('home-onbid-sheet'); if (!sh) return;
+            var batas = sh.getBoundingClientRect().top - 8;
+            if (batas <= 0) return;
+            if (k.getBoundingClientRect().bottom > batas) k.classList.add('ringkas');
+            var r = k.getBoundingClientRect();
+            if (r.bottom > batas) k.style.top = Math.max(64, r.top - (r.bottom - batas)) + 'px';
+        } catch (e) {}
+    }
+    window.addEventListener('resize', function () { setTimeout(aturPosisi, 100); });
+
+    function dengar(uid) {
+        if (uid === uidAktif) return;
+        if (henti) { try { henti(); } catch (e) {} henti = null; }
+        uidAktif = uid; daftar = []; gambar();
+        if (!uid) return;
+        import(URL_FS).then(function (m) {
+            if (uidAktif !== uid) return;
+            var q = m.query(m.collection(m.getFirestore(), 'artifacts', 'onbid-2f87a', 'public', 'data', 'modal_rider'),
+                m.where('rider_uid', '==', uid), m.where('lunas', '==', false));
+            henti = m.onSnapshot(q, function (snap) {
+                var a = [];
+                snap.forEach(function (s) {
+                    var d = s.data() || {}, n = Number(d.nominal);
+                    if (/^[A-Za-z0-9_-]{1,80}$/.test(s.id) && d.lunas === false && Number.isInteger(n) && n > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(d.tanggal || '')))
+                        a.push({ id: s.id, nominal: n, tanggal: d.tanggal });
+                });
+                daftar = a.sort(function (x, y) { return x.tanggal < y.tanggal ? -1 : 1; });
+                gambar();
+            }, function (e) { console.warn('[Modal rider] baca', e && e.code); });
+        }).catch(function (e) { console.warn('[Modal rider]', e); });
+    }
+    function mulai() {
+        Promise.all([import(URL_APP), import(URL_AUTH)]).then(function (r) {
+            var app; try { app = r[0].getApp(); } catch (e) { setTimeout(mulai, 3000); return; }
+            r[1].onAuthStateChanged(r[1].getAuth(app), function (u) {
+                var em = u && u.email ? String(u.email).toLowerCase() : '';
+                var uid = /^[a-z0-9._-]+@projekgo\.id$/.test(em) ? em.split('@')[0].toUpperCase() : '';
+                dengar(uid);
+            });
+        }).catch(function (e) { console.warn('[Modal rider]', e); });
+    }
+    // jam berganti ke hari berikutnya: tulisan "hari ini" -> "belum dibayar"
+    setInterval(function () { if (daftar.length) gambar(); }, 5 * 60 * 1000);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mulai); else mulai();
+})();
+</script>
 </body>
 </html>
