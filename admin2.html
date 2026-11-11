@@ -2285,6 +2285,425 @@
     .cpa-bub.adm, .cpa-bub.rdr { background: #FFD9BD; }
     .cpa-tulis { background: #E6DED3; }
 </style>
+<!-- ===== 11 Nov 2026: AKSI CHAT BERSAMA (rider, pelanggan, admin) =====
+     Tekan lama (menu), geser kanan untuk membalas, kutipan balasan, tanda "diedit", pemutar & perekam
+     pesan suara. Hanya DOM + textContent (tanpa innerHTML dari data). Dipakai oleh modul chat tiap aplikasi. -->
+<style id="pg-aksi-css">
+    .pga-bisa-geser { touch-action: pan-y; }
+    .pga-geser { transition: none !important; position: relative; }
+    .pga-geser::before { content: ""; position: absolute; left: -38px; top: 50%; width: 28px; height: 28px; margin-top: -14px; border-radius: 50%; background: rgba(255,255,255,.92) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2312895E' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h11a5 5 0 0 1 5 5v5'/%3E%3C/svg%3E") center/16px no-repeat; box-shadow: 0 1px 2px rgba(0,0,0,.15); opacity: .35; }
+    .pga-geser.pga-siap::before { opacity: 1; }
+    .pga-kutip { display: block; flex-basis: 100%; box-sizing: border-box; margin: 0 0 5px; padding: 5px 9px; border: 0; border-left: 4px solid #12895E; border-radius: 8px; background: rgba(10, 79, 55, .08); cursor: pointer; text-align: left; font: inherit; color: inherit; width: 100%; min-width: 150px; }
+    .pga-kutip b { display: block; font-size: 12.5px; font-weight: 800; color: #0E6B4A; }
+    .pga-kutip span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13.5px; line-height: 1.35; color: #34493F; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .pga-kutip.lawan { border-left-color: #C2410C; background: rgba(194, 65, 12, .07); }
+    .pga-kutip.lawan b { color: #B84300; }
+    .pga-sorot { animation: pgaSorot 1.4s ease-out; }
+    @keyframes pgaSorot { 0%, 40% { box-shadow: 0 0 0 3px rgba(18, 137, 94, .55); } 100% { box-shadow: 0 1px 2px rgba(20, 60, 40, .16); } }
+    .pga-terus { display: flex; flex-basis: 100%; align-items: center; gap: 4px; margin-bottom: 3px; font-size: 12px; font-weight: 800; color: #0E6B4A; }
+    .pga-terus svg { width: 13px; height: 13px; }
+    .pga-tarik { font-style: italic; color: #5E6E66; }
+    .pga-edit-wadah { display: flex; flex-direction: column; gap: 4px; max-width: 84%; }
+    .pga-pil-edit { align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: #D92D20; color: #FFFFFF; font-size: 12.5px; font-weight: 800; box-shadow: 0 1px 2px rgba(120, 20, 10, .25); }
+    .pga-merah { box-shadow: 0 0 0 2px #F3A59D !important; }
+    .pga-diedit-label { color: #B42318; font-weight: 800; }
+    .pga-asli { display: inline-block; margin-top: 3px; border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 800; color: #9A3412; text-decoration: underline; cursor: pointer; }
+    /* batang balas / edit di atas kolom ketik */
+    .pga-batang { display: flex; align-items: center; gap: 10px; margin: 6px 10px 0; padding: 8px 6px 8px 12px; background: #FFFFFF; border-left: 4px solid #12895E; border-radius: 12px; box-shadow: 0 1px 2px rgba(20, 60, 40, .12); }
+    .pga-batang[hidden] { display: none; }
+    .pga-batang.edit { border-left-color: #C2410C; }
+    .pga-batang > span { flex: 1; min-width: 0; }
+    .pga-batang b { display: block; font-size: 12.5px; color: #0E6B4A; }
+    .pga-batang.edit b { color: #C2410C; }
+    .pga-batang span span { display: block; font-size: 13px; color: #34493F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pga-batang button { width: 36px; height: 36px; flex: none; border: 0; border-radius: 50%; background: transparent; color: #5E6E66; display: grid; place-items: center; cursor: pointer; }
+    .pga-batang button svg { width: 18px; height: 18px; }
+    /* menu tekan lama */
+    .pga-latar { position: absolute; inset: 0; z-index: 70; background: rgba(15, 30, 25, .32); display: flex; align-items: flex-end; }
+    .pga-lembar { width: 100%; max-height: 80%; overflow-y: auto; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); font-family: inherit; color: #1C1C1E; }
+    .pga-lembar .pga-gagang { display: block; width: 40px; height: 5px; border-radius: 9px; background: #D9D4CE; margin: 0 auto 10px; }
+    .pga-pratinjau { margin: 0 0 6px; padding: 10px 12px; border-radius: 12px; background: #F2F6F4; font-size: 14px; line-height: 1.45; color: #34493F; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: hidden; }
+    .pga-lembar > button { width: 100%; min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 6px 4px; border: 0; border-bottom: 1px solid #EEF2EF; background: transparent; font: inherit; font-size: 15.5px; font-weight: 700; color: #1C1C1E; text-align: left; cursor: pointer; }
+    .pga-lembar > button:last-child { border-bottom: 0; }
+    .pga-lembar > button svg { width: 22px; height: 22px; flex: none; color: #3F6B57; }
+    .pga-lembar > button small { display: block; font-size: 12.5px; font-weight: 600; color: #6B7B73; }
+    .pga-lembar > button.bahaya, .pga-lembar > button.bahaya svg { color: #B42318; }
+    .pga-lembar .pga-versi { margin: 4px 0 8px; padding: 10px 12px; border-radius: 12px; background: #FFF7ED; border: 1px solid #FCD9B6; font-size: 13.5px; line-height: 1.45; color: #4A2B12; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .pga-lembar .pga-versi small { display: block; font-size: 12px; font-weight: 800; color: #9A3412; margin-bottom: 2px; }
+    /* pesan suara */
+    .pga-vn { display: flex; align-items: center; gap: 10px; width: 230px; max-width: 100%; }
+    .pga-vn-main { width: 40px; height: 40px; flex: none; border-radius: 50%; border: 0; background: #12895E; color: #FFFFFF; display: grid; place-items: center; cursor: pointer; padding: 0; }
+    .pga-vn-main svg { width: 16px; height: 16px; }
+    .pga-vn.saya .pga-vn-main { background: #FFFFFF; color: #0E6B4A; }
+    .pga-vn-gel { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; height: 28px; }
+    .pga-vn-gel i { display: block; width: 3px; border-radius: 2px; background: #9FC9B5; }
+    .pga-vn-gel i.on { background: #12895E; }
+    .pga-vn.saya .pga-vn-gel i { background: #8DBFA6; }
+    .pga-vn.saya .pga-vn-gel i.on { background: #0E6B4A; }
+    .pga-vn-wkt { display: block; min-width: 34px; font-size: 12px; color: #5E6E66; font-variant-numeric: tabular-nums; }
+    .pga-mik { width: 48px; height: 48px; flex: none; border-radius: 50%; border: 0; background: #12895E; color: #FFFFFF; display: none; place-items: center; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; padding: 0; }
+    .pga-mik svg { width: 22px; height: 22px; }
+    .pga-mik.rekam { transform: scale(1.12); box-shadow: 0 0 0 6px rgba(18, 137, 94, .22); }
+    .pga-rekam { position: absolute; left: 10px; right: 66px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); height: 48px; z-index: 5; border-radius: 999px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); display: flex; align-items: center; gap: 10px; padding: 0 16px; font-size: 14px; color: #5E6E66; }
+    .pga-rekam[hidden] { display: none; }
+    .pga-rekam i { width: 10px; height: 10px; border-radius: 50%; background: #D92D20; animation: pgaTitik 1s steps(2, end) infinite; }
+    .pga-rekam b { font-size: 16px; color: #1C1C1E; font-variant-numeric: tabular-nums; }
+    .pga-rekam span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pga-rekam.batal span { color: #B42318; font-weight: 800; }
+    @keyframes pgaTitik { 50% { opacity: .2; } }
+    /* jam menempel di baris terakhir (seperti WhatsApp): penanda kosong selebar jam ikut mengalir di akhir teks,
+       jam sendiri diletakkan di pojok kanan bawah. Kalau baris terakhir penuh, penanda turun -> jam ikut turun. */
+    .pga-jam-wa { display: block !important; position: relative; }
+    .pga-jam-wa > .pga-jam { position: absolute; right: 10px; bottom: 5px; margin: 0 !important; padding: 0 !important; white-space: nowrap; }
+    .pga-jam-wa .pga-jarak { display: inline-block !important; visibility: hidden; padding: 0 0 0 10px !important; margin: 0 !important; white-space: nowrap; vertical-align: baseline; height: 1px; overflow: hidden; position: static !important; }
+    .pga-jarak * { visibility: hidden; }
+    @media (prefers-reduced-motion: reduce) { .pga-sorot, .pga-rekam i { animation: none; } }
+</style>
+<script>
+(function () {
+    var SVG = 'http://www.w3.org/2000/svg';
+    var IKON = {
+        balas: [['path', 'M9 14L4 9l5-5'], ['path', 'M4 9h11a5 5 0 0 1 5 5v5']],
+        salin: [['rect', null, { x: 9, y: 9, width: 12, height: 12, rx: 2 }], ['path', 'M5 15V5a2 2 0 0 1 2-2h10']],
+        edit: [['path', 'M4 20h4L19 9l-4-4L4 16z'], ['path', 'M13.5 6.5l4 4']],
+        tarik: [['path', 'M3 7v6h6'], ['path', 'M3.5 13A9 9 0 1 0 6 6.3L3 9']],
+        hapus: [['path', 'M4 7h16'], ['path', 'M10 11v6M14 11v6'], ['path', 'M6 7l1 13h10l1-13M9 7V4h6v3']],
+        teruskan: [['path', 'M15 14l5-5-5-5'], ['path', 'M20 9H9a5 5 0 0 0-5 5v5']],
+        asli: [['circle', null, { cx: 12, cy: 12, r: 9 }], ['path', 'M12 7v5l3 2']],
+        tutup: [['path', 'M6 6l12 12M18 6L6 18']],
+        main: [['path', 'M7 4v16l13-8z', null, true]],
+        jeda: [['path', 'M7 4h4v16H7zM13 4h4v16h-4z', null, true]],
+        mik: [['rect', null, { x: 9, y: 3, width: 6, height: 12, rx: 3 }], ['path', 'M5 11a7 7 0 0 0 14 0M12 18v3']]
+    };
+    function ikon(nama) {
+        var s = document.createElementNS(SVG, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+        var isi = false;
+        (IKON[nama] || []).forEach(function (x) {
+            var p = document.createElementNS(SVG, x[0]);
+            if (x[1]) p.setAttribute('d', x[1]);
+            if (x[2]) Object.keys(x[2]).forEach(function (k) { p.setAttribute(k, x[2][k]); });
+            if (x[3]) isi = true;
+            s.appendChild(p);
+        });
+        if (isi) s.setAttribute('fill', 'currentColor');
+        else { s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); }
+        return s;
+    }
+    function polos(t) { t = String(t == null ? '' : t); try { return typeof window.pgPolos === 'function' ? window.pgPolos(t) : t; } catch (e) { return t; } }
+    function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
+    function getar(n) { try { if (navigator.vibrate) navigator.vibrate(n); } catch (e) {} }
+
+    // ---------- tekan lama + geser kanan untuk membalas ----------
+    function gestur(w, o) {
+        if (!w || w.__pga) return; w.__pga = true;
+        var a = null, sudahLama = false, habisGeser = 0;
+        w.addEventListener('pointerdown', function (e) {
+            if (e.button) return;
+            var b = e.target.closest && e.target.closest(o.pilih);
+            if (!b || !w.contains(b) || !b.getAttribute('data-id')) return;
+            a = { b: b, id: b.getAttribute('data-id'), x0: e.clientX, y0: e.clientY, dx: 0, mode: '' };
+            sudahLama = false;
+            if (o.tekanLama) a.timer = setTimeout(function () {
+                if (!a || a.mode) return;
+                sudahLama = true; getar(20);
+                o.tekanLama(a.id, a.b); a = null;
+            }, 480);
+        });
+        w.addEventListener('pointermove', function (e) {
+            if (!a) return;
+            var dx = e.clientX - a.x0, dy = e.clientY - a.y0;
+            if (!a.mode) {
+                if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { a.mode = 'gulir'; clearTimeout(a.timer); return; }
+                if (o.balas && dx > 12 && dx > Math.abs(dy) * 1.4) { a.mode = 'geser'; clearTimeout(a.timer); a.b.classList.add('pga-geser'); }
+                else if (Math.abs(dx) > 10) { a.mode = 'lain'; clearTimeout(a.timer); }
+            }
+            if (a.mode === 'geser') {
+                a.dx = Math.max(0, Math.min(84, dx));
+                a.b.style.transform = 'translateX(' + a.dx + 'px)';
+                a.b.classList.toggle('pga-siap', a.dx >= 56);
+                if (e.cancelable) e.preventDefault();
+            }
+        });
+        function selesai() {
+            if (!a) return;
+            clearTimeout(a.timer);
+            var x = a; a = null;
+            if (x.mode !== 'geser') return;
+            habisGeser = Date.now();
+            x.b.style.transition = 'transform .18s'; x.b.style.transform = '';
+            setTimeout(function () { x.b.style.transition = ''; x.b.classList.remove('pga-geser', 'pga-siap'); }, 200);
+            if (x.dx >= 56) { getar(15); o.balas(x.id); }
+        }
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (n) { w.addEventListener(n, selesai); });
+        // ketukan yang muncul di akhir geseran jangan ikut membuka kutipan / foto
+        w.addEventListener('click', function (e) { if (Date.now() - habisGeser < 450) { e.stopPropagation(); e.preventDefault(); } }, true);
+        if (o.tekanLama) {
+            w.addEventListener('contextmenu', function (e) {
+                var b = e.target.closest && e.target.closest(o.pilih); if (!b || !b.getAttribute('data-id')) return;
+                e.preventDefault(); if (!sudahLama) o.tekanLama(b.getAttribute('data-id'), b);
+            });
+            // ketukan yang sama setelah tekan lama jangan ikut membuka foto/tautan
+            w.addEventListener('click', function (e) { if (sudahLama) { e.stopPropagation(); e.preventDefault(); sudahLama = false; } }, true);
+        }
+    }
+
+    // ---------- menu (lembar bawah) ----------
+    function menu(layar, pratinjau, pilihan, versi) {
+        if (!layar) return;
+        var lama = layar.querySelector(':scope > .pga-latar'); if (lama) lama.remove();
+        var lat = el('div', 'pga-latar'), sh = el('div', 'pga-lembar');
+        sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.setAttribute('aria-label', 'Pilihan pesan');
+        sh.appendChild(el('span', 'pga-gagang'));
+        if (pratinjau) sh.appendChild(el('div', 'pga-pratinjau', polos(pratinjau)));
+        (versi || []).forEach(function (v) { var d = el('div', 'pga-versi'); d.appendChild(el('small', '', v.judul)); d.appendChild(document.createTextNode(v.teks)); sh.appendChild(d); });
+        function tutup() { lat.remove(); document.removeEventListener('keydown', esc); }
+        function esc(e) { if (e.key === 'Escape') tutup(); }
+        (pilihan || []).forEach(function (x) {
+            var b = el('button', x.bahaya ? 'bahaya' : ''); b.type = 'button';
+            var t = el('span'); t.appendChild(document.createTextNode(x.teks)); if (x.ket) t.appendChild(el('small', '', x.ket));
+            b.appendChild(ikon(x.ikon)); b.appendChild(t);
+            b.addEventListener('click', function () {
+                if (x.yakin && b.getAttribute('data-yakin') !== '1') { b.setAttribute('data-yakin', '1'); t.firstChild.textContent = x.yakin; return; }
+                tutup(); x.jalan();
+            });
+            sh.appendChild(b);
+        });
+        lat.appendChild(sh);
+        lat.addEventListener('click', function (e) { if (e.target === lat) tutup(); });
+        document.addEventListener('keydown', esc);
+        layar.appendChild(lat);
+        var f = sh.querySelector('button');
+        if (f && window.matchMedia && window.matchMedia('(pointer: fine)').matches) { try { f.focus({ preventScroll: true }); } catch (e) {} }
+        return { tutup: tutup };
+    }
+
+    // ---------- kutipan balasan di dalam gelembung ----------
+    function kutipan(balas, nama, lawan, keId) {
+        var k = el('button', 'pga-kutip' + (lawan ? ' lawan' : '')); k.type = 'button';
+        k.setAttribute('aria-label', 'Lihat pesan yang dibalas');
+        k.appendChild(el('b', '', nama));
+        k.appendChild(el('span', '', String(balas.teks || '').slice(0, 200)));
+        k.addEventListener('click', function (e) { e.stopPropagation(); if (keId) keId(balas.id); });
+        return k;
+    }
+    function sorot(w, id, pilih) {
+        var b = null;
+        try { b = w.querySelector(pilih + '[data-id="' + String(id).replace(/[^A-Za-z0-9_-]/g, '') + '"]'); } catch (e) {}
+        if (!b) return false;
+        b.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        b.classList.remove('pga-sorot'); void b.offsetWidth; b.classList.add('pga-sorot');
+        return true;
+    }
+    function terusLabel() { var d = el('span', 'pga-terus'); d.appendChild(ikon('teruskan')); d.appendChild(document.createTextNode('Diteruskan admin')); return d; }
+
+    // ---------- batang balas / edit di atas kolom ketik ----------
+    function batang(sebelum) {
+        var b = el('div', 'pga-batang'); b.hidden = true;
+        var s = el('span'), j = el('b'), t = el('span'); s.appendChild(j); s.appendChild(t);
+        var x = el('button'); x.type = 'button'; x.setAttribute('aria-label', 'Batal'); x.appendChild(ikon('tutup'));
+        b.appendChild(s); b.appendChild(x);
+        if (sebelum && sebelum.parentNode) sebelum.parentNode.insertBefore(b, sebelum);
+        var api = {
+            el: b, mode: '', data: null, onBatal: null,
+            tampil: function (mode, judul, teks, data) { api.mode = mode; api.data = data || null; b.className = 'pga-batang' + (mode === 'edit' ? ' edit' : ''); j.textContent = judul; t.textContent = polos(teks).replace(/\s+/g, ' ').slice(0, 160); b.hidden = false; },
+            sembunyi: function () { api.mode = ''; api.data = null; b.hidden = true; }
+        };
+        x.addEventListener('click', function () { var m = api.mode; api.sembunyi(); if (api.onBatal) api.onBatal(m); });
+        return api;
+    }
+
+    // ---------- tanda "diedit" yang belum dilihat penerima ----------
+    function pelacakEdit(kunci) {
+        var sesi = {};
+        function muat() { try { var o = JSON.parse(localStorage.getItem(kunci) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } }
+        return {
+            // true = tampilkan merah (baru diedit & belum dilihat). Dilihat = saat ruang chat terbuka.
+            merah: function (id, dieditMs) {
+                if (!dieditMs) return false;
+                if (sesi[id] === dieditMs) return true;
+                var o = muat();
+                if (o[id] === dieditMs) return false;
+                sesi[id] = dieditMs; o[id] = dieditMs;
+                var ks = Object.keys(o); if (ks.length > 300) ks.slice(0, ks.length - 300).forEach(function (k) { delete o[k]; });
+                try { localStorage.setItem(kunci, JSON.stringify(o)); } catch (e) {}
+                return true;
+            },
+            reset: function () { sesi = {}; }
+        };
+    }
+    function pilEdit() { return el('span', 'pga-pil-edit', 'Chat diedit, silakan ditinjau kembali'); }
+
+    // ---------- sembunyikan pesan di HP ini saja ----------
+    function himpunan(kunci) {
+        var s = {};
+        try { (JSON.parse(localStorage.getItem(kunci) || '[]') || []).forEach(function (x) { if (typeof x === 'string') s[x] = 1; }); } catch (e) {}
+        return {
+            ada: function (id) { return !!s[id]; },
+            tambah: function (id) { s[id] = 1; try { localStorage.setItem(kunci, JSON.stringify(Object.keys(s).slice(-300))); } catch (e) {} }
+        };
+    }
+    function salin(teks, kabar) {
+        var cad = function () { var a = document.createElement('textarea'); a.value = teks; a.setAttribute('readonly', ''); a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e) {} a.remove(); };
+        try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(teks).catch(cad); else cad(); } catch (e) { cad(); }
+        if (kabar) kabar('Disalin');
+    }
+
+    // ---------- pemutar pesan suara ----------
+    var sedangMain = null;
+    function waktu(d) { d = Math.max(0, Math.round(d || 0)); return Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0'); }
+    function pemutar(o) {
+        var w = el('div', 'pga-vn' + (o.saya ? ' saya' : ''));
+        var b = el('button', 'pga-vn-main'); b.type = 'button'; b.setAttribute('aria-label', 'Putar pesan suara'); b.appendChild(ikon('main'));
+        var g = el('div', 'pga-vn-gel'), bar = [];
+        var h = 0; String(o.id || 'x').split('').forEach(function (c) { h = (h * 31 + c.charCodeAt(0)) >>> 0; });
+        for (var i = 0; i < 22; i++) { h = (h * 1103515245 + 12345) >>> 0; var x = el('i'); x.style.height = (8 + (h % 19)) + 'px'; g.appendChild(x); bar.push(x); }
+        var wk = el('span', 'pga-vn-wkt', waktu(o.durasi));
+        w.appendChild(b); w.appendChild(g); w.appendChild(wk);
+        var au = null;
+        function gambar() {
+            var d = (au && isFinite(au.duration) && au.duration > 0) ? au.duration : (o.durasi || 1);
+            var p = au ? Math.min(1, au.currentTime / d) : 0;
+            var n = Math.round(p * bar.length);
+            bar.forEach(function (x, i) { x.className = i < n ? 'on' : ''; });
+            wk.textContent = au && !au.paused ? waktu(au.currentTime) : waktu(o.durasi);
+        }
+        function ganti(main) { b.textContent = ''; b.appendChild(ikon(main ? 'jeda' : 'main')); b.setAttribute('aria-label', main ? 'Jeda' : 'Putar pesan suara'); }
+        b.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (au && !au.paused) { au.pause(); return; }
+            if (sedangMain && sedangMain !== au) { try { sedangMain.pause(); } catch (x) {} }
+            var mulai = function (url) {
+                if (!url) { if (o.gagal) o.gagal(); return; }
+                if (!au) {
+                    au = new Audio(); au.preload = 'auto'; au.src = url;
+                    au.addEventListener('timeupdate', gambar);
+                    au.addEventListener('play', function () { ganti(true); });
+                    au.addEventListener('pause', function () { ganti(false); gambar(); });
+                    au.addEventListener('ended', function () { au.currentTime = 0; ganti(false); gambar(); });
+                    au.addEventListener('error', function () { ganti(false); if (o.gagal) o.gagal(); });
+                }
+                sedangMain = au;
+                var p = au.play(); if (p && p.catch) p.catch(function () { if (o.gagal) o.gagal(); });
+            };
+            if (au) mulai(au.src);
+            else Promise.resolve(o.ambil ? o.ambil() : '').then(mulai, function () { if (o.gagal) o.gagal(); });
+        });
+        return w;
+    }
+
+    // ---------- perekam (tahan tombol mik, geser kiri untuk batal, maks 60 detik) ----------
+    function jenisRekam() {
+        var c = [['audio/webm;codecs=opus', 'audio/webm', 'webm'], ['audio/webm', 'audio/webm', 'webm'], ['audio/mp4', 'audio/mp4', 'm4a'], ['audio/ogg;codecs=opus', 'audio/ogg', 'ogg']];
+        if (typeof window.MediaRecorder === 'undefined') return null;
+        for (var i = 0; i < c.length; i++) { try { if (MediaRecorder.isTypeSupported(c[i][0])) return c[i]; } catch (e) {} }
+        return null;
+    }
+    function perekam(o) {
+        // o: { form, layar, kabar(teks), kirim(blob, detik, contentType, ext) }
+        var jr = jenisRekam();
+        if (!o.form || !jr || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
+        var m = el('button', 'pga-mik'); m.type = 'button'; m.setAttribute('aria-label', 'Tahan untuk merekam pesan suara'); m.appendChild(ikon('mik'));
+        o.form.appendChild(m);
+        var p = el('div', 'pga-rekam'); p.hidden = true;
+        var titik = el('i'), wk = el('b', '', '0:00'), ket = el('span', '', 'Merekam… geser kiri untuk batal');
+        p.appendChild(titik); p.appendChild(wk); p.appendChild(ket);
+        o.form.style.position = o.form.style.position || 'relative';
+        o.form.appendChild(p);
+        var st = null;   // { rec, stream, potong, mulai, x0, batal, jalan, timer }
+        function bersih() {
+            if (!st) return;
+            clearInterval(st.timer); clearTimeout(st.maks);
+            try { st.stream && st.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+            m.classList.remove('rekam'); p.hidden = true; p.classList.remove('batal');
+        }
+        function berhenti(batal) {
+            if (!st) return;
+            var s = st; s.batal = s.batal || batal;
+            if (s.rec && s.rec.state !== 'inactive') { try { s.rec.stop(); } catch (e) { bersih(); st = null; } }
+            else { bersih(); st = null; }
+        }
+        m.addEventListener('pointerdown', function (e) {
+            e.preventDefault();
+            if (st) return;
+            try { m.setPointerCapture(e.pointerId); } catch (x) {}
+            var s = st = { x0: e.clientX, potong: [], batal: false, lepas: false };
+            m.classList.add('rekam'); p.hidden = false; wk.textContent = '0:00'; ket.textContent = 'Merekam… geser kiri untuk batal';
+            navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+                if (st !== s) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+                s.stream = stream;
+                if (s.lepas) { berhenti(true); if (o.kabar) o.kabar('Tahan tombol mikrofon selama berbicara'); return; }
+                var rec; try { rec = new MediaRecorder(stream, { mimeType: jr[0], audioBitsPerSecond: 24000 }); } catch (x) { rec = new MediaRecorder(stream); }
+                s.rec = rec; s.mulai = Date.now();
+                rec.ondataavailable = function (ev) { if (ev.data && ev.data.size) s.potong.push(ev.data); };
+                rec.onstop = function () {
+                    var detik = Math.round((Date.now() - s.mulai) / 1000);
+                    bersih(); if (st === s) st = null;
+                    if (s.batal) return;
+                    if (detik < 1) { if (o.kabar) o.kabar('Terlalu singkat. Tahan tombol selama berbicara.'); return; }
+                    var blob = new Blob(s.potong, { type: jr[1] });
+                    o.kirim(blob, Math.min(60, Math.max(1, detik)), jr[1], jr[2]);
+                };
+                rec.start(250);
+                s.timer = setInterval(function () { wk.textContent = waktu((Date.now() - s.mulai) / 1000); }, 250);
+                s.maks = setTimeout(function () { berhenti(false); }, 60000);
+                getar(20);
+            }, function (err) {
+                bersih(); st = null;
+                if (o.kabar) o.kabar(err && err.name === 'NotAllowedError' ? 'Izinkan mikrofon dulu untuk merekam pesan suara.' : 'Mikrofon tidak bisa dipakai di HP ini.');
+            });
+        });
+        m.addEventListener('pointermove', function (e) {
+            if (!st) return;
+            var geser = e.clientX - st.x0;
+            p.classList.toggle('batal', geser < -70);
+            ket.textContent = geser < -70 ? 'Lepas untuk membatalkan' : 'Merekam… geser kiri untuk batal';
+        });
+        function lepas(e) {
+            if (!st) return;
+            st.lepas = true;
+            var batal = (e && e.type === 'pointercancel') || (e && e.clientX - st.x0 < -70);
+            if (st.rec) berhenti(batal);
+        }
+        m.addEventListener('pointerup', lepas);
+        m.addEventListener('pointercancel', lepas);
+        m.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+        return { tombol: m, batal: function () { berhenti(true); } };
+    }
+
+    // Rapikan jam semua gelembung teks di dalam wadah: dipanggil setelah daftar pesan digambar
+    function rapikanJam(w, pilihBub, pilihTeks, pilihJam) {
+        if (!w) return;
+        var daftar = w.querySelectorAll(pilihBub);
+        for (var i = 0; i < daftar.length; i++) {
+            var b = daftar[i];
+            if (b.classList.contains('pga-jam-wa')) continue;
+            var j = b.lastElementChild, t = b.querySelector(':scope > ' + pilihTeks);
+            if (!j || !t || !j.matches(pilihJam)) continue;
+            var jarak = j.cloneNode(true);
+            jarak.className = 'pga-jarak'; jarak.removeAttribute('id'); jarak.setAttribute('aria-hidden', 'true');
+            t.appendChild(jarak);
+            j.classList.add('pga-jam');
+            b.classList.add('pga-jam-wa');
+        }
+    }
+
+    window.pgChat = {
+        rapikanJam: rapikanJam,
+        ikon: ikon, gestur: gestur, menu: menu, kutipan: kutipan, sorot: sorot, terusLabel: terusLabel,
+        batang: batang, pelacakEdit: pelacakEdit, pilEdit: pilEdit, himpunan: himpunan, salin: salin,
+        pemutar: pemutar, perekam: perekam, bisaRekam: function () { return !!jenisRekam() && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); },
+        // isi balasan yang disimpan di pesan: maks 160 huruf, hanya id/dari/teks
+        balasData: function (p, ringkas) { return { id: String(p.id).slice(0, 64), dari: p.dari, teks: polos(ringkas || p.teks || '').replace(/\s+/g, ' ').slice(0, 160) }; },
+        balasBaca: function (x) {
+            if (!x || typeof x !== 'object') return null;
+            var id = String(x.id || ''), dari = String(x.dari || '');
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || ['pelanggan', 'rider', 'admin'].indexOf(dari) < 0) return null;
+            return { id: id, dari: dari, teks: String(x.teks || '').slice(0, 200) };
+        },
+        BATAS_UBAH: 15 * 60 * 1000
+    };
+})();
+</script>
 </head>
 <body class="pb-24">
 
@@ -28748,7 +29167,7 @@
                 </div>
                 <form class="cpa-tulis" id="cpa-form" autocomplete="off">
                     <label for="cpa-input" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Balasan untuk pelanggan</label>
-                    <textarea id="cpa-input" rows="1" maxlength="1000" placeholder="Tulis balasan..."></textarea>
+                    <div class="cpa-kolom"><textarea id="cpa-input" rows="1" maxlength="1000" placeholder="Tulis balasan..."></textarea></div>
                     <button type="submit" class="cpa-kirim" id="cpa-kirim" aria-label="Kirim balasan" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
                 </form>
             </section>
@@ -28866,6 +29285,7 @@
                 const tengah = el('span');
                 tengah.style.minWidth = '0';
                 tengah.append(el('span', 'cpa-nm', c.nama), el('span', 'cpa-ms', (c.terakhir_dari === 'admin' ? 'Kamu: ' : '') + c.terakhir));
+                if (c.edit) { const t = el('span', 'cpa-tg', 'Diedit'); t.style.cssText = 'background:#FDECEA;color:#B42318'; tengah.appendChild(t); }
                 if (c.jenis_terakhir === 'pesanan') { const t = el('span', 'cpa-tg', 'Ada pesanan'); t.style.cssText = 'background:#FFF0E4;color:#C2410C'; tengah.appendChild(t); }
                 if (c.status === 'selesai') { const t = el('span', 'cpa-tg', 'Selesai'); t.style.cssText = 'background:#E8F3E6;color:#2F6B3E'; tengah.appendChild(t); }
                 else if (belumDibalas(c)) { const t = el('span', 'cpa-tg', 'Belum dibalas'); t.style.cssText = 'background:#FDF3D3;color:#7A5A0A'; tengah.appendChild(t); }
@@ -28897,7 +29317,7 @@
             hentiMasuk = onSnapshot(query(collection(db, 'chat_pelanggan'), orderBy('terakhir_at', 'desc'), limit(60)), (s) => {
                 daftarSemua = s.docs.map((d) => {
                     const x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, nama: String(x.nama || 'Pelanggan').slice(0, 60), email: String(x.email || '').slice(0, 120), terakhir: String(x.terakhir || '').slice(0, 200), terakhir_dari: x.terakhir_dari === 'admin' ? 'admin' : 'pelanggan', t: ms(x.terakhir_at), belum_admin: Math.max(0, Number(x.belum_admin) || 0), status: String(x.status || ''), jenis_terakhir: String(x.jenis_terakhir || ''), bersih: x.bersih_admin_at ? ms(x.bersih_admin_at) : 0, dihapus: x.dihapus_admin_at ? ms(x.dihapus_admin_at) : 0, kode: /^PG[2-9A-HJ-NP-Z]{5}$/.test(String(x.kode || '')) ? x.kode : '' };
+                    return { id: d.id, nama: String(x.nama || 'Pelanggan').slice(0, 60), email: String(x.email || '').slice(0, 120), terakhir: String(x.terakhir || '').slice(0, 200), terakhir_dari: x.terakhir_dari === 'admin' ? 'admin' : 'pelanggan', t: ms(x.terakhir_at), belum_admin: Math.max(0, Number(x.belum_admin) || 0), status: String(x.status || ''), jenis_terakhir: String(x.jenis_terakhir || ''), bersih: x.bersih_admin_at ? ms(x.bersih_admin_at) : 0, dihapus: x.dihapus_admin_at ? ms(x.dihapus_admin_at) : 0, kode: /^PG[2-9A-HJ-NP-Z]{5}$/.test(String(x.kode || '')) ? x.kode : '', edit: x.edit_utk_admin === true };
                 });
                 // Chat yang "dihapus" admin disembunyikan sampai pelanggan mengirim pesan lagi
                 daftar = daftarSemua.filter((c) => !(c.dihapus && c.dihapus >= c.t));
@@ -29010,6 +29430,7 @@
                 const b = el('div', 'cpa-bub ' + (p.dari === 'admin' ? 'adm' : 'plg'));
                 b.dataset.id = p.id;
                 if (p.dari === 'pelanggan' && !p.ditarik && /^⚠ KENDALA PESANAN/.test(p.teks)) b.classList.add('kendala');
+                if (p.balas && !p.ditarik && window.pgChat) b.appendChild(window.pgChat.kutipan(p.balas, p.balas.dari === 'admin' ? 'Admin' : 'Pelanggan', p.balas.dari !== 'admin', (id) => { if (!window.pgChat.sorot($('cpa-isi'), id, '.cpa-bub')) tost('Pesan yang dibalas sudah tidak tampil'); }));
                 const lat = Number(p.lat), lng = Number(p.lng);
                 if (p.ditarik) {
                     b.classList.add('ditarik');
@@ -29033,6 +29454,8 @@
                         f.appendChild(el('span', 'cpa-foto-st', src === 'gagal' ? 'Foto tidak bisa dibuka' : 'Memuat foto...'));
                     }
                     b.appendChild(f);
+                } else if (p.jenis === 'vn' && p.vn && window.pgChat) {
+                    b.appendChild(window.pgChat.pemutar({ id: p.id, durasi: p.durasi, saya: p.dari === 'admin', ambil: () => urlSuaraA(p.vn), gagal: () => tost('Pesan suara belum bisa diputar', 'Periksa internet.') }));
                 } else if (p.jenis === 'kontak' && p.kontak_nomor) {
                     b.classList.add('cpa-kontak');
                     const k = el('div', 'cpa-kontak-k');
@@ -29056,20 +29479,27 @@
                 } else {
                     const tx = el('span', 'cpa-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('cpa-teks');
                 }
-                b.appendChild(el('span', 'cpa-wk', (p.diedit && !p.ditarik ? 'diedit · ' : '') + jam(p.t) + (p.dari === 'admin' && p.tunda ? ' · mengirim' : '')));
+                b.appendChild(el('span', 'cpa-wk', (p.diedit && !p.ditarik ? 'Diedit · ' : '') + jam(p.t) + (p.dari === 'admin' && p.tunda ? ' · mengirim' : '')));
+                // (11 Nov 2026) salinan isi asli (hanya admin) untuk pesan pelanggan yang diedit / ditarik
+                if (p.dari === 'pelanggan' && (p.diedit || p.ditarik)) { const la = el('button', 'pga-asli', 'Lihat isi asli'); la.type = 'button'; la.onclick = (e) => { e.stopPropagation(); lihatAsli('chat_pelanggan', ruangUid, p.id, pratinjau(p)); }; b.appendChild(la); }
+                if (p.dari === 'pelanggan' && p.diedit && !p.ditarik && window.pgChat) {
+                    const pl = window.__cpaPelacak || (window.__cpaPelacak = window.pgChat.pelacakEdit('cpa_edit_dilihat'));
+                    if (pl.merah(p.id, p.dieditMs)) { b.classList.add('pga-merah'); const wd = el('div', 'pga-edit-wadah'); wd.append(window.pgChat.pilEdit(), b); frag.appendChild(wd); return; }
+                }
                 frag.appendChild(b);
             });
             if (!tampil.length) frag.appendChild(el('div', 'cpa-kosong', pesan.length ? 'Chat sudah dikosongkan.' : 'Belum ada pesan.'));
             isi.textContent = '';
             isi.appendChild(frag);
+            if (window.pgChat && window.pgChat.rapikanJam) window.pgChat.rapikanJam(isi, '.cpa-bub.cpa-teks', '.cpa-t', '.cpa-wk');
             if (paksaBawah || diBawah) isi.scrollTop = isi.scrollHeight;
         }
 
         function tandaiDibaca() {
             const c = chatIni();
-            if (!c || !(c.belum_admin > 0) || sedangBaca || !panelBuka() || $('cpa-ruang').hidden || document.visibilityState !== 'visible') return;
+            if (!c || !(c.belum_admin > 0 || c.edit) || sedangBaca || !panelBuka() || $('cpa-ruang').hidden || document.visibilityState !== 'visible') return;
             sedangBaca = true;
-            updateDoc(doc(db, 'chat_pelanggan', c.id), { belum_admin: 0, dibaca_admin_at: serverTimestamp() })
+            updateDoc(doc(db, 'chat_pelanggan', c.id), Object.assign({ belum_admin: 0, dibaca_admin_at: serverTimestamp() }, c.edit ? { edit_utk_admin: false } : {}))
                 .catch((e) => console.warn('[Chat] tandai dibaca gagal:', e && e.code))
                 .finally(() => { sedangBaca = false; });
         }
@@ -29084,7 +29514,8 @@
                 if (ruangUid !== uid) return;
                 pesan = s.docs.map((d) => {
                     const x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, dari: x.dari === 'admin' ? 'admin' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, layanan: x.layanan ? String(x.layanan).slice(0, 40) : '', ongkir: Number(x.ongkir) > 0 ? Math.round(Number(x.ongkir)) : 0, foto: typeof x.foto === 'string' ? x.foto : '', w: Number(x.w) || 0, h: Number(x.h) || 0, kontak_nama: x.kontak_nama ? String(x.kontak_nama).slice(0, 60) : '', kontak_nomor: x.kontak_nomor ? String(x.kontak_nomor).replace(/[^\d+]/g, '').slice(0, 20) : '', ditarik: x.ditarik === true, diedit: !!x.diedit_at, t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites) };
+                    return { id: d.id, dari: x.dari === 'admin' ? 'admin' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, layanan: x.layanan ? String(x.layanan).slice(0, 40) : '', ongkir: Number(x.ongkir) > 0 ? Math.round(Number(x.ongkir)) : 0, foto: typeof x.foto === 'string' ? x.foto : '', w: Number(x.w) || 0, h: Number(x.h) || 0, kontak_nama: x.kontak_nama ? String(x.kontak_nama).slice(0, 60) : '', kontak_nomor: x.kontak_nomor ? String(x.kontak_nomor).replace(/[^\d+]/g, '').slice(0, 20) : '', ditarik: x.ditarik === true, diedit: !!x.diedit_at, t: ms(x.dibuat_at), tunda: !!(d.metadata && d.metadata.hasPendingWrites),
+                             dieditMs: x.diedit_at ? ms(x.diedit_at) : 0, balas: window.pgChat ? window.pgChat.balasBaca(x.balas) : null, vn: typeof x.vn === 'string' ? x.vn : '', durasi: Number(x.durasi) || 0 };
                 }).sort((a, b) => a.t - b.t);
                 renderRuang();
                 tandaiDibaca();
@@ -29115,13 +29546,13 @@
 
         // Kirim balasan admin
         let kirimJalan = false;
-        async function kirimBalasan(teks) {
+        async function kirimBalasan(teks, balas) {
             const c = chatIni();
             if (!c || kirimJalan) return false;
             kirimJalan = true;
             try {
                 const b = writeBatch(db);
-                b.set(doc(collection(db, 'chat_pelanggan', c.id, 'pesan')), { dari: 'admin', teks, jenis: 'teks', dibuat_at: serverTimestamp(), oleh: emailAdmin.slice(0, 120) });
+                b.set(doc(collection(db, 'chat_pelanggan', c.id, 'pesan')), Object.assign({ dari: 'admin', teks, jenis: 'teks', dibuat_at: serverTimestamp(), oleh: peranAdminA() }, balas ? { balas } : {}));
                 b.update(doc(db, 'chat_pelanggan', c.id), { terakhir: teks.replace(/\s+/g, ' ').slice(0, 200), terakhir_dari: 'admin', terakhir_at: serverTimestamp(), belum_pelanggan: increment(1), belum_admin: 0, dibaca_admin_at: serverTimestamp(), status: 'dibalas' });
                 await b.commit();
                 return true;
@@ -29148,7 +29579,9 @@
             if (!teks) return;
             if (sedangEditA) { simpanEditAdmin(teks); return; }
             i.value = ''; aturInput();
-            const ok = await kirimBalasan(teks);
+            const bl = batangA && batangA.mode === 'balas' ? batangA.data : null;
+            if (bl) batangA.sembunyi();
+            const ok = await kirimBalasan(teks, bl);
             if (!ok && !i.value) { i.value = teks; aturInput(); }
         });
         $('cpa-cepat').addEventListener('click', (e) => {
@@ -29268,7 +29701,7 @@
             renderMasuk();
         }));
         // ---------- PILIHAN PESAN: SALIN, EDIT, TARIK, HAPUS UNTUK SAYA (7 Nov 2026) ----------
-        const BATAS_EDIT = 15 * 60 * 1000, BATAS_TARIK = 24 * 3600 * 1000;
+        const BATAS_EDIT = 15 * 60 * 1000, BATAS_TARIK = 15 * 60 * 1000;   // (11 Nov 2026) tarik juga maks 15 menit
         let sembunyiAdmin = new Set();
         try { (JSON.parse(localStorage.getItem('cpa_sembunyi')) || []).forEach((x) => sembunyiAdmin.add(String(x))); } catch (e) {}
         const simpanSembunyiA = () => { try { localStorage.setItem('cpa_sembunyi', JSON.stringify([...sembunyiAdmin].slice(-500))); } catch (e) {} };
@@ -29293,6 +29726,9 @@
             const p = pesan.find((x) => x.id === id); if (!p || p.tunda) return;
             const milikAdmin = p.dari === 'admin', umur = Date.now() - p.t;
             const pil = [];
+            if (!p.ditarik) pil.push({ ikon: 'fa-solid fa-reply', teks: 'Balas', jalan: () => mulaiBalasA(p) });
+            if (!milikAdmin && !p.ditarik && ['teks', 'foto', 'vn', 'lokasi', 'kontak', 'pesanan'].indexOf(p.jenis) >= 0) pil.push({ ikon: 'fa-solid fa-share', teks: 'Teruskan ke rider', ket: 'Ke rider yang sedang memegang order pelanggan ini', jalan: () => teruskanKeRider(p) });
+            if (!milikAdmin && (p.diedit || p.ditarik)) pil.push({ ikon: 'fa-solid fa-clock-rotate-left', teks: 'Lihat isi asli', ket: 'Hanya admin yang bisa melihat', jalan: () => lihatAsli('chat_pelanggan', ruangUid, p.id, pratinjau(p)) });
             if (!p.ditarik && (p.jenis === 'teks' || p.jenis === 'pesanan')) pil.push({ ikon: 'fa-solid fa-copy', teks: 'Salin', jalan: () => salinTeks(p.teks, 'Pesan disalin') });
             if (!p.ditarik && p.jenis === 'kontak') pil.push({ ikon: 'fa-solid fa-copy', teks: 'Salin nomor', jalan: () => salinTeks(p.kontak_nomor, 'Nomor disalin') });
             if (milikAdmin && !p.ditarik && p.jenis === 'teks' && umur < BATAS_EDIT) pil.push({ ikon: 'fa-solid fa-pen', teks: 'Edit', ket: 'Bisa dalam 15 menit setelah dikirim', jalan: () => mulaiEditAdmin(p) });
@@ -29332,7 +29768,7 @@
             try {
                 const b = writeBatch(db);
                 b.update(doc(db, 'chat_pelanggan', c.id, 'pesan', ed.id), { teks, diedit_at: serverTimestamp() });
-                if (ed.terakhir) b.update(doc(db, 'chat_pelanggan', c.id), { terakhir: teks.replace(/\s+/g, ' ').slice(0, 200) });
+                b.update(doc(db, 'chat_pelanggan', c.id), Object.assign({ edit_utk_pelanggan: true }, ed.terakhir ? { terakhir: teks.replace(/\s+/g, ' ').slice(0, 200) } : {}));
                 await b.commit();
             } catch (e) { console.warn(e); tost('Edit belum tersimpan', 'Periksa internet.'); }
         }
@@ -29340,11 +29776,86 @@
             const c = chatIni(); if (!c) return;
             try {
                 const b = writeBatch(db);
-                b.update(doc(db, 'chat_pelanggan', c.id, 'pesan', p.id), { teks: '', ditarik: true, ditarik_at: serverTimestamp(), foto: deleteField(), w: deleteField(), h: deleteField(), lat: deleteField(), lng: deleteField(), kontak_nama: deleteField(), kontak_nomor: deleteField(), layanan: deleteField(), ongkir: deleteField() });
+                b.update(doc(db, 'chat_pelanggan', c.id, 'pesan', p.id), { teks: '', ditarik: true, ditarik_at: serverTimestamp(), foto: deleteField(), w: deleteField(), h: deleteField(), lat: deleteField(), lng: deleteField(), kontak_nama: deleteField(), kontak_nomor: deleteField(), layanan: deleteField(), ongkir: deleteField(), vn: deleteField(), durasi: deleteField(), balas: deleteField() });
                 if (pesanAkhir() && pesanAkhir().id === p.id) b.update(doc(db, 'chat_pelanggan', c.id), { terakhir: '🚫 Pesan ditarik' });
                 await b.commit();
             } catch (e) { console.warn(e); tost('Belum bisa menarik pesan', 'Periksa internet.'); }
         }
+        // ---------- (11 Nov 2026) BALAS, GESER, PESAN SUARA, LIHAT ISI ASLI, TERUSKAN KE RIDER ----------
+        let batangA = null;
+        const peranAdminA = () => { try { return (typeof window.roleFromEmail === 'function' && window.roleFromEmail(emailAdmin)) === 'owner' ? 'pemilik' : 'admin'; } catch (e) { return 'admin'; } };
+        const urlSuaraAc = {};
+        const PATH_SUARA_A = /^(chat_rider\/[A-Za-z0-9]{12,32}\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}|chat_pelanggan\/[A-Za-z0-9]{10,128}\/[A-Za-z0-9_-]{10,40})\.(webm|ogg|m4a)$/;
+        function urlSuaraA(path) {
+            if (!PATH_SUARA_A.test(String(path || ''))) return Promise.resolve('');
+            if (!urlSuaraAc[path]) urlSuaraAc[path] = getDownloadURL(sRef(storage, path)).catch((e) => { delete urlSuaraAc[path]; throw e; });
+            return urlSuaraAc[path];
+        }
+        function mulaiBalasA(p) {
+            if (!batangA || !p || p.ditarik) return;
+            if (sedangEditA) batalEditAdmin();
+            batangA.tampil('balas', 'Membalas ' + (p.dari === 'admin' ? 'pesan admin' : 'pelanggan'), pratinjau(p), window.pgChat.balasData(p, pratinjau(p)));
+            setTimeout(() => $('cpa-input').focus(), 30);
+        }
+        // Salinan isi asli: chat_pelanggan/{uid}/asli/{id} atau chat_rider/{kode}/asli/{id} (hanya admin yang bisa membaca)
+        async function lihatAsli(koleksi, induk, id, sekarang) {
+            if (!induk || !/^[A-Za-z0-9_-]{1,128}$/.test(String(induk)) || !/^[A-Za-z0-9_-]{1,64}$/.test(String(id))) return;
+            let v = [];
+            try { const s = await getDoc(doc(db, koleksi, induk, 'asli', id)); v = s.exists() && Array.isArray(s.data().v) ? s.data().v : []; }
+            catch (e) { tost('Isi asli belum bisa dibuka', e && e.code === 'permission-denied' ? 'Rules tahap 2 belum dipasang.' : 'Periksa internet.'); return; }
+            const versi = v.slice(-8).map((x, i) => ({ judul: 'Versi ' + (i + 1) + (x && x.at ? ' · ' + jam(Number(x.at)) : ''), teks: String((x && x.t) || '(kosong)').slice(0, 1000) }));
+            if (!versi.length) versi.push({ judul: 'Belum ada salinan', teks: 'Pesan ini diubah sebelum fitur salinan aktif.' });
+            window.pgChat.menu(koleksi === 'chat_rider' ? $('cpa-pantau') : $('cpa-aksi').parentElement, 'Sekarang: ' + (sekarang || ''), [], versi);
+        }
+        // Teruskan pesan pelanggan ke rider yang sedang memegang order pelanggan ini
+        async function teruskanKeRider(p) {
+            const c = chatIni(); if (!c) return;
+            const ruang = [];
+            try {
+                const s = await getDocs(query(collection(db, 'chat_rider'), where('pelanggan_uid', '==', c.id), limit(10)));
+                for (const d of s.docs) {
+                    const x = d.data() || {};
+                    if (!/^[A-Za-z0-9]{12,32}$/.test(d.id) || !/^[A-Za-z0-9_-]{1,64}$/.test(String(x.order_id || ''))) continue;
+                    try {
+                        const o = await getDoc(doc(db, 'artifacts', PROYEK, 'public', 'data', 'active_orders', x.order_id));
+                        const od = o.exists() ? (o.data() || {}) : null;
+                        if (od && ['assigned', 'processing'].indexOf(od.status) >= 0 && od.rider_uid)
+                            ruang.push({ kode: d.id, rider: String(x.rider_nama || od.rider_name || od.rider_uid || 'Rider').slice(0, 60), riderUid: String(od.rider_uid).trim().toUpperCase() });
+                    } catch (e) {}
+                }
+            } catch (e) { console.warn('[Teruskan]', e); tost('Belum bisa mencari rider', 'Periksa internet.'); return; }
+            if (!ruang.length) { tost('Tidak ada rider yang sedang mengantar', 'Pesan hanya bisa diteruskan ke rider yang sedang memegang order ' + c.nama + '.'); return; }
+            bukaAksiA('Teruskan: ' + pratinjau(p), ruang.map((r) => ({ ikon: 'fa-solid fa-motorcycle', teks: 'Teruskan ke ' + r.rider, ket: 'Sedang mengantar order ' + c.nama, jalan: () => kirimTerusan(p, r, c) })));
+        }
+        async function kirimTerusan(p, r, c) {
+            const data = { dari: 'admin', diteruskan: true, dibuat_at: serverTimestamp() };
+            const lat = Number(p.lat), lng = Number(p.lng);
+            let ring = '', berkas = '';
+            if (p.jenis === 'lokasi' && isFinite(lat) && isFinite(lng)) { Object.assign(data, { jenis: 'lokasi', teks: '📍 Lokasi pelanggan', lat, lng }); ring = '📍 Lokasi'; }
+            else if (p.jenis === 'foto' && p.foto) { Object.assign(data, { jenis: 'foto', teks: 'Foto', foto: p.foto, w: p.w || 1, h: p.h || 1 }); ring = '📷 Foto'; berkas = p.foto; }
+            else if (p.jenis === 'vn' && p.vn) { Object.assign(data, { jenis: 'vn', teks: '🎤 Pesan suara', vn: p.vn, durasi: Math.min(60, Math.max(1, p.durasi || 1)) }); ring = '🎤 Pesan suara'; berkas = p.vn; }
+            else if (p.jenis === 'kontak') Object.assign(data, { jenis: 'teks', teks: ('👤 ' + (p.kontak_nama || 'Kontak') + ' · ' + p.kontak_nomor).slice(0, 3000) });
+            else Object.assign(data, { jenis: 'teks', teks: String(p.teks || '').slice(0, 3000) || '-' });
+            ring = (ring || data.teks.replace(/\s+/g, ' ')).slice(0, 200);
+            try {
+                const b = writeBatch(db);
+                b.set(doc(collection(db, 'chat_rider', r.kode, 'pesan')), data);
+                b.update(doc(db, 'chat_rider', r.kode), { terakhir: ring, terakhir_dari: 'admin', terakhir_at: serverTimestamp(), belum_rider: increment(1) });
+                // foto / suara tetap di folder pelanggan; rider ini diberi izin membukanya
+                if (berkas) {
+                    const nama = berkas.split('/').pop().split('.')[0];
+                    if (/^[A-Za-z0-9_-]{10,40}$/.test(nama)) b.set(doc(db, 'terusan_file', c.id + '_' + nama), { rider_uid: r.riderUid, kode: r.kode, at: serverTimestamp() });
+                }
+                await b.commit();
+                tost('Diteruskan ke ' + r.rider, 'Masuk ke chat rider dengan label "Diteruskan admin". Pelanggan juga melihatnya.');
+            } catch (e) { console.warn('[Teruskan]', e); tost('Belum bisa meneruskan', e && e.code === 'permission-denied' ? 'Rules tahap 2 belum dipasang.' : 'Periksa internet.'); }
+        }
+        (function pasangAksiA() {
+            if (!window.pgChat) return;
+            batangA = window.pgChat.batang($('cpa-form'));
+            window.pgChat.gestur($('cpa-isi'), { pilih: '.cpa-bub[data-id]', balas: (id) => { const p = pesan.find((x) => x.id === id); if (p && !p.tunda) mulaiBalasA(p); } });
+        })();
+
         // Kosongkan chat (berlaku untuk semua admin) & Hapus chat dari daftar (muncul lagi kalau pelanggan kirim pesan)
         $('cpa-m-kosong').onclick = () => {
             const b = $('cpa-m-kosong'), c = chatIni(); if (!c) return;
@@ -29535,7 +30046,7 @@
             hentiPantauDaftar = onSnapshot(query(collection(db, 'chat_rider'), orderBy('terakhir_at', 'desc'), limit(30)), (s) => {
                 pantauDaftar = s.docs.map((d) => {
                     const x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, pel: String(x.pelanggan_nama || 'Pelanggan').slice(0, 30), rider: String(x.rider_nama || x.rider_uid || 'Belum ada rider').slice(0, 60), terakhir: String(x.terakhir || '').slice(0, 200), dari: x.terakhir_dari === 'rider' ? 'rider' : (x.terakhir_dari === 'pelanggan' ? 'pelanggan' : ''), t: ms(x.terakhir_at), jenis: String(x.jenis || '') };
+                    return { id: d.id, pel: String(x.pelanggan_nama || 'Pelanggan').slice(0, 30), rider: String(x.rider_nama || x.rider_uid || 'Belum ada rider').slice(0, 60), terakhir: String(x.terakhir || '').slice(0, 200), dari: x.terakhir_dari === 'rider' ? 'rider' : (x.terakhir_dari === 'pelanggan' ? 'pelanggan' : (x.terakhir_dari === 'admin' ? 'admin' : '')), t: ms(x.terakhir_at), jenis: String(x.jenis || '') };
                 });
                 if (filter === 'rider') renderMasuk();
             }, (e) => {
@@ -29561,7 +30072,7 @@
                 const b = el('button', 'cpa-rw'); b.type = 'button';
                 const tengah = el('span'); tengah.style.minWidth = '0';
                 tengah.append(el('span', 'cpa-nm', c.pel + ' ↔ ' + c.rider),
-                    el('span', 'cpa-ms', c.terakhir ? (c.dari === 'rider' ? 'Rider: ' : 'Pelanggan: ') + c.terakhir : 'Belum ada pesan'));
+                    el('span', 'cpa-ms', c.terakhir ? (c.dari === 'rider' ? 'Rider: ' : (c.dari === 'admin' ? 'Admin: ' : 'Pelanggan: ')) + c.terakhir : 'Belum ada pesan'));
                 b.append(el('span', 'cpa-av', '🛵'), tengah, el('span', 'cpa-kn', waktuDaftar(c.t)));
                 b.setAttribute('aria-label', 'Chat ' + c.pel + ' dengan rider ' + c.rider);
                 b.onclick = () => bukaPantauRuang(c.id);
@@ -29581,7 +30092,8 @@
                 if (pantauKode !== kode) return;
                 pantauPesan = s.docs.map((d) => {
                     const x = d.data({ serverTimestamps: 'estimate' }) || {};
-                    return { id: d.id, dari: x.dari === 'rider' ? 'rider' : 'pelanggan', teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, qris: typeof x.qris === 'string' ? x.qris : '', foto: typeof x.foto === 'string' ? x.foto : '', t: ms(x.dibuat_at) };
+                    return { id: d.id, dari: x.dari === 'rider' ? 'rider' : (x.dari === 'admin' ? 'admin' : 'pelanggan'), teks: String(x.teks || '').slice(0, 3000), jenis: String(x.jenis || 'teks'), lat: x.lat, lng: x.lng, qris: typeof x.qris === 'string' ? x.qris : '', foto: typeof x.foto === 'string' ? x.foto : '', t: ms(x.dibuat_at),
+                             ditarik: x.ditarik === true, diedit: !!x.diedit_at, balas: window.pgChat ? window.pgChat.balasBaca(x.balas) : null, vn: typeof x.vn === 'string' ? x.vn : '', durasi: Number(x.durasi) || 0, diteruskan: x.diteruskan === true };
                 }).sort((a, b) => a.t - b.t);
                 renderPantauRuang();
             }, (e) => console.warn('[Pantau rider] pesan', e && e.code));
@@ -29601,10 +30113,15 @@
             pantauPesan.forEach((p) => {
                 const h = labelHari(p.t);
                 if (h !== hariSblm) { hariSblm = h; frag.appendChild(el('div', 'cpa-hari', h)); }
-                const b = el('div', 'cpa-bub ' + (p.dari === 'rider' ? 'rdr' : 'plg'));
-                b.appendChild(el('span', 'cpa-nmp', p.dari === 'rider' ? c.rider + ' (rider)' : c.pel + ' (pelanggan)'));
+                const b = el('div', 'cpa-bub ' + (p.dari === 'pelanggan' ? 'plg' : 'rdr'));
+                b.appendChild(el('span', 'cpa-nmp', p.dari === 'rider' ? c.rider + ' (rider)' : (p.dari === 'admin' ? 'Admin (diteruskan)' : c.pel + ' (pelanggan)')));
+                if (p.balas && !p.ditarik && window.pgChat) b.appendChild(window.pgChat.kutipan(p.balas, p.balas.dari === 'rider' ? 'Rider' : (p.balas.dari === 'admin' ? 'Admin' : 'Pelanggan'), p.balas.dari === 'pelanggan', null));
                 const lat = Number(p.lat), lng = Number(p.lng);
-                if (p.jenis === 'lokasi' && isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+                if (p.ditarik) {
+                    b.classList.add('ditarik'); b.appendChild(document.createTextNode('🚫 Pesan ini ditarik ' + (p.dari === 'rider' ? 'rider' : 'pelanggan')));
+                } else if (p.jenis === 'vn' && p.vn && window.pgChat) {
+                    b.appendChild(window.pgChat.pemutar({ id: p.id, durasi: p.durasi, saya: p.dari !== 'pelanggan', ambil: () => urlSuaraA(p.vn), gagal: () => tost('Pesan suara belum bisa diputar', 'Periksa internet.') }));
+                } else if (p.jenis === 'lokasi' && isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
                     const a = el('a', '', '📍 Lokasi · buka di Google Maps'); a.href = 'https://www.google.com/maps?q=' + lat.toFixed(6) + ',' + lng.toFixed(6); a.target = '_blank'; a.rel = 'noopener noreferrer';
                     b.appendChild(a);
                 } else if (p.jenis === 'qris' && /^https:\/\/[^\s"'<>`\\]+$/i.test(p.qris)) {
@@ -29617,7 +30134,7 @@
                     if (p.teks) { const t = el('div'); isiTeks(t, p.teks); b.appendChild(t); }
                 } else if (p.jenis === 'panggil') {
                     b.className = 'cpa-bub pgl'; b.textContent = '📞 ' + c.rider + ' memanggil pelanggan (notifikasi)';
-                } else if (p.jenis === 'foto' && /^chat_rider\/[A-Za-z0-9]{12,32}\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}\.jpg$/.test(p.foto)) {
+                } else if (p.jenis === 'foto' && /^(chat_rider\/[A-Za-z0-9]{12,32}\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}|chat_pelanggan\/[A-Za-z0-9]{10,128}\/[A-Za-z0-9_-]{10,40})\.jpg$/.test(p.foto)) {
                     const u = urlFoto[p.foto];
                     if (u && u !== 'gagal') { const im = el('img', 'cpa-pfoto'); im.alt = 'Foto di chat rider'; im.loading = 'lazy'; im.src = u; im.onclick = () => bukaLihat(u); b.appendChild(im); }
                     else {
@@ -29625,11 +30142,13 @@
                         if (!u && !mintaFoto[p.foto]) mintaFoto[p.foto] = getDownloadURL(sRef(storage, p.foto)).then((x) => { urlFoto[p.foto] = x; renderPantauRuang(); }, () => { urlFoto[p.foto] = 'gagal'; renderPantauRuang(); });
                     }
                 } else { const tx = el('span', 'cpa-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('cpa-teks'); }
-                b.appendChild(el('span', 'cpa-wk', jam(p.t)));
+                b.appendChild(el('span', 'cpa-wk', (p.diedit && !p.ditarik ? 'Diedit · ' : '') + jam(p.t)));
+                if (p.dari !== 'admin' && (p.diedit || p.ditarik)) { const la = el('button', 'pga-asli', 'Lihat isi asli'); la.type = 'button'; la.onclick = () => lihatAsli('chat_rider', pantauKode, p.id, p.ditarik ? 'Pesan ditarik' : p.teks); b.appendChild(la); }
                 frag.appendChild(b);
             });
             if (!pantauPesan.length) frag.appendChild(el('div', 'cpa-kosong', 'Belum ada pesan.'));
             isi.textContent = ''; isi.appendChild(frag);
+            if (window.pgChat && window.pgChat.rapikanJam) window.pgChat.rapikanJam(isi, '.cpa-bub.cpa-teks', '.cpa-t', '.cpa-wk');
             if (diBawah || pantauPesan.length < 12) isi.scrollTop = isi.scrollHeight;
         }
         $('cpa-p-kembali').onclick = () => { tutupPantauRuang(); renderMasuk(); };
@@ -29829,7 +30348,7 @@
     </script>
 <style id="gaya-chat-mint-11nov">
     /* ===== 11 Nov 2026: warna chat C "Mint segar" + motif ProjekGo (sama di rider, pelanggan, admin) ===== */
-    .cpa-isi { background-color: #E4EFEA; background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27180%27 height=%27180%27 viewBox=%270 0 180 180%27 fill=%27none%27 stroke=%27%232F3B4A%27 stroke-opacity=%270.13%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Ccircle cx=%2720%27 cy=%2738%27 r=%277%27/%3E%3Ccircle cx=%2750%27 cy=%2738%27 r=%277%27/%3E%3Cpath d=%27M20 38l9-15h9l6 15M29 23h-5M38 23l4-6h6%27/%3E%3Cpath d=%27M118 14c-7 0-12 5-12 11 0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z%27/%3E%3Ccircle cx=%27118%27 cy=%2725%27 r=%273.5%27/%3E%3Cpath d=%27M150 70h22v20h-22zM154 70v-4a7 7 0 0 1 14 0v4%27/%3E%3Cpath d=%27M70 82h26a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H82l-8 7v-7h-4a6 6 0 0 1-6-6V88a6 6 0 0 1 6-6z%27/%3E%3Cpath d=%27M20 110l3.5 7 7.5 1-5.5 5 1.5 7.5-7-3.5-7 3.5 1.5-7.5-5.5-5 7.5-1z%27/%3E%3Cpath d=%27M110 140a18 18 0 0 1 36 0zM106 140h44M128 122v-4%27/%3E%3Cpath d=%27M40 150h22l-3 18H43zM45 150v-4a6 6 0 0 1 12 0v4%27/%3E%3Cpath d=%27M150 120l10 10M160 120l-10 10%27/%3E%3Ccircle cx=%2788%27 cy=%2740%27 r=%272.5%27/%3E%3Ccircle cx=%27168%27 cy=%27160%27 r=%272.5%27/%3E%3Ccircle cx=%2710%27 cy=%2780%27 r=%272.5%27/%3E%3C/svg%3E"); background-size: 180px 180px; }
+    .cpa-isi { background-color: #EFE7DD; background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27180%27 height=%27180%27 viewBox=%270 0 180 180%27 fill=%27none%27 stroke=%27%232F3B4A%27 stroke-opacity=%270.13%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Ccircle cx=%2720%27 cy=%2738%27 r=%277%27/%3E%3Ccircle cx=%2750%27 cy=%2738%27 r=%277%27/%3E%3Cpath d=%27M20 38l9-15h9l6 15M29 23h-5M38 23l4-6h6%27/%3E%3Cpath d=%27M118 14c-7 0-12 5-12 11 0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z%27/%3E%3Ccircle cx=%27118%27 cy=%2725%27 r=%273.5%27/%3E%3Cpath d=%27M150 70h22v20h-22zM154 70v-4a7 7 0 0 1 14 0v4%27/%3E%3Cpath d=%27M70 82h26a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H82l-8 7v-7h-4a6 6 0 0 1-6-6V88a6 6 0 0 1 6-6z%27/%3E%3Cpath d=%27M20 110l3.5 7 7.5 1-5.5 5 1.5 7.5-7-3.5-7 3.5 1.5-7.5-5.5-5 7.5-1z%27/%3E%3Cpath d=%27M110 140a18 18 0 0 1 36 0zM106 140h44M128 122v-4%27/%3E%3Cpath d=%27M40 150h22l-3 18H43zM45 150v-4a6 6 0 0 1 12 0v4%27/%3E%3Cpath d=%27M150 120l10 10M160 120l-10 10%27/%3E%3Ccircle cx=%2788%27 cy=%2740%27 r=%272.5%27/%3E%3Ccircle cx=%27168%27 cy=%27160%27 r=%272.5%27/%3E%3Ccircle cx=%2710%27 cy=%2780%27 r=%272.5%27/%3E%3C/svg%3E"); background-size: 180px 180px; }
     .cpa-bub { border-radius: 16px; box-shadow: 0 1px 2px rgba(20, 60, 40, .16); }
     .cpa-bub.plg { background: #FFFFFF; border-top-left-radius: 4px; }
     .cpa-bub.adm, .cpa-bub.rdr { background: #CDEFDD; color: #0F2A1E; border-top-right-radius: 4px; }
@@ -29844,7 +30363,7 @@
     .cpa-bub.cpa-teks > .cpa-t { flex: 0 1 auto; min-width: 0; }
     .cpa-bub.cpa-teks > .cpa-wk { margin: 0 0 0 auto; padding-bottom: 1px; white-space: nowrap; }
     .cpa-hari { background: #FFFFFF; color: #4B5E55; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); }
-    .cpa-cepat, .cpa-tulis, .cpa-pantau-kaki { background: #E4EFEA; }
+    .cpa-cepat, .cpa-tulis, .cpa-pantau-kaki { background: #EFE7DD; }
     .cpa-tulis textarea { box-shadow: 0 1px 2px rgba(20, 60, 40, .14); }
     .cpa-tulis textarea:focus { box-shadow: 0 0 0 2px #7CC5A4; }
     .cpa-kirim { background: #12895E; }
@@ -30023,5 +30542,123 @@
             });
         })();
     </script>
+<style id="gaya-chat-admin-tahap2-11nov">
+    /* 11 Nov 2026: tahap 2 chat admin (balas, diedit, pesan suara, teruskan) */
+    .cpa-isi .cpa-bub { touch-action: pan-y; }
+    .pga-edit-wadah { align-self: flex-start; }
+    .pga-edit-wadah > .cpa-bub { max-width: 100%; align-self: flex-start; }
+    .cpa-bub.cpa-teks > .pga-kutip, .cpa-bub.cpa-teks > .pga-asli { flex-basis: 100%; }
+    .cpa-bub .pga-asli { display: block; text-align: left; }
+    #cpa-pantau { position: relative; }
+</style>
+<style id="gaya-chat-admin-seragam-11nov">
+    /* 11 Nov 2026: ruang chat admin & pantau = tampilan chat aplikasi pelanggan (daftar chat & menu dispatch tidak berubah) */
+    #cpa-ruang, #cpa-pantau { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    #cpa-ruang .cpa-kepala, #cpa-pantau .cpa-kepala { background: #FFFFFF; color: #1C1C1E; border-bottom: 1px solid #D7E4DE; padding: calc(env(safe-area-inset-top, 0px) + 10px) 10px 10px 6px; }
+    #cpa-ruang .cpa-ik, #cpa-pantau .cpa-ik { width: 44px; height: 44px; border: 0; background: transparent; color: #1C1C1E; font-size: 20px; }
+    #cpa-r-av, #cpa-p-av { width: 44px !important; height: 44px !important; flex: 0 0 44px; background: #CDEFDD !important; color: #0A4F37 !important; font-size: 16px; }
+    #cpa-ruang .cpa-judul b, #cpa-pantau .cpa-judul b { font-size: 17.5px; color: #1C1C1E; }
+    #cpa-ruang .cpa-judul span, #cpa-pantau .cpa-judul span { font-size: 13px; font-weight: 600; color: #6B6258; opacity: 1; }
+    #cpa-ruang .cpa-chips { padding-left: 52px; }
+    #cpa-ruang .cpa-ch { background: #F2F6F4; color: #34493F; border-color: #D7E4DE; }
+    #cpa-ruang .cpa-ch.putih { background: #E7F5EE; color: #1E7A34; border-color: #CDEFDD; }
+    #cpa-ruang .cpa-ch.merah { background: #FCEDEB; color: #9B2C2C; border-color: #F5C2BD; }
+    #cpa-ruang .cpa-ch.emas { background: #FFF4D6; color: #7A5A0A; border-color: #F6D9A8; }
+    #cpa-ruang .cpa-ch.hijau { background: #E8F3E6; color: #2F6B3E; border-color: #CDE5C8; }
+    #cpa-ruang .cpa-ch.kode { background: #1F1A16; color: #FFFFFF; border-color: #1F1A16; }
+    #cpa-isi .cpa-bub, #cpa-p-isi .cpa-bub { font-size: 16.5px; line-height: 1.42; padding: 8px 12px 6px; max-width: 84%; border-radius: 16px; }
+    #cpa-isi .cpa-bub.plg, #cpa-p-isi .cpa-bub.plg { border-top-left-radius: 4px; }
+    #cpa-isi .cpa-bub.adm, #cpa-p-isi .cpa-bub.rdr { border-top-right-radius: 4px; }
+    #cpa-isi .cpa-bub.pgl, #cpa-p-isi .cpa-bub.pgl { font-size: 13px; border-radius: 12px; }
+    #cpa-isi .cpa-psn { max-width: none; }
+    #cpa-isi .cpa-wk, #cpa-p-isi .cpa-wk { font-size: 12px; }
+    #cpa-p-isi .cpa-nmp { font-size: 12.5px; }
+    #cpa-isi .cpa-hari, #cpa-p-isi .cpa-hari { font-size: 13px; padding: 4px 12px; }
+    #cpa-p-isi .cpa-pantau-info { background: rgba(255, 255, 255, .94); color: #34493F; font-size: 13px; font-weight: 600; border-radius: 8px; }
+    #cpa-form { gap: 8px; padding: 6px 8px max(6px, env(safe-area-inset-bottom, 0px)); background: #EFE7DD; }
+    .cpa-kolom { flex: 1; min-width: 0; display: flex; align-items: flex-end; background: #FFFFFF; border-radius: 25px; box-shadow: 0 1px 2px rgba(20, 60, 40, .14); padding: 0 4px 0 0; }
+    .cpa-kolom:focus-within { box-shadow: 0 0 0 2px #7CC5A4; }
+    .cpa-kolom textarea { background: transparent !important; box-shadow: none !important; border-radius: 0 !important; padding: 12px 6px 12px 16px !important; font-size: 16.5px !important; }
+    .cpa-kolom.ada-petir textarea { padding-left: 2px !important; }
+    .cpa-kolom .pg-petir { height: 46px; }
+    #cpa-form .cpa-kirim { width: 46px; height: 46px; background: #12895E; }
+</style>
+<!-- ===== 11 Nov 2026: PESAN CEPAT (ikon petir di kolom ketik -> lembar pilihan). Dipakai rider & pelanggan.
+     Tombol pesan cepat yang lama TIDAK dibuat ulang: wadahnya dipindah utuh ke dalam lembar, jadi semua
+     fungsi klik yang sudah ada tetap jalan. Hanya DOM, tanpa innerHTML dari data. ===== -->
+<style id="pg-cepat-css">
+    .pg-petir { width: 42px; height: 48px; flex: none; border: 0; padding: 0; background: transparent; color: #C2410C; display: grid; place-items: center; cursor: pointer; border-radius: 99px; }
+    .pg-petir svg { width: 22px; height: 22px; display: block; }
+    .pg-petir[hidden] { display: none; }
+    .pg-petir:focus-visible { outline: 2px solid #12895E; outline-offset: -4px; }
+    .pg-cepat-latar { position: absolute; inset: 0; z-index: 60; background: rgba(15, 30, 25, .32); display: flex; align-items: flex-end; }
+    .pg-cepat-latar[hidden] { display: none; }
+    .pg-cepat-lembar { width: 100%; max-height: 72%; overflow-y: auto; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 10px 16px calc(16px + env(safe-area-inset-bottom, 0px)); font-family: inherit; color: #1C1C1E; }
+    .pg-cepat-gagang { display: block; width: 40px; height: 5px; border-radius: 9px; background: #D9D4CE; margin: 0 auto 10px; }
+    .pg-cepat-kepala { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+    .pg-cepat-kepala h2 { margin: 0; font-size: 18px; font-weight: 800; }
+    .pg-cepat-kepala small { font-size: 13px; color: #5E6E66; }
+    .pg-cepat-lembar .pg-cepat-daftar { display: flex !important; flex-direction: column; gap: 0; padding: 0 !important; margin: 0; overflow: visible; background: transparent !important; }
+    .pg-cepat-lembar .pg-cepat-daftar[hidden] { display: none !important; }
+    .pg-cepat-lembar .pg-cepat-daftar > button { width: 100%; height: auto !important; min-height: 52px; flex: none; display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 8px 4px !important; border: 0 !important; border-bottom: 1px solid #EEF2EF !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; color: #1C1C1E !important; font: inherit; font-size: 15.5px !important; font-weight: 700; text-align: left; white-space: normal !important; line-height: 1.35; cursor: pointer; }
+    .pg-cepat-lembar .pg-cepat-daftar > button:last-child { border-bottom: 0 !important; }
+    .pg-cepat-lembar .pg-cepat-daftar > button i { width: 36px; height: 36px; flex: none; border-radius: 10px; background: #FFF1E6; color: #C2410C !important; display: grid; place-items: center; font-size: 16px; }
+    .pg-cepat-lembar .pg-cepat-daftar > button:active { background: #F4F8F6 !important; }
+</style>
+<script>
+(function () {
+    var SVG = 'http://www.w3.org/2000/svg';
+    function petir() {
+        var s = document.createElementNS(SVG, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+        var p = document.createElementNS(SVG, 'path'); p.setAttribute('d', 'M13.5 2 4 13.6h6.6L9.5 22 20 9.9h-6.7z'); p.setAttribute('fill', 'currentColor');
+        s.appendChild(p); return s;
+    }
+    // o = { wadah: daftar tombol lama, kolom: tempat ikon (di awal), layar: induk lembar (position fixed/relative), sub: teks kecil }
+    window.pgPasangCepat = function (o) {
+        var c = o && o.wadah, k = o && o.kolom, L = o && o.layar;
+        if (!c || !k || !L || c.__pgCepat) return null;
+        c.__pgCepat = true;
+        var bt = document.createElement('button'); bt.type = 'button'; bt.className = 'pg-petir';
+        bt.setAttribute('aria-label', 'Pesan cepat'); bt.setAttribute('aria-haspopup', 'dialog'); bt.setAttribute('aria-expanded', 'false');
+        bt.appendChild(petir());
+        k.insertBefore(bt, k.firstChild); k.classList.add('ada-petir');
+        var lat = document.createElement('div'); lat.className = 'pg-cepat-latar'; lat.hidden = true;
+        var sh = document.createElement('div'); sh.className = 'pg-cepat-lembar';
+        sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.setAttribute('aria-label', 'Pesan cepat');
+        var g = document.createElement('span'); g.className = 'pg-cepat-gagang'; g.setAttribute('aria-hidden', 'true');
+        var kp = document.createElement('div'); kp.className = 'pg-cepat-kepala';
+        var h = document.createElement('h2'); h.textContent = 'Pesan cepat';
+        var sm = document.createElement('small'); sm.textContent = o.sub || 'Ketuk salah satu';
+        kp.appendChild(h); kp.appendChild(sm);
+        sh.appendChild(g); sh.appendChild(kp);
+        c.classList.add('pg-cepat-daftar');
+        sh.appendChild(c);               // dipindah utuh: pendengar klik lama tetap menempel
+        lat.appendChild(sh); L.appendChild(lat);
+        function buka() { if (c.hidden) return; lat.hidden = false; bt.setAttribute('aria-expanded', 'true'); var f = c.querySelector('button'); if (f) { try { f.focus({ preventScroll: true }); } catch (e) {} } }
+        function tutup() { if (lat.hidden) return; lat.hidden = true; bt.setAttribute('aria-expanded', 'false'); }
+        bt.addEventListener('click', buka);
+        lat.addEventListener('click', function (e) { if (e.target === lat) tutup(); });
+        // didaftarkan SETELAH pendengar lama -> aksi lama jalan dulu, baru lembar ditutup
+        c.addEventListener('click', function (e) { if (e.target && e.target.closest && e.target.closest('button')) setTimeout(tutup, 0); });
+        lat.addEventListener('keydown', function (e) { if (e.key === 'Escape') { tutup(); bt.focus(); } });
+        function samakan() { bt.hidden = !!c.hidden; if (c.hidden) tutup(); }
+        try { new MutationObserver(samakan).observe(c, { attributes: true, attributeFilter: ['hidden'] }); } catch (e) {}
+        samakan();
+        return { buka: buka, tutup: tutup };
+    };
+})();
+</script>
+<script>
+(function () {
+    // 11 Nov 2026: pesan cepat admin -> ikon petir di kolom ketik (sama seperti aplikasi pelanggan)
+    function pasang() {
+        try {
+            if (typeof window.pgPasangCepat !== 'function') return;
+            window.pgPasangCepat({ wadah: document.getElementById('cpa-cepat'), kolom: document.querySelector('#cpa-form .cpa-kolom'), layar: document.getElementById('cpa-ruang'), sub: 'Ketuk untuk mengisi kolom' });
+        } catch (e) { console.warn('[Pesan cepat admin]', e); }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasang); else pasang();
+})();
+</script>
 </body>
 </html>
