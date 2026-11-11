@@ -28217,7 +28217,7 @@ window.PembuatQR = PembuatQR;
     var PATH = ['artifacts', 'onbid-2f87a', 'public', 'data'];
     var KUNCI_OK = /^[A-Za-z0-9_-]{10,200}$/;
     var uid = '', atur = { aktif: false, kunci: '' }, henti = null;
-    var watchId = null, posTerakhir = null, terkirim = null, jalan = false, onSblm = false, statusSblm = '', tundaKirim = 0;
+    var watchId = null, posTerakhir = null, terkirim = null, jalan = false, onSblm = false, statusSblm = '', tundaKirim = 0, jedaIzin = 0;
 
     function onAktif() { var t = document.getElementById('onbid-toggle'); return !!(t && t.checked); }
     function sedangAntar() { var o = document.getElementById('active-order-overlay'); return !!(o && !o.classList.contains('hidden')); }
@@ -28266,12 +28266,16 @@ window.PembuatQR = PembuatQR;
         }, tunggu);
     }
     function mulaiGps() {
-        if (watchId !== null || !navigator.geolocation) return;
+        if (watchId !== null || !navigator.geolocation || Date.now() < jedaIzin) return;
         try {
             watchId = navigator.geolocation.watchPosition(function (pos) {
                 posTerakhir = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
                 kirim(posTerakhir, false);
-            }, function (e) { console.warn('[Posisi rider] GPS', e && e.code); }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+            }, function (e) {
+                console.warn('[Posisi rider] GPS', e && e.code);
+                // izin lokasi ditolak: berhenti, dicoba lagi 5 menit kemudian (mis. setelah rider mengizinkan lokasi saat mengantar)
+                if (e && e.code === 1) { hentiGps(); jedaIzin = Date.now() + 300000; }
+            }, { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
         } catch (e) { watchId = null; }
     }
     function hentiGps() { if (watchId !== null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} watchId = null; } }
