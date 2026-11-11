@@ -3256,6 +3256,17 @@
                 </button>
             </div>
         </div>
+        <!-- (11 Nov 2026) PETA RIDER: posisi terakhir rider yang ON -->
+        <style>#page-lainnya .ml-pr { background: linear-gradient(145deg, #22A06B, #116B45); --ml-sh: rgba(17, 107, 69, .3); }</style>
+        <div class="ml-kat" id="pr-kat">
+            <h3 class="ml-kat-h">Pantau Rider</h3>
+            <div class="grid grid-cols-3 gap-3">
+                <button type="button" onclick="window.prBuka && window.prBuka()" class="ml-tw ml-pr">
+                    <i class="fa-solid fa-map-location-dot"></i>
+                    <span>Peta<br>Rider</span>
+                </button>
+            </div>
+        </div>
         <!-- ================= AKHIR ADMIN GABUNGAN (menu) ================= -->
 
         <!-- MENU LAINNYA PER KATEGORI (14 Okt 2026): Input · Opsional · Skema Tambahan · Monitoring -->
@@ -30660,5 +30671,319 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasang); else pasang();
 })();
 </script>
+    <!-- ===================== PETA RIDER (11 Nov 2026) =====================
+         Layar penuh dari Menu Lainnya: posisi terakhir rider yang ON (posisi_rider/{UID}), penanda bernama,
+         daftar rider, kartu detail, "Ikuti rider", dan pengaturan (aktif / nonaktif + kunci peta CARTO).
+         Peta: Leaflet (gratis). Peta dasar: CARTO kalau kunci sudah diisi, kalau belum OpenStreetMap.
+         Membaca data hanya saat layar ini terbuka. Semua isi ditampilkan lewat textContent / elemen DOM. -->
+    <style id="peta-rider-css">
+        .pr-layar { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; background: #FFFFFF; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; }
+        .pr-layar[hidden] { display: none; }
+        .pr-kepala { flex: none; display: flex; align-items: center; gap: 6px; padding: calc(env(safe-area-inset-top, 0px) + 8px) 10px 8px 4px; border-bottom: 1px solid #E6E1DA; background: #FFFFFF; }
+        .pr-kepala button { width: 44px; height: 44px; flex: none; border: 0; border-radius: 12px; background: transparent; color: #1C1C1E; font-size: 19px; cursor: pointer; }
+        .pr-judul { flex: 1; min-width: 0; }
+        .pr-judul b { display: block; font-size: 18px; font-weight: 800; }
+        .pr-judul span { display: block; font-size: 12.5px; font-weight: 600; color: #6B6258; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pr-chips { flex: none; display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #EEE9E2; overflow-x: auto; font-size: 12.5px; font-weight: 800; }
+        .pr-chips span { flex: none; padding: 4px 10px; border-radius: 999px; }
+        .pr-c-siap { background: #E6F4EA; color: #1E7A34; } .pr-c-antar { background: #FFF1E6; color: #B84300; } .pr-c-hilang { background: #EFEDEA; color: #6B6258; }
+        .pr-peta-wadah { position: relative; flex: 1; min-height: 0; }
+        .pr-peta { position: absolute; inset: 0; background: #F2EFE9; }
+        .pr-pesan { position: absolute; inset: 0; z-index: 500; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: rgba(255,255,255,.92); font-size: 14px; line-height: 1.5; color: #4A433C; }
+        .pr-pesan[hidden] { display: none; }
+        .pr-tbl { min-height: 46px; padding: 0 18px; border-radius: 12px; border: 0; background: #1C1C1E; color: #FFFFFF; font: inherit; font-size: 14.5px; font-weight: 800; cursor: pointer; }
+        .pr-tbl.garis { background: #FFFFFF; color: #1C1C1E; border: 1.5px solid #E2D8CC; }
+        .pr-tbl.merah { background: #FFFFFF; color: #B42318; border: 1.5px solid #F3C8C3; }
+        .pr-ik { display: flex; flex-direction: column; align-items: center; gap: 3px; transform: translate(-50%, -50%); width: max-content; }
+        .pr-ik i { width: 38px; height: 38px; border-radius: 50%; color: #FFFFFF; border: 3px solid #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 13px; font-weight: 800; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+        .pr-ik b { padding: 2px 8px; border-radius: 999px; background: #FFFFFF; font-size: 11.5px; font-weight: 800; color: #1C1C1E; box-shadow: 0 1px 3px rgba(0,0,0,.25); white-space: nowrap; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+        .pr-ik.siap i { background: #1E8E5A; } .pr-ik.antar i { background: #E8590C; } .pr-ik.hilang { opacity: .6; } .pr-ik.hilang i { background: #8A8F8C; }
+        .pr-ik.dipilih i { box-shadow: 0 0 0 4px rgba(232,89,12,.35), 0 2px 6px rgba(0,0,0,.3); }
+        .leaflet-div-icon.pr-ik-l { background: transparent; border: 0; }
+        .pr-semua { position: absolute; right: 12px; top: 12px; z-index: 450; width: 42px; height: 42px; border-radius: 10px; border: 0; background: #FFFFFF; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; font-size: 16px; }
+        .pr-daftar { flex: none; max-height: 34%; overflow-y: auto; padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #EEE9E2; background: #FFFFFF; }
+        .pr-daftar h3 { margin: 0 0 2px; font-size: 15px; font-weight: 800; }
+        .pr-baris { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 2px; border: 0; border-bottom: 1px solid #EEF2EF; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+        .pr-baris:last-child { border-bottom: 0; }
+        .pr-titik { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+        .pr-baris span.isi { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .pr-baris b { font-size: 15px; }
+        .pr-baris small { font-size: 12.5px; color: #6B6258; }
+        .pr-kartu { position: absolute; left: 12px; right: 12px; bottom: 14px; z-index: 460; background: #FFFFFF; border-radius: 18px; padding: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); display: flex; flex-direction: column; gap: 10px; max-width: 460px; margin: 0 auto; }
+        .pr-kartu[hidden] { display: none; }
+        .pr-k-atas { display: flex; gap: 12px; align-items: center; }
+        .pr-k-atas i { width: 46px; height: 46px; border-radius: 50%; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-style: normal; font-weight: 800; flex: none; }
+        .pr-k-atas div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .pr-k-atas b { font-size: 17px; }
+        .pr-k-atas span { font-size: 13px; font-weight: 700; }
+        .pr-k-atas button { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #F4F1EE; cursor: pointer; font-size: 15px; flex: none; }
+        .pr-k-info { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
+        .pr-k-info div { padding: 8px 10px; border-radius: 12px; background: #F4F1EE; }
+        .pr-k-info small { display: block; color: #6B6258; }
+        .pr-k-tbl { display: flex; gap: 8px; }
+        .pr-k-tbl > * { flex: 1; min-height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; text-decoration: none; cursor: pointer; font-family: inherit; }
+        .pr-k-tbl a { border: 1.5px solid #E2D8CC; color: #1C1C1E; background: #FFFFFF; }
+        .pr-k-tbl button { border: 0; background: #1C1C1E; color: #FFFFFF; }
+        .pr-k-tbl button.on { background: #E8590C; }
+        .pr-atur { position: absolute; inset: 0; z-index: 600; background: rgba(20,16,12,.35); display: flex; align-items: flex-end; }
+        .pr-atur[hidden] { display: none; }
+        .pr-atur form { width: 100%; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 12px; margin: 0; max-height: 90%; overflow-y: auto; }
+        .pr-atur h3 { margin: 0; font-size: 18px; font-weight: 800; }
+        .pr-atur p { margin: 0; font-size: 13px; line-height: 1.5; color: #5C4E42; }
+        .pr-saklar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1.5px solid #E2D8CC; border-radius: 14px; font-size: 15px; font-weight: 800; }
+        .pr-saklar input { width: 22px; height: 22px; accent-color: #1E8E5A; }
+        .pr-atur label { font-size: 13px; font-weight: 800; color: #4A3F35; }
+        .pr-atur input[type="text"] { display: block; width: 100%; box-sizing: border-box; height: 46px; margin-top: 6px; border-radius: 12px; border: 1.5px solid #E2D8CC; padding: 0 12px; font: inherit; font-size: 14px; font-family: ui-monospace, Menlo, monospace; }
+        .pr-atur small { display: block; min-height: 18px; font-size: 12.5px; font-weight: 700; color: #B42318; }
+    </style>
+    <section class="pr-layar" id="pr-layar" hidden role="dialog" aria-modal="true" aria-labelledby="pr-judul">
+        <div class="pr-kepala">
+            <button type="button" id="pr-tutup" aria-label="Kembali"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            <div class="pr-judul"><b id="pr-judul">Peta rider</b><span id="pr-sub">Memuat...</span></div>
+            <button type="button" id="pr-atur-btn" aria-label="Pengaturan peta rider"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
+        </div>
+        <div class="pr-chips" id="pr-chips"></div>
+        <div class="pr-peta-wadah">
+            <div class="pr-peta" id="pr-peta"></div>
+            <button type="button" class="pr-semua" id="pr-semua" aria-label="Tampilkan semua rider"><i class="fa-solid fa-expand" aria-hidden="true"></i></button>
+            <div class="pr-pesan" id="pr-pesan" hidden></div>
+            <div class="pr-kartu" id="pr-kartu" hidden></div>
+            <div class="pr-atur" id="pr-atur" hidden>
+                <form id="pr-atur-form" autocomplete="off">
+                    <h3>Pengaturan peta rider</h3>
+                    <div class="pr-saklar"><span>Peta rider aktif</span><input type="checkbox" id="pr-aktif" aria-label="Peta rider aktif"></div>
+                    <p>Saat aktif, aplikasi rider mengirim posisinya selama rider ON. Saat dinonaktifkan, semua rider berhenti mengirim dan posisi yang tersimpan dihapus.</p>
+                    <label for="pr-kunci">Kunci peta CARTO (boleh kosong)<input type="text" id="pr-kunci" maxlength="200" spellcheck="false" autocapitalize="off" placeholder="tempel kunci dari email CARTO"></label>
+                    <p>Kosong = peta OpenStreetMap. Kunci yang sama juga dipakai peta di beranda aplikasi rider.</p>
+                    <small id="pr-atur-pesan" role="status"></small>
+                    <button type="submit" class="pr-tbl">Simpan</button>
+                    <button type="button" class="pr-tbl garis" id="pr-atur-batal">Batal</button>
+                </form>
+            </div>
+        </div>
+        <div class="pr-daftar" id="pr-daftar"></div>
+    </section>
+    <script type="module">
+        import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, doc, onSnapshot, query, where, getDocs, setDoc, writeBatch, serverTimestamp, limit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        (function petaRider() {
+            let app; try { app = getApp(); } catch (e) { return; }
+            const auth = getAuth(app), db = getFirestore(app);
+            const P = ['artifacts', 'onbid-2f87a', 'public', 'data'];
+            const KOL = () => collection(db, ...P, 'posisi_rider');
+            const ATUR = () => doc(db, ...P, 'peta_rider_atur', 'umum');
+            const PUSAT = [-7.6077, 109.5131];   // Gombong
+            const HILANG_MS = 10 * 60 * 1000;
+            const KUNCI_OK = /^[A-Za-z0-9_-]{10,200}$/;
+            const UID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+            const $ = (id) => document.getElementById(id);
+            const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+            const tost = (j, i) => { if (typeof window.abToast === 'function') window.abToast(j, i || '', null, false); };
+            const warna = { siap: '#1E8E5A', antar: '#E8590C', hilang: '#8A8F8C' };
+            const label = { siap: 'Siap', antar: 'Mengantar', hilang: 'Hilang sinyal' };
+            let peta = null, lapisan = null, kunciAktif = null, penanda = {}, data = {}, atur = { aktif: false, kunci: '' };
+            let hentiPos = null, hentiAtur = null, dipilih = '', ikuti = '', pertama = true, jamTimer = 0, adminOk = false;
+
+            const ms = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : 0);
+            const lalu = (t) => { const d = Math.max(0, Date.now() - t); if (d < 60000) return 'baru saja'; const m = Math.floor(d / 60000); return m < 60 ? m + ' mnt lalu' : Math.floor(m / 60) + ' jam lalu'; };
+            const inisial = (n) => { const k = String(n || '?').trim().split(/\s+/); return ((k[0] || '?').charAt(0) + (k[1] ? k[1].charAt(0) : '')).toUpperCase(); };
+            const keadaan = (r) => Date.now() - r.t > HILANG_MS ? 'hilang' : (r.status === 'antar' ? 'antar' : 'siap');
+
+            function muatLeaflet() {
+                if (window.L && window.L.map) return Promise.resolve();
+                if (window.__prLeaflet) return window.__prLeaflet;
+                window.__prLeaflet = new Promise((ok, gagal) => {
+                    const c = document.createElement('link'); c.rel = 'stylesheet'; c.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                    c.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; c.crossOrigin = '';
+                    document.head.appendChild(c);
+                    const s = document.createElement('script'); s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                    s.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; s.crossOrigin = '';
+                    s.onload = () => ok(); s.onerror = () => { window.__prLeaflet = null; gagal(new Error('leaflet')); };
+                    document.head.appendChild(s);
+                });
+                return window.__prLeaflet;
+            }
+            function pasangLapisan() {
+                if (!peta) return;
+                const k = KUNCI_OK.test(atur.kunci) ? atur.kunci : '';
+                if (lapisan && kunciAktif === k) return;
+                if (lapisan) { peta.removeLayer(lapisan); lapisan = null; }
+                kunciAktif = k;
+                lapisan = k
+                    ? L.tileLayer('https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=' + encodeURIComponent(k), { maxZoom: 19, attribution: '&copy; OpenStreetMap &copy; CARTO' })
+                    : L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
+                lapisan.addTo(peta);
+            }
+            function pesan(teks, tombol) {
+                const p = $('pr-pesan'); p.textContent = '';
+                if (!teks) { p.hidden = true; return; }
+                p.appendChild(el('div', '', teks));
+                if (tombol) { const b = el('button', 'pr-tbl', tombol.teks); b.type = 'button'; b.onclick = tombol.jalan; p.appendChild(b); }
+                p.hidden = false;
+            }
+            function ikonRider(r) {
+                const w = el('div', 'pr-ik ' + keadaan(r) + (dipilih === r.uid ? ' dipilih' : ''));
+                w.appendChild(el('i', '', inisial(r.nama)));
+                w.appendChild(el('b', '', String(r.nama).split(/\s+/)[0].slice(0, 14)));
+                return L.divIcon({ className: 'pr-ik-l', html: w, iconSize: [0, 0] });
+            }
+            function gambar() {
+                const daftar = Object.values(data).filter((r) => r.on).sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
+                const n = { siap: 0, antar: 0, hilang: 0 };
+                daftar.forEach((r) => n[keadaan(r)]++);
+                const ch = $('pr-chips'); ch.textContent = '';
+                ch.appendChild(el('span', 'pr-c-siap', '● ' + n.siap + ' siap'));
+                ch.appendChild(el('span', 'pr-c-antar', '● ' + n.antar + ' mengantar'));
+                ch.appendChild(el('span', 'pr-c-hilang', '● ' + n.hilang + ' hilang sinyal'));
+                $('pr-sub').textContent = atur.aktif ? 'Diperbarui otomatis · ' + daftar.length + ' rider ON' : 'Peta rider sedang nonaktif';
+                // penanda
+                if (peta) {
+                    Object.keys(penanda).forEach((u) => { if (!daftar.some((r) => r.uid === u)) { peta.removeLayer(penanda[u]); delete penanda[u]; } });
+                    daftar.forEach((r) => {
+                        const ll = [r.lat, r.lng];
+                        if (!penanda[r.uid]) { penanda[r.uid] = L.marker(ll, { icon: ikonRider(r), keyboard: true, title: r.nama }).addTo(peta); penanda[r.uid].on('click', () => pilih(r.uid)); }
+                        else { penanda[r.uid].setLatLng(ll); penanda[r.uid].setIcon(ikonRider(r)); }
+                    });
+                    if (pertama && daftar.length) { pertama = false; semua(); }
+                    if (ikuti && data[ikuti]) peta.panTo([data[ikuti].lat, data[ikuti].lng]);
+                }
+                // daftar
+                const w = $('pr-daftar'); w.textContent = '';
+                w.appendChild(el('h3', '', daftar.length + ' rider ON'));
+                if (!daftar.length) w.appendChild(el('p', '', atur.aktif ? 'Belum ada rider ON yang mengirim posisi.' : 'Aktifkan peta rider lewat tombol pengaturan (ikon gir).'));
+                daftar.forEach((r) => {
+                    const b = el('button', 'pr-baris'); b.type = 'button';
+                    const t = el('span', 'pr-titik'); t.style.background = warna[keadaan(r)];
+                    const isi = el('span', 'isi'); isi.appendChild(el('b', '', r.nama)); isi.appendChild(el('small', '', label[keadaan(r)] + (keadaan(r) === 'hilang' ? ' · posisi ' + lalu(r.t) : '')));
+                    b.append(t, isi, el('small', '', lalu(r.t)));
+                    b.onclick = () => pilih(r.uid, true);
+                    w.appendChild(b);
+                });
+                if (dipilih) gambarKartu();
+            }
+            function semua() {
+                if (!peta) return;
+                const t = Object.values(data).filter((r) => r.on).map((r) => [r.lat, r.lng]);
+                if (t.length === 1) peta.setView(t[0], 16);
+                else if (t.length) peta.fitBounds(t, { padding: [50, 50], maxZoom: 16 });
+                else peta.setView(PUSAT, 14);
+            }
+            async function pilih(u, geser) {
+                dipilih = u; const r = data[u]; if (!r) return;
+                if (geser && peta) peta.setView([r.lat, r.lng], Math.max(peta.getZoom(), 16));
+                gambar();
+                // order yang sedang dipegang (dibaca saat diketuk saja)
+                r._order = r._order || 'memuat';
+                gambarKartu();
+                try {
+                    let s = await getDocs(query(collection(db, ...P, 'active_orders'), where('rider_uid', '==', u), limit(5)));
+                    if (s.empty) s = await getDocs(query(collection(db, ...P, 'active_orders'), where('rider_uid', '==', u.toLowerCase()), limit(5)));
+                    const o = s.docs.map((d) => d.data() || {}).find((x) => ['assigned', 'processing'].indexOf(x.status) >= 0);
+                    r._order = o ? ('Order: ' + String(o.customer_name || 'pelanggan').replace(/\s*\(chat\)\s*$/i, '').slice(0, 40)) : '';
+                } catch (e) { r._order = ''; }
+                if (dipilih === u) gambarKartu();
+            }
+            function gambarKartu() {
+                const k = $('pr-kartu'), r = data[dipilih];
+                if (!r || !r.on) { k.hidden = true; return; }
+                const st = keadaan(r);
+                k.textContent = '';
+                const atas = el('div', 'pr-k-atas');
+                const av = el('i', '', inisial(r.nama)); av.style.background = warna[st];
+                const tengah = el('div'); tengah.appendChild(el('b', '', r.nama));
+                const s = el('span', '', label[st] + (r._order && r._order !== 'memuat' ? ' · ' + r._order : '')); s.style.color = warna[st]; tengah.appendChild(s);
+                const x = el('button', '', '✕'); x.type = 'button'; x.setAttribute('aria-label', 'Tutup'); x.onclick = () => { dipilih = ''; ikuti = ''; k.hidden = true; gambar(); };
+                atas.append(av, tengah, x);
+                const info = el('div', 'pr-k-info');
+                const i1 = el('div'); i1.appendChild(el('small', '', 'Posisi diperbarui')); i1.appendChild(el('b', '', lalu(r.t)));
+                const i2 = el('div'); i2.appendChild(el('small', '', 'Ketepatan GPS')); i2.appendChild(el('b', '', r.akurasi ? '± ' + r.akurasi + ' meter' : '-'));
+                info.append(i1, i2);
+                const tb = el('div', 'pr-k-tbl');
+                const a = el('a', '', 'Buka di Google Maps'); a.href = 'https://www.google.com/maps?q=' + r.lat.toFixed(6) + ',' + r.lng.toFixed(6); a.target = '_blank'; a.rel = 'noopener noreferrer';
+                const ik = el('button', ikuti === r.uid ? 'on' : '', ikuti === r.uid ? 'Berhenti ikuti' : 'Ikuti rider'); ik.type = 'button';
+                ik.onclick = () => { ikuti = ikuti === r.uid ? '' : r.uid; if (ikuti && peta) peta.setView([r.lat, r.lng], Math.max(peta.getZoom(), 16)); gambarKartu(); };
+                tb.append(a, ik);
+                k.append(atas, info, tb);
+                k.hidden = false;
+            }
+            function dengarPosisi() {
+                if (hentiPos) return;
+                const batas = new Date(Date.now() - 12 * 3600 * 1000);
+                hentiPos = onSnapshot(query(KOL(), where('at', '>=', batas)), (s) => {
+                    const baru = {};
+                    s.forEach((d) => {
+                        const x = d.data({ serverTimestamps: 'estimate' }) || {}, lat = Number(x.lat), lng = Number(x.lng);
+                        if (!UID_OK.test(d.id) || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
+                        baru[d.id] = Object.assign(data[d.id] && data[d.id]._order ? { _order: data[d.id]._order } : {}, {
+                            uid: d.id, lat, lng, on: x.on === true, status: x.status === 'antar' ? 'antar' : 'siap',
+                            nama: String(x.nama || d.id).slice(0, 60), akurasi: Math.max(0, Math.round(Number(x.akurasi) || 0)), t: ms(x.at) });
+                    });
+                    data = baru; gambar();
+                }, (e) => { console.warn('[Peta rider]', e && e.code); pesan(e && e.code === 'permission-denied' ? 'Rules peta rider belum dipasang.' : 'Belum bisa memuat posisi rider. Periksa internet.'); });
+            }
+            function hentiDengarPosisi() { if (hentiPos) { try { hentiPos(); } catch (e) {} hentiPos = null; } }
+            function terapkanAtur() {
+                pasangLapisan();
+                if (atur.aktif) { pesan(''); dengarPosisi(); }
+                else {
+                    hentiDengarPosisi(); data = {}; gambar();
+                    pesan('Peta rider sedang nonaktif. Aplikasi rider tidak mengirim posisi.', { teks: 'Aktifkan peta rider', jalan: () => bukaAtur() });
+                }
+            }
+            async function buka() {
+                if (!adminOk) { tost('Hanya admin', 'Masuk dengan akun admin dulu.'); return; }
+                $('pr-layar').hidden = false; document.body.style.overflow = 'hidden';
+                pesan('Memuat peta...');
+                try { await muatLeaflet(); }
+                catch (e) { pesan('Peta belum bisa dimuat. Periksa internet lalu buka lagi.'); return; }
+                if (!peta) {
+                    peta = L.map('pr-peta', { center: PUSAT, zoom: 14, zoomControl: true });
+                    peta.on('dragstart', () => { if (ikuti) { ikuti = ''; gambarKartu(); } });
+                }
+                setTimeout(() => peta.invalidateSize(), 60);
+                if (!hentiAtur) hentiAtur = onSnapshot(ATUR(), (s) => {
+                    const d = s.exists() ? (s.data() || {}) : {};
+                    atur = { aktif: d.aktif === true, kunci: typeof d.carto_key === 'string' && KUNCI_OK.test(d.carto_key) ? d.carto_key : '' };
+                    terapkanAtur();
+                }, (e) => { console.warn('[Peta rider] pengaturan', e && e.code); pesan('Rules peta rider belum dipasang.'); });
+                else terapkanAtur();
+                clearInterval(jamTimer); jamTimer = setInterval(gambar, 30000);
+            }
+            function tutup() {
+                $('pr-layar').hidden = true; document.body.style.overflow = '';
+                hentiDengarPosisi(); clearInterval(jamTimer);
+                if (hentiAtur) { try { hentiAtur(); } catch (e) {} hentiAtur = null; }
+                dipilih = ''; ikuti = ''; pertama = true; $('pr-kartu').hidden = true;
+            }
+            function bukaAtur() {
+                $('pr-aktif').checked = atur.aktif; $('pr-kunci').value = atur.kunci; $('pr-atur-pesan').textContent = '';
+                $('pr-atur').hidden = false;
+            }
+            $('pr-atur-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const aktif = $('pr-aktif').checked, k = $('pr-kunci').value.trim();
+                if (k && !KUNCI_OK.test(k)) { $('pr-atur-pesan').textContent = 'Kunci tidak valid. Salin ulang dari email CARTO (hanya huruf, angka, - dan _).'; return; }
+                const matikan = atur.aktif && !aktif;
+                if (matikan && !window.confirm('Nonaktifkan peta rider?\n\nSemua rider berhenti mengirim posisi dan posisi yang tersimpan dihapus.')) return;
+                try {
+                    await setDoc(ATUR(), { aktif, carto_key: k, diubah_at: serverTimestamp() });
+                    if (matikan) {
+                        const s = await getDocs(KOL());
+                        for (let i = 0; i < s.docs.length; i += 400) { const b = writeBatch(db); s.docs.slice(i, i + 400).forEach((d) => b.delete(d.ref)); await b.commit(); }
+                    }
+                    $('pr-atur').hidden = true;
+                    tost('Pengaturan disimpan', aktif ? 'Rider yang ON mulai mengirim posisi dalam 1 menit.' : 'Peta rider dinonaktifkan.');
+                } catch (e2) { $('pr-atur-pesan').textContent = e2 && e2.code === 'permission-denied' ? 'Ditolak: rules peta rider belum dipasang.' : 'Gagal menyimpan. Periksa internet.'; }
+            });
+            $('pr-atur-batal').onclick = () => { $('pr-atur').hidden = true; };
+            $('pr-atur-btn').onclick = bukaAtur;
+            $('pr-tutup').onclick = tutup;
+            $('pr-semua').onclick = () => { ikuti = ''; semua(); };
+            document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('pr-layar').hidden) { if (!$('pr-atur').hidden) $('pr-atur').hidden = true; else tutup(); } });
+            window.prBuka = buka;
+            onAuthStateChanged(auth, (u) => { adminOk = !!(u && typeof window.roleFromEmail === 'function' && window.roleFromEmail(u.email)); if (!adminOk && !$('pr-layar').hidden) tutup(); });
+        })();
+    </script>
 </body>
 </html>
