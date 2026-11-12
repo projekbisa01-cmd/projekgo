@@ -21729,6 +21729,199 @@
             try { await signOut(uangAuthPemeriksa); } catch (e) {}
         }
 
+        // =====================================================================
+        // KUNCI OWNER UNTUK KOREKSI / EDIT / HAPUS DATA UANG (12 Nov 2026)
+        // Tombol yang mengubah data uang (lihat OW_TOMBOL di bawah) wajib password akun pemilik.
+        // - Password dicek Firebase lewat sesi terpisah (uangCekPasswordPemilik), tidak disimpan di mana pun.
+        // - Setelah benar, berlaku 5 menit di HP ini saja. Terkunci lagi kalau aplikasi ditinggal
+        //   (pindah aplikasi / layar mati), kalau tombol "Kunci" ditekan, atau setelah 5 menit.
+        // - Berlaku juga saat yang login akun pemilik sendiri (HP yang tertinggal terbuka tetap aman).
+        // - Alur harian (Top Up biasa, Setor tabungan, catat Transfer, Top Up/Setoran Daftar) TIDAK diubah.
+        // CATATAN: ini kunci di aplikasi. Firestore Rules belum membedakan "koreksi" dan "operasional",
+        // jadi akun admin yang paham kode masih bisa menulis langsung lewat konsol (perlu tahap server terpisah).
+        // =====================================================================
+        (function kunciOwnerUang() {
+            const OW_JEDA_MS = 5 * 60 * 1000;
+            let owSampai = 0, owGagal = 0, owTahan = 0, owTunggu = null, owDetik = null;
+            const owSah = () => Date.now() < owSampai;
+
+            // [selector, alasan yang tampil di pop up]
+            const OW_TOMBOL = [
+                [`[onclick*="pilihMenuSaldo('sub')"]`, 'Kurangi saldo rider'],
+                [`[onclick*="pilihMenuSaldo('set')"]`, 'Set manual saldo rider'],
+                [`[onclick*="updateSaldoAction('sub')"]`, 'Kurangi saldo rider'],
+                [`[onclick*="updateSaldoAction('set')"]`, 'Set manual saldo rider'],
+                [`[onclick*="updateTabunganAction('sub')"]`, 'Tarik tabungan rider'],
+                [`[onclick*="koreksiSaldoAwal("]`, 'Koreksi saldo awal'],
+                [`[onclick*="openEditCicilanModal("]`, 'Edit cicilan rider'],
+                [`[onclick*="deleteCicilan("]`, 'Hapus cicilan rider'],
+                [`[onclick*="deleteLangganan("]`, 'Hapus pemasukan lain'],
+                [`[onclick*="deleteCloudRecap("]`, 'Hapus rekap harian'],
+                [`[onclick*="bukaPinAdm4("]`, 'Eksekusi potongan ADM tambahan'],
+                [`[onclick*="deleteHistoryOrder("]`, 'Hapus order di Histori (saldo ikut dikembalikan)'],
+                [`[onclick*="openEditOrder("][onclick*=", true)"]`, 'Edit order di Histori (saldo ikut disesuaikan)'],
+                [`[data-tl="ubah"]`, 'Ubah nominal Tabungan Lebaran'],
+                [`[data-tl="henti"]`, 'Hentikan Tabungan Lebaran rider'],
+                [`[data-tl="aktif"]`, 'Aktifkan lagi Tabungan Lebaran rider'],
+                [`[data-tl="hapus"]`, 'Hapus peserta Tabungan Lebaran'],
+                [`#page-transfer [data-act="ubah"]`, 'Ubah / koreksi data Transfer'],
+                [`#page-transfer [data-act="batal"]`, 'Batalkan data Transfer'],
+                [`#page-transfer [data-act="hapus2"]`, 'Hapus data Transfer'],
+                [`#page-transfer [data-act="c2fix"]`, 'Perbaiki data Transfer (kode / nominal)'],
+                [`#page-transfer [data-act="koreksibukti"]`, 'Koreksi bukti Transfer'],
+                [`#page-transfer [data-act="ubahkhusus"]`, 'Ubah penanda pelanggan khusus Transfer']
+            ];
+            const OW_SEMUA = OW_TOMBOL.map(x => x[0]).join(',');
+            const owAlasan = (el) => { const x = OW_TOMBOL.find(([s]) => { try { return el.matches(s); } catch (e) { return false; } }); return x ? x[1] : 'Mengubah data uang'; };
+
+            // ---------- chip "Mode owner terbuka" + tombol Kunci ----------
+            function owChip() {
+                let c = document.getElementById('ow-chip');
+                if (!c) {
+                    c = document.createElement('div');
+                    c.id = 'ow-chip';
+                    c.style.cssText = 'position:fixed;left:10px;bottom:86px;z-index:9000;display:none;align-items:center;gap:8px;background:#065f46;color:#fff;border-radius:999px;padding:6px 6px 6px 12px;font-size:11px;font-weight:800;box-shadow:0 6px 18px rgba(0,0,0,.25);';
+                    const t = document.createElement('span'); t.id = 'ow-chip-teks';
+                    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Kunci';
+                    b.style.cssText = 'background:#fff;color:#065f46;border:0;border-radius:999px;padding:4px 10px;font-size:10px;font-weight:900;';
+                    b.addEventListener('click', () => owKunci());
+                    c.appendChild(t); c.appendChild(b);
+                    document.body.appendChild(c);
+                }
+                return c;
+            }
+            function owSegarkanChip() {
+                const c = owChip();
+                if (!owSah()) { c.style.display = 'none'; if (owDetik) { clearInterval(owDetik); owDetik = null; } return; }
+                const sisa = Math.max(0, Math.ceil((owSampai - Date.now()) / 1000));
+                document.getElementById('ow-chip-teks').textContent = '🔓 Mode owner · ' + Math.floor(sisa / 60) + ':' + String(sisa % 60).padStart(2, '0');
+                c.style.display = 'flex';
+            }
+            function owKunci() { owSampai = 0; owSegarkanChip(); }
+            function owBuka() {
+                owSampai = Date.now() + OW_JEDA_MS;
+                owSegarkanChip();
+                if (!owDetik) owDetik = setInterval(owSegarkanChip, 1000);
+            }
+            document.addEventListener('visibilitychange', () => { if (document.hidden) owKunci(); });
+
+            // ---------- pop up password owner (dialog: selalu di lapisan paling atas) ----------
+            function owDialog() {
+                let d = document.getElementById('ow-dlg');
+                if (d) return d;
+                d = document.createElement('dialog');
+                d.id = 'ow-dlg';
+                d.style.cssText = 'border:0;border-radius:24px;padding:0;width:min(330px,92vw);box-shadow:0 20px 50px rgba(0,0,0,.35);';
+                d.innerHTML = `
+                    <form method="dialog" style="padding:20px;margin:0;font-family:inherit">
+                        <div style="width:48px;height:48px;margin:0 auto 10px;border-radius:50%;background:#fef3c7;color:#d97706;display:flex;align-items:center;justify-content:center;font-size:20px"><i class="fa-solid fa-user-shield"></i></div>
+                        <h3 style="margin:0;text-align:center;font-size:14px;font-weight:900;color:#1e293b;text-transform:uppercase;letter-spacing:.03em">Perlu Password Owner</h3>
+                        <p id="ow-alasan" style="margin:6px 0 2px;text-align:center;font-size:12px;font-weight:800;color:#b45309"></p>
+                        <p style="margin:0 0 12px;text-align:center;font-size:10.5px;font-weight:600;color:#64748b;line-height:1.45">Owner mengetik password akun pemilik di HP ini. Password tidak disimpan. Setelah benar, berlaku 5 menit di HP ini.</p>
+                        <input id="ow-pw" type="password" autocomplete="new-password" placeholder="Password pemilik" style="width:100%;box-sizing:border-box;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px;font-size:14px;font-weight:700;color:#0f172a">
+                        <p id="ow-err" style="display:none;margin:8px 0 0;text-align:center;font-size:10.5px;font-weight:800;color:#e11d48"></p>
+                        <div style="display:flex;gap:8px;margin-top:14px">
+                            <button type="button" id="ow-batal" style="flex:1;padding:12px;border:0;border-radius:12px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:900;text-transform:uppercase">Batal</button>
+                            <button type="button" id="ow-ok" style="flex:2;padding:12px;border:0;border-radius:12px;background:#d97706;color:#fff;font-size:11px;font-weight:900;text-transform:uppercase">Lanjutkan</button>
+                        </div>
+                    </form>`;
+                document.body.appendChild(d);
+                const pw = d.querySelector('#ow-pw'), ok = d.querySelector('#ow-ok'), err = d.querySelector('#ow-err');
+                if (typeof window.adPasangMata === 'function') window.adPasangMata(pw);
+                const salah = (t) => { err.textContent = t; err.style.display = t ? 'block' : 'none'; };
+                const selesai = (hasil) => {
+                    pw.value = ''; if (pw._mataReset) pw._mataReset(); salah('');
+                    try { if (d.open) d.close(); } catch (e) {}
+                    const cb = owTunggu; owTunggu = null;
+                    if (cb) cb(hasil);
+                };
+                const kirim = async () => {
+                    if (ok.disabled) return;
+                    const v = pw.value;
+                    if (!v) { salah('Password belum diisi.'); return; }
+                    if (Date.now() < owTahan) { salah(`Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((owTahan - Date.now()) / 1000)} detik.`); return; }
+                    ok.disabled = true; ok.textContent = 'Memeriksa...';
+                    try {
+                        await uangCekPasswordPemilik(v);
+                        owGagal = 0;
+                        owBuka();
+                        selesai(true);
+                    } catch (e) {
+                        const kode = String((e && e.code) || '');
+                        if (kode === 'auth/too-many-requests') salah('Terlalu banyak percobaan. Firebase menahan sementara, coba lagi beberapa menit lagi.');
+                        else if (kode === 'auth/network-request-failed') salah('Tidak ada koneksi. Periksa internet lalu coba lagi.');
+                        else {
+                            owGagal++;
+                            if (owGagal >= 5) { owTahan = Date.now() + 60000; owGagal = 0; }
+                            salah('Password owner salah.');
+                        }
+                        pw.value = ''; pw.focus();
+                    } finally { ok.disabled = false; ok.textContent = 'Lanjutkan'; }
+                };
+                ok.addEventListener('click', kirim);
+                pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); kirim(); } });
+                d.querySelector('#ow-batal').addEventListener('click', () => selesai(false));
+                d.addEventListener('cancel', (e) => { e.preventDefault(); selesai(false); });
+                return d;
+            }
+
+            // Dipakai di mana saja: await window.pastikanOwner('alasan') -> true kalau boleh lanjut
+            window.pastikanOwner = (alasan) => new Promise((resolve) => {
+                if (owSah()) { resolve(true); return; }
+                if (owTunggu) { resolve(false); return; }   // pop up sedang terbuka
+                const d = owDialog();
+                d.querySelector('#ow-alasan').textContent = alasan || 'Mengubah data uang';
+                owTunggu = resolve;
+                try { d.showModal(); } catch (e) { d.setAttribute('open', ''); }
+                setTimeout(() => { try { d.querySelector('#ow-pw').focus(); } catch (e) {} }, 50);
+            });
+
+            // ---------- 1) tombol-tombol koreksi/edit/hapus: dicegat sebelum aksinya jalan ----------
+            const owCariLagi = (el) => {
+                // daftar bisa digambar ulang (realtime) selama pop up terbuka: cari tombol yang sama
+                const attr = ['data-act', 'data-tl', 'data-id', 'data-uid', 'onclick'].filter(a => el.hasAttribute(a));
+                if (!attr.length) return null;
+                const sel = attr.map(a => `[${a}="${CSS.escape(el.getAttribute(a))}"]`).join('');
+                try { return document.querySelector(sel); } catch (e) { return null; }
+            };
+            window.addEventListener('click', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(OW_SEMUA) : null;
+                if (!el || owSah()) return;
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                window.pastikanOwner(owAlasan(el)).then((boleh) => {
+                    if (!boleh) return;
+                    const t = el.isConnected ? el : owCariLagi(el);
+                    if (t) t.click();
+                    else if (typeof window.showAlert === 'function') window.showAlert('Silakan ulangi', 'Mode owner sudah terbuka 5 menit. Ketuk lagi tombolnya.', 'info');
+                });
+            }, true);
+
+            // ---------- 2) pengaman akhir Kurangi / Set Manual saldo & Tarik tabungan ----------
+            // (berlaku untuk semua jalur: halaman Top Up, pop up saldo rider, menu Tabungan)
+            const pasangPengamanAkhir = () => {
+                const asli = window.confirmTransactionFinal;
+                if (typeof asli !== 'function' || asli._owKunci) return;
+                const dibungkus = async function (...a) {
+                    const tx = window.tempTx;
+                    const perlu = tx && ((tx.module === 'saldo' && (tx.actionType === 'sub' || tx.actionType === 'set'))
+                                       || (tx.module === 'tabungan' && tx.actionType === 'sub'));
+                    if (perlu) {
+                        const teks = tx.module === 'tabungan' ? 'Tarik tabungan rider' : (tx.actionType === 'set' ? 'Set manual saldo rider' : 'Kurangi saldo rider');
+                        if (!(await window.pastikanOwner(teks))) {
+                            const ld = document.getElementById('loading-overlay');
+                            if (ld) { ld.classList.add('hidden'); ld.classList.remove('flex'); }
+                            return;
+                        }
+                    }
+                    return asli.apply(this, a);
+                };
+                dibungkus._owKunci = true;
+                window.confirmTransactionFinal = dibungkus;
+            };
+            if (document.readyState === 'complete') pasangPengamanAkhir();
+            else window.addEventListener('load', pasangPengamanAkhir);
+        })();
+
         let uangSetelahBuka = null;
         function uangModal() {
             let m = document.getElementById('uang-modal');
