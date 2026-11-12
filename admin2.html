@@ -9474,6 +9474,17 @@
                     }
                 });
 
+                // (12 Nov 2026) WA RIDER: nomor diisi rider sendiri lewat pop up di aplikasi rider (field wa_rider
+                // di status_rider_aktif yang memang sudah dipantau di sini -> 0 read tambahan). Kalau ada nomor
+                // yang berubah/baru masuk, kartu Pantauan digambar ulang supaya tombol WhatsApp-nya langsung muncul.
+                try {
+                    const sidikWa = allRiders.map(r => r.uid + ':' + (typeof r.wa_rider === 'string' ? r.wa_rider : '')).join('|');
+                    if (window._sidikWaRider !== sidikWa) {
+                        window._sidikWaRider = sidikWa;
+                        renderActiveOrders();
+                    }
+                } catch (e) {}
+
                 // (23 Okt 2026) Rider yang sedang kena hukuman antrean (kepatuhan tahap) ditaruh paling bawah
                 window.urutAntreanUtama = (a, b) => {
                     const kini = Date.now(), H = window.hukumanAntrean || {};
@@ -12433,6 +12444,28 @@
             return { kelas: 'bg-sky-50 text-sky-700 border-sky-300', ikon: 'fa-bell', pendek: 'Sudah Up ke rider', panjang: 'Up otomatis ' + ke + ': notifikasi terkirim, menunggu tanda terima dari HP rider.' };
         };
 
+        // ===== WA RIDER DI KARTU PANTAUAN (12 Nov 2026) =====
+        // Nomor diambil dari status_rider_aktif.wa_rider (diisi rider). Selalu dicek ulang di sini:
+        // hanya angka berformat 628xxxxxxxx yang dipakai, jadi isi aneh tidak bisa masuk ke HTML / link.
+        const AO_PESAN_WA_RIDER = 'Mas, cek aplikasi yah, njenengan ulih orderan, segera di ACC yah';
+        function aoWaRider(uid) {
+            const u = String(uid || '').trim().toUpperCase();
+            if (!u) return '';
+            const r = allRiders.find(x => String(x.uid || '').trim().toUpperCase() === u);
+            const d = r && typeof r.wa_rider === 'string' ? r.wa_rider.replace(/\D/g, '') : '';
+            return /^628\d{8,11}$/.test(d) ? d : '';
+        }
+        function aoFormatWa(d) {
+            const n = '0' + String(d).slice(2);
+            return n.replace(/^(\d{4})(\d{4})(\d+)$/, '$1-$2-$3');
+        }
+        window.aoWaRiderBuka = (orderId) => {
+            const o = allGlobalOrders.find(x => x && x.id === orderId);
+            const no = o ? aoWaRider(o.rider_uid) : '';
+            if (!no) { alert('Nomor WhatsApp rider ini belum diisi.'); return; }
+            window.open('https://wa.me/' + no + '?text=' + encodeURIComponent(AO_PESAN_WA_RIDER), '_blank', 'noopener');
+        };
+
         function renderActiveOrders() {
             const container = document.getElementById('active-orders-list');
             // Keluarkan unassigned dari pantauan aktif agar hanya muncul di tab Pending
@@ -12492,6 +12525,14 @@
                 const tamStr = tamVal > 0 ? `<span class="text-[10px] text-black font-black ml-1">+ ${tamVal.toLocaleString('id-ID')}</span>` : '';
                 const custNameStr = order.customer_name ? ` | ${escDx(order.customer_name)}` : '';
                 const riderNama = escDx(order.rider_name || 'Tidak Ada');
+                // (12 Nov 2026) WA rider: tampil di kartu + tombol WhatsApp ke rider
+                const waRider = aoWaRider(order.rider_uid);
+                const waRiderTeks = waRider
+                    ? `<span class="font-bold text-slate-500"> · ${escDx(aoFormatWa(waRider))}</span>`
+                    : (order.rider_uid ? `<span class="font-bold text-slate-400"> · WA belum diisi</span>` : '');
+                const waRiderTombol = waRider
+                    ? `<button type="button" onclick="window.aoWaRiderBuka('${order.id}')" class="shrink-0 w-11 my-2 mr-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-500 hover:text-white transition-colors flex flex-col items-center justify-center gap-0.5" title="WhatsApp rider: ${escDx(aoFormatWa(waRider))}"><i class="fa-brands fa-whatsapp text-base leading-none"></i><span class="text-[7px] font-black uppercase tracking-wider">Rider</span></button>`
+                    : '';
                 const ringkasItem = escDx(Array.isArray(order.items) && order.items.length ? order.items.map(i => i && i.name).filter(Boolean).join(', ') : (order.customer_name || 'Order Biasa'));
 
                 let timeAssignedStr = '--:--';
@@ -12530,7 +12571,8 @@
                 html += `
                     <div id="card-order-${order.id}" class="rounded-2xl border ${cardBaseClass} relative overflow-hidden transition-all duration-500">
                         <div class="absolute left-0 top-0 bottom-0 w-1 ${borderLeft}"></div>
-                        <button type="button" id="ao-head-${order.id}" onclick="window.aoToggle('${order.id}')" aria-expanded="${terbuka ? 'true' : 'false'}" class="w-full text-left pl-4 pr-3 py-2.5 flex items-center gap-2">
+                        <div class="flex items-stretch">
+                        <button type="button" id="ao-head-${order.id}" onclick="window.aoToggle('${order.id}')" aria-expanded="${terbuka ? 'true' : 'false'}" class="flex-1 min-w-0 w-full text-left pl-4 pr-3 py-2.5 flex items-center gap-2">
                             <div class="flex-1 min-w-0">
                                 <div class="flex items-center gap-1.5 flex-wrap">
                                     <span class="text-[8px] font-black ${statusColor} px-1.5 py-0.5 rounded border uppercase tracking-wider">${statusPendek}</span>
@@ -12543,7 +12585,7 @@
                                     ${isProcessing ? `<span id="detak-order-${order.id}" class="ao-detak" hidden></span>` : ''}
                                     ${isProcessing && !teksTahap ? (() => { const dg = typeof window.aoDiagnosaTahap === 'function' ? window.aoDiagnosaTahap(order) : null; return `<span id="diag-order-${order.id}" class="ao-diag${dg && dg.x ? ' x' : ''}"${dg ? '' : ' hidden'}>⚠️ ${escDx(dg ? dg.teks : '')}</span>`; })() : ''}
                                 </div>
-                                <p class="text-[11px] font-black text-black truncate mt-1"><i class="fa-solid fa-motorcycle text-[9px] text-slate-400 mr-1"></i>${riderNama}</p>
+                                <p class="text-[11px] font-black text-black truncate mt-1"><i class="fa-solid fa-motorcycle text-[9px] text-slate-400 mr-1"></i>${riderNama}${waRiderTeks}</p>
                                 <span class="ad-cust text-[11px] font-bold text-black mt-0.5"><i class="fa-solid fa-user" aria-hidden="true"></i><span>${escDx(order.customer_name || 'Tanpa nama')}</span><span class="ad-cust-wa">· ${escDx(order.customer_phone || '-')}</span></span>
                                 <p class="text-[9px] font-bold text-slate-500 truncate">${ringkasItem}</p>
                             </div>
@@ -12552,6 +12594,8 @@
                                 <i id="ao-panah-${order.id}" class="fa-solid fa-chevron-down text-[10px] text-slate-400 mt-2 transition-transform ${terbuka ? 'rotate-180' : ''}"></i>
                             </div>
                         </button>
+                        ${waRiderTombol}
+                        </div>
                         <div id="ao-detail-${order.id}" class="${terbuka ? '' : 'hidden '}px-4 pb-4 pt-3 flex flex-col gap-3 border-t border-slate-100">
                             <div class="pl-1">
                                 <span class="text-[8px] font-black ${statusColor} px-2 py-0.5 rounded border uppercase tracking-widest inline-block w-max">${statusText}</span>

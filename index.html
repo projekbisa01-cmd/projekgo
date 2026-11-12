@@ -5601,6 +5601,11 @@
                     <i class="fa-solid fa-chevron-right text-gray-300"></i>
                 </button>
 
+                <!-- (12 Nov 2026) Ubah nomor WhatsApp operasional (dipakai admin di kartu Pantauan) -->
+                <button type="button" onclick="window.bukaUbahWaRider && window.bukaUbahWaRider()" class="wr-profil-btn w-full py-4 mb-3 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                    <i class="fa-brands fa-whatsapp"></i> Ubah Nomor WA <span id="wa-rider-profil" class="wr-profil-no">Belum diisi</span>
+                </button>
+
                 <button onclick="window.bukaGantiPin()" class="w-full py-4 mb-3 bg-orange-50 hover:bg-orange-100 text-orange-600 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
                     <i class="fa-solid fa-key"></i> Ganti PIN
                 </button>
@@ -19905,6 +19910,8 @@
               const statusRef = doc(db, '/status_rider_aktif', cleanUid);
 
               myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
+                  // (12 Nov 2026) Pop up nomor WA operasional: cek dari dokumen yang sama (0 read tambahan)
+                  try { if (typeof window.cekWaRider === 'function') window.cekWaRider(cleanUid, docSnap.exists() ? docSnap.data() : null, docSnap.metadata && docSnap.metadata.fromCache); } catch (e) {}
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       
@@ -28452,6 +28459,206 @@ window.PembuatQR = PembuatQR;
         new MutationObserver(function () { setTimeout(function () { if (posTerakhir) kirim(posTerakhir, false); }, 500); }).observe(o, { attributes: true, attributeFilter: ['class'] });
     })();
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mulai); else mulai();
+})();
+</script>
+<!-- ===== POP UP NOMOR WA OPERASIONAL RIDER (12 Nov 2026) =====
+     Rider wajib mengisi nomor WhatsApp yang dipakai saat narik. Disimpan ke status_rider_aktif/{uid}.wa_rider
+     (dokumen milik rider sendiri). Aplikasi admin mengambil nomor ini untuk tombol WhatsApp di kartu Pantauan.
+     Pop up muncul lagi selama nomor belum diisi: saat aplikasi dibuka, saat kembali ke aplikasi, dan
+     5 menit setelah "Nanti saja". Tidak tampil saat layar orderan masuk sedang terbuka. -->
+<style>
+  #wa-rider-pop { position: fixed; inset: 0; z-index: 9000; background: rgba(15,23,42,.6); display: none; align-items: center; justify-content: center; padding: 18px; }
+  #wa-rider-pop.buka { display: flex; }
+  #wa-rider-pop .wr-kotak { width: 100%; max-width: 360px; background: #fff; border-radius: 22px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.3); font-family: inherit; }
+  #wa-rider-pop .wr-atas { background: linear-gradient(135deg,#fb923c,#ea580c); color: #fff; padding: 18px 18px 16px; text-align: center; }
+  #wa-rider-pop .wr-ikon { width: 52px; height: 52px; margin: 0 auto 8px; border-radius: 50%; background: rgba(255,255,255,.2); display: flex; align-items: center; justify-content: center; font-size: 28px; }
+  #wa-rider-pop .wr-atas h3 { margin: 0; font-size: 16px; font-weight: 900; }
+  #wa-rider-pop .wr-atas p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.45; opacity: .95; }
+  #wa-rider-pop .wr-isi { padding: 16px 18px 18px; }
+  #wa-rider-pop label.wr-lbl { display: block; font-size: 11px; font-weight: 800; color: #334155; margin-bottom: 6px; }
+  #wa-rider-pop .wr-input { width: 100%; box-sizing: border-box; border: 2px solid #e2e8f0; border-radius: 12px; padding: 11px 12px; font-size: 16px; font-weight: 800; letter-spacing: .5px; color: #0f172a; outline: none; }
+  #wa-rider-pop .wr-input:focus { border-color: #f97316; }
+  #wa-rider-pop .wr-pratinjau { min-height: 16px; margin-top: 6px; font-size: 11px; font-weight: 700; color: #64748b; }
+  #wa-rider-pop .wr-pratinjau.ok { color: #059669; }
+  #wa-rider-pop .wr-pratinjau.x { color: #dc2626; }
+  #wa-rider-pop .wr-cek { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 11px; font-weight: 600; color: #475569; line-height: 1.4; }
+  #wa-rider-pop .wr-cek input { margin-top: 2px; width: 16px; height: 16px; accent-color: #ea580c; flex: none; }
+  #wa-rider-pop .wr-pesan { display: none; margin-top: 10px; background: #fef2f2; color: #b91c1c; border-radius: 10px; padding: 8px 10px; font-size: 11px; font-weight: 700; line-height: 1.4; }
+  #wa-rider-pop .wr-simpan { width: 100%; margin-top: 14px; border: 0; border-radius: 12px; padding: 12px; background: #ea580c; color: #fff; font-size: 13px; font-weight: 900; letter-spacing: .3px; }
+  #wa-rider-pop .wr-simpan:disabled { background: #fdba74; }
+  #wa-rider-pop .wr-nanti { width: 100%; margin-top: 8px; border: 0; background: transparent; color: #94a3b8; font-size: 11.5px; font-weight: 700; padding: 6px; }
+  .wr-profil-btn { background: #ecfdf5; color: #047857; }
+  .wr-profil-btn:hover { background: #d1fae5; }
+  .wr-profil-btn i { font-size: 17px; }
+  .wr-profil-no { margin-left: 4px; background: #fff; color: #065f46; border: 1px solid #a7f3d0; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 800; letter-spacing: 0; text-transform: none; }
+  .wr-profil-no.kosong { color: #b91c1c; border-color: #fecaca; }
+</style>
+<script>
+(function () {
+  var JEDA_NANTI = 5 * 60 * 1000;          // "Nanti saja" -> muncul lagi 5 menit kemudian
+  var S = { uid: null, ada: null, nomor: '', mode: 'wajib', tundaSampai: 0, menyimpan: false, el: null };
+
+  // 08xx / 8xx / +62 8xx / 62 8xx -> 628xxxxxxxx (10–13 digit kalau ditulis pakai 0)
+  function normal(v) {
+    var d = String(v || '').replace(/\D/g, '');
+    if (d.indexOf('0') === 0) d = '62' + d.slice(1);
+    else if (d.indexOf('8') === 0) d = '62' + d;
+    return /^628\d{8,11}$/.test(d) ? d : '';
+  }
+  function tampilNomor(d) { return ('0' + d.slice(2)).replace(/^(\d{4})(\d{4})(\d+)$/, '$1-$2-$3'); }
+
+  function buat() {
+    if (S.el) return S.el;
+    var w = document.createElement('div');
+    w.id = 'wa-rider-pop';
+    w.setAttribute('role', 'dialog');
+    w.setAttribute('aria-modal', 'true');
+    w.innerHTML =
+      '<div class="wr-kotak">' +
+        '<div class="wr-atas"><div class="wr-ikon"><i class="fa-brands fa-whatsapp"></i></div>' +
+          '<h3 id="wr-judul">Isi Nomor WhatsApp Operasional</h3>' +
+          '<p id="wr-sub">Nomor ini dipakai admin untuk menghubungi kamu saat ada orderan, supaya operasional lancar.</p></div>' +
+        '<div class="wr-isi">' +
+          '<label class="wr-lbl" for="wr-input">Nomor WhatsApp yang kamu pakai saat narik</label>' +
+          '<input id="wr-input" class="wr-input" type="tel" inputmode="numeric" autocomplete="tel" maxlength="18" placeholder="08xx-xxxx-xxxx">' +
+          '<div id="wr-pratinjau" class="wr-pratinjau"></div>' +
+          '<label class="wr-cek"><input type="checkbox" id="wr-setuju"><span>Nomor ini aktif di WhatsApp dan selalu saya bawa saat ON.</span></label>' +
+          '<div id="wr-pesan" class="wr-pesan"></div>' +
+          '<button type="button" id="wr-simpan" class="wr-simpan" disabled>Simpan Nomor</button>' +
+          '<button type="button" id="wr-nanti" class="wr-nanti">Nanti saja</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(w);
+    S.el = w;
+
+    var inp = w.querySelector('#wr-input'), pra = w.querySelector('#wr-pratinjau'),
+        setuju = w.querySelector('#wr-setuju'), btn = w.querySelector('#wr-simpan');
+    function cekForm() {
+      var d = normal(inp.value), ada = String(inp.value || '').replace(/\D/g, '').length > 0;
+      pra.className = 'wr-pratinjau' + (d ? ' ok' : (ada ? ' x' : ''));
+      pra.textContent = d ? ('\u2713 ' + tampilNomor(d)) : (ada ? 'Nomor belum benar. Contoh: 0812-3456-7890' : '');
+      btn.disabled = S.menyimpan || !d || !setuju.checked;
+    }
+    inp.addEventListener('input', cekForm);
+    setuju.addEventListener('change', cekForm);
+    btn.addEventListener('click', function () { simpan(normal(inp.value)); });
+    w.querySelector('#wr-nanti').addEventListener('click', function () {
+      if (S.mode === 'ubah') { S.mode = 'wajib'; tutup(); coba(); return; }   // batal ubah: tidak menunda apa pun
+      S.tundaSampai = Date.now() + JEDA_NANTI;
+      tutup();
+    });
+    S.cekForm = cekForm;
+    return w;
+  }
+
+  // Teks pop up untuk mode wajib (belum isi) atau mode ubah (dari Profil)
+  function aturMode(mode) {
+    var w = buat();
+    S.mode = mode;
+    var ubah = mode === 'ubah';
+    w.querySelector('#wr-judul').textContent = ubah ? 'Ubah Nomor WhatsApp Operasional' : 'Isi Nomor WhatsApp Operasional';
+    w.querySelector('#wr-sub').textContent = ubah
+      ? (S.nomor ? 'Nomor sekarang: ' + tampilNomor(S.nomor) + '. Ganti kalau kamu pindah nomor/HP.' : 'Nomor ini dipakai admin untuk menghubungi kamu saat ada orderan.')
+      : 'Nomor ini dipakai admin untuk menghubungi kamu saat ada orderan, supaya operasional lancar.';
+    w.querySelector('#wr-nanti').textContent = ubah ? 'Batal' : 'Nanti saja';
+    w.querySelector('#wr-input').value = ubah && S.nomor ? tampilNomor(S.nomor) : '';
+    w.querySelector('#wr-setuju').checked = false;
+    pesan('');
+    if (S.cekForm) S.cekForm();
+  }
+
+  // Label nomor di tombol Profil
+  function segarkanProfil() {
+    var el = document.getElementById('wa-rider-profil');
+    if (!el) return;
+    el.textContent = S.nomor ? tampilNomor(S.nomor) : 'Belum diisi';
+    el.className = 'wr-profil-no' + (S.nomor ? '' : ' kosong');
+  }
+
+  function pesan(t) {
+    var p = S.el && S.el.querySelector('#wr-pesan');
+    if (!p) return;
+    p.textContent = t || '';
+    p.style.display = t ? 'block' : 'none';
+  }
+
+  function tutup() { if (S.el) S.el.classList.remove('buka'); }
+
+  function bolehTampil() {
+    if (!S.uid || S.ada !== false) return false;
+    if (Date.now() < S.tundaSampai) return false;
+    if (document.visibilityState === 'hidden') return false;
+    try {
+      var me = typeof window.getRiderUid === 'function' ? window.getRiderUid() : null;
+      if (!me || String(me).toUpperCase() !== String(S.uid).toUpperCase()) return false;   // belum login / sudah logout
+    } catch (e) { return false; }
+    var om = document.getElementById('incoming-order-popup');   // jangan menutupi layar orderan masuk
+    if (om && !om.classList.contains('hidden')) return false;
+    return true;
+  }
+
+  function coba() {
+    if (S.mode === 'ubah') return;   // sedang mengubah dari Profil: biarkan rider menyelesaikan
+    if (bolehTampil()) {
+      var w = buat();
+      if (!w.classList.contains('buka')) { aturMode('wajib'); w.classList.add('buka'); }
+    } else if (S.ada !== false || !S.uid) {
+      tutup();
+    }
+  }
+
+  // Dipanggil tombol "Ubah Nomor WA" di halaman Profil
+  window.bukaUbahWaRider = function () {
+    if (!S.uid) { alert('Data akun belum termuat. Coba lagi sebentar.'); return; }
+    aturMode('ubah');
+    S.el.classList.add('buka');
+    try { S.el.querySelector('#wr-input').focus(); } catch (e) {}
+  };
+
+  async function simpan(d) {
+    if (!d || S.menyimpan || !S.uid) return;
+    var uid = S.uid, btn = S.el.querySelector('#wr-simpan');
+    S.menyimpan = true; btn.disabled = true; btn.textContent = 'Menyimpan...'; pesan('');
+    try {
+      var m = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+      var tulis = m.setDoc(m.doc(m.getFirestore(), 'status_rider_aktif', uid),
+        { wa_rider: d, wa_rider_at: m.serverTimestamp() }, { merge: true });
+      var batas = new Promise(function (_, tolak) { setTimeout(function () { tolak({ code: 'timeout' }); }, 15000); });
+      await Promise.race([tulis, batas]);
+      S.ada = true; S.nomor = d; S.mode = 'wajib';
+      segarkanProfil();
+      tutup();
+    } catch (e) {
+      var k = e && e.code;
+      pesan(k === 'permission-denied' ? 'Gagal menyimpan: izin ditolak server. Kabari admin ya.'
+          : k === 'timeout' ? 'Sinyal lemah, nomor belum terkirim. Coba tekan Simpan lagi.'
+          : 'Gagal menyimpan. Periksa sinyal lalu coba lagi.');
+    } finally {
+      S.menyimpan = false;
+      btn.textContent = 'Simpan Nomor';
+      var inp = S.el.querySelector('#wr-input'), st = S.el.querySelector('#wr-setuju');
+      btn.disabled = !normal(inp.value) || !st.checked;
+    }
+  }
+
+  // Dipanggil dari listener status_rider_aktif milik rider sendiri (data yang sama, tanpa read baru).
+  window.cekWaRider = function (uid, data, dariCache) {
+    var u = String(uid || '').trim();
+    if (!u) { S.uid = null; tutup(); return; }
+    if (u !== S.uid) { S.uid = u; S.ada = null; S.nomor = ''; S.mode = 'wajib'; S.tundaSampai = 0; }
+    if (!data) { if (!dariCache) S.ada = null; segarkanProfil(); coba(); return; }   // dokumen belum ada: tunggu dulu
+    var isi = typeof data.wa_rider === 'string' ? normal(data.wa_rider) : '';
+    S.nomor = isi;
+    segarkanProfil();
+    if (isi) { S.ada = true; if (S.mode !== 'ubah') tutup(); return; }
+    S.ada = false;
+    coba();
+  };
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') setTimeout(coba, 1500);
+  });
+  setInterval(coba, 30000);   // cek ringan tiap 30 detik (tanpa baca Firebase)
 })();
 </script>
 </body>
