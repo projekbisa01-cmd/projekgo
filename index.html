@@ -27994,7 +27994,10 @@ window.PembuatQR = PembuatQR;
 <!-- ===================== MODAL RIDER (11 Nov 2026) =====================
      Kartu berkedip di beranda selama ada modal ProjekGo yang belum lunas (modal_rider, dibuat admin dari
      halaman Transfer). Tombol "Sudah dibayarkan" membuka WhatsApp admin administrasi dengan pesan siap kirim.
-     Kartu hilang setelah admin menandai Lunas. Rider hanya MEMBACA datanya sendiri (dijaga rules). -->
+     Kartu hilang setelah admin menandai Lunas. Rider hanya MEMBACA datanya sendiri (dijaga rules).
+     TAMBAHAN (12 Nov 2026): lewat pukul 00.00 dan modal belum lunas -> akun dibekukan sementara:
+     pop up "akun dibekukan" (boleh ditutup), rider TIDAK BISA ON sampai admin menandai Lunas, dan kalau
+     sedang ON otomatis di-OFF-kan (keluar antrean). Pop up muncul lagi tiap aplikasi dibuka & saat mencoba ON. -->
 <style id="modal-rider-css">
     .md-kartu { position: absolute; left: 14px; right: 14px; top: calc(env(safe-area-inset-top, 0px) + 158px); z-index: 46; pointer-events: auto; box-sizing: border-box; max-width: 460px; margin: 0 auto; background: #FFFFFF; border: 2px solid #E8590C; border-radius: 18px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; animation: mdKedip 1.4s ease-in-out infinite; }
     .md-kartu[hidden] { display: none; }
@@ -28035,6 +28038,25 @@ window.PembuatQR = PembuatQR;
     @keyframes mdKedipMerah { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 45, 32, .55), 0 6px 18px rgba(0, 0, 0, .14); } 50% { box-shadow: 0 0 0 8px rgba(217, 45, 32, 0), 0 6px 18px rgba(0, 0, 0, .14); } }
     @keyframes mdTitik { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
     @media (prefers-reduced-motion: reduce) { .md-kartu, .md-titik { animation: none; } }
+    /* akun dibekukan sementara (modal lewat hari) */
+    .md-beku { position: fixed; inset: 0; z-index: 2147483000; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; background: rgba(28, 22, 16, .62); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; }
+    .md-beku[hidden] { display: none; }
+    .md-beku-kotak { width: 100%; max-width: 400px; max-height: 100%; overflow-y: auto; box-sizing: border-box; background: #FFFFFF; border-radius: 24px; padding: 22px 20px 18px; display: flex; flex-direction: column; gap: 12px; text-align: center; box-shadow: 0 18px 50px rgba(0, 0, 0, .35); }
+    .md-beku-ikon { width: 64px; height: 64px; margin: 0 auto 2px; border-radius: 50%; background: #FEECEB; color: #B42318; display: grid; place-items: center; }
+    .md-beku-ikon svg { width: 32px; height: 32px; }
+    .md-beku h2 { margin: 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
+    .md-beku p { margin: 0; font-size: 14.5px; line-height: 1.55; color: #3D362F; }
+    .md-beku-rincian { border-radius: 16px; background: #FFF5EE; border: 1.5px solid #F6D5BF; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+    .md-beku-baris { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; color: #4A3F35; }
+    .md-beku-baris b { color: #1C1C1E; }
+    .md-beku-total { display: flex; justify-content: space-between; gap: 10px; padding-top: 6px; border-top: 1px dashed #EBC3A7; font-size: 16px; font-weight: 800; }
+    .md-beku-langkah { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: 13.5px; line-height: 1.45; color: #3D362F; }
+    .md-beku-langkah li { display: flex; gap: 10px; align-items: flex-start; }
+    .md-beku-langkah span { width: 22px; height: 22px; flex: none; border-radius: 50%; background: #1C1C1E; color: #FFFFFF; font-size: 12px; font-weight: 800; display: grid; place-items: center; }
+    .md-beku .md-tombol { width: 100%; }
+    .md-beku-status { font-size: 13px !important; font-weight: 700; color: #1E7A34 !important; }
+    .md-beku-tutup { min-height: 46px; width: 100%; border-radius: 14px; border: 1.5px solid #E2D8CC; background: #FFFFFF; color: #1C1C1E; font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+
 </style>
 <script>
 (function modalRider() {
@@ -28045,7 +28067,7 @@ window.PembuatQR = PembuatQR;
     var KUNCI = 'md_dikabari';               // id modal yang sudah dikabarkan rider (di HP ini saja)
     var KUNCI_KECIL = 'md_kecil';            // kartu dikecilkan rider (berlaku sampai ada modal baru)
     var SVG = 'http://www.w3.org/2000/svg';
-    var daftar = [], henti = null, uidAktif = '', kartu = null;
+    var daftar = [], henti = null, uidAktif = '', kartu = null, beku = null, bekuDitutup = '', bekuAktif = false;
 
     function pad(n) { return String(n).padStart(2, '0'); }
     function kunciTgl(ms) { var d = new Date(ms + 7 * 36e5); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
@@ -28078,7 +28100,99 @@ window.PembuatQR = PembuatQR;
         home.appendChild(kartu);
         return kartu;
     }
+    // ---------- akun dibekukan sementara: modal yang lewat hari (sudah lewat 23.59) belum lunas ----------
+    function gambarBeku() {
+        var hi = kunciTgl(Date.now());
+        var lama = daftar.filter(function (d) { return d.tanggal < hi; });
+        bekuAktif = lama.length > 0;
+        if (bekuAktif) paksaOff();
+        var tanda = lama.map(function (d) { return d.id; }).sort().join(',');
+        if (!lama.length || bekuDitutup === tanda) { if (beku) { beku.hidden = true; beku.textContent = ''; } try { document.documentElement.style.overflow = ''; } catch (e) {} return; }
+        if (!beku) {
+            beku = el('div', 'md-beku'); beku.hidden = true;
+            beku.setAttribute('role', 'alertdialog'); beku.setAttribute('aria-modal', 'true'); beku.setAttribute('aria-labelledby', 'md-beku-judul');
+            // ketukan di area gelap tidak menembus ke aplikasi di bawahnya (tutup hanya lewat tombol Tutup)
+            ['click', 'touchstart', 'pointerdown'].forEach(function (n) { beku.addEventListener(n, function (e) { e.stopPropagation(); }, { passive: true }); });
+            document.body.appendChild(beku);
+        }
+        var total = daftar.reduce(function (s, d) { return s + d.nominal; }, 0);
+        var sudah = dikabari(), semuaDikabari = daftar.every(function (d) { return sudah.indexOf(d.id) >= 0; });
+        var tg = lama.map(function (d) { return teksTgl(d.tanggal); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+        beku.textContent = '';
+        var kt = el('div', 'md-beku-kotak');
+        var ik = el('div', 'md-beku-ikon');
+        ik.appendChild(ikon([['rect', { x: '4', y: '11', width: '16', height: '10', rx: '2' }], ['path', { d: 'M8 11V7a4 4 0 0 1 8 0v4' }], ['circle', { cx: '12', cy: '16', r: '1.3' }]]));
+        kt.appendChild(ik);
+        var h = el('h2', '', 'Akun kamu dibekukan sementara'); h.id = 'md-beku-judul'; kt.appendChild(h);
+        kt.appendChild(el('p', '', 'Mohon maaf ya, akunmu kami bekukan sementara karena masih ada modal ProjekGo yang belum dikembalikan. Selama dibekukan, kamu belum bisa ON dan tidak masuk antrean. Yuk selesaikan dulu, setelah itu akunmu bisa dipakai lagi seperti biasa.'));
+        var rc = el('div', 'md-beku-rincian');
+        daftar.forEach(function (d) {
+            var b = el('div', 'md-beku-baris');
+            b.appendChild(el('span', '', 'Modal ' + teksTgl(d.tanggal) + (d.tanggal < hi ? '' : ' (hari ini)')));
+            b.appendChild(el('b', '', rp(d.nominal)));
+            rc.appendChild(b);
+        });
+        var tt = el('div', 'md-beku-total'); tt.appendChild(el('span', '', 'Total')); tt.appendChild(el('span', '', rp(total)));
+        rc.appendChild(tt); kt.appendChild(rc);
+        var ol = el('ol', 'md-beku-langkah');
+        ['Bayarkan modal ke admin ProjekGo.', 'Kabari admin lewat tombol di bawah, lalu kirim bukti bayarnya.', 'Akun aktif lagi otomatis setelah admin menandai lunas.'].forEach(function (x, i) {
+            var li = el('li'); li.appendChild(el('span', '', String(i + 1))); li.appendChild(el('div', '', x)); ol.appendChild(li);
+        });
+        kt.appendChild(ol);
+        var b = el('button', 'md-tombol'); b.type = 'button';
+        b.appendChild(ikon([['path', { d: 'M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.2c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .1-3.3-.8-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2 1-2.3c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.4 0 .5l-.4.6-.3.4c-.1.1-.3.3-.1.6.2.3.7 1.2 1.6 2 1.1 1 2 1.3 2.3 1.4.3.2.5.1.6-.1l.9-1.1c.2-.3.4-.2.7-.1l2 .9c.3.1.5.2.5.3.1.2.1.7-.1 1.3z' }]], true));
+        b.appendChild(document.createTextNode(semuaDikabari ? 'Kabari admin lagi' : 'Sudah bayar, kabari admin'));
+        b.addEventListener('click', function () {
+            var semuaTg = daftar.map(function (d) { return teksTgl(d.tanggal); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+            var teks = 'min modal tanggal ' + semuaTg.join(', ') + ' sudah saya bayar ya, total ' + rp(total) + '. Nanti saya kirimkan bukti nya. Mohon akun saya dibuka kembali.';
+            tandaiDikabari(daftar.map(function (d) { return d.id; }));
+            try {
+                if (typeof window.openWaSelector === 'function') window.openWaSelector(WA_ADMIN, teks);
+                else window.open('https://wa.me/' + WA_ADMIN + '?text=' + encodeURIComponent(teks), '_blank', 'noopener');
+            } catch (e) { console.warn('[Modal rider] WA', e); }
+            gambarBeku();
+        });
+        kt.appendChild(b);
+        if (semuaDikabari) kt.appendChild(el('p', 'md-beku-status', 'Sudah kamu kabari admin. Tunggu sebentar ya, akun aktif lagi setelah admin mengecek dan menandai lunas.'));
+        var tp = el('button', 'md-beku-tutup', 'Tutup'); tp.type = 'button';
+        tp.addEventListener('click', function () { bekuDitutup = tanda; gambarBeku(); });
+        kt.appendChild(tp);
+        beku.appendChild(kt);
+        beku.hidden = false;
+        try { document.documentElement.style.overflow = 'hidden'; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+    }
+    // ---------- penjaga saklar: akun dibekukan tidak bisa ON ----------
+    function sedangAntar() { var o = document.getElementById('active-order-overlay'); return !!(o && !o.classList.contains('hidden')); }
+    function tampilkanLagi() { bekuDitutup = ''; gambarBeku(); }
+    function tolakOn() {
+        var t = document.getElementById('onbid-toggle');
+        if (!bekuAktif || !t || !t.checked) return false;
+        t.checked = false;
+        tampilkanLagi();
+        return true;
+    }
+    function paksaOff() {
+        // sedang ON (mis. lupa OFF semalam): keluarkan dari antrean. Tidak saat sedang mengantar order.
+        var t = document.getElementById('onbid-toggle');
+        if (!t || !t.checked || sedangAntar() || typeof window.toggleOnbid !== 'function') return;
+        t.checked = false;
+        try { window.toggleOnbid(true); } catch (e) { console.warn('[Modal rider] OFF', e); }
+    }
+    var asliToggle = null, asliSebelumOn = null;
+    function pasangPenjaga() {
+        // dipasang SEKALI saja (kalau kode lain ikut membungkus belakangan, tidak terjadi putaran tanpa akhir)
+        if (!asliToggle && typeof window.toggleOnbid === 'function') { asliToggle = window.toggleOnbid; window.toggleOnbid = jagaToggle; }
+        if (!asliSebelumOn && typeof window.mkSebelumOn === 'function') { asliSebelumOn = window.mkSebelumOn; window.mkSebelumOn = jagaSebelumOn; }
+    }
+    function jagaToggle() { if (tolakOn()) return; return asliToggle.apply(this, arguments); }
+    function jagaSebelumOn() { if (tolakOn()) return; return asliSebelumOn.apply(this, arguments); }
+    // saklar diketuk: ditahan sebelum sampai ke aplikasi (fase capture)
+    document.addEventListener('change', function (e) {
+        if (e.target && e.target.id === 'onbid-toggle' && tolakOn()) { e.stopPropagation(); e.stopImmediatePropagation(); }
+    }, true);
     function gambar() {
+        pasangPenjaga();
+        gambarBeku();
         var k = siapkanKartu(); if (!k) return;
         if (!daftar.length) { k.hidden = true; k.textContent = ''; return; }
         var total = daftar.reduce(function (s, d) { return s + d.nominal; }, 0);
@@ -28122,7 +28236,7 @@ window.PembuatQR = PembuatQR;
             var tg = lama.map(function (d) { return teksTgl(d.tanggal); }).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
             p.appendChild(document.createTextNode('Modal ProjekGo tanggal ' + tg.join(', ') + ' belum dibayar. Total yang harus dibayar '));
             p.appendChild(el('b', '', rp(total)));
-            p.appendChild(document.createTextNode('. Segera bayarkan ya.'));
+            p.appendChild(document.createTextNode('. Akun dibekukan sementara, belum bisa ON sampai admin menandai lunas.'));
         }
         k.appendChild(p);
         var b = el('button', 'md-tombol'); b.type = 'button';
@@ -28177,6 +28291,8 @@ window.PembuatQR = PembuatQR;
                 });
                 daftar = a.sort(function (x, y) { return x.tanggal < y.tanggal ? -1 : 1; });
                 gambar();
+                // status ON dari HP bisa dipulihkan sedikit lebih lambat dari data modal: cek ulang
+                setTimeout(function () { if (bekuAktif) paksaOff(); }, 8000);
             }, function (e) { console.warn('[Modal rider] baca', e && e.code); });
         }).catch(function (e) { console.warn('[Modal rider]', e); });
     }
@@ -28191,7 +28307,9 @@ window.PembuatQR = PembuatQR;
         }).catch(function (e) { console.warn('[Modal rider]', e); });
     }
     // jam berganti ke hari berikutnya: tulisan "hari ini" -> "belum dibayar"
-    setInterval(function () { if (daftar.length) gambar(); }, 5 * 60 * 1000);
+    setInterval(function () { if (daftar.length) gambar(); }, 60 * 1000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden && daftar.length) { bekuDitutup = ''; gambar(); } });
+    setTimeout(pasangPenjaga, 1500); setTimeout(pasangPenjaga, 6000);
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mulai); else mulai();
 })();
 </script>
