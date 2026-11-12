@@ -30483,7 +30483,7 @@
                         belum.forEach(d => {
                             const r = el('tr');
                             const c1 = el('td', '', teksTgl(d.tanggal) + (d.no ? ' · No ' + d.no : ''));
-                            if (d.tanggal < hi) { c1.appendChild(el('div', 'md-telat', 'lewat hari')); }
+                            if (d.tanggal < hi) { c1.appendChild(el('div', 'md-telat', 'lewat hari · akun rider dibekukan')); }   // 12 Nov 2026: rider melihat pop up akun dibekukan sampai Lunas
                             const c2 = el('td'); c2.appendChild(el('b', '', d.kode || '-'));
                             const c3 = el('td', '', d.nama || '-');
                             const c4 = el('td', 'r'); c4.appendChild(el('b', '', rp(d.nominal)));
@@ -31011,5 +31011,319 @@
             onAuthStateChanged(auth, (u) => { adminOk = !!(u && typeof window.roleFromEmail === 'function' && window.roleFromEmail(u.email)); if (!adminOk && !$('pr-layar').hidden) tutup(); });
         })();
     </script>
+    <!-- ===================== PENGINGAT JAM ORDER PENDING (12 Nov 2026) =====================
+         Opsional per order di tab Pending Reguler: admin mengisi "jam dibagikan" (mis. pelanggan pesan jam 08.00
+         untuk diantar jam 14.00). 5 menit sebelum jam itu, SEMUA layar admin yang terbuka menampilkan pop up
+         pengingat. Tanpa jam = order pending biasa seperti sekarang.
+         HANYA MENAMBAH: kode Pending yang lama tidak diubah (kartu diberi baris tambahan setelah digambar).
+         Data: 1 dokumen pengingat_pending/umum { daftar: { idOrder: { waktu, jam, nama } } } — admin saja (rules
+         "SISANYA: ADMIN SAJA"), 1 pendengar kecil. Pengingat otomatis dihapus setelah order dibagikan / dibatalkan. -->
+    <style id="jd-css">
+        .jd-baris { display: flex; align-items: center; gap: 8px; margin: 2px 0 0 4px; flex-wrap: wrap; }
+        .jd-tbl { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border-radius: 10px; border: 1.5px dashed #CBD5E1; background: #FFFFFF; color: #334155; font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; }
+        .jd-tbl svg { width: 15px; height: 15px; flex: none; }
+        .jd-tbl.ada { border-style: solid; border-color: #C7D2FE; background: #EEF2FF; color: #3730A3; }
+        .jd-tbl.dekat { border-color: #FDBA74; background: #FFF7ED; color: #9A3412; }
+        .jd-tbl.lewat { border-color: #FCA5A5; background: #FEF2F2; color: #B91C1C; animation: jdKedip 1.2s ease-in-out infinite; }
+        .jd-tbl small { font-weight: 700; opacity: .85; }
+        .jd-kartu-sorot { animation: jdSorot 1.6s ease-out 2; }
+        @keyframes jdKedip { 0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, .45); } 50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); } }
+        @keyframes jdSorot { 0% { box-shadow: 0 0 0 4px rgba(79, 70, 229, .55); } 100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); } }
+        .jd-lapis { position: fixed; inset: 0; z-index: 2147482000; display: flex; align-items: flex-end; justify-content: center; background: rgba(15, 23, 42, .45); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #0F172A; }
+        .jd-lapis[hidden] { display: none; }
+        .jd-lapis.tengah { align-items: center; padding: 18px; }
+        .jd-kotak { width: 100%; max-width: 440px; box-sizing: border-box; background: #FFFFFF; border-radius: 22px 22px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 12px; max-height: 92%; overflow-y: auto; }
+        .jd-lapis.tengah .jd-kotak { border-radius: 22px; box-shadow: 0 18px 50px rgba(0, 0, 0, .35); }
+        .jd-kotak h3 { margin: 0; font-size: 18px; font-weight: 800; }
+        .jd-kotak p { margin: 0; font-size: 13.5px; line-height: 1.5; color: #475569; }
+        .jd-jam { display: block; width: 100%; box-sizing: border-box; height: 56px; border-radius: 14px; border: 1.5px solid #CBD5E1; padding: 0 14px; font: inherit; font-size: 24px; font-weight: 800; text-align: center; color: #0F172A; background: #FFFFFF; }
+        .jd-cepat { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+        .jd-cepat button { min-height: 40px; border-radius: 10px; border: 1.5px solid #E2E8F0; background: #F8FAFC; font: inherit; font-size: 12.5px; font-weight: 800; color: #334155; cursor: pointer; }
+        .jd-ket { font-size: 13px !important; font-weight: 700; color: #3730A3 !important; min-height: 20px; }
+        .jd-ket.salah { color: #B91C1C !important; }
+        .jd-aksi { display: flex; flex-direction: column; gap: 8px; }
+        .jd-aksi button { min-height: 48px; border-radius: 14px; border: 0; font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+        .jd-utama { background: #0F172A; color: #FFFFFF; }
+        .jd-utama.ungu { background: #4F46E5; }
+        .jd-garis { background: #FFFFFF; color: #0F172A; border: 1.5px solid #E2E8F0 !important; }
+        .jd-merah { background: #FFFFFF; color: #B91C1C; border: 1.5px solid #FECACA !important; }
+        .jd-ikon { width: 60px; height: 60px; margin: 0 auto; border-radius: 50%; background: #EEF2FF; color: #4F46E5; display: grid; place-items: center; animation: jdGoyang 1.1s ease-in-out infinite; }
+        .jd-ikon svg { width: 30px; height: 30px; }
+        .jd-ikon.lewat { background: #FEF2F2; color: #DC2626; }
+        @keyframes jdGoyang { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-12deg); } 40% { transform: rotate(10deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(4deg); } }
+        .jd-pop-judul { text-align: center; }
+        .jd-item { border-radius: 14px; border: 1.5px solid #E2E8F0; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
+        .jd-item b { font-size: 15px; }
+        .jd-item span { font-size: 13px; color: #475569; white-space: pre-wrap; word-break: break-word; }
+        .jd-item em { font-style: normal; font-size: 12.5px; font-weight: 800; color: #4F46E5; }
+        .jd-item.lewat em { color: #DC2626; }
+        @media (prefers-reduced-motion: reduce) { .jd-tbl.lewat, .jd-ikon, .jd-kartu-sorot { animation: none; } }
+    </style>
+    <script type="module">
+        import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, deleteField, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        (function pengingatJamPending() {
+            let app; try { app = getApp(); } catch (e) { console.warn('[Pengingat jam] Firebase belum siap'); return; }
+            const auth = getAuth(app), db = getFirestore(app);
+            const DOKU = () => doc(db, 'artifacts', 'onbid-2f87a', 'public', 'data', 'pengingat_pending', 'umum');
+            const ID_OK = (v) => /^[A-Za-z0-9_-]{1,128}$/.test(String(v || ''));
+            const SEBELUM = 5 * 60 * 1000;            // pop up 5 menit sebelum jam
+            const KUNCI = 'jd_sudah_muncul';          // pop up yang sudah tampil di layar ini (per perangkat)
+            const SVG = 'http://www.w3.org/2000/svg';
+            let adminOk = false, henti = null, daftar = {}, orders = {}, ordersSiap = false, timer = 0, popId = [], tunda = {};
+            const $ = (id) => document.getElementById(id);
+            const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+            const pad = (n) => String(n).padStart(2, '0');
+            const jamDari = (ms) => { const d = new Date(ms); return pad(d.getHours()) + '.' + pad(d.getMinutes()); };
+            const hariSama = (a, b) => { const x = new Date(a), y = new Date(b); return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate(); };
+            const teksWaktu = (ms) => (hariSama(ms, Date.now()) ? '' : 'besok ') + 'jam ' + jamDari(ms);
+            function ikonJam() {
+                const s = document.createElementNS(SVG, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2.2'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('aria-hidden', 'true');
+                [['circle', { cx: '12', cy: '13', r: '8' }], ['path', { d: 'M12 9v4l2.5 2' }], ['path', { d: 'M5 3L2 6' }], ['path', { d: 'M19 3l3 3' }]].forEach(([t, a]) => { const p = document.createElementNS(SVG, t); Object.keys(a).forEach(k => p.setAttribute(k, a[k])); s.appendChild(p); });
+                return s;
+            }
+            function sudahMuncul() { try { const o = JSON.parse(localStorage.getItem(KUNCI) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } }
+            function tandaiMuncul(id, tanda) { try { const o = sudahMuncul(); o[id] = String(tanda); Object.keys(o).forEach(k => { if (parseInt(o[k], 10) < Date.now() - 2 * 864e5) delete o[k]; }); localStorage.setItem(KUNCI, JSON.stringify(o)); } catch (e) {} }
+
+            /* ---------- data order (dipinjam dari pendengar active_orders yang sudah ada, 0 read tambahan) ---------- */
+            function pasangPenyadap() {
+                if (window.__jdSadap || typeof window.akSelaraskan !== 'function') return !!window.__jdSadap;
+                const asli = window.akSelaraskan;
+                window.akSelaraskan = function (list) {
+                    try {
+                        const o = {};
+                        (list || []).forEach(x => { if (x && ID_OK(x.id)) o[x.id] = x; });
+                        orders = o; ordersSiap = true; bersihkan(); periksa();
+                    } catch (e) {}
+                    return asli.apply(this, arguments);
+                };
+                window.__jdSadap = true;
+                return true;
+            }
+            function pendingIni(id) { const o = orders[id]; return !!(o && o.status === 'unassigned'); }
+            function aktif() { return Object.keys(daftar).filter(id => pendingIni(id)).map(id => Object.assign({ id: id }, daftar[id])); }
+            // pengingat untuk order yang sudah dibagikan / dibatalkan / lebih dari 1 hari lewat: dihapus (oleh perangkat mana saja)
+            function bersihkan() {
+                if (!adminOk || !ordersSiap) return;
+                Object.keys(daftar).forEach(id => {
+                    const o = orders[id], w = Number(daftar[id].waktu) || 0;
+                    // hanya kalau order TERLIHAT sudah dibagikan, atau jamnya sudah lewat > 1 hari (order yang dibatalkan ikut terhapus di sini)
+                    const selesai = (o && o.status && o.status !== 'unassigned') || w < Date.now() - 864e5;
+                    if (selesai) hapus(id, true);
+                });
+            }
+
+            /* ---------- simpan / hapus ---------- */
+            async function simpan(id, waktu, nama) {
+                if (!ID_OK(id)) return false;
+                try {
+                    await setDoc(DOKU(), { daftar: { [id]: { waktu: waktu, jam: jamDari(waktu), nama: String(nama || '').slice(0, 60), dibuat: Date.now() } }, diubah_at: serverTimestamp() }, { merge: true });
+                    return true;
+                } catch (e) { console.warn('[Pengingat jam] simpan', e && e.code); return false; }
+            }
+            const sedangHapus = new Set();
+            async function hapus(id, diam) {
+                if (!ID_OK(id) || !daftar[id] || sedangHapus.has(id)) return;   // cegah hapus berulang saat data belum tersinkron
+                sedangHapus.add(id);
+                const lama = daftar[id]; delete daftar[id]; gambarKartu();
+                try { await updateDoc(DOKU(), { ['daftar.' + id]: deleteField() }); }
+                catch (e) { if (!diam) { daftar[id] = lama; gambarKartu(); } console.warn('[Pengingat jam] hapus', e && e.code); }
+                setTimeout(() => sedangHapus.delete(id), 5000);
+            }
+
+            /* ---------- baris tambahan di kartu Pending Reguler ---------- */
+            function kartuOrder(id) {
+                const b = document.querySelector('#pending-orders-list [onclick="window.openEditOrder(\'' + id + '\')"]');
+                return b ? b.closest('#pending-orders-list > div') : null;
+            }
+            function gambarKartu() {
+                const w = $('pending-orders-list'); if (!w || !adminOk) return;
+                w.querySelectorAll('.jd-baris').forEach(x => x.remove());
+                w.querySelectorAll(':scope > div').forEach(k => {
+                    const b = k.querySelector('[onclick^="window.openEditOrder(\'"]'); if (!b) return;
+                    const m = /openEditOrder\('([A-Za-z0-9_-]{1,128})'\)/.exec(b.getAttribute('onclick') || ''); if (!m) return;
+                    const id = m[1], p = daftar[id];
+                    const baris = el('div', 'jd-baris');
+                    const t = el('button', 'jd-tbl'); t.type = 'button';
+                    t.appendChild(ikonJam());
+                    if (p && Number(p.waktu)) {
+                        const sisa = Number(p.waktu) - Date.now();
+                        t.classList.add('ada');
+                        if (sisa <= 0) t.classList.add('lewat'); else if (sisa <= SEBELUM) t.classList.add('dekat');
+                        t.appendChild(document.createTextNode('Bagikan ' + teksWaktu(Number(p.waktu))));
+                        t.appendChild(el('small', '', sisa <= 0 ? '· sudah waktunya' : '· ubah'));
+                        t.setAttribute('aria-label', 'Pengingat bagikan ' + teksWaktu(Number(p.waktu)) + ', ketuk untuk mengubah');
+                    } else {
+                        t.appendChild(document.createTextNode('Atur jam dibagikan'));
+                        t.appendChild(el('small', '', '(opsional)'));
+                    }
+                    const nama = (orders[id] && orders[id].customer_name) || '';
+                    t.addEventListener('click', () => bukaAtur(id, nama));
+                    baris.appendChild(t);
+                    k.appendChild(baris);
+                });
+            }
+            function pasangKartu() {
+                if (window.__jdKartu || typeof window.renderPendingOrders !== 'function') return !!window.__jdKartu;
+                const asli = window.renderPendingOrders;
+                window.renderPendingOrders = function () { const r = asli.apply(this, arguments); try { gambarKartu(); } catch (e) {} return r; };
+                window.__jdKartu = true;
+                return true;
+            }
+
+            /* ---------- lembar atur jam ---------- */
+            let lembar = null;
+            function bukaAtur(id, nama) {
+                if (!ID_OK(id)) return;
+                if (lembar) lembar.remove();
+                lembar = el('div', 'jd-lapis'); lembar.setAttribute('role', 'dialog'); lembar.setAttribute('aria-modal', 'true');
+                const k = el('div', 'jd-kotak');
+                k.appendChild(el('h3', '', 'Jam order dibagikan'));
+                k.appendChild(el('p', '', 'Pengingat muncul di layar admin 5 menit sebelum jam ini. ' + (nama ? 'Order: ' + String(nama).slice(0, 40) : '')));
+                const inp = el('input', 'jd-jam'); inp.type = 'time'; inp.setAttribute('aria-label', 'Jam dibagikan');
+                const p = daftar[id];
+                const awal = p && Number(p.waktu) ? Number(p.waktu) : Date.now() + 60 * 60 * 1000;
+                inp.value = pad(new Date(awal).getHours()) + ':' + pad(new Date(awal).getMinutes());
+                k.appendChild(inp);
+                const cepat = el('div', 'jd-cepat');
+                [['+30 mnt', 30], ['+1 jam', 60], ['+2 jam', 120], ['+3 jam', 180]].forEach(([t, m]) => {
+                    const b = el('button', '', t); b.type = 'button';
+                    b.addEventListener('click', () => { const d = new Date(Date.now() + m * 60000); inp.value = pad(d.getHours()) + ':' + pad(d.getMinutes()); tulisKet(); });
+                    cepat.appendChild(b);
+                });
+                k.appendChild(cepat);
+                const ket = el('p', 'jd-ket'); ket.setAttribute('role', 'status'); k.appendChild(ket);
+                function hitung() {
+                    const m = /^(\d{2}):(\d{2})$/.exec(inp.value || ''); if (!m) return 0;
+                    const d = new Date(); d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+                    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);   // jam sudah lewat = besok
+                    return d.getTime();
+                }
+                function tulisKet() {
+                    const w = hitung(); ket.classList.toggle('salah', !w);
+                    if (!w) { ket.textContent = 'Isi jamnya dulu.'; return; }
+                    const s = Math.round((w - Date.now()) / 60000);
+                    ket.textContent = 'Dibagikan ' + teksWaktu(w) + ' · pengingat muncul jam ' + jamDari(w - SEBELUM) + (s < 60 ? ' (' + s + ' menit lagi)' : '');
+                }
+                inp.addEventListener('input', tulisKet); tulisKet();
+                const aksi = el('div', 'jd-aksi');
+                const sv = el('button', 'jd-utama ungu', 'Simpan pengingat'); sv.type = 'button';
+                sv.addEventListener('click', async () => {
+                    const w = hitung(); if (!w) { tulisKet(); return; }
+                    sv.disabled = true; sv.textContent = 'Menyimpan...';
+                    const ok = await simpan(id, w, nama);
+                    if (ok) {
+                        tutupAtur();
+                        if (typeof window.abToast === 'function') window.abToast('Pengingat disimpan', 'Bagikan ' + teksWaktu(w) + ' · muncul jam ' + jamDari(w - SEBELUM));
+                    } else { sv.disabled = false; sv.textContent = 'Simpan pengingat'; ket.classList.add('salah'); ket.textContent = 'Gagal menyimpan. Periksa internet lalu coba lagi.'; }
+                });
+                aksi.appendChild(sv);
+                if (p) {
+                    const hp = el('button', 'jd-merah', 'Hapus pengingat'); hp.type = 'button';
+                    hp.addEventListener('click', () => { hapus(id); tutupAtur(); });
+                    aksi.appendChild(hp);
+                }
+                const bt = el('button', 'jd-garis', 'Batal'); bt.type = 'button'; bt.addEventListener('click', tutupAtur);
+                aksi.appendChild(bt);
+                k.appendChild(aksi);
+                lembar.appendChild(k);
+                lembar.addEventListener('click', (e) => { if (e.target === lembar) tutupAtur(); });
+                document.body.appendChild(lembar);
+                setTimeout(() => { try { inp.focus(); } catch (e) {} }, 50);
+            }
+            function tutupAtur() { if (lembar) { lembar.remove(); lembar = null; } }
+
+            /* ---------- pop up pengingat ---------- */
+            let pop = null;
+            function periksa() {
+                if (!adminOk || !ordersSiap) return;
+                gambarKartuBerkala();
+                const kini = Date.now(), sudah = sudahMuncul();
+                // 2 kali: 5 menit sebelum jam, lalu tepat di jamnya kalau belum juga dibagikan
+                const tahap = (w) => w + ':' + (kini >= w ? 2 : 1);
+                const jatuh = aktif().filter(p => {
+                    const w = Number(p.waktu) || 0;
+                    if (!w || kini < w - SEBELUM) return false;
+                    if (tunda[p.id] && kini < tunda[p.id]) return false;
+                    return sudah[p.id] !== tahap(w) || (tunda[p.id] && kini >= tunda[p.id]);
+                }).sort((a, b) => a.waktu - b.waktu);
+                // pop up yang sedang tampil: tutup sendiri kalau ordernya sudah dibagikan
+                if (pop && popId.length && !popId.some(id => pendingIni(id) && daftar[id])) tutupPop();
+                if (!jatuh.length) return;
+                const ids = jatuh.map(p => p.id).sort().join(',');
+                if (pop && popId.slice().sort().join(',') === ids) return;
+                tampilPop(jatuh);
+            }
+            function tampilPop(jatuh) {
+                tutupPop();
+                popId = jatuh.map(p => p.id);
+                jatuh.forEach(p => { const w = Number(p.waktu); tandaiMuncul(p.id, w + ':' + (Date.now() >= w ? 2 : 1)); delete tunda[p.id]; });
+                const lewat = jatuh.some(p => Number(p.waktu) <= Date.now());
+                pop = el('div', 'jd-lapis tengah'); pop.setAttribute('role', 'alertdialog'); pop.setAttribute('aria-modal', 'true');
+                const k = el('div', 'jd-kotak');
+                const ik = el('div', 'jd-ikon' + (lewat ? ' lewat' : '')); ik.appendChild(ikonJam()); k.appendChild(ik);
+                const j = el('h3', 'jd-pop-judul', jatuh.length > 1 ? jatuh.length + ' order terjadwal harus dibagikan' : 'Order terjadwal harus dibagikan');
+                k.appendChild(j);
+                k.appendChild(el('p', 'jd-pop-judul', 'Order di Pending Reguler ini dijadwalkan dibagikan sebentar lagi. Pilih rider lalu kirim.'));
+                jatuh.forEach(p => {
+                    const o = orders[p.id] || {}, w = Number(p.waktu), sisa = Math.round((w - Date.now()) / 60000);
+                    const it = el('div', 'jd-item' + (w <= Date.now() ? ' lewat' : ''));
+                    it.appendChild(el('em', '', 'Jam ' + jamDari(w) + (sisa > 0 ? ' · ' + sisa + ' menit lagi' : (sisa === 0 ? ' · sekarang' : ' · lewat ' + (-sisa) + ' menit'))));
+                    it.appendChild(el('b', '', String(o.customer_name || p.nama || 'Tanpa nama').slice(0, 60)));
+                    const isi = Array.isArray(o.items) ? o.items.map(i => i && i.name).filter(Boolean).join('\n') : '';
+                    if (isi) it.appendChild(el('span', '', isi.length > 140 ? isi.slice(0, 140) + '…' : isi));
+                    k.appendChild(it);
+                });
+                const aksi = el('div', 'jd-aksi');
+                const bk = el('button', 'jd-utama ungu', 'Buka Pending'); bk.type = 'button';
+                bk.addEventListener('click', () => { const id = popId[0]; tutupPop(); bukaPending(id); });
+                const nt = el('button', 'jd-garis', 'Ingatkan lagi 5 menit'); nt.type = 'button';
+                nt.addEventListener('click', () => { popId.forEach(id => { tunda[id] = Date.now() + 5 * 60 * 1000; }); tutupPop(); });
+                aksi.appendChild(bk); aksi.appendChild(nt);
+                k.appendChild(aksi);
+                pop.appendChild(k);
+                document.body.appendChild(pop);
+                try { bk.focus(); } catch (e) {}
+                try { if (typeof window.abUcap === 'function') window.abUcap('Pengingat. Ada order terjadwal jam ' + jamDari(Number(jatuh[0].waktu)) + ' yang harus dibagikan.'); } catch (e) {}
+                try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+            }
+            function tutupPop() { if (pop) { pop.remove(); pop = null; } popId = []; }
+            function bukaPending(id) {
+                try { if (!(window.abKeHalaman && window.abKeHalaman(2))) window.switchPage('pending'); } catch (e) {}
+                try { const t = document.querySelector('#ak-tabs [data-ak-tab="reguler"]'); if (t && !t.classList.contains('on')) t.click(); } catch (e) {}
+                setTimeout(() => {
+                    const k = ID_OK(id) ? kartuOrder(id) : null; if (!k) return;
+                    k.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    k.classList.remove('jd-kartu-sorot'); void k.offsetWidth; k.classList.add('jd-kartu-sorot');
+                }, 350);
+            }
+            // warna kartu ikut berubah menjelang / lewat jam (tanpa menggambar ulang daftar pending)
+            let kartuTerakhir = 0;
+            function gambarKartuBerkala() { if (Date.now() - kartuTerakhir > 25000) { kartuTerakhir = Date.now(); gambarKartu(); } }
+
+            /* ---------- mulai ---------- */
+            function dengar() {
+                if (henti) return;
+                henti = onSnapshot(DOKU(), (s) => {
+                    const d = s.exists() ? (s.data() || {}) : {};
+                    const a = {}, src = d.daftar && typeof d.daftar === 'object' ? d.daftar : {};
+                    Object.keys(src).forEach(id => { const p = src[id]; if (ID_OK(id) && p && Number.isFinite(Number(p.waktu))) a[id] = { waktu: Number(p.waktu), jam: String(p.jam || ''), nama: String(p.nama || '').slice(0, 60), dibuat: Number(p.dibuat) || 0 }; });
+                    daftar = a;
+                    gambarKartu(); bersihkan(); periksa();
+                }, (e) => console.warn('[Pengingat jam] baca', e && e.code));
+            }
+            function berhenti() { if (henti) { try { henti(); } catch (e) {} henti = null; } daftar = {}; tutupPop(); tutupAtur(); gambarKartu(); }
+            onAuthStateChanged(auth, (u) => {
+                adminOk = !!(u && typeof window.roleFromEmail === 'function' && window.roleFromEmail(u.email));
+                if (adminOk) dengar(); else berhenti();
+            });
+            const coba = setInterval(() => { const a = pasangPenyadap(), b = pasangKartu(); if (a && b) clearInterval(coba); }, 500);
+            pasangPenyadap(); pasangKartu();
+            clearInterval(timer); timer = setInterval(periksa, 15000);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) periksa(); });
+        })();
+    </script>
+    <!-- ===================== AKHIR PENGINGAT JAM ORDER PENDING ===================== -->
 </body>
 </html>
