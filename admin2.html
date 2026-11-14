@@ -2993,6 +2993,9 @@
                 <h2>Order pending <span class="ad-count" id="stat-pending-orders">0</span></h2>
                 <p>Order ini belum dibagikan ke rider mana pun. Pembagian <b>full manual</b>: pilih order, lalu kirim ke rider yang Anda kehendaki.</p>
                 <div class="ad-rider-line ad-kosong"><i class="fa-solid fa-motorcycle" aria-hidden="true"></i><span id="ad-pending-rider">Belum ada rider dipilih. Pilih dulu di halaman Dispatch.</span></div>
+                <!-- (14 Nov 2026) judul, keterangan & baris "Rider terpilih" di atas disembunyikan (tetap ada untuk kode lama);
+                     gantinya antrean rider geser yang sama dengan halaman Dispatch -->
+                <div id="ar-pending-strip" class="ar-pending"></div>
             </div>
             <!-- ANTAR HEMAT (30 Okt 2026): tab Pending Reguler / Khusus · Mitra -->
             <div class="ak-tabs" id="ak-tabs" role="tablist" aria-label="Jenis order pending">
@@ -9483,6 +9486,12 @@
                         window._sidikWaRider = sidikWa;
                         renderActiveOrders();
                     }
+                    // (14 Nov 2026) label area rider di antrean geser ikut diperbarui saat area rider berubah
+                    const sidikArea = allRiders.map(r => r.uid + ':' + (typeof r.area_rider === 'string' ? r.area_rider : '')).join('|');
+                    if (window._sidikAreaRider !== sidikArea) {
+                        window._sidikAreaRider = sidikArea;
+                        if (typeof window.dxRenderRiderStrip === 'function') window.dxRenderRiderStrip();
+                    }
                 } catch (e) {}
 
                 // (23 Okt 2026) Rider yang sedang kena hukuman antrean (kepatuhan tahap) ditaruh paling bawah
@@ -10592,39 +10601,78 @@
             if (typeof window.dxCekOngkirSalah === 'function') window.dxCekOngkirSalah();
         };
 
-        // ---------- Kotak "Kirim ke": satu rider terpilih yang besar + rider siap berikutnya ----------
+        // ---------- Kotak "Kirim ke" (14 Nov 2026): SELURUH antrean dalam satu baris yang digeser ke samping ----------
+        // Dipakai di Dispatch (#dx-rider-strip) dan Pending (#ar-pending-strip). Urutan = urutan antrean (tidak diacak).
+        // Tiap kartu: nomor antrean, nama panggilan, lokasi yang ditulis rider, dan label area dari GPS rider
+        // (status_rider_aktif.area_rider, diisi aplikasi rider -> 0 read tambahan). Semua teks di-escape.
         let _dxInfoAntrean = [];
         let _abTerpilihSebelum = null;
+        const AR_AREA_NAMA = { pusat: 'Pusat', utara: 'Utara', selatan: 'Selatan', barat: 'Barat', timur: 'Timur' };
+        const AR_LEWATI_NAMA = /^(muhammad|muhamad|mohammad|mohamad|mochammad|mochamad|moch|moh|muh|mhd|md)$/i;
+        // "Dedi Kurniawan" -> "Dedi", "R A Jamaludin" -> "Jamaludin", "M. Rizki" -> "Rizki" (singkatan dilewati)
+        function arNamaPendek(n) {
+            const kata = String(n || '').trim().split(/\s+/).filter(Boolean);
+            if (!kata.length) return '';
+            const bersih = (k) => k.replace(/[.,]/g, '');
+            let k = kata.find(x => bersih(x).length > 2 && !AR_LEWATI_NAMA.test(bersih(x))) || kata.find(x => bersih(x).length > 2) || kata[0];
+            k = bersih(k) || k;
+            return k.length > 1 && k === k.toUpperCase() ? k.charAt(0) + k.slice(1).toLowerCase() : k;
+        }
+        window.arNamaPendek = arNamaPendek;
+        function arAreaRider(uid) {
+            const u = String(uid || '').trim().toUpperCase();
+            const r = allRiders.find(x => String(x.uid || '').trim().toUpperCase() === u);
+            const a = r && typeof r.area_rider === 'string' ? r.area_rider : '';
+            if (!a) return null;
+            const t = getTimestampMs(r.area_at);
+            if (t && Date.now() - t > 12 * 3600 * 1000) return null;   // data kemarin: tidak dipakai
+            if (a === 'x') return { k: 'x', t: 'Belum akurat' };
+            return AR_AREA_NAMA[a] ? { k: a, t: AR_AREA_NAMA[a] } : null;
+        }
+        function arKartuRider(x, terpilih) {
+            const on = terpilih === x.uid;
+            const a = arAreaRider(x.uid);
+            const pos = Number(x.pos) || 0;
+            const nama = arNamaPendek(x.nama) || String(x.nama || x.uid);
+            return `<button type="button" class="ar-chip${on ? ' on' : ''}${x.bisa ? '' : ' off'}" data-dx-aksi="pilih" data-ar-pilih="1" data-uid="${escDx(x.uid)}" data-bisa="${x.bisa ? '1' : '0'}" aria-pressed="${on ? 'true' : 'false'}" title="${escDx(x.nama)}${x.stTeks ? ' · ' + escDx(x.stTeks) : ''}">`
+                + `<span class="ar-no">#${pos}${on ? ' · DIPILIH' : ''}</span>`
+                + `<b class="ar-nm">${escDx(nama)}</b>`
+                + `<span class="ar-lok">${escDx(x.lokasi || 'Posisi / Standby')}</span>`
+                + (a ? `<span class="ar-area ar-a-${a.k}">${escDx(a.t)}</span>` : '')
+                + `</button>`;
+        }
         window.dxRenderRiderStrip = () => {
-            const box = document.getElementById('dx-rider-strip');
-            if (!box) return;
             const terpilih = document.getElementById('selected-rider-uid').value;
-            const r = terpilih ? _dxInfoAntrean.find(x => x.uid === terpilih) : null;
-            let html = '';
-            if (r) {
-                const sub = r.lokasi || 'Posisi / Standby';   // kotak ini sengaja hanya nama + lokasi
-                html = `<div class="ab-pilihan">
-                    <span class="ab-no" aria-label="Antrean ${Number(r.pos) || 0}">${Number(r.pos) || 0}</span>
-                    <span class="ab-isi"><span class="ab-nm" style="display:block">${escDx(r.nama)}</span><span class="ab-sub" style="display:block">${escDx(sub)}</span></span>
-                    ${r.stTeks ? `<span class="ab-st">${escDx(r.stTeks)}</span>` : ''}
-                </div>`;
-            } else if (terpilih) {
-                html = `<div class="ab-pilihan"><span class="ab-no">&#10003;</span><span class="ab-isi"><span class="ab-nm" style="display:block">${escDx(document.getElementById('selected-rider-name').value || terpilih)}</span></span></div>`;
-            } else if (_dxInfoAntrean.some(x => x.bisa)) {
-                html = `<div class="ab-pilihan ab-kosong"><span class="ab-no">?</span><span class="ab-isi"><span class="ab-nm" style="display:block">Belum pilih rider</span><span class="ab-sub" style="display:block">Ketuk salah satu rider di bawah</span></span></div>`;
-            } else {
-                html = `<div class="ab-pilihan ab-kosong"><span class="ab-no">!</span><span class="ab-isi"><span class="ab-nm" style="display:block">Tidak ada rider siap</span><span class="ab-sub" style="display:block">Order yang dikirim akan masuk Pending</span></span></div>`;
-            }
-            // Kanan: 3 rider siap berikutnya (nomor, nama, lokasi). Ketuk = langsung ganti tujuan.
-            const lain = _dxInfoAntrean.filter(x => x.bisa && x.uid !== terpilih).slice(0, 3);
-            html += '<div class="ab-mini" aria-label="Rider siap berikutnya">' + (lain.length
-                ? lain.map(x => `<button type="button" class="ab-mini-b" data-dx-aksi="pilih" data-uid="${escDx(x.uid)}" data-bisa="1" title="Kirim ke ${escDx(x.nama)}"><i>${Number(x.pos) || 0}</i><span><b>${escDx(x.nama)}</b><em>(${escDx(x.lokasi || 'Posisi / Standby')})</em></span></button>`).join('')
-                : '<p class="ab-mini-kosong">Tidak ada rider siap lainnya</p>') + '</div>';
-            box.innerHTML = html;
-            // Berkedip hijau saat rider tujuan berganti (mis. setelah order terkirim)
-            if (r && _abTerpilihSebelum && _abTerpilihSebelum !== r.uid) box.querySelector('.ab-pilihan')?.classList.add('ab-kedip');
+            const isi = _dxInfoAntrean.length
+                ? `<div class="ar-strip">${_dxInfoAntrean.map(x => arKartuRider(x, terpilih)).join('')}</div>`
+                : `<p class="ar-kosong">Antrean kosong · order yang dikirim masuk Pending</p>`;
+            const berganti = terpilih && _abTerpilihSebelum && _abTerpilihSebelum !== terpilih;
+            ['dx-rider-strip', 'ar-pending-strip'].forEach(id => {
+                const box = document.getElementById(id);
+                if (!box) return;
+                const lama = box.querySelector('.ar-strip');
+                const geser = lama ? lama.scrollLeft : 0;   // posisi geser tidak loncat saat antrean diperbarui
+                box.innerHTML = (id === 'ar-pending-strip'
+                    ? `<div class="ar-head"><span>Kirim ke · geser untuk rider lain</span><small>${_dxInfoAntrean.length} rider antre</small></div>` : '') + isi;
+                const s = box.querySelector('.ar-strip');
+                if (!s) return;
+                s.scrollLeft = geser;
+                const k = s.querySelector('.ar-chip.on');
+                if (k && (berganti || k.offsetLeft < s.scrollLeft || k.offsetLeft + k.offsetWidth > s.scrollLeft + s.clientWidth)) {
+                    s.scrollLeft = Math.max(0, k.offsetLeft - 8);
+                    if (berganti) k.classList.add('ar-kedip');
+                }
+            });
             _abTerpilihSebelum = terpilih || _abTerpilihSebelum;
         };
+        // Pending: ketuk kartu rider = pilih rider (sama seperti di Dispatch)
+        document.addEventListener('click', (ev) => {
+            const el = ev.target.closest && ev.target.closest('#ar-pending-strip [data-ar-pilih]');
+            if (!el) return;
+            const uid = el.dataset.uid || '';
+            if (el.dataset.bisa !== '1') { if (typeof window.abToast === 'function') window.abToast('Rider belum bisa dipilih', 'Rider ini sedang istirahat, hilang sinyal, atau saldonya habis.', null, false); return; }
+            window.selectRider(uid, namaRiderDx(allRiders.find(r => r.uid === uid)) || uid);
+        });
 
         function dxTandaiRiderTerpilih(uid) {
             document.querySelectorAll('#page-dispatch .dx-q').forEach(el => el.classList.toggle('selected', !!uid && el.dataset.uid === uid));
@@ -30913,6 +30961,32 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pasang); else pasang();
 })();
 </script>
+    <!-- ===================== ANTREAN GESER + AREA RIDER (14 Nov 2026) =====================
+         Kotak "Kirim ke" di Dispatch & kepala halaman Pending: seluruh antrean dalam satu baris geser
+         (isi digambar window.dxRenderRiderStrip). Label area dari status_rider_aktif.area_rider. -->
+    <style id="ar-css">
+        #page-dispatch section.ab-target { display: flex; flex-direction: column; gap: 6px; }
+        .ar-strip { position: relative; display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 2px 2px 5px; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+        .ar-chip { flex: none; scroll-snap-align: start; min-width: 78px; max-width: 132px; min-height: 68px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 9px; border-radius: 12px; border: 1.5px solid var(--ad-ln); background: var(--ad-sf); color: var(--ad-ink); font-family: inherit; text-align: left; cursor: pointer; }
+        .ar-chip .ar-no { font-size: 10px; font-weight: 800; color: var(--ad-mu); white-space: nowrap; }
+        .ar-chip .ar-nm { font-size: 14px; font-weight: 800; line-height: 1.15; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ar-chip .ar-lok { font-size: 10.5px; font-weight: 700; color: var(--ad-mu); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ar-chip .ar-area { font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+        .ar-a-pusat { background: #FFF0E4; color: #9A3412; } .ar-a-utara { background: #EAF0FD; color: #1D4ED8; } .ar-a-selatan { background: #E6F4F2; color: #0F766E; }
+        .ar-a-barat { background: #F1EBFD; color: #6D28D9; } .ar-a-timur { background: #FBF2DC; color: #854D0E; } .ar-a-x { background: #EFEDEA; color: #57534E; }
+        .ar-chip.on { border: 2px solid var(--ad-acc); background: var(--ad-soft); padding: 5.5px 8.5px; }
+        .ar-chip.on .ar-no { color: var(--ad-acc); }
+        .ar-chip.off { opacity: .5; }
+        .ar-chip.ar-kedip { animation: ar-kedip .8s ease-out; }
+        @keyframes ar-kedip { 0% { box-shadow: 0 0 0 4px rgba(22, 163, 74, .5); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
+        @media (prefers-reduced-motion: reduce) { .ar-chip.ar-kedip { animation: none; } }
+        .ar-kosong { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--ad-warnbg); color: var(--ad-warn); font-size: 12.5px; font-weight: 700; }
+        #page-pending .ad-head > h2, #page-pending .ad-head > p, #page-pending .ad-head > .ad-rider-line { display: none; }
+        #page-pending .ad-head { padding: 10px 10px 8px; }
+        .ar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+        .ar-head span { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--ad-mu); }
+        .ar-head small { font-size: 11px; font-weight: 700; color: var(--ad-mu); white-space: nowrap; }
+    </style>
     <!-- ===================== PETA RIDER (11 Nov 2026) =====================
          Layar penuh dari Menu Lainnya: posisi terakhir rider yang ON (posisi_rider/{UID}), penanda bernama,
          daftar rider, kartu detail, "Ikuti rider", dan pengaturan (aktif / nonaktif + kunci peta CARTO).
@@ -30982,11 +31056,19 @@
         .pr-atur label { font-size: 13px; font-weight: 800; color: #4A3F35; }
         .pr-atur input[type="text"] { display: block; width: 100%; box-sizing: border-box; height: 46px; margin-top: 6px; border-radius: 12px; border: 1.5px solid #E2D8CC; padding: 0 12px; font: inherit; font-size: 14px; font-family: ui-monospace, Menlo, monospace; }
         .pr-atur small { display: block; min-height: 18px; font-size: 12.5px; font-weight: 700; color: #B42318; }
+        /* (14 Nov 2026) kotak area */
+        .pr-kepala button.pr-area-btn { width: auto; height: 36px; padding: 0 12px; border-radius: 999px; border: 1.5px solid #E2D8CC; background: #FFFFFF; color: #6B6258; font-size: 12.5px; font-weight: 800; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+        .pr-kepala button.pr-area-btn[aria-pressed="true"] { border-color: #F4BE95; background: #FFF0E4; color: #9A3412; }
+        .pr-kepala button.pr-area-btn i { font-size: 13px; }
+        .leaflet-div-icon.pr-area-l { background: transparent; border: 0; }
+        .pr-area-lbl { transform: translate(-50%, -50%); width: max-content; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-size: 12.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; text-shadow: 0 0 3px #FFFFFF, 0 0 3px #FFFFFF, 0 0 3px #FFFFFF; pointer-events: none; }
     </style>
     <section class="pr-layar" id="pr-layar" hidden role="dialog" aria-modal="true" aria-labelledby="pr-judul">
         <div class="pr-kepala">
             <button type="button" id="pr-tutup" aria-label="Kembali"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
             <div class="pr-judul"><b id="pr-judul">Peta rider</b><span id="pr-sub">Memuat...</span></div>
+            <!-- (14 Nov 2026) tampil / sembunyikan kotak area Pusat-Utara-Selatan-Barat-Timur -->
+            <button type="button" id="pr-area-btn" class="pr-area-btn" aria-pressed="true" aria-label="Tampilkan kotak area"><i class="fa-solid fa-border-all" aria-hidden="true"></i><span>Area</span></button>
             <button type="button" id="pr-atur-btn" aria-label="Pengaturan peta rider"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
         </div>
         <div class="pr-peta-wadah">
@@ -31033,6 +31115,59 @@
             const label = { siap: 'Siap', antar: 'Mengantar', hilang: 'Hilang sinyal' };
             let peta = null, lapisan = null, kunciAktif = null, penanda = {}, data = {}, atur = { aktif: false, kunci: '' };
             let hentiPos = null, hentiAtur = null, dipilih = '', ikuti = '', pertama = true, jamTimer = 0, adminOk = false, aturSiap = false, petaGagal = false;
+
+            // ---------- (14 Nov 2026) KOTAK AREA ----------
+            // PUSAT = kotak 2 x 2 km di titik pusat. Di luar kotak dibagi garis miring dari 4 sudut kotak
+            // (garis itu tepat melewati titik pusat): lebih jauh ke utara/selatan = UTARA/SELATAN, ke barat/timur = BARAT/TIMUR.
+            // Rumus yang sama dipakai aplikasi rider untuk badge "Lokasi kamu di Area ...".
+            const AREA_PUSAT = [-7.604234430992013, 109.51229132737893];
+            const KM_LAT = 110.574, KM_LNG = 111.320 * Math.cos(AREA_PUSAT[0] * Math.PI / 180);
+            const AREA = {
+                pusat: { t: 'Pusat', w: '#EA580C', tx: '#9A3412', bg: '#FFF0E4' }, utara: { t: 'Utara', w: '#2563EB', tx: '#1D4ED8', bg: '#EAF0FD' },
+                selatan: { t: 'Selatan', w: '#0D9488', tx: '#0F766E', bg: '#E6F4F2' }, barat: { t: 'Barat', w: '#7C3AED', tx: '#6D28D9', bg: '#F1EBFD' },
+                timur: { t: 'Timur', w: '#CA8A04', tx: '#854D0E', bg: '#FBF2DC' }
+            };
+            const URUT_AREA = ['pusat', 'utara', 'selatan', 'barat', 'timur'];
+            function areaDari(lat, lng) {
+                const dy = (lat - AREA_PUSAT[0]) * KM_LAT, dx = (lng - AREA_PUSAT[1]) * KM_LNG;
+                if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return 'pusat';
+                if (Math.abs(dy) >= Math.abs(dx)) return dy > 0 ? 'utara' : 'selatan';
+                return dx > 0 ? 'timur' : 'barat';
+            }
+            const keLL = (dxKm, dyKm) => [AREA_PUSAT[0] + dyKm / KM_LAT, AREA_PUSAT[1] + dxKm / KM_LNG];
+            let lapisArea = null, areaTampil = true;
+            try { areaTampil = localStorage.getItem('pr_area_tampil') !== '0'; } catch (e) {}
+            function pasangArea() {
+                if (!peta || !window.L) return;
+                if (lapisArea) { peta.removeLayer(lapisArea); lapisArea = null; }
+                const b = $('pr-area-btn');
+                if (b) { b.setAttribute('aria-pressed', areaTampil ? 'true' : 'false'); b.setAttribute('aria-label', areaTampil ? 'Sembunyikan kotak area' : 'Tampilkan kotak area'); }
+                if (!areaTampil) return;
+                const R = 40, g = L.layerGroup();
+                const bidang = (titik, a) => L.polygon(titik.map((p) => keLL(p[0], p[1])), {
+                    color: AREA[a].w, weight: a === 'pusat' ? 2 : 1.5, dashArray: a === 'pusat' ? null : '6 5',
+                    fillColor: AREA[a].w, fillOpacity: a === 'pusat' ? 0.14 : 0.07, interactive: false }).addTo(g);
+                bidang([[-1, 1], [1, 1], [R, R], [-R, R]], 'utara');
+                bidang([[-1, -1], [1, -1], [R, -R], [-R, -R]], 'selatan');
+                bidang([[-1, -1], [-1, 1], [-R, R], [-R, -R]], 'barat');
+                bidang([[1, -1], [1, 1], [R, R], [R, -R]], 'timur');
+                bidang([[-1, -1], [1, -1], [1, 1], [-1, 1]], 'pusat');
+                const tulisan = (a, dx, dy) => {
+                    const t = el('div', 'pr-area-lbl', AREA[a].t); t.style.color = AREA[a].tx;
+                    L.marker(keLL(dx, dy), { icon: L.divIcon({ className: 'pr-area-l', html: t, iconSize: [0, 0] }), interactive: false, keyboard: false }).addTo(g);
+                };
+                tulisan('pusat', 0, 0.72); tulisan('utara', 0, 2.3); tulisan('selatan', 0, -2.3); tulisan('barat', -2.6, 0); tulisan('timur', 2.6, 0);
+                g.addTo(peta); lapisArea = g;
+            }
+            // nama panggilan sama seperti di antrean: "R A Jamaludin" -> "Jamaludin", "Dedi Kurniawan" -> "Dedi"
+            const LEWATI_NAMA = /^(muhammad|muhamad|mohammad|mohamad|mochammad|mochamad|moch|moh|muh|mhd|md)$/i;
+            function namaPendek(n) {
+                if (typeof window.arNamaPendek === 'function') return window.arNamaPendek(n) || String(n || '');
+                const kata = String(n || '').trim().split(/\s+/).filter(Boolean);
+                const bersih = (k) => k.replace(/[.,]/g, '');
+                const k = kata.find((x) => bersih(x).length > 2 && !LEWATI_NAMA.test(bersih(x))) || kata[0] || '';
+                return bersih(k) || k;
+            }
 
             const ms = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : 0);
             const lalu = (t) => { const d = Math.max(0, Date.now() - t); if (d < 60000) return 'baru saja'; const m = Math.floor(d / 60000); return m < 60 ? m + ' mnt lalu' : Math.floor(m / 60) + ' jam lalu'; };
@@ -31082,8 +31217,9 @@
             }
             function ikonRider(r) {
                 const w = el('div', 'pr-ik ' + keadaan(r) + (dipilih === r.uid ? ' dipilih' : ''));
-                w.appendChild(el('i', '', inisial(r.nama)));
-                w.appendChild(el('b', '', String(r.nama).split(/\s+/)[0].slice(0, 14)));
+                const pendek = namaPendek(r.nama);   // (14 Nov 2026) nama panggilan
+                w.appendChild(el('i', '', inisial(pendek)));
+                w.appendChild(el('b', '', pendek.slice(0, 14)));
                 return L.divIcon({ className: 'pr-ik-l', html: w, iconSize: [0, 0] });
             }
             function gambar() {
@@ -31094,6 +31230,10 @@
                 ch.appendChild(el('span', 'pr-c-siap', '● ' + n.siap + ' siap'));
                 ch.appendChild(el('span', 'pr-c-antar', '● ' + n.antar + ' mengantar'));
                 ch.appendChild(el('span', 'pr-c-hilang', '● ' + n.hilang + ' hilang sinyal'));
+                if (areaTampil) {   // (14 Nov 2026) jumlah rider ON per area
+                    const na = {}; daftar.forEach((r) => { const a = areaDari(r.lat, r.lng); na[a] = (na[a] || 0) + 1; });
+                    URUT_AREA.forEach((a) => { const c = el('span', '', AREA[a].t + ' ' + (na[a] || 0)); c.style.background = AREA[a].bg; c.style.color = AREA[a].tx; ch.appendChild(c); });
+                }
                 $('pr-sub').textContent = atur.aktif ? 'Diperbarui otomatis · ' + daftar.length + ' rider ON' : 'Peta rider sedang nonaktif';
                 // penanda
                 if (peta) {
@@ -31213,6 +31353,7 @@
                 if (!peta) {
                     peta = L.map('pr-peta', { center: PUSAT, zoom: 14, zoomControl: true });
                     peta.on('dragstart', () => { if (ikuti) { ikuti = ''; gambarKartu(); } });
+                    pasangArea();   // (14 Nov 2026)
                 }
                 setTimeout(() => peta.invalidateSize(), 60);
                 if (aturSiap) terapkanAtur();
@@ -31246,6 +31387,11 @@
             });
             $('pr-atur-batal').onclick = () => { $('pr-atur').hidden = true; };
             $('pr-atur-btn').onclick = bukaAtur;
+            $('pr-area-btn').onclick = () => {   // (14 Nov 2026) tampil / sembunyikan kotak area (diingat di HP ini)
+                areaTampil = !areaTampil;
+                try { localStorage.setItem('pr_area_tampil', areaTampil ? '1' : '0'); } catch (e) {}
+                pasangArea(); gambar();
+            };
             $('pr-tutup').onclick = tutup;
             $('pr-semua').onclick = () => { ikuti = ''; semua(); };
             document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('pr-layar').hidden) { if (!$('pr-atur').hidden) $('pr-atur').hidden = true; else tutup(); } });

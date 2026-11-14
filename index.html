@@ -19912,6 +19912,7 @@
               myStatusUnsubscribe = onSnapshot(statusRef, (docSnap) => {
                   // (12 Nov 2026) Pop up nomor WA operasional: cek dari dokumen yang sama (0 read tambahan)
                   try { if (typeof window.cekWaRider === 'function') window.cekWaRider(cleanUid, docSnap.exists() ? docSnap.data() : null, docSnap.metadata && docSnap.metadata.fromCache); } catch (e) {}
+                  try { if (typeof window.arStatusRider === 'function' && docSnap.exists()) window.arStatusRider(docSnap.data()); } catch (e) {}   // (14 Nov 2026) area rider
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       
@@ -28329,6 +28330,32 @@ window.PembuatQR = PembuatQR;
     .cr-b-lbl.edit { background: #FDECEA; color: #B42318; }
     .cr-ruang { position: fixed; }
 </style>
+<!-- ===== AREA RIDER: badge beranda + pop up lokasi kurang akurat (14 Nov 2026). Logika ada di skrip posisiRider. ===== -->
+<style>
+  .ar-badge { display: flex; align-items: center; gap: 8px; width: calc(100% - 32px); margin: 6px 16px 2px; padding: 8px 12px; border-radius: 12px; border: 1.5px solid transparent; font-family: inherit; font-size: 12.5px; font-weight: 800; text-align: left; cursor: default; }
+  .ar-badge[hidden] { display: none; }
+  .ar-badge i { font-size: 14px; flex: none; }
+  .ar-badge .ar-badge-teks { flex: 1; min-width: 0; }
+  .ar-badge .ar-badge-cek { font-size: 11px; font-weight: 900; text-decoration: underline; }
+  .ar-badge .ar-badge-cek[hidden] { display: none; }
+  .ar-b-pusat { background: #FFF0E4; color: #9A3412; } .ar-b-utara { background: #EAF0FD; color: #1D4ED8; } .ar-b-selatan { background: #E6F4F2; color: #0F766E; }
+  .ar-b-barat { background: #F1EBFD; color: #6D28D9; } .ar-b-timur { background: #FBF2DC; color: #854D0E; }
+  .ar-b-x { background: #FFFBEB; color: #92400E; border-color: #FCD34D; cursor: pointer; }
+  #ar-pop { position: fixed; inset: 0; z-index: 8990; background: rgba(15,23,42,.55); display: none; align-items: center; justify-content: center; padding: 20px; }
+  #ar-pop.buka { display: flex; }
+  #ar-pop .ar-pop-kotak { width: 100%; max-width: 340px; background: #fff; border-radius: 22px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+  #ar-pop .ar-pop-atas { background: #FFF7ED; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+  #ar-pop .ar-pop-ikon { width: 52px; height: 52px; border-radius: 50%; background: #FDE68A; color: #92400E; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  #ar-pop h3 { margin: 0; font-size: 16px; font-weight: 900; color: #7C2D12; }
+  #ar-pop .ar-pop-isi { padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+  #ar-pop .ar-pop-isi p { margin: 0; font-size: 13px; font-weight: 600; color: #374151; line-height: 1.55; }
+  #ar-pop .ar-pop-l { display: flex; gap: 10px; align-items: flex-start; }
+  #ar-pop .ar-pop-l span { width: 22px; height: 22px; border-radius: 50%; background: #EA580C; color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex: none; }
+  #ar-pop .ar-pop-l b { font-size: 13px; font-weight: 700; color: #1F2937; line-height: 1.45; }
+  #ar-pop .ar-pop-l em { font-style: normal; font-weight: 600; color: #6B7280; }
+  #ar-pop-ok { margin-top: 6px; min-height: 46px; border: 0; border-radius: 12px; background: #EA580C; color: #fff; font-size: 13.5px; font-weight: 900; font-family: inherit; }
+  body.dark-mode .ar-badge { filter: brightness(.95); }
+</style>
 <!-- ===================== POSISI RIDER UNTUK PETA ADMIN (11 Nov 2026) =====================
      Selama rider ON: posisi GPS dikirim ke posisi_rider/{UID} kalau pindah >= 50 m (paling cepat 20 detik sekali)
      atau tiap 3 menit kalau diam. OFF -> berhenti dan ditandai off. Hanya admin yang bisa membaca (rules).
@@ -28396,6 +28423,7 @@ window.PembuatQR = PembuatQR;
             watchId = navigator.geolocation.watchPosition(function (pos) {
                 posTerakhir = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
                 kirim(posTerakhir, false);
+                arFixT = Date.now(); arCek();   // (14 Nov 2026) area rider
             }, function (e) {
                 console.warn('[Posisi rider] GPS', e && e.code);
                 // izin lokasi ditolak: berhenti, dicoba lagi 5 menit kemudian (mis. setelah rider mengizinkan lokasi saat mengantar)
@@ -28414,6 +28442,135 @@ window.PembuatQR = PembuatQR;
             if (onSblm) tandaiOff(0);
         }
         onSblm = harus;
+        arCek();   // (14 Nov 2026) area rider
+    }
+
+    // ===================== AREA RIDER (14 Nov 2026) =====================
+    // Dari posisi GPS: PUSAT = kotak 2 x 2 km di titik pusat; di luar kotak dibagi garis miring dari 4 sudut kotak
+    // (UTARA / SELATAN / BARAT / TIMUR). Rumus sama dengan kotak area di Peta rider admin.
+    // Hasilnya ditulis ke status_rider_aktif/{UID}.area_rider HANYA saat berubah (hemat read admin), sebagai label
+    // di antrean admin. Tidak mengubah logika antrean. GPS tidak terbaca > 5 menit saat ON -> 'x' = "kurang akurat"
+    // (badge kuning + pop up, diulang paling cepat 30 menit sekali).
+    var AR_PUSAT = [-7.604234430992013, 109.51229132737893];
+    var AR_KM_LAT = 110.574, AR_KM_LNG = 111.320 * Math.cos(AR_PUSAT[0] * Math.PI / 180);
+    var AR_NAMA = { pusat: 'Pusat', utara: 'Utara', selatan: 'Selatan', barat: 'Barat', timur: 'Timur' };
+    var AR_BASI = 5 * 60 * 1000, AR_TENGGANG = 2 * 60 * 1000, AR_ULANG_POP = 30 * 60 * 1000;
+    var arAturSiap = false, arFixT = 0, arMulaiOn = 0, arCalon = '', arCalonSejak = 0, arTertulis, arTulisT = 0, arMenulis = false, arMintaT = 0, arKini = '';
+    function arDari(lat, lng) {
+        var dy = (lat - AR_PUSAT[0]) * AR_KM_LAT, dx = (lng - AR_PUSAT[1]) * AR_KM_LNG;
+        if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return 'pusat';
+        if (Math.abs(dy) >= Math.abs(dx)) return dy > 0 ? 'utara' : 'selatan';
+        return dx > 0 ? 'timur' : 'barat';
+    }
+    function arTulis(v) {
+        if (arMenulis || !uid) return;
+        if (arTertulis !== undefined && Date.now() - arTulisT < 60000) return;   // paling sering 1x per menit
+        arMenulis = true;
+        var u = uid;
+        import(URL_FS).then(function (m) {
+            // updateDoc: kalau dokumen status belum ada, tidak membuat dokumen baru
+            return m.updateDoc(m.doc(m.getFirestore(), 'status_rider_aktif', u), { area_rider: v, area_at: m.serverTimestamp() });
+        }).then(function () { if (u === uid) arTertulis = v; }, function (e) { console.warn('[Area rider]', e && e.code); })
+          .then(function () { arTulisT = Date.now(); arMenulis = false; });
+    }
+    function arMintaPosisi() {
+        // HP diam lama kadang tidak mengirim posisi baru: minta sekali (paling sering 1x per menit)
+        if (!navigator.geolocation || Date.now() < jedaIzin || Date.now() - arMintaT < 60000) return;
+        arMintaT = Date.now();
+        try {
+            navigator.geolocation.getCurrentPosition(function (pos) {
+                posTerakhir = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+                arFixT = Date.now();
+                kirim(posTerakhir, false);
+                arCek();
+            }, function () {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 });
+        } catch (e) {}
+    }
+    function arCek() {
+        var kini = Date.now();
+        var harus = !!uid && atur.aktif && onAktif();
+        if (!harus) {
+            arMulaiOn = 0; arCalon = '';
+            // peta rider dimatikan admin: hapus label area yang masih tersimpan
+            if (uid && arAturSiap && !atur.aktif && arTertulis) arTulis('');
+            arTampil('');
+            return;
+        }
+        if (!arMulaiOn) arMulaiOn = kini;
+        var segar = !!(arFixT && posTerakhir && kini - arFixT <= AR_BASI);
+        if (!segar || kini - arFixT > 3 * 60 * 1000) arMintaPosisi();
+        var v;
+        if (segar) v = arDari(posTerakhir.lat, posTerakhir.lng);
+        else if (kini - arMulaiOn >= AR_TENGGANG) v = 'x';
+        else { arTampil(''); return; }   // baru ON: beri waktu GPS mencari posisi
+        if (v !== arCalon) { arCalon = v; arCalonSejak = kini; }
+        // di perbatasan area: tunggu 45 detik stabil dulu supaya tidak bolak-balik menulis
+        var stabil = v === 'x' || !arTertulis || arTertulis === 'x' || kini - arCalonSejak >= 45000;
+        arTampil(v);
+        if (stabil && v !== arTertulis) arTulis(v);
+        if (v === 'x') arPopMungkin(false);
+    }
+    // nilai yang sudah tersimpan di server (dipanggil dari pendengar status milik rider sendiri, tanpa read tambahan)
+    window.arStatusRider = function (d) {
+        if (arTertulis === undefined && d && typeof d.area_rider === 'string') arTertulis = d.area_rider;
+    };
+
+    // ---------- badge di beranda + pop up ----------
+    function arBadge() {
+        var b = document.getElementById('ar-badge');
+        if (b) return b;
+        var acuan = document.getElementById('onbid-durasi-info');
+        if (!acuan || !acuan.parentNode) return null;
+        b = document.createElement('button');
+        b.type = 'button'; b.id = 'ar-badge'; b.className = 'ar-badge'; b.hidden = true;
+        var ik = document.createElement('i'); ik.className = 'fa-solid fa-location-dot'; ik.setAttribute('aria-hidden', 'true');
+        var t = document.createElement('span'); t.className = 'ar-badge-teks';
+        var c = document.createElement('span'); c.className = 'ar-badge-cek'; c.textContent = 'Cek';
+        b.appendChild(ik); b.appendChild(t); b.appendChild(c);
+        b.addEventListener('click', function () { if (arKini === 'x') arPopMungkin(true); });
+        acuan.parentNode.insertBefore(b, acuan.nextSibling);
+        return b;
+    }
+    function arTampil(v) {
+        arKini = v;
+        var b = arBadge(); if (!b) return;
+        if (!v) { b.hidden = true; return; }
+        b.hidden = false;
+        b.className = 'ar-badge ar-b-' + v;
+        b.querySelector('.ar-badge-teks').textContent = v === 'x' ? 'Lokasi kamu kurang akurat' : 'Lokasi kamu di Area ' + AR_NAMA[v];
+        b.querySelector('.ar-badge-cek').hidden = v !== 'x';
+        b.setAttribute('aria-label', v === 'x' ? 'Lokasi kamu kurang akurat, ketuk untuk melihat cara memperbaiki' : 'Lokasi kamu di Area ' + AR_NAMA[v]);
+    }
+    function arPop() {
+        var w = document.getElementById('ar-pop');
+        if (w) return w;
+        w = document.createElement('div');
+        w.id = 'ar-pop'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-labelledby', 'ar-pop-judul');
+        w.innerHTML =
+            '<div class="ar-pop-kotak">' +
+              '<div class="ar-pop-atas"><div class="ar-pop-ikon"><i class="fa-solid fa-location-dot" aria-hidden="true"></i></div>' +
+                '<h3 id="ar-pop-judul">Lokasi kamu di admin kurang akurat</h3></div>' +
+              '<div class="ar-pop-isi">' +
+                '<p>Supaya orderan dari admin tidak terlalu jauh dari lokasimu:</p>' +
+                '<div class="ar-pop-l"><span>1</span><b>Update aplikasi rider ke versi terbaru <em>(kalau sudah, abaikan)</em></b></div>' +
+                '<div class="ar-pop-l"><span>2</span><b>Nyalakan GPS / Lokasi di HP kamu</b></div>' +
+                '<button type="button" id="ar-pop-ok">Mengerti</button>' +
+              '</div>' +
+            '</div>';
+        document.body.appendChild(w);
+        w.querySelector('#ar-pop-ok').addEventListener('click', function () { w.classList.remove('buka'); });
+        return w;
+    }
+    function arPopMungkin(paksa) {
+        var kini = Date.now(), terakhir = 0;
+        try { terakhir = parseInt(localStorage.getItem('ar_pop_t') || '0', 10) || 0; } catch (e) {}
+        if (!paksa) {
+            if (kini - terakhir < AR_ULANG_POP || document.visibilityState === 'hidden') return;
+            var om = document.getElementById('incoming-order-popup');   // jangan menutupi layar orderan masuk
+            if (om && !om.classList.contains('hidden')) return;
+        }
+        try { localStorage.setItem('ar_pop_t', String(kini)); } catch (e) {}
+        arPop().classList.add('buka');
     }
     // ---------- kunci peta CARTO untuk peta beranda rider ----------
     function pasangKunci(k) {
@@ -28434,6 +28591,7 @@ window.PembuatQR = PembuatQR;
                 var d = s.exists() ? (s.data() || {}) : {};
                 var k = typeof d.carto_key === 'string' ? d.carto_key.trim() : '';
                 atur = { aktif: d.aktif === true, kunci: KUNCI_OK.test(k) ? k : '' };
+                arAturSiap = true;   // (14 Nov 2026) area rider: pengaturan sudah terbaca
                 if (atur.kunci) pasangKunci(atur.kunci);
                 periksa();
             }, function (e) { console.warn('[Posisi rider] pengaturan', e && e.code); });
