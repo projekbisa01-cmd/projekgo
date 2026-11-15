@@ -9515,7 +9515,7 @@
                         renderActiveOrders();
                     }
                     // (14 Nov 2026) label area rider di antrean geser ikut diperbarui saat area rider berubah
-                    const sidikArea = allRiders.map(r => r.uid + ':' + (typeof r.area_rider === 'string' ? r.area_rider : '')).join('|');
+                    const sidikArea = allRiders.map(r => r.uid + ':' + (typeof r.area_rider === 'string' ? r.area_rider : '') + ':' + (r.helm2 === true ? 'h' : '') + (typeof r.helm2_tgl === 'string' ? r.helm2_tgl : '')).join('|');
                     if (window._sidikAreaRider !== sidikArea) {
                         window._sidikAreaRider = sidikArea;
                         if (typeof window.dxRenderRiderStrip === 'function') window.dxRenderRiderStrip();
@@ -10289,7 +10289,7 @@
                     <div class="dx-q${isFirst ? ' first' : ''}${isSelectable ? '' : ' off'}${terpilih ? ' selected' : ''}" data-dx-aksi="pilih" data-uid="${escDx(rider.uid)}" data-bisa="${isSelectable ? '1' : '0'}" role="button" tabindex="0">
                         <div class="n num">${nomorHtml}</div>
                         <div class="body">
-                            <div class="nm"><span class="nm-t">${escDx(displayName)}</span><span class="lv-b teks" data-lv-uid="${escDx(rider.uid)}" data-lv-mode="teks" hidden></span><span class="ab-lokr">(<b>${escDx(ketLokasi)}</b>)</span>${stHtml}${(() => { const a = arAreaRider(rider.uid); return a ? ` <span class="ar-area ar-q-area ar-a-${a.k}">${escDx(a.t)}</span>` : ''; })()}</div>
+                            <div class="nm"><span class="nm-t">${escDx(displayName)}</span><span class="lv-b teks" data-lv-uid="${escDx(rider.uid)}" data-lv-mode="teks" hidden></span><span class="ab-lokr">(<b>${escDx(ketLokasi)}</b>)</span>${stHtml}${(() => { const a = arAreaRider(rider.uid); return a ? ` <span class="ar-area ar-q-area ar-a-${a.k}">${escDx(a.t)}</span>` : ''; })()}${arHelmRider(rider.uid) ? ` <span class="ar-q-hm" title="Bawa helm penumpang hari ini">${AR_HELM_SVG}Helm 2</span>` : ''}</div>
                             <div class="loc num">${escDx(ketLokasi)} · masuk antrean ${escDx(timeOnbidStr)}</div>
                             ${statHtml}
                         </div>
@@ -10657,23 +10657,46 @@
             if (a === 'x') return { k: 'x', t: 'Belum akurat' };
             return AR_AREA_NAMA[a] ? { k: a, t: AR_AREA_NAMA[a] } : null;
         }
+        // (15 Nov 2026) HELM PENUMPANG: rider menjawab di aplikasi rider (sekali sehari, wajib) -> status_rider_aktif
+        // helm2 (true/false) + helm2_tgl (YYYY-MM-DD WIB). Badge hanya kalau jawabannya HARI INI. 0 read tambahan.
+        const AR_HELM_SVG = '<svg class="hm-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3C6.9 3 3 7.1 3 12.3V16a2 2 0 0 0 2 2h7.6c.9 0 1.7-.5 2.1-1.3l.6-1.2c.2-.3.5-.5.9-.5H20a1 1 0 0 0 1-1v-1.7C21 7.1 17.1 3 12 3Zm-6.6 8.6c.4-3 2.7-5.4 5.7-5.8.6-.1 1 .5.7 1L10 10.3c-.3.5-.8.8-1.4.8H6c-.4 0-.7-.3-.6-.6Z"/></svg>';
+        function arHelmRider(uid) {
+            const u = String(uid || '').trim().toUpperCase();
+            const r = allRiders.find(x => String(x.uid || '').trim().toUpperCase() === u);
+            return !!r && r.helm2 === true && typeof r.helm2_tgl === 'string' && r.helm2_tgl === kunciTglWib(new Date());
+        }
+        window.arHelmRider = arHelmRider;
         function arKartuRider(x, terpilih) {
             const on = terpilih === x.uid;
             const a = arAreaRider(x.uid);
+            const helm = arHelmRider(x.uid);
             const pos = Number(x.pos) || 0;
             const nama = arNamaPendek(x.nama) || String(x.nama || x.uid);
-            return `<button type="button" class="ar-chip${on ? ' on' : ''}${x.bisa ? '' : ' off'}" data-dx-aksi="pilih" data-ar-pilih="1" data-uid="${escDx(x.uid)}" data-bisa="${x.bisa ? '1' : '0'}" aria-pressed="${on ? 'true' : 'false'}" title="${escDx(x.nama)}${x.stTeks ? ' · ' + escDx(x.stTeks) : ''}">`
+            return `<button type="button" class="ar-chip${on ? ' on' : ''}${x.bisa ? '' : ' off'}${helm ? ' helm' : ''}" data-dx-aksi="pilih" data-ar-pilih="1" data-uid="${escDx(x.uid)}" data-bisa="${x.bisa ? '1' : '0'}" aria-pressed="${on ? 'true' : 'false'}" title="${escDx(x.nama)}${helm ? ' · bawa helm penumpang' : ''}${x.stTeks ? ' · ' + escDx(x.stTeks) : ''}">`
+                + (helm ? `<span class="ar-hm" aria-label="Bawa helm penumpang">${AR_HELM_SVG}2</span>` : '')
                 + `<span class="ar-no">#${pos}${on ? ' · DIPILIH' : ''}</span>`
                 + `<b class="ar-nm">${escDx(nama)}</b>`
-                + `<span class="ar-lok">${escDx(x.lokasi || 'Posisi / Standby')}</span>`
+                + `<span class="ar-lok">${escDx(!x.bisa && x.stTeks ? x.stTeks : (x.lokasi || 'Posisi / Standby'))}</span>`
                 + (a ? `<span class="ar-area ar-a-${a.k}">${escDx(a.t)}</span>` : '')
                 + `</button>`;
         }
         window.dxRenderRiderStrip = () => {
             const terpilih = document.getElementById('selected-rider-uid').value;
-            const isi = _dxInfoAntrean.length
-                ? `<div class="ar-strip">${_dxInfoAntrean.map(x => arKartuRider(x, terpilih)).join('')}</div>`
-                : `<p class="ar-kosong">Antrean kosong · order yang dikirim masuk Pending</p>`;
+            // (15 Nov 2026) Hanya rider yang SIAP (ON, tersedia, saldo ada) yang tampil di antrean geser,
+            // sama seperti kotak "Kirim ke" sebelumnya. Rider OFF / istirahat / sinyal hilang / saldo habis
+            // tetap ada di daftar antrean bawah (pudar) dan nomor antreannya tidak berubah.
+            // Pengecualian: rider yang sedang dipilih tetap tampil (pudar) supaya admin tahu ia tidak siap.
+            const siap = _dxInfoAntrean.filter(x => x.bisa || x.uid === terpilih);
+            const jmlSiap = _dxInfoAntrean.filter(x => x.bisa).length;
+            const isi = siap.length
+                ? `<div class="ar-strip">${siap.map(x => arKartuRider(x, terpilih)).join('')}</div>`
+                : `<p class="ar-kosong">${_dxInfoAntrean.length ? 'Tidak ada rider siap' : 'Antrean kosong'} · order yang dikirim masuk Pending</p>`;
+            // (15 Nov 2026) Jenis order Ngojek: rider bawa helm penumpang ditonjolkan + saran. Admin tetap memilih sendiri.
+            const modeOjek = typeof window.abJenisTerpilih === 'function' && window.abJenisTerpilih() === 'ojek';
+            const helmSiap = modeOjek ? _dxInfoAntrean.filter(x => x.bisa && arHelmRider(x.uid)) : [];
+            const saranOjek = !modeOjek ? '' : (helmSiap.length
+                ? `<p class="ar-saran">${AR_HELM_SVG}<span>Ngojek: utamakan rider bawa helm penumpang · ${helmSiap.slice(0, 4).map(x => `<b>${escDx(arNamaPendek(x.nama) || x.nama)} #${Number(x.pos) || 0}</b>`).join(', ')}${helmSiap.length > 4 ? ` +${helmSiap.length - 4}` : ''}</span></p>`
+                : `<p class="ar-saran kosong">${AR_HELM_SVG}<span>Ngojek: belum ada rider siap yang bawa helm penumpang hari ini.</span></p>`);
             const berganti = terpilih && _abTerpilihSebelum && _abTerpilihSebelum !== terpilih;
             ['dx-rider-strip', 'ar-pending-strip'].forEach(id => {
                 const box = document.getElementById(id);
@@ -10681,9 +10704,10 @@
                 const lama = box.querySelector('.ar-strip');
                 const geser = lama ? lama.scrollLeft : 0;   // posisi geser tidak loncat saat antrean diperbarui
                 box.innerHTML = (id === 'ar-pending-strip'
-                    ? `<div class="ar-head"><span>Kirim ke · geser untuk rider lain</span><small>${_dxInfoAntrean.length} rider antre</small></div>` : '') + isi;
+                    ? `<div class="ar-head"><span>Kirim ke · geser untuk rider lain</span><small>${jmlSiap} rider siap</small></div>` : saranOjek) + isi;
                 const s = box.querySelector('.ar-strip');
                 if (!s) return;
+                if (id === 'dx-rider-strip') s.classList.toggle('ojek', modeOjek && helmSiap.length > 0);
                 s.scrollLeft = geser;
                 const k = s.querySelector('.ar-chip.on');
                 if (k && (berganti || k.offsetLeft < s.scrollLeft || k.offsetLeft + k.offsetWidth > s.scrollLeft + s.clientWidth)) {
@@ -11312,6 +11336,7 @@
                 const box = $('ab-jenis'); if (box) box.classList.toggle('kosong', !j);
                 const wajib = $('ab-jenis-wajib'); if (wajib) wajib.hidden = !!j;
                 if (det) det.placeholder = CONTOH_PESANAN[j || 'food'];
+                try { if (typeof window.dxRenderRiderStrip === 'function') window.dxRenderRiderStrip(); } catch (e) {}   // (15 Nov 2026) saran helm untuk Ngojek
             };
             // '' = belum dipilih -> submitOrder / submitPendingOrder memunculkan pop up pilihan
             window.abJenisTerpilih = () => {
@@ -31078,6 +31103,20 @@
         @keyframes ar-kedip { 0% { box-shadow: 0 0 0 4px rgba(22, 163, 74, .5); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
         @media (prefers-reduced-motion: reduce) { .ar-chip.ar-kedip { animation: none; } }
         .ar-q-area { display: inline-block; margin-left: 4px; font-size: 10.5px; font-weight: 800; padding: 1px 6px; border-radius: 6px; vertical-align: middle; white-space: nowrap; }
+        /* (15 Nov 2026) helm penumpang */
+        .ar-chip { position: relative; }
+        .ar-strip { padding-top: 8px; }
+        .ar-hm { position: absolute; top: -7px; right: -3px; display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px 1px 4px; border-radius: 99px; background: #1D4ED8; color: #fff; font-size: 10px; font-weight: 900; line-height: 1.4; box-shadow: 0 0 0 2px var(--ad-sf, #fff); }
+        .ar-hm .hm-svg { width: 12px; height: 12px; }
+        .ar-strip.ojek .ar-chip:not(.helm):not(.on) { opacity: .55; }
+        .ar-strip.ojek .ar-chip.helm:not(.on) { border-color: #1D4ED8; background: #EFF4FF; }
+        .ar-saran { margin: 0; display: flex; gap: 7px; align-items: flex-start; padding: 7px 10px; border-radius: 10px; background: #EFF4FF; border: 1.5px solid #C7D7FB; color: #1E3A8A; font-size: 12px; font-weight: 700; line-height: 1.4; }
+        .ar-saran b { font-weight: 900; }
+        .ar-saran .hm-svg { width: 16px; height: 16px; flex: none; color: #1D4ED8; margin-top: 1px; }
+        .ar-saran.kosong { background: #F5F5F4; border-color: #E7E5E4; color: #57534E; }
+        .ar-saran.kosong .hm-svg { color: #A8A29E; }
+        .ar-q-hm { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; padding: 1px 6px 1px 4px; border-radius: 6px; background: #EAF0FD; color: #1D4ED8; font-size: 10.5px; font-weight: 900; vertical-align: middle; white-space: nowrap; }
+        .ar-q-hm .hm-svg { width: 12px; height: 12px; }
         .ar-kosong { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--ad-warnbg); color: var(--ad-warn); font-size: 12.5px; font-weight: 700; }
         #page-pending .ad-head > h2, #page-pending .ad-head > p, #page-pending .ad-head > .ad-rider-line { display: none; }
         #page-pending .ad-head { padding: 10px 10px 8px; }

@@ -5606,6 +5606,11 @@
                     <i class="fa-brands fa-whatsapp"></i> Ubah Nomor WA <span id="wa-rider-profil" class="wr-profil-no">Belum diisi</span>
                 </button>
 
+                <!-- (15 Nov 2026) Helm penumpang hari ini (dipakai admin untuk orderan Ngojek) -->
+                <button type="button" onclick="window.bukaUbahHelmRider && window.bukaUbahHelmRider()" class="hm-profil-btn w-full py-4 mb-3 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                    <svg class="hm-ik" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3C6.9 3 3 7.1 3 12.3V16a2 2 0 0 0 2 2h7.6c.9 0 1.7-.5 2.1-1.3l.6-1.2c.2-.3.5-.5.9-.5H20a1 1 0 0 0 1-1v-1.7C21 7.1 17.1 3 12 3Zm-6.6 8.6c.4-3 2.7-5.4 5.7-5.8.6-.1 1 .5.7 1L10 10.3c-.3.5-.8.8-1.4.8H6c-.4 0-.7-.3-.6-.6Z"/></svg> Helm penumpang <span id="helm-rider-profil" class="hm-profil-no kosong">Belum dijawab</span>
+                </button>
+
                 <button onclick="window.bukaGantiPin()" class="w-full py-4 mb-3 bg-orange-50 hover:bg-orange-100 text-orange-600 font-bold rounded-2xl active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
                     <i class="fa-solid fa-key"></i> Ganti PIN
                 </button>
@@ -19913,6 +19918,7 @@
                   // (12 Nov 2026) Pop up nomor WA operasional: cek dari dokumen yang sama (0 read tambahan)
                   try { if (typeof window.cekWaRider === 'function') window.cekWaRider(cleanUid, docSnap.exists() ? docSnap.data() : null, docSnap.metadata && docSnap.metadata.fromCache); } catch (e) {}
                   try { if (typeof window.arStatusRider === 'function' && docSnap.exists()) window.arStatusRider(docSnap.data()); } catch (e) {}   // (14 Nov 2026) area rider
+                  try { if (typeof window.cekHelmRider === 'function') window.cekHelmRider(cleanUid, docSnap.exists() ? docSnap.data() : null, docSnap.metadata && docSnap.metadata.fromCache); } catch (e) {}   // (15 Nov 2026) helm penumpang
                   if (docSnap.exists()) {
                       const data = docSnap.data();
                       
@@ -28817,6 +28823,166 @@ window.PembuatQR = PembuatQR;
     if (document.visibilityState === 'visible') setTimeout(coba, 1500);
   });
   setInterval(coba, 30000);   // cek ringan tiap 30 detik (tanpa baca Firebase)
+})();
+</script>
+<!-- ===== POP UP HELM PENUMPANG (15 Nov 2026) =====
+     Sekali sehari, saat rider ON dan belum menjawab untuk HARI INI (tanggal WIB): "Hari ini bawa helm untuk penumpang?"
+     WAJIB dijawab (tidak ada tombol tutup). Jawaban disimpan ke status_rider_aktif/{uid}: helm2 (true/false), helm2_tgl
+     (YYYY-MM-DD WIB), helm2_at. Admin menampilkan badge "helm 2" hanya bila helm2_tgl = hari ini, jadi jawaban kemarin
+     tidak terbawa. Bisa diubah dari Profil. Tidak menutupi layar orderan masuk. Data dibaca dari pendengar status
+     milik rider sendiri (0 read tambahan). Semua teks statis, tidak ada isi dari database yang ditulis sebagai HTML. -->
+<style>
+  #helm-rider-pop { position: fixed; inset: 0; z-index: 8995; background: rgba(15,23,42,.6); display: none; align-items: center; justify-content: center; padding: 18px; }
+  #helm-rider-pop.buka { display: flex; }
+  #helm-rider-pop .hm-kotak { width: 100%; max-width: 360px; background: #fff; border-radius: 22px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.3); font-family: inherit; }
+  #helm-rider-pop .hm-atas { background: linear-gradient(135deg,#3b82f6,#1d4ed8); color: #fff; padding: 18px; text-align: center; }
+  #helm-rider-pop .hm-ikon { width: 58px; height: 58px; margin: 0 auto 8px; border-radius: 50%; background: rgba(255,255,255,.2); display: flex; align-items: center; justify-content: center; }
+  #helm-rider-pop .hm-ikon svg { width: 34px; height: 34px; }
+  #helm-rider-pop h3 { margin: 0; font-size: 16.5px; font-weight: 900; }
+  #helm-rider-pop .hm-atas p { margin: 5px 0 0; font-size: 12px; line-height: 1.45; opacity: .95; }
+  #helm-rider-pop .hm-isi { padding: 16px 18px 18px; }
+  #helm-rider-pop .hm-ya { width: 100%; border: 0; border-radius: 12px; min-height: 48px; padding: 12px; background: #1d4ed8; color: #fff; font-size: 13.5px; font-weight: 900; font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  #helm-rider-pop .hm-ya svg { width: 16px; height: 16px; }
+  #helm-rider-pop .hm-tdk { width: 100%; margin-top: 8px; border: 2px solid #e2e8f0; background: #fff; border-radius: 12px; min-height: 46px; padding: 10px; color: #334155; font-size: 13px; font-weight: 800; font-family: inherit; }
+  #helm-rider-pop button:disabled { opacity: .6; }
+  #helm-rider-pop .hm-ket { margin-top: 10px; font-size: 11px; color: #64748b; font-weight: 600; line-height: 1.45; text-align: center; }
+  #helm-rider-pop .hm-pesan { display: none; margin-top: 10px; background: #fef2f2; color: #b91c1c; border-radius: 10px; padding: 8px 10px; font-size: 11px; font-weight: 700; line-height: 1.4; }
+  #helm-rider-pop .hm-batal { width: 100%; margin-top: 6px; border: 0; background: transparent; color: #94a3b8; font-size: 11.5px; font-weight: 700; padding: 6px; font-family: inherit; }
+  #helm-rider-pop .hm-batal[hidden] { display: none; }
+  .hm-profil-btn { background: #EFF4FF; color: #1D4ED8; }
+  .hm-profil-btn:hover { background: #DBE6FE; }
+  .hm-profil-btn .hm-ik { width: 18px; height: 18px; flex: none; }
+  .hm-profil-no { margin-left: 4px; background: #fff; color: #1D4ED8; border: 1px solid #C7D7FB; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 800; letter-spacing: 0; text-transform: none; }
+  .hm-profil-no.kosong { color: #b91c1c; border-color: #fecaca; }
+  body.dark-mode #helm-rider-pop .hm-kotak { background: #1e293b; } body.dark-mode #helm-rider-pop .hm-tdk { background: #0f172a; color: #e2e8f0; border-color: #334155; }
+</style>
+<script>
+(function () {
+  var HELM_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3C6.9 3 3 7.1 3 12.3V16a2 2 0 0 0 2 2h7.6c.9 0 1.7-.5 2.1-1.3l.6-1.2c.2-.3.5-.5.9-.5H20a1 1 0 0 0 1-1v-1.7C21 7.1 17.1 3 12 3Zm-6.6 8.6c.4-3 2.7-5.4 5.7-5.8.6-.1 1 .5.7 1L10 10.3c-.3.5-.8.8-1.4.8H6c-.4 0-.7-.3-.6-.6Z"/></svg>';
+  var FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' });
+  function hariIni() { return FMT.format(new Date()); }   // YYYY-MM-DD (WIB)
+  // jawab: null = belum termuat, '' = belum menjawab hari ini, 'ya' / 'tidak'
+  var S = { uid: null, jawab: null, tgl: '', mode: 'wajib', menyimpan: false, el: null };
+
+  function onAktif() { var t = document.getElementById('onbid-toggle'); return !!(t && t.checked); }
+
+  function buat() {
+    if (S.el) return S.el;
+    var w = document.createElement('div');
+    w.id = 'helm-rider-pop';
+    w.setAttribute('role', 'dialog');
+    w.setAttribute('aria-modal', 'true');
+    w.setAttribute('aria-labelledby', 'hm-judul');
+    w.innerHTML =
+      '<div class="hm-kotak">' +
+        '<div class="hm-atas"><div class="hm-ikon">' + HELM_SVG + '</div>' +
+          '<h3 id="hm-judul">Hari ini bawa helm untuk penumpang?</h3>' +
+          '<p>Rider yang membawa 2 helm (1 untuk penumpang) diutamakan saat ada orderan Ngojek.</p></div>' +
+        '<div class="hm-isi">' +
+          '<button type="button" id="hm-ya" class="hm-ya">' + HELM_SVG + '<span>Ya, saya bawa 2 helm</span></button>' +
+          '<button type="button" id="hm-tdk" class="hm-tdk">Tidak, hanya 1 helm</button>' +
+          '<div id="hm-pesan" class="hm-pesan"></div>' +
+          '<div id="hm-ket" class="hm-ket">Jawab dengan jujur ya. Pelanggan Ngojek yang tidak mendapat helm bisa melapor ke admin.</div>' +
+          '<button type="button" id="hm-batal" class="hm-batal" hidden>Batal</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(w);
+    S.el = w;
+    w.querySelector('#hm-ya').addEventListener('click', function () { simpan(true); });
+    w.querySelector('#hm-tdk').addEventListener('click', function () { simpan(false); });
+    w.querySelector('#hm-batal').addEventListener('click', function () { S.mode = 'wajib'; tutup(); coba(); });
+    return w;
+  }
+  function pesan(t) {
+    var p = S.el && S.el.querySelector('#hm-pesan');
+    if (!p) return;
+    p.textContent = t || '';
+    p.style.display = t ? 'block' : 'none';
+  }
+  function tutup() { if (S.el) S.el.classList.remove('buka'); }
+  function buka(mode) {
+    var w = buat();
+    S.mode = mode;
+    w.querySelector('#hm-batal').hidden = mode !== 'ubah';   // wajib: tidak bisa ditutup
+    pesan('');
+    w.classList.add('buka');
+  }
+
+  function segarkanProfil() {
+    var el = document.getElementById('helm-rider-profil');
+    if (!el) return;
+    var sah = S.tgl === hariIni() && (S.jawab === 'ya' || S.jawab === 'tidak');
+    el.textContent = !sah ? 'Belum dijawab' : (S.jawab === 'ya' ? 'Bawa 2 helm hari ini' : '1 helm hari ini');
+    el.className = 'hm-profil-no' + (sah ? '' : ' kosong');
+  }
+
+  function perluTanya() {
+    if (!S.uid || S.jawab === null) return false;               // data status belum termuat
+    if (S.tgl === hariIni() && S.jawab) return false;            // sudah menjawab hari ini
+    if (!onAktif()) return false;                                // ditanyakan saat rider ON
+    if (document.visibilityState === 'hidden') return false;
+    try {
+      var me = typeof window.getRiderUid === 'function' ? window.getRiderUid() : null;
+      if (!me || String(me).toUpperCase() !== String(S.uid).toUpperCase()) return false;
+    } catch (e) { return false; }
+    var om = document.getElementById('incoming-order-popup');   // jangan menutupi layar orderan masuk
+    if (om && !om.classList.contains('hidden')) return false;
+    return true;
+  }
+  function coba() {
+    segarkanProfil();
+    if (S.mode === 'ubah') return;   // sedang mengubah dari Profil
+    if (perluTanya()) { if (!S.el || !S.el.classList.contains('buka')) buka('wajib'); }
+    else tutup();
+  }
+
+  async function simpan(bawa) {
+    if (S.menyimpan || !S.uid) return;
+    var uid = S.uid, tgl = hariIni();
+    var ya = S.el.querySelector('#hm-ya'), tdk = S.el.querySelector('#hm-tdk');
+    S.menyimpan = true; ya.disabled = true; tdk.disabled = true; pesan('');
+    try {
+      var m = await import('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+      var tulis = m.setDoc(m.doc(m.getFirestore(), 'status_rider_aktif', uid),
+        { helm2: bawa === true, helm2_tgl: tgl, helm2_at: m.serverTimestamp() }, { merge: true });
+      var batas = new Promise(function (_, tolak) { setTimeout(function () { tolak({ code: 'timeout' }); }, 15000); });
+      await Promise.race([tulis, batas]);
+      S.jawab = bawa ? 'ya' : 'tidak'; S.tgl = tgl; S.mode = 'wajib';
+      tutup();
+      segarkanProfil();
+      if (typeof window.showCustomToast === 'function') window.showCustomToast(bawa ? 'Tercatat: bawa 2 helm hari ini' : 'Tercatat: 1 helm hari ini');
+    } catch (e) {
+      var k = e && e.code;
+      pesan(k === 'permission-denied' ? 'Gagal menyimpan: izin ditolak server. Kabari admin ya.'
+          : k === 'timeout' ? 'Sinyal lemah, jawaban belum terkirim. Coba tekan lagi.'
+          : 'Gagal menyimpan. Periksa sinyal lalu coba lagi.');
+    } finally {
+      S.menyimpan = false; ya.disabled = false; tdk.disabled = false;
+    }
+  }
+
+  // Tombol "Helm penumpang" di Profil: ubah jawaban hari ini (boleh dibatalkan)
+  window.bukaUbahHelmRider = function () {
+    if (!S.uid) { alert('Data akun belum termuat. Coba lagi sebentar.'); return; }
+    buka('ubah');
+  };
+
+  // Dipanggil dari listener status_rider_aktif milik rider sendiri (data yang sama, tanpa read baru)
+  window.cekHelmRider = function (uid, data, dariCache) {
+    var u = String(uid || '').trim();
+    if (!u) { S.uid = null; S.jawab = null; tutup(); segarkanProfil(); return; }
+    if (u !== S.uid) { S.uid = u; S.jawab = null; S.tgl = ''; S.mode = 'wajib'; }
+    if (!data) { if (!dariCache) { S.jawab = ''; S.tgl = ''; } coba(); return; }
+    var tgl = typeof data.helm2_tgl === 'string' ? data.helm2_tgl : '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(tgl) && typeof data.helm2 === 'boolean') { S.tgl = tgl; S.jawab = data.helm2 ? 'ya' : 'tidak'; }
+    else { S.tgl = ''; S.jawab = ''; }
+    coba();
+  };
+
+  // Saklar ON diketuk: tanya setelah status ON tersimpan
+  document.addEventListener('change', function (e) { if (e.target && e.target.id === 'onbid-toggle') setTimeout(coba, 1200); }, true);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') setTimeout(coba, 1500); });
+  setInterval(coba, 30000);   // cek ringan tiap 30 detik (juga saat ganti hari), tanpa baca Firebase
 })();
 </script>
 </body>
