@@ -2970,6 +2970,7 @@
         .ak-k-judul b { font-size: 14px; font-weight: 800; color: #0F172A; }
         .ak-k-judul small { font-size: 11.5px; color: #64748B; font-weight: 600; }
         .ak-st { font-size: 9.5px; font-weight: 800; padding: 4px 8px; border-radius: 99px; white-space: nowrap; background: #EEF1F4; color: #475569; }
+        .ak-plg { display: inline-block; padding: 1px 7px; border-radius: 99px; background: #E8F0FB; color: #1F5AA6; font-size: 11px; font-weight: 800; letter-spacing: .02em; vertical-align: 1px; }
         .ak-st-baru { background: #FDECEC; color: #C62828; } .ak-st-proses { background: #FFF6E0; color: #8A5A00; } .ak-st-bawa { background: #E6F6EC; color: #1E7A34; }
         .ak-k-angka { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; padding: 10px 6px; border-bottom: 1px solid #EEF0F3; }
         .ak-k-angka > div + div { border-left: 1px solid #EEF0F3; }
@@ -12216,7 +12217,12 @@
             const akEmail = () => (auth && auth.currentUser && auth.currentUser.email) || '';
             const akRp = (n) => 'Rp ' + Math.round(Number(n) || 0).toLocaleString('id-ID');
             const akKm = (n) => (n == null || isNaN(n)) ? '-' : (Math.round(Number(n) * 10) / 10).toLocaleString('id-ID') + ' km';
-            const akLinkTitik = (t) => (isFinite(Number(t.lat)) && isFinite(Number(t.lng))) ? 'https://maps.google.com/?q=' + Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6) : '';
+            const akAdaKoord = (t) => !!t && t.lat !== null && t.lat !== undefined && t.lat !== '' && t.lng !== null && t.lng !== undefined && t.lng !== '' && isFinite(Number(t.lat)) && isFinite(Number(t.lng));
+            const akLinkTitik = (t) => akAdaKoord(t) ? 'https://maps.google.com/?q=' + Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6) : '';
+            // (14 Nov 2026) Kirim Paket dari aplikasi pelanggan: mitraId 'p_<uid>', sumber 'pelanggan'
+            const akPelanggan = (p) => !!p && p.sumber === 'pelanggan' && /^p_[A-Za-z0-9]{10,128}$/.test(String(p.mitraId || ''));
+            // Titik tanpa koordinat ditulis TANPA lat/lng (aplikasi rider membaca itu sebagai "titik belum ada", bukan 0,0)
+            const akTitikBersih = (t, bayar) => { const o = { kirimId: String(t.kirimId || ''), nama: String(t.nama || '').slice(0, 60), hp: akHp(t.hp).slice(0, 20), patokan: String(t.patokan || '').slice(0, 600), ongkir: Number(t.ongkir) || 0, bayar }; if (akAdaKoord(t)) { o.lat = Number(t.lat); o.lng = Number(t.lng); } return o; };
             const akLinkAman = (u) => (typeof u === 'string' && /^https:\/\/www\.google\.com\/maps\/dir\//.test(u)) ? u : '';
             const akHp = (v) => String(v || '').replace(/[^0-9]/g, '');
 
@@ -12231,8 +12237,9 @@
                     const belumDilihat = baru.filter(p => !p.dilihatAdmin);
                     if (belumDilihat.length && (!akAwal || belumDilihat.length)) {
                         const p = belumDilihat[0];
-                        if (typeof window.abUcap === 'function') window.abUcap('Permintaan antar hemat baru dari ' + (p.mitraNama || 'mitra'));
-                        if (typeof window.abToast === 'function') window.abToast('Permintaan Antar Hemat baru', (p.mitraNama || 'Mitra') + ' · ' + (p.jenis === 'gabungan' ? 'rute ' + (p.jam || '') : 'instan') + ' · ' + ((p.titik || []).length) + ' titik', () => window.akBukaKhusus(), false, 'Lihat');
+                        const plg = akPelanggan(p);
+                        if (typeof window.abUcap === 'function') window.abUcap(plg ? 'Kirim paket baru dari pelanggan ' + (p.mitraNama || '') : 'Permintaan antar hemat baru dari ' + (p.mitraNama || 'mitra'));
+                        if (typeof window.abToast === 'function') window.abToast(plg ? 'Kirim Paket baru · pelanggan' : 'Permintaan Antar Hemat baru', (p.mitraNama || 'Mitra') + ' · ' + (p.jenis === 'gabungan' ? (plg ? 'gabungan' : 'rute ' + (p.jam || '')) : 'instan') + ' · ' + ((p.titik || []).length) + ' titik', () => window.akBukaKhusus(), false, 'Lihat');
                     }
                     akAwal = false;
                     window.akRender();
@@ -12280,18 +12287,20 @@
                     const pr = (s) => s === 'menunggu' ? 0 : (s === 'diproses' ? 1 : 2);
                     return pr(a.status) - pr(b.status) || ((a.dibuatAt?.seconds || 0) - (b.dibuatAt?.seconds || 0));
                 });
-                if (!urut.length) { kh.innerHTML = '<p class="ak-kosong">Belum ada permintaan dari mitra.</p>'; return; }
+                if (!urut.length) { kh.innerHTML = '<p class="ak-kosong">Belum ada permintaan dari mitra / pelanggan.</p>'; return; }
                 kh.innerHTML = urut.map(p => {
                     if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(p.id || ''))) return '';
                     const jam = p.dibuatAt && p.dibuatAt.seconds ? new Date(p.dibuatAt.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--';
                     const titik = Array.isArray(p.titik) ? p.titik : [];
                     const st = { menunggu: ['BARU', 'ak-st-baru'], diproses: ['DI PENDING / BELUM ACC', 'ak-st-proses'], dibawa: ['DIBAWA ' + escDx(String(p.riderNama || 'RIDER').toUpperCase()), 'ak-st-bawa'] }[p.status] || [escDx(p.status), ''];
                     const rute = akLinkAman(p.ruteLink);
+                    const plg = akPelanggan(p);
+                    const ketBayar = plg ? (p.pembayar === 'penerima' ? ' · ongkir ditagih ke penerima' : ' · ongkir dibayar pengirim saat jemput') : (p.pembayar === 'penerima' ? ' · ongkir ditagih ke penerima' : (p.pembayar === 'campur' ? ' · ongkir sebagian ditagih ke penerima' : ' · ongkir ditagih ke mitra'));
                     return `<div class="ak-kartu">
                         <div class="ak-k-atas"><span class="ak-ik" aria-hidden="true"><i class="fa-solid fa-box"></i></span>
-                            <span class="ak-k-judul"><b>${escDx(p.mitraNama || 'Mitra')} · ${p.jenis === 'gabungan' ? 'Gabungan ' + escDx(p.jam || '') : 'Instan'}</b><small>Dikirim mitra ${jam}${p.pembayar === 'penerima' ? ' · ongkir ditagih ke penerima' : (p.pembayar === 'campur' ? ' · ongkir sebagian ditagih ke penerima' : ' · ongkir ditagih ke mitra')}</small></span>
+                            <span class="ak-k-judul"><b>${plg ? '<span class="ak-plg">PELANGGAN</span> ' : ''}${escDx(p.mitraNama || 'Mitra')} · ${p.jenis === 'gabungan' ? (plg ? 'Gabungan' : 'Gabungan ' + escDx(p.jam || '')) : 'Instan'}</b><small>${plg ? 'Kirim Paket dari aplikasi pelanggan' : 'Dikirim mitra'} ${jam}${ketBayar}</small></span>
                             <span class="ak-st ${st[1]}">${st[0]}</span></div>
-                        <div class="ak-k-angka"><div><b>${titik.length} titik</b><small>urut otomatis</small></div><div><b>${escDx(akKm(p.jarakKm))}</b><small>jarak rute</small></div><div><b class="ak-oranye">${escDx(akRp(p.totalOngkir))}</b><small>ongkir rider</small></div></div>
+                        <div class="ak-k-angka"><div><b>${titik.length} titik</b><small>urut otomatis</small></div><div><b>${escDx(plg && !(Number(p.jarakKm) > 0) ? '-' : akKm(p.jarakKm))}</b><small>jarak rute</small></div><div><b class="ak-oranye">${(plg && !(Number(p.totalOngkir) > 0)) ? 'Hitung' : escDx(akRp(p.totalOngkir))}</b><small>${(plg && !(Number(p.totalOngkir) > 0)) ? 'ongkir manual' : 'ongkir rider'}</small></div></div>
                         <ol class="ak-k-titik">${titik.map(t => `<li><b>${escDx(t.nama || '-')}</b>${t.patokan ? ' · ' + escDx(t.patokan) : ''}</li>`).join('')}</ol>
                         <div class="ak-k-aksi">
                             ${p.status === 'menunggu' ? `<button type="button" class="ak-btn ak-btn-utama" data-ak-isi="${p.id}">Isi ke form &amp; pilih rider</button>` : ''}
@@ -12304,7 +12313,34 @@
 
             // Pembayar ongkir per titik: 'penerima' (rider menagih) atau 'pengirim' (ditotal ke mitra)
             const akBayarTitik = (t, p) => (t && (t.bayar === 'penerima' || t.bayar === 'pengirim')) ? t.bayar : (p && p.pembayar === 'penerima' ? 'penerima' : 'pengirim');
+            const akRincianPelanggan = (p) => {
+                const titik = Array.isArray(p.titik) ? p.titik : [];
+                const asalLink = akAdaKoord({ lat: p.asalLat, lng: p.asalLng }) ? akLinkTitik({ lat: p.asalLat, lng: p.asalLng }) : '';
+                const total = Number(p.totalOngkir) || 0;
+                const manual = !(total > 0);
+                const pen = p.pembayar === 'penerima';
+                const baris = [
+                    '#KIRIM PAKET · PELANGGAN · ' + (p.jenis === 'gabungan' ? 'GABUNGAN ' + titik.length + ' PENERIMA' : 'INSTAN'),
+                    'Jemput paket di: ' + (p.mitraAlamat || '-'),
+                    asalLink ? 'Titik jemput: ' + asalLink : '',
+                    'Pengirim: ' + (p.mitraNama || 'Pelanggan') + ' (hubungi lewat chat aplikasi)',
+                    p.jenis === 'gabungan' ? titik.length + ' penerima · ' + akKm(p.jarakKm) + (akLinkAman(p.ruteLink) ? ' · rute: ' + akLinkAman(p.ruteLink) : '') : '',
+                    manual ? 'Ongkir dihitung admin (titik tidak lengkap).' : (pen ? 'Tagih ongkir ke tiap penerima sesuai daftar.' : 'Tagih ongkir ke PENGIRIM saat jemput: ' + akRp(total) + '. JANGAN menagih penerima.')
+                ].filter(Boolean);
+                baris.push('');
+                titik.forEach((t, i) => {
+                    baris.push((titik.length > 1 ? (i + 1) + '. ' : 'Penerima: ') + (t.nama || '-') + (t.hp ? ' · ' + akHp(t.hp) : ''));
+                    if (t.patokan) baris.push('Patokan: ' + t.patokan);
+                    const l = akLinkTitik(t); if (l) baris.push('Titik: ' + l);
+                    if (pen) baris.push(manual ? 'TAGIH ongkir ke penerima (nominal dari admin)' : 'TAGIH ongkir: ' + akRp(t.ongkir));
+                    else baris.push('Ongkir dibayar pengirim (jangan ditagih)');
+                    baris.push('');
+                });
+                baris.push('Kabari penerima lewat WA sebelum tiba. Foto rumah/penerima sebagai bukti.');
+                return baris.filter((x, i, a) => !(x === '' && a[i - 1] === '')).join('\n').trim();
+            };
             const akRincian = (p) => {
+                if (akPelanggan(p)) return akRincianPelanggan(p);
                 const titik = Array.isArray(p.titik) ? p.titik : [];
                 const asalLink = (isFinite(Number(p.asalLat)) && isFinite(Number(p.asalLng))) ? akLinkTitik({ lat: p.asalLat, lng: p.asalLng }) : '';
                 const baris = [
@@ -12340,7 +12376,7 @@
                 if (!akAktif || !p) { if (c) c.remove(); return; }
                 const form = document.getElementById('view-form-order'); if (!form) return;
                 if (!c) { c = document.createElement('div'); c.id = 'ak-form-chip'; c.className = 'ak-form-chip'; form.insertBefore(c, form.firstChild); }
-                c.innerHTML = `<i class="fa-solid fa-box" aria-hidden="true"></i><span>Mengisi permintaan <b>${escDx(p.mitraNama || 'mitra')}</b>. Pilih rider lalu tekan Kirim.</span><button type="button" id="ak-chip-batal">Batal</button>`;
+                c.innerHTML = `<i class="fa-solid fa-box" aria-hidden="true"></i><span>Mengisi ${akPelanggan(p) ? 'Kirim Paket pelanggan' : 'permintaan'} <b>${escDx(p.mitraNama || 'mitra')}</b>.${akPelanggan(p) && !(Number(p.totalOngkir) > 0) ? ' Isi ongkir dulu.' : ''} Pilih rider lalu tekan Kirim.</span><button type="button" id="ak-chip-batal">Batal</button>`;
             };
             window.akIsiForm = (id) => {
                 const p = akData.find(x => x.id === id); if (!p) return;
@@ -12356,17 +12392,44 @@
                 if (typeof window.dxAutoGrowPesanan === 'function') window.dxAutoGrowPesanan();
                 if (typeof window.dxUpdateTombolKirim === 'function') window.dxUpdateTombolKirim();
                 akChip();
+                if (akPelanggan(p)) { akIsiPelanggan(p); return; }
                 if (!akHp(p.mitraHp) && typeof window.abToast === 'function') window.abToast('Nomor kontak mitra kosong', 'Isi kolom Nomor WA secara manual sebelum mengirim.', null, true);
             };
+            // Kirim Paket pelanggan: kolom Nomor WA diisi KODE pelanggan (PG-xxxxx). Mekanisme kode pelanggan yang sudah ada
+            // lalu mengganti kolom itu dengan nomor admin (nomor pelanggan tetap privat) dan menghubungkan order ke Aktivitas + chat rider.
+            async function akIsiPelanggan(p) {
+                const nm = document.getElementById('cust-name');
+                akSetNilai('cust-phone', '');
+                akSetNilai('cust-name', ('Kirim Paket · ' + (p.mitraNama || 'Pelanggan')).slice(0, 60));
+                if (nm) nm.dataset.oto = '0';
+                if (!(Number(p.totalOngkir) > 0)) akSetNilai('order-fee', '');
+                let kode = '';
+                try {
+                    const uid = String(p.pelangganUid || '');
+                    if (/^[A-Za-z0-9]{10,128}$/.test(uid) && 'p_' + uid === p.mitraId) {
+                        const q = await getDocs(query(collection(db, 'kode_pelanggan'), where('uid', '==', uid), limit(1)));
+                        if (!q.empty && /^PG[2-9A-HJ-NP-Z]{5}$/.test(q.docs[0].id)) kode = q.docs[0].id;
+                    }
+                } catch (e) { console.warn('Kode pelanggan Kirim Paket:', e && e.code); }
+                if (akAktif !== p.id) return;   // admin sudah pindah ke permintaan lain
+                if (!kode) {
+                    if (typeof window.abToast === 'function') window.abToast('Kode pelanggan belum ada', 'Buka chat pelanggan ini (kode dibuat otomatis), salin kodenya, lalu tempel di kolom Nomor WA.', null, true);
+                    return;
+                }
+                akSetNilai('cust-phone', 'PG-' + kode.slice(2));
+                if (nm) { nm.dataset.oto = '0'; }
+            }
             // Dipanggil submitOrder / submitPendingOrder SEBELUM batch.commit(): order ditandai, permintaan ikut diperbarui
             window.akSisipkan = (batch, orderRef, riderUid, riderName) => {
                 if (!akAktif) return;
                 const p = akData.find(x => x.id === akAktif); if (!p) { akAktif = null; return; }
-                const titik = (Array.isArray(p.titik) ? p.titik : []).slice(0, 25).map(t => ({
-                    kirimId: String(t.kirimId || ''), nama: String(t.nama || '').slice(0, 60), hp: akHp(t.hp).slice(0, 20),
-                    patokan: String(t.patokan || '').slice(0, 600), lat: Number(t.lat), lng: Number(t.lng), ongkir: Number(t.ongkir) || 0, bayar: akBayarTitik(t, p)
-                }));
-                const asalOk = isFinite(Number(p.asalLat)) && isFinite(Number(p.asalLng)) && p.asalLat !== null && p.asalLng !== null;
+                const titik = (Array.isArray(p.titik) ? p.titik : []).slice(0, 25).map(t => akTitikBersih(t, akBayarTitik(t, p)));
+                // Kirim Paket instan pelanggan yang ongkirnya dihitung admin: ongkir titik = ongkir di form (supaya rider tidak menagih Rp0)
+                if (akPelanggan(p) && titik.length === 1 && !(titik[0].ongkir > 0)) {
+                    const fee = Math.round(Number(String((document.getElementById('order-fee') || {}).value || '').replace(/[^0-9]/g, '')) || 0);
+                    if (fee > 0) titik[0].ongkir = fee;
+                }
+                const asalOk = akAdaKoord({ lat: p.asalLat, lng: p.asalLng });
                 batch.set(orderRef, { antar_id: p.id, antar_mitra: String(p.mitraNama || '').slice(0, 60), antar_mitra_id: String(p.mitraId || ''), antar_titik: titik, antar_rute: akLinkAman(p.ruteLink), antar_bayar: (p.pembayar === 'penerima' || p.pembayar === 'campur') ? p.pembayar : 'pengirim', antar_alamat: String(p.mitraAlamat || '').slice(0, 160), antar_asal: asalOk ? { lat: Number(p.asalLat), lng: Number(p.asalLng) } : null }, { merge: true });
                 batch.update(doc(db, 'antar_permintaan', p.id), {
                     status: riderUid ? 'dibawa' : 'diproses', orderId: orderRef.id, riderUid: riderUid || null, riderNama: riderName || null,
@@ -12413,9 +12476,11 @@
                             const titik = Array.isArray(data.antar_titik) ? data.antar_titik : [];
                             const tanpaHp = titik.map(t => Object.assign({}, t, { hp: '' }));
                             const wb = writeBatch(db);
-                            wb.update(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp(), titik: tanpaHp.map(t => ({ kirimId: t.kirimId || '', nama: t.nama || '', hp: '', patokan: t.patokan || '', lat: t.lat, lng: t.lng, ongkir: t.ongkir || 0, bayar: t.bayar === 'penerima' ? 'penerima' : 'pengirim' })) });
+                            wb.update(doc(db, 'antar_permintaan', pid), { status: 'selesai', selesaiAt: serverTimestamp(), titik: tanpaHp.map(t => akTitikBersih(Object.assign({}, t, { hp: '' }), t.bayar === 'penerima' ? 'penerima' : 'pengirim')) });
                             wb.update(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'active_orders', orderId), { antar_titik: tanpaHp });
-                            titik.forEach(t => { if (/^[A-Za-z0-9_-]{1,128}$/.test(String(t.kirimId || ''))) wb.update(doc(db, 'antar_kirim', t.kirimId), { hp: '' }); });
+                            // Data paket (antar_kirim) hanya ada untuk mitra; Kirim Paket pelanggan (mitraId p_...) tidak punya
+                            const dariPelanggan = /^p_/.test(String(data.antar_mitra_id || ''));
+                            if (!dariPelanggan) titik.forEach(t => { if (/^[A-Za-z0-9_-]{1,128}$/.test(String(t.kirimId || ''))) wb.update(doc(db, 'antar_kirim', t.kirimId), { hp: '' }); });
                             await wb.commit();
                         }
                         else if (!s.exists()) await updateDoc(doc(db, 'antar_permintaan', pid), { status: 'menunggu', orderId: null, riderUid: null, riderNama: null, dilihatAdmin: true });
@@ -29801,8 +29866,13 @@
                     const k = el('div', 'cpa-psn-k'); k.append(ikon('fa-solid fa-receipt'), document.createTextNode('Pesanan' + (p.layanan ? ' · ' + p.layanan : '') + (p.ongkir ? ' · ongkir Rp' + Number(p.ongkir).toLocaleString('id-ID') : '')));
                     const bd = el('div', 'cpa-psn-b'); isiTeks(bd, p.teks);
                     const s = el('button', 'cpa-salin'); s.type = 'button';
+                    // (14 Nov 2026) Kirim Paket baru sudah otomatis masuk Pending › Khusus -> tombol membuka tab itu (bukan salin, supaya tidak dobel)
+                    const kpBaru = p.layanan === 'Kirim Paket' && /^📦 KIRIM PAKET · /.test(String(p.teks || '')) && typeof window.akBukaKhusus === 'function';
+                    if (kpBaru) { s.append(ikon('fa-solid fa-box'), el('span', '', 'Buka di Pending › Khusus')); s.onclick = () => window.akBukaKhusus(); }
+                    else {
                     s.append(ikon('fa-solid fa-paper-plane'), el('span', '', 'Salin ke Data order di Dispatch'));
                     s.onclick = () => salinKeOrder({ teks: p.teks, layanan: p.layanan, ongkir: p.ongkir }, s);
+                    }
                     b.append(k, bd, s);
                 } else {
                     const tx = el('span', 'cpa-t'); isiTeks(tx, p.teks); b.appendChild(tx); b.classList.add('cpa-teks');
