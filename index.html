@@ -29136,5 +29136,495 @@ window.PembuatQR = PembuatQR;
   setInterval(coba, 30000);   // cek ringan tiap 30 detik (juga saat ganti hari), tanpa baca Firebase
 })();
 </script>
+<!-- ===================== ORDER OTOMATIS: TAWARAN & LAYAR GAYA GRAB (17 Nov 2026) =====================
+     Pelanggan aplikasi (Ngojek / Antar barang, area Gombong) -> otomatis_order/{id} status "cari".
+     Aplikasi ini mendengarkan tawaran yang masih dicari, lalu menampilkannya HANYA kalau rider:
+       ON & siap, tidak sedang membawa order, jarak HP <= batas (2 km) ke titik jemput, saldo cukup untuk potongan 16%,
+       dan (khusus Ngojek) sudah menjawab "bawa helm ke-2" hari ini.
+     Rider terdekat melihat tawaran lebih dulu: tiap 0,5 km tambahan menunggu 1 putaran (15 detik).
+     Terima = SATU transaksi: tawaran diterima + saldo dipotong 16% + catatan potongan + order berjalan + riwayat harian.
+     Rules Firestore memeriksa semuanya (lihat blok ORDER OTOMATIS di rules). Gagal -> dicatat untuk admin.
+     Setelah diterima: layar gaya Grab (Sudah sampai -> Jemput -> Turunkan) di atas Tugas Berjalan, khusus order otomatis.
+     "Turunkan" membuka langkah bukti selesai yang sudah ada (foto + pembayaran), jadi aturan selesai order tidak berubah.
+     Semua teks dari pelanggan ditampilkan dengan textContent. -->
+<style id="oto-css">
+    .oto-tawar { position: fixed; inset: 0; z-index: 9998; background: #20232B; color: #fff; display: flex; flex-direction: column; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    .oto-tawar[hidden], .oto-grab[hidden], .oto-balik[hidden], .oto-ok[hidden], .oto-cat[hidden], .oto-helm[hidden] { display: none; }
+    .oto-atas { padding: calc(env(safe-area-inset-top, 0px) + 22px) 20px 18px; }
+    .oto-atas small { font-size: 12px; color: #AEB4C0; font-weight: 600; }
+    .oto-atas h2 { font-size: 34px; font-weight: 900; letter-spacing: -.5px; margin: 2px 0 2px; }
+    .oto-atas .pb { font-size: 12.5px; color: #C8CDD6; font-weight: 600; }
+    .oto-tg { display: inline-block; margin: 10px 6px 0 0; background: #3A3F4B; border-radius: 7px; font-size: 11.5px; font-weight: 800; padding: 4px 9px; }
+    .oto-tg.or { background: #FFB547; color: #3B2400; }
+    .oto-isi { background: #2A2E38; padding: 16px 20px; border-top: 1px solid #383D49; }
+    .oto-lyn { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 15px; font-weight: 800; margin-bottom: 8px; }
+    .oto-helm { font-size: 11.5px; font-weight: 800; background: #E8F5EC; color: #1E6B3A; border-radius: 7px; padding: 3px 8px; }
+    .oto-jr { font-size: 12.5px; color: #AEB4C0; font-weight: 600; margin-bottom: 8px; }
+    .oto-titik { display: flex; gap: 11px; align-items: flex-start; padding: 7px 0; font-size: 14px; font-weight: 800; line-height: 1.35; }
+    .oto-titik small { display: block; font-size: 12px; color: #9AA1AE; font-weight: 600; margin-top: 1px; }
+    .oto-dot { width: 13px; height: 13px; border-radius: 50%; flex: none; margin-top: 3px; }
+    .oto-cat { font-size: 12.5px; color: #C8CDD6; font-weight: 600; background: #343946; border-radius: 10px; padding: 8px 10px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .oto-bawah { margin-top: auto; padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 18px); }
+    .oto-lewat { display: block; width: 100%; background: none; border: 0; color: #AEB4C0; font-size: 14px; font-weight: 700; padding: 10px; margin-bottom: 6px; }
+    .oto-terima { position: relative; width: 100%; height: 60px; border: 0; border-radius: 16px; background: #16A34A; color: #fff; font-size: 19px; font-weight: 900; }
+    .oto-terima:disabled { opacity: .7; }
+    .oto-terima i { position: absolute; right: 10px; top: 10px; width: 40px; height: 40px; border-radius: 50%; background: #0F7A36; font-style: normal; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    /* layar order berjalan (gaya Grab) */
+    .oto-grab { position: fixed; inset: 0; z-index: 9988; background: #E9E6DF; display: flex; flex-direction: column; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; }
+    .oto-peta { flex: 1; position: relative; min-height: 120px; overflow: hidden; background: #E9E6DF; }
+    .oto-peta iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .oto-nav { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 12px; background: #1C1C1E; color: #fff; border-radius: 12px; padding: 8px 12px; font-size: 17px; font-weight: 900; max-width: 60%; }
+    .oto-nav small { display: block; font-size: 11px; color: #9AA1AE; font-weight: 700; }
+    .oto-tag { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 12px; background: #FFB547; color: #3B2400; border-radius: 10px; padding: 6px 10px; font-size: 11.5px; font-weight: 900; }
+    .oto-kartu { background: #fff; border-radius: 18px 18px 0 0; box-shadow: 0 -6px 18px rgba(0,0,0,.12); padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 92px); position: relative; }
+    .oto-bar { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; color: #5E554C; border-bottom: 1px solid #F1ECE6; padding-bottom: 9px; margin-bottom: 9px; }
+    .oto-bar b { color: #1C1C1E; font-size: 13px; }
+    .oto-nm { font-size: 12px; color: #7A7068; font-weight: 700; }
+    .oto-kartu h5 { font-size: 17px; font-weight: 900; margin: 2px 0 1px; }
+    .oto-al { font-size: 13px; color: #3C3631; font-weight: 600; overflow-wrap: anywhere; }
+    .oto-hr { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 15px; font-weight: 800; }
+    .oto-hr span { font-size: 11.5px; background: #F1ECE6; border-radius: 6px; padding: 2px 8px; color: #5E554C; }
+    .oto-ok { display: flex; gap: 6px; align-items: center; background: #E8F5EC; color: #1E6B3A; border-radius: 9px; padding: 6px 9px; font-size: 12px; font-weight: 800; margin-top: 7px; }
+    .oto-navbtn { width: 100%; margin-top: 10px; height: 46px; border-radius: 13px; border: 0; background: #E0EDFF; color: #1D4ED8; font-size: 14.5px; font-weight: 900; }
+    .oto-ikon { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 10px; border-top: 1px solid #F1ECE6; padding-top: 6px; }
+    .oto-ikon button { background: none; border: 0; padding: 6px 0; font-size: 11.5px; font-weight: 700; color: #5E554C; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 48px; }
+    .oto-ikon button b { font-size: 18px; }
+    .oto-aksi { position: absolute; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); height: 58px; border-radius: 29px; border: 0; background: #16A34A; color: #fff; font-size: 18px; font-weight: 900; box-shadow: 0 6px 14px rgba(22,163,74,.35); }
+    .oto-aksi.putih { background: #fff; color: #16A34A; border: 2px solid #16A34A; }
+    .oto-aksi:disabled { opacity: .7; }
+    .oto-balik { position: fixed; right: 12px; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 9989; border: 0; border-radius: 26px; background: #FFB547; color: #3B2400; font-size: 13.5px; font-weight: 900; padding: 12px 16px; box-shadow: 0 8px 20px rgba(0,0,0,.25); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+</style>
+<div class="oto-tawar" id="oto-tawar" hidden role="dialog" aria-modal="true" aria-labelledby="oto-t-ongkir">
+    <div class="oto-atas">
+        <small>Rp</small>
+        <h2 id="oto-t-ongkir">0</h2>
+        <div class="pb" id="oto-t-bersih">Pendapatan bersih</div>
+        <span class="oto-tg">Uang tunai</span><span class="oto-tg or">⚡ Order otomatis</span>
+    </div>
+    <div class="oto-isi">
+        <div class="oto-lyn"><span id="oto-t-lyn">Ngojek</span><span class="oto-helm" id="oto-t-helm" hidden>🪖 Pakai helm ke-2</span></div>
+        <div class="oto-jr" id="oto-t-jarak"></div>
+        <div class="oto-titik"><span class="oto-dot" style="background:#16A34A"></span><div><span id="oto-t-jemput"></span><small id="oto-t-jemput2"></small></div></div>
+        <div class="oto-titik"><span class="oto-dot" style="background:#EF4444"></span><div><span id="oto-t-tujuan"></span><small id="oto-t-tujuan2"></small></div></div>
+        <div class="oto-cat" id="oto-t-cat" hidden></div>
+    </div>
+    <div class="oto-bawah">
+        <button type="button" class="oto-lewat" id="oto-t-lewat">Lewati</button>
+        <button type="button" class="oto-terima" id="oto-t-terima">Terima<i id="oto-t-detik">15</i></button>
+    </div>
+</div>
+<div class="oto-grab" id="oto-grab" hidden>
+    <div class="oto-peta" id="oto-g-peta">
+        <div class="oto-nav" id="oto-g-nav">Menuju jemput<small>Ketuk Navigasi untuk rute</small></div>
+        <div class="oto-tag">⚡ OTOMATIS</div>
+    </div>
+    <div class="oto-kartu">
+        <div class="oto-bar"><span id="oto-g-langkah">1 · Jemput</span><b id="oto-g-lyn">Ngojek</b><span id="oto-g-km"></span></div>
+        <div class="oto-nm" id="oto-g-nama"></div>
+        <h5 id="oto-g-judul"></h5>
+        <div class="oto-al" id="oto-g-alamat"></div>
+        <div class="oto-ok" id="oto-g-ok" hidden></div>
+        <div class="oto-hr"><span id="oto-g-ongkir" style="background:none;padding:0;font-size:15px;color:#1C1C1E">Rp0</span><span>Uang tunai</span></div>
+        <button type="button" class="oto-navbtn" id="oto-g-navbtn">🧭 Navigasi ke titik jemput</button>
+        <div class="oto-ikon">
+            <button type="button" id="oto-g-chat"><b aria-hidden="true">💬</b>Chat</button>
+            <button type="button" id="oto-g-telp"><b aria-hidden="true">📞</b>Telepon</button>
+            <button type="button" id="oto-g-detail"><b aria-hidden="true">🧾</b>Detail</button>
+            <button type="button" id="oto-g-salin"><b aria-hidden="true">📋</b>Salin titik</button>
+        </div>
+    </div>
+    <button type="button" class="oto-aksi putih" id="oto-g-aksi">Sudah sampai</button>
+</div>
+<button type="button" class="oto-balik" id="oto-balik" hidden>⚡ Tampilan otomatis</button>
+<script type="module">
+    import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, serverTimestamp, setDoc, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    (function orderOtomatisRider() {
+        'use strict';
+        const P = 'onbid-2f87a';
+        let db;
+        try { db = getFirestore(getApp()); } catch (e) { console.warn('[Otomatis] Firebase belum siap', e); return; }
+        const $ = (id) => document.getElementById(id);
+        const ID_OK = /^[A-Za-z0-9]{20}$/, KODE_OK = /^[A-Za-z0-9]{16}$/;
+        const toast = (t) => { try { if (typeof window.showCustomToast === 'function') window.showCustomToast(t); } catch (e) {} };
+        const rp = (n) => 'Rp' + Math.round(Number(n) || 0).toLocaleString('id-ID');
+        const ms = (t) => t && typeof t.toMillis === 'function' ? t.toMillis() : (t && typeof t.seconds === 'number' ? t.seconds * 1000 : 0);
+        const ya = (v) => v === true || v === 'true';
+        const titikOk = (t) => t && isFinite(Number(t.lat)) && isFinite(Number(t.lng));
+        function km(a, b) {
+            const R = 6371, r = Math.PI / 180, dA = (b.lat - a.lat) * r, dO = (b.lng - a.lng) * r;
+            const x = Math.sin(dA / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dO / 2) ** 2;
+            return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+        }
+        const fmtKm = (d) => (d < 1 ? (Math.round(d * 10) / 10).toFixed(1).replace('.', ',') : (Math.round(d * 10) / 10).toString().replace('.', ',')) + ' km';
+        function uidKu() { try { return String((window.getRiderUid && window.getRiderUid()) || '').trim().toUpperCase(); } catch (e) { return ''; } }
+
+        // ---------- keadaan ----------
+        let uid = '', atur = null, statusKu = null, saldo = NaN, pos = null, posT = 0;
+        let tawaran = new Map();          // id -> { o, lihat: ms pertama terlihat (lokal), umur: ms umur server saat terlihat }
+        const lewat = new Set();          // tawaran yang dilewati / sudah lewat gilirannya di HP ini
+        let tampil = null;                // { id, o, jarak, habis }
+        let henti = { atur: null, status: null, saldo: null, tawar: null, aktif: null };
+        let watchId = null, sibukTerima = false;
+        try { (JSON.parse(sessionStorage.getItem('oto_lewat') || '[]') || []).forEach((x) => lewat.add(String(x))); } catch (e) {}
+        const simpanLewat = () => { try { sessionStorage.setItem('oto_lewat', JSON.stringify(Array.from(lewat).slice(-50))); } catch (e) {} };
+
+        function namaKu() {
+            const n = (statusKu && (statusKu.nama || statusKu.name)) || (window._profilRiderData && (window._profilRiderData.nama || window._profilRiderData.name)) || uid;
+            return String(n || 'Rider').slice(0, 60);
+        }
+        function helm2Hari() {
+            if (!statusKu || statusKu.helm2 !== true) return false;
+            const t = ms(statusKu.helm2_at);
+            return !!t && Date.now() - t < 20 * 3600 * 1000;
+        }
+        function sibukOrder() { return !!(window.currentActiveOrderId || window.currentIncomingOrderId); }
+        function siap() { return !!(uid && atur && atur.aktif === true && statusKu && ya(statusKu.is_online) && ya(statusKu.is_available) && !sibukOrder()); }
+
+        // ---------- GPS sendiri (hanya selama mungkin menerima tawaran) ----------
+        function gpsMulai() {
+            if (watchId !== null || !navigator.geolocation) return;
+            try {
+                watchId = navigator.geolocation.watchPosition((p) => { pos = { lat: p.coords.latitude, lng: p.coords.longitude }; posT = Date.now(); },
+                    () => {}, { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+            } catch (e) { watchId = null; }
+        }
+        function gpsHenti() { if (watchId !== null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} watchId = null; } }
+
+        // ---------- mendengarkan ----------
+        function hentikanSemua() { Object.keys(henti).forEach((k) => { if (henti[k]) { try { henti[k](); } catch (e) {} henti[k] = null; } }); tawaran.clear(); gpsHenti(); }
+        function mulai(u) {
+            hentikanSemua();
+            uid = u;
+            henti.atur = onSnapshot(doc(db, 'otomatis_atur', 'umum'), (s) => { atur = s.exists() ? s.data() : null; aturDengarTawaran(); }, () => { atur = null; aturDengarTawaran(); });
+            henti.status = onSnapshot(doc(db, 'status_rider_aktif', uid), (s) => { statusKu = s.exists() ? s.data() : null; aturDengarTawaran(); }, () => {});
+            henti.saldo = onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', uid), (s) => { saldo = s.exists() ? Number(s.data().saldo) : NaN; }, () => {});
+            pulihkanAktif();
+        }
+        function aturDengarTawaran() {
+            const perlu = !!(uid && atur && atur.aktif === true && statusKu && ya(statusKu.is_online));
+            if (perlu && !henti.tawar) {
+                gpsMulai();
+                henti.tawar = onSnapshot(query(collection(db, 'otomatis_order'), where('status', '==', 'cari')), (s) => {
+                    const ada = new Set();
+                    s.docs.forEach((d) => {
+                        if (!ID_OK.test(d.id)) return;
+                        ada.add(d.id);
+                        const o = d.data({ serverTimestamps: 'estimate' }) || {};
+                        const lama = tawaran.get(d.id);
+                        if (lama) { lama.o = o; return; }
+                        const umur = Math.max(0, Date.now() - (ms(o.dibuat_at) || Date.now()));
+                        tawaran.set(d.id, { o, lihat: Date.now(), umur: Math.min(umur, 10 * 60 * 1000) });
+                    });
+                    Array.from(tawaran.keys()).forEach((id) => { if (!ada.has(id)) tawaran.delete(id); });
+                    if (tampil && !ada.has(tampil.id) && !sibukTerima) { tutupTawaran(); toast('Tawaran sudah diambil rider lain / dibatalkan'); }
+                }, (e) => { console.warn('[Otomatis] tawaran belum terbaca:', e && e.code); });
+            } else if (!perlu && henti.tawar) {
+                try { henti.tawar(); } catch (e) {} henti.tawar = null; tawaran.clear(); gpsHenti();
+                if (tampil && !sibukTerima) tutupTawaran();
+            }
+        }
+
+        // ---------- memilih tawaran untuk ditampilkan ----------
+        function cocok(id, x) {
+            const o = x.o, a = atur;
+            if (!o || o.status !== 'cari' || lewat.has(id)) return null;
+            if (!titikOk(o.jemput) || !titikOk(o.tujuan) || !(Number(o.fee) > 0)) return null;
+            if (!((o.layanan === 'ngojek' && a.ngojek === true) || (o.layanan === 'antar' && a.antar === true))) return null;
+            if (o.layanan === 'ngojek' && !helm2Hari()) return null;
+            const pot = Math.round(Number(o.fee) * 0.16);
+            if (!(saldo >= pot)) return null;
+            if (!pos || Date.now() - posT > 120000) return null;
+            const jarak = km(pos, { lat: Number(o.jemput.lat), lng: Number(o.jemput.lng) });
+            const batas = Number(a.jarak_km) || 2;
+            if (jarak > batas) return null;
+            const cari = (Number(a.cari_dtk) || 60) * 1000, giliran = (Number(a.tawar_dtk) || 15) * 1000;
+            const umurKini = x.umur + (Date.now() - x.lihat);
+            if (umurKini > cari) return null;
+            // terdekat lebih dulu: tiap 0,5 km menunggu satu giliran
+            const tunggu = Math.floor(jarak / 0.5) * giliran;
+            if (umurKini < tunggu) return null;
+            return { id, o, jarak, pot, giliran };
+        }
+        function pilih() {
+            if (tampil || sibukTerima || !siap()) return;
+            let terbaik = null;
+            tawaran.forEach((x, id) => { const c = cocok(id, x); if (c && (!terbaik || c.jarak < terbaik.jarak)) terbaik = c; });
+            if (terbaik) bukaTawaran(terbaik);
+        }
+
+        // ---------- kartu tawaran ----------
+        const LAYANAN = { ngojek: 'Ngojek', antar: 'Antar barang' };
+        function pisahAlamat(t) {
+            const s = String((t && t.alamat) || '').trim();
+            const i = s.indexOf(',');
+            return i > 0 ? [s.slice(0, i), s.slice(i + 1).trim()] : [s || 'Titik di peta', ''];
+        }
+        function bukaTawaran(c) {
+            tampil = Object.assign({}, c, { habis: Date.now() + c.giliran });
+            const o = c.o;
+            $('oto-t-ongkir').textContent = Math.round(Number(o.fee) - c.pot).toLocaleString('id-ID');
+            $('oto-t-bersih').textContent = 'Pendapatan bersih (ongkir ' + rp(o.fee) + ' − adm 16% ' + rp(c.pot) + ')';
+            $('oto-t-lyn').textContent = '👤 ' + (LAYANAN[o.layanan] || 'Order');
+            $('oto-t-helm').hidden = o.layanan !== 'ngojek';
+            $('oto-t-jarak').textContent = fmtKm(c.jarak) + ' dari kamu · perjalanan ' + fmtKm(Number(o.jarak_km) || 0);
+            const j = pisahAlamat(o.jemput), t = pisahAlamat(o.tujuan);
+            $('oto-t-jemput').textContent = j[0]; $('oto-t-jemput2').textContent = j[1];
+            $('oto-t-tujuan').textContent = t[0]; $('oto-t-tujuan2').textContent = t[1];
+            const cat = String(o.catatan || '').trim();
+            $('oto-t-cat').hidden = !cat; $('oto-t-cat').textContent = cat ? 'Catatan: ' + cat : '';
+            $('oto-t-terima').disabled = false;
+            $('oto-tawar').hidden = false;
+            hitungMundur();
+            try {
+                if (window.AndroidInterface && typeof window.AndroidInterface.triggerOrderNotification === 'function') {
+                    window.AndroidInterface.triggerOrderNotification('⚡ ORDER OTOMATIS', (LAYANAN[o.layanan] || 'Order') + ' ' + fmtKm(c.jarak) + ' dari kamu. Buka aplikasi!');
+                } else if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+            } catch (e) {}
+        }
+        function hitungMundur() {
+            if (!tampil) return;
+            const sisa = Math.max(0, Math.ceil((tampil.habis - Date.now()) / 1000));
+            $('oto-t-detik').textContent = String(sisa);
+            if (sisa <= 0 && !sibukTerima) { lewati(true); }
+        }
+        function tutupTawaran() { tampil = null; $('oto-tawar').hidden = true; }
+        function lewati(waktuHabis) {
+            if (!tampil) return;
+            lewat.add(tampil.id); simpanLewat();
+            tutupTawaran();
+            if (waktuHabis) toast('Waktu habis, tawaran dialihkan ke rider lain');
+        }
+        $('oto-t-lewat').addEventListener('click', () => { if (!sibukTerima) lewati(false); });
+        $('oto-t-terima').addEventListener('click', () => { if (tampil && !sibukTerima) terima(tampil); });
+
+        // ---------- TERIMA: satu transaksi (dicek rules) ----------
+        function tglJam() {
+            const f = (o) => new Intl.DateTimeFormat('en-CA', Object.assign({ timeZone: 'Asia/Jakarta' }, o)).format(new Date());
+            const tgl = f({ year: 'numeric', month: '2-digit', day: '2-digit' });
+            const jam = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+            return { tgl, jam };
+        }
+        function teksPesanan(o) {
+            const peta = (t) => 'https://www.google.com/maps?q=' + Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
+            let s = '⚡ ORDER OTOMATIS · ' + (LAYANAN[o.layanan] || 'Order') + '\n'
+                + '📍 Jemput: ' + String(o.jemput.alamat || '').slice(0, 200) + '\n' + peta(o.jemput) + '\n'
+                + '🚩 Tujuan: ' + String(o.tujuan.alamat || '').slice(0, 200) + '\n' + peta(o.tujuan);
+            const cat = String(o.catatan || '').trim();
+            if (cat) s += '\nCatatan: ' + cat.slice(0, 300);
+            return s;
+        }
+        async function catatGagal(id, alasan) {
+            try { await setDoc(doc(db, 'otomatis_order', id, 'log', uid), { nama: namaKu(), alasan: String(alasan).slice(0, 120), at: serverTimestamp() }); } catch (e) {}
+        }
+        async function terima(c) {
+            sibukTerima = true;
+            const btn = $('oto-t-terima'); btn.disabled = true; btn.firstChild.textContent = 'Memproses… ';
+            const id = c.id, nama = namaKu();
+            const refT = doc(db, 'otomatis_order', id);
+            const refSaku = doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', uid);
+            let hasil = null;
+            try {
+                hasil = await runTransaction(db, async (trx) => {
+                    const sT = await trx.get(refT);
+                    if (!sT.exists()) throw { oto: 'hilang' };
+                    const o = sT.data();
+                    if (o.status !== 'cari') throw { oto: 'diambil' };
+                    const sS = await trx.get(refSaku);
+                    const sebelum = sS.exists() ? Number(sS.data().saldo) : NaN;
+                    const pot = Math.round(Number(o.fee) * 0.16);
+                    if (!(sebelum >= pot)) throw { oto: 'saldo', saldo: sebelum, pot };
+                    const sesudah = sebelum - pot;
+                    const ST = serverTimestamp(), w = tglJam();
+                    trx.update(refT, { status: 'diterima', rider_uid: uid, rider_nama: nama, diterima_at: ST, potongan: pot,
+                        saldo_sebelum: sebelum, saldo_sesudah: sesudah, rider_km: Math.round(c.jarak * 100) / 100 });
+                    trx.update(refSaku, { saldo: sesudah, updated_at: ST, oto_id: id });
+                    trx.set(doc(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan', 'oto_' + id), {
+                        order_id: id, rider_uid: uid, rider_name: nama, amount: pot, omset_order: o.fee, type: 'auto_order',
+                        desc: 'Order otomatis (aplikasi pelanggan)', created_at: ST, oto: true });
+                    trx.set(doc(db, 'artifacts', P, 'public', 'data', 'active_orders', id), {
+                        status: 'processing', rider_uid: uid, rider_name: nama, customer_name: String(o.nama || 'Pelanggan').slice(0, 60), customer_phone: '',
+                        items: [{ name: teksPesanan(o) }], fee: o.fee, tambahan: 0, jenis: o.layanan === 'ngojek' ? 'ojek' : 'kirim',
+                        created_at: ST, accepted_at: ST, daily_order_id: 'oto_' + id,
+                        adm_potong: { jumlah: pot, rider_uid: uid, ledger_id: 'oto_' + id, at: ST },
+                        ulasan_kode: o.kode, akt_uid: o.pelanggan_uid, cr: true, otomatis: true,
+                        oto: { jemput: o.jemput, tujuan: o.tujuan, jarak_km: o.jarak_km, layanan: o.layanan },
+                        missed_by: null, payment_type: 'Tunai', tahap: 'menuju', tahap_at: ST });
+                    trx.set(doc(db, 'artifacts', P, 'users', uid, 'daily_orders', 'oto_' + id), {
+                        UID: uid, Nama_Rider: nama, Tanggal: w.tgl, Jam: w.jam, Nama_Pelanggan: String(o.nama || 'Pelanggan').slice(0, 60),
+                        Nominal_Kotor: o.fee / 1000, Tambahan: 0, Status: 'Selesai', Keterangan: 'Order otomatis · ' + (LAYANAN[o.layanan] || 'Order'),
+                        belum_selesai: true, created_at: ST, payment_type: 'Tunai', payment_nominal: 0, oto_id: id });
+                    trx.update(doc(db, 'status_rider_aktif', uid), { is_available: false, is_online: true, in_main_queue: true,
+                        tanggal_order_pertama: ST, last_updated: ST });
+                    return { o, pot, sebelum, sesudah };
+                });
+            } catch (e) {
+                sibukTerima = false; btn.disabled = false; btn.firstChild.textContent = 'Terima';
+                lewat.add(id); simpanLewat(); tutupTawaran();
+                const k = e && e.oto;
+                if (k === 'diambil' || k === 'hilang') { toast('Tawaran sudah diambil rider lain'); return; }
+                let alasan;
+                if (k === 'saldo') alasan = 'Saldo kurang (' + rp(e.saldo) + ', butuh ' + rp(e.pot) + ')';
+                else if (e && e.code === 'permission-denied') alasan = 'Ditolak server: cek GPS (Peta rider aktif?), jarak, helm ke-2, atau saldo';
+                else alasan = 'Gagal: ' + String((e && (e.code || e.message)) || 'koneksi').slice(0, 80);
+                toast('Order otomatis gagal diterima. ' + alasan);
+                catatGagal(id, alasan);
+                return;
+            }
+            sibukTerima = false; btn.firstChild.textContent = 'Terima';
+            tutupTawaran();
+            toast('Order diterima ✓ Potongan adm ' + rp(hasil.pot) + ' · saldo ' + rp(hasil.sesudah));
+            try { localStorage.setItem('oto_aktif_' + uid, id); } catch (e) {}
+            dengarAktif(id);
+        }
+
+        // ---------- LAYAR GAYA GRAB untuk order otomatis yang sedang berjalan ----------
+        let aktif = null;   // { id, o (active order), kontak }
+        let sembunyi = false;
+        const kunciSampai = (id) => 'oto_sampai_' + id;
+        function pulihkanAktif() {
+            let id = '';
+            try { id = localStorage.getItem('oto_aktif_' + uid) || ''; } catch (e) {}
+            if (ID_OK.test(id)) dengarAktif(id);
+        }
+        function dengarAktif(id) {
+            if (henti.aktif) { try { henti.aktif(); } catch (e) {} henti.aktif = null; }
+            aktif = { id, o: null, kontak: null };
+            sembunyi = false;
+            henti.aktif = onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'active_orders', id), (s) => {
+                const o = s.exists() ? s.data() : null;
+                if (!o || String(o.rider_uid || '').toUpperCase() !== uid || !['processing', 'assigned'].includes(String(o.status))) {
+                    akhiriAktif(o && o.status === 'completed');
+                    return;
+                }
+                aktif.o = o;
+                gambarGrab();
+            }, () => {});
+            getDoc(doc(db, 'otomatis_order', id, 'kontak', 'data')).then((s) => { if (aktif && aktif.id === id && s.exists()) aktif.kontak = s.data(); gambarGrab(); }).catch(() => {});
+        }
+        function akhiriAktif(selesai) {
+            if (henti.aktif) { try { henti.aktif(); } catch (e) {} henti.aktif = null; }
+            const id = aktif && aktif.id;
+            aktif = null;
+            $('oto-grab').hidden = true; $('oto-balik').hidden = true;
+            try { localStorage.removeItem('oto_aktif_' + uid); if (id) localStorage.removeItem(kunciSampai(id)); } catch (e) {}
+            if (selesai) toast('Order otomatis selesai ✓ Masuk riwayat harian');
+        }
+        function langkah() {
+            const o = aktif && aktif.o; if (!o) return 'jemput';
+            if (o.tahap === 'antar') return 'antar';
+            let sampai = false; try { sampai = localStorage.getItem(kunciSampai(aktif.id)) === '1'; } catch (e) {}
+            return sampai ? 'sampai' : 'jemput';
+        }
+        function gambarGrab() {
+            if (!aktif || !aktif.o) return;
+            const o = aktif.o, x = o.oto || {}, lk = langkah();
+            const keTujuan = lk === 'antar';
+            const t = keTujuan ? x.tujuan : x.jemput;
+            const al = pisahAlamat(t);
+            $('oto-g-langkah').textContent = keTujuan ? '2 · Antar' : '1 · Jemput';
+            $('oto-g-lyn').textContent = LAYANAN[x.layanan] || 'Order';
+            $('oto-g-km').textContent = fmtKm(Number(x.jarak_km) || 0);
+            $('oto-g-nama').textContent = String(o.customer_name || 'Pelanggan');
+            $('oto-g-judul').textContent = al[0];
+            $('oto-g-alamat').textContent = al[1];
+            $('oto-g-ongkir').textContent = rp(o.fee);
+            $('oto-g-navbtn').textContent = keTujuan ? '🧭 Navigasi ke tujuan' : '🧭 Navigasi ke titik jemput';
+            $('oto-g-nav').firstChild.textContent = keTujuan ? 'Menuju tujuan' : (lk === 'sampai' ? 'Di titik jemput' : 'Menuju jemput');
+            $('oto-g-nav').lastChild.textContent = keTujuan ? 'Turunkan setelah dibayar' : (lk === 'sampai' ? 'Tunggu pelanggan' : 'Ketuk Navigasi untuk rute');
+            const ok = $('oto-g-ok');
+            ok.hidden = lk !== 'sampai';
+            ok.textContent = lk === 'sampai' ? ('✓ Kamu sudah sampai' + (x.layanan === 'antar' ? ' · ambil barangnya' : ' · tunggu penumpang naik')) : '';
+            const aksi = $('oto-g-aksi');
+            aksi.disabled = false;
+            aksi.classList.toggle('putih', lk === 'jemput');
+            aksi.textContent = lk === 'jemput' ? 'Sudah sampai' : (lk === 'sampai' ? 'Jemput' : 'Turunkan');
+            // peta kecil (tanpa kunci API): titik tujuan langkah ini
+            const peta = $('oto-g-peta');
+            const q = Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
+            let fr = peta.querySelector('iframe');
+            if (!fr) { fr = document.createElement('iframe'); fr.setAttribute('title', 'Peta'); fr.setAttribute('loading', 'lazy'); fr.setAttribute('referrerpolicy', 'no-referrer'); peta.insertBefore(fr, peta.firstChild); }
+            const src = 'https://maps.google.com/maps?q=' + q + '&z=16&output=embed';
+            if (fr.getAttribute('src') !== src) fr.setAttribute('src', src);
+            if (!sembunyi) { $('oto-grab').hidden = false; $('oto-balik').hidden = true; }
+            else { $('oto-grab').hidden = true; $('oto-balik').hidden = false; }
+        }
+        function bukaPeta(t) {
+            if (!titikOk(t)) { toast('Titik belum ada'); return; }
+            const lat = Number(t.lat), lng = Number(t.lng), q = lat.toFixed(6) + ',' + lng.toFixed(6);
+            if (window.AndroidInterface && typeof window.AndroidInterface.bukaPeta === 'function') { try { window.AndroidInterface.bukaPeta(lat, lng); return; } catch (e) {} }
+            if (window.AndroidInterface) { window.location.href = 'geo:' + q + '?q=' + q; return; }
+            window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(q) + '&travelmode=driving', '_blank', 'noopener');
+        }
+        $('oto-g-navbtn').addEventListener('click', () => {
+            if (!aktif || !aktif.o) return;
+            const x = aktif.o.oto || {};
+            bukaPeta(langkah() === 'antar' ? x.tujuan : x.jemput);
+        });
+        $('oto-g-salin').addEventListener('click', () => {
+            if (!aktif || !aktif.o) return;
+            const x = aktif.o.oto || {}, t = langkah() === 'antar' ? x.tujuan : x.jemput;
+            const teks = 'https://www.google.com/maps?q=' + Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
+            try { navigator.clipboard.writeText(teks).then(() => toast('Link titik disalin'), () => toast(teks)); } catch (e) { toast(teks); }
+        });
+        $('oto-g-chat').addEventListener('click', () => {
+            const b = $('btn-wa-customer');
+            if (b && b.classList.contains('cr-tombol')) { b.click(); return; }
+            toast('Chat pelanggan sedang disiapkan, coba lagi sebentar');
+        });
+        $('oto-g-telp').addEventListener('click', () => {
+            const k = aktif && aktif.kontak;
+            const lyn = aktif && aktif.o && aktif.o.oto && aktif.o.oto.layanan;
+            // antar barang setelah dijemput: telepon penerima kalau ada
+            let no = '';
+            if (k) no = (lyn === 'antar' && langkah() === 'antar' && k.penerima_hp) ? String(k.penerima_hp) : String(k.wa || '');
+            no = no.replace(/[^0-9+]/g, '');
+            if (!no) { toast('Nomor belum tersedia, pakai Chat'); return; }
+            if (no.indexOf('62') === 0) no = '0' + no.slice(2);
+            window.location.href = 'tel:' + no;
+        });
+        $('oto-g-detail').addEventListener('click', () => { sembunyi = true; gambarGrab(); });
+        $('oto-balik').addEventListener('click', () => { sembunyi = false; gambarGrab(); });
+        $('oto-g-aksi').addEventListener('click', () => {
+            if (!aktif || !aktif.o) return;
+            const lk = langkah(), id = aktif.id;
+            if (lk === 'jemput') {
+                try { localStorage.setItem(kunciSampai(id), '1'); } catch (e) {}
+                gambarGrab();
+                return;
+            }
+            if (lk === 'sampai') {
+                const btn = $('oto-g-aksi'); btn.disabled = true;
+                let ok = false;
+                try { if (typeof window.barLacakAksi === 'function') window.barLacakAksi(id, 'maju:antar'); } catch (e) {}
+                // cadangan: tekan tombol tahap yang sama di Tugas Berjalan
+                setTimeout(() => {
+                    ok = !!(aktif && aktif.o && aktif.o.tahap === 'antar');
+                    if (ok) return;
+                    const tombol = Array.prototype.find.call(document.querySelectorAll('#active-order-overlay button'), (b) => /mulai antar/i.test(b.textContent || ''));
+                    if (tombol) tombol.click();
+                    setTimeout(() => { if (aktif && aktif.o && aktif.o.tahap !== 'antar') { btn.disabled = false; toast('Belum tersimpan. Pastikan izin lokasi aktif, lalu tekan Jemput lagi.'); } }, 2500);
+                }, 1500);
+                return;
+            }
+            // Turunkan -> langkah bukti selesai yang sudah ada (foto + metode bayar)
+            sembunyi = true; gambarGrab();
+            try { if (typeof window.goToPage === 'function') window.goToPage(2); } catch (e) {}
+            toast('Foto bukti & pilih pembayaran, lalu selesaikan order');
+        });
+
+        // ---------- jalan terus ----------
+        setInterval(() => {
+            const u = uidKu();
+            if (u && u !== uid) mulai(u);
+            if (!u && uid) { hentikanSemua(); uid = ''; }
+            if (tampil) hitungMundur(); else pilih();
+            if (aktif && aktif.o && !sembunyi && !window.currentActiveOrderId) { /* overlay Tugas Berjalan belum muncul: tetap tampil */ }
+        }, 1000);
+        window.otoRiderDebug = () => ({ uid, atur, siap: siap(), pos, saldo, tawaran: Array.from(tawaran.keys()), lewat: Array.from(lewat), aktif: aktif && aktif.id });
+    })();
+</script>
+<!-- ===================== AKHIR ORDER OTOMATIS (RIDER) ===================== -->
+
 </body>
 </html>
