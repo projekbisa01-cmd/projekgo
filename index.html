@@ -29284,12 +29284,17 @@ window.PembuatQR = PembuatQR;
         // ---------- keadaan ----------
         let uid = '', atur = null, statusKu = null, saldo = NaN, pos = null, posT = 0;
         let tawaran = new Map();          // id -> { o, lihat: ms pertama terlihat (lokal), umur: ms umur server saat terlihat }
-        const lewat = new Set();          // tawaran yang dilewati / sudah lewat gilirannya di HP ini
+        // (18 Nov 2026) Tawaran yang dilewati / habis waktunya TIDAK hilang selamanya: setelah rider lain mendapat giliran
+        // (2 putaran), kalau masih belum ada yang menerima, tawaran itu bisa datang lagi ke rider ini. Catatan dilewati
+        // dihapus saat rider OFF. Yang benar-benar tidak ditawarkan lagi hanya yang GAGAL diterima (mis. saldo kurang).
+        const lewat = new Map();          // id -> jam dilewati (ms)
+        const gagal = new Set();          // gagal diterima di HP ini (sampai rider OFF)
         let tampil = null;                // { id, o, jarak, habis }
         let henti = { atur: null, status: null, saldo: null, tawar: null, aktif: null };
         let watchId = null, sibukTerima = false;
-        try { (JSON.parse(sessionStorage.getItem('oto_lewat') || '[]') || []).forEach((x) => lewat.add(String(x))); } catch (e) {}
-        const simpanLewat = () => { try { sessionStorage.setItem('oto_lewat', JSON.stringify(Array.from(lewat).slice(-50))); } catch (e) {} };
+        try { const x = JSON.parse(sessionStorage.getItem('oto_lewat2') || '{}') || {}; Object.keys(x).forEach((k) => lewat.set(k, Number(x[k]) || 0)); } catch (e) {}
+        const simpanLewat = () => { try { sessionStorage.setItem('oto_lewat2', JSON.stringify(Object.fromEntries(Array.from(lewat.entries()).slice(-50)))); } catch (e) {} };
+        function lupakanLewat() { if (lewat.size || gagal.size) { lewat.clear(); gagal.clear(); simpanLewat(); } }
 
         function namaKu() {
             const n = (statusKu && (statusKu.nama || statusKu.name)) || (window._profilRiderData && (window._profilRiderData.nama || window._profilRiderData.name)) || uid;
@@ -29319,7 +29324,11 @@ window.PembuatQR = PembuatQR;
             hentikanSemua();
             uid = u;
             henti.atur = onSnapshot(doc(db, 'otomatis_atur', 'umum'), (s) => { atur = s.exists() ? s.data() : null; aturDengarTawaran(); }, () => { atur = null; aturDengarTawaran(); });
-            henti.status = onSnapshot(doc(db, 'status_rider_aktif', uid), (s) => { statusKu = s.exists() ? s.data() : null; aturDengarTawaran(); }, () => {});
+            henti.status = onSnapshot(doc(db, 'status_rider_aktif', uid), (s) => {
+                statusKu = s.exists() ? s.data() : null;
+                if (!statusKu || !ya(statusKu.is_online)) lupakanLewat();   // rider OFF -> histori dilewati dilupakan
+                aturDengarTawaran();
+            }, () => {});
             henti.saldo = onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', uid), (s) => { saldo = s.exists() ? Number(s.data().saldo) : NaN; }, () => {});
             pulihkanAktif();
         }
@@ -29350,7 +29359,9 @@ window.PembuatQR = PembuatQR;
         // ---------- memilih tawaran untuk ditampilkan ----------
         function cocok(id, x) {
             const o = x.o, a = atur;
-            if (!o || o.status !== 'cari' || lewat.has(id)) return null;
+            if (!o || o.status !== 'cari' || gagal.has(id)) return null;
+            const jeda = 2 * (Number(a.tawar_dtk) || 15) * 1000;   // beri giliran rider lain dulu
+            if (lewat.has(id) && Date.now() - lewat.get(id) < jeda) return null;
             if (!titikOk(o.jemput) || !titikOk(o.tujuan) || !(Number(o.fee) > 0)) return null;
             if (!((o.layanan === 'ngojek' && a.ngojek === true) || (o.layanan === 'antar' && a.antar === true))) return null;
             if (o.layanan === 'ngojek' && !helm2Hari()) return null;
@@ -29440,7 +29451,7 @@ window.PembuatQR = PembuatQR;
         function tutupTawaran() { tampil = null; $('oto-tawar').hidden = true; }
         function lewati(waktuHabis) {
             if (!tampil) return;
-            lewat.add(tampil.id); simpanLewat();
+            lewat.set(tampil.id, Date.now()); simpanLewat();
             tutupTawaran();
             if (waktuHabis) toast('Waktu habis, tawaran dialihkan ke rider lain');
         }
@@ -29512,7 +29523,8 @@ window.PembuatQR = PembuatQR;
                 });
             } catch (e) {
                 sibukTerima = false; btn.disabled = false; btn.firstChild.textContent = 'Terima';
-                lewat.add(id); simpanLewat(); tutupTawaran();
+                tutupTawaran();
+                if (e && e.oto !== 'diambil' && e.oto !== 'hilang') gagal.add(id);
                 const k = e && e.oto;
                 if (k === 'diambil' || k === 'hilang') { toast('Tawaran sudah diambil rider lain'); return; }
                 let alasan;
@@ -29694,7 +29706,7 @@ window.PembuatQR = PembuatQR;
             if (tampil) hitungMundur(); else pilih();
             if (aktif && aktif.o && !sembunyi && !window.currentActiveOrderId) { /* overlay Tugas Berjalan belum muncul: tetap tampil */ }
         }, 1000);
-        window.otoRiderDebug = () => ({ uid, atur, siap: siap(), pos, saldo, tawaran: Array.from(tawaran.keys()), lewat: Array.from(lewat), aktif: aktif && aktif.id });
+        window.otoRiderDebug = () => ({ uid, atur, siap: siap(), pos, saldo, tawaran: Array.from(tawaran.keys()), lewat: Array.from(lewat.keys()), gagal: Array.from(gagal), aktif: aktif && aktif.id });
     })();
 </script>
 <!-- ===================== AKHIR ORDER OTOMATIS (RIDER) ===================== -->
