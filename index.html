@@ -27982,6 +27982,14 @@ window.PembuatQR = PembuatQR;
     $('cr-pilih').addEventListener('click', function (e) { if (e.target.id === 'cr-pilih') { $('cr-pilih').hidden = true; gambarChip(); } });
     document.addEventListener('visibilitychange', function () { if (!document.hidden && ruang) tandaiDibaca(cur()); });
     // Tombol Back HP (dipanggil dari penjaga tombol kembali): true = layar chat ditutup
+    // (18 Nov 2026) ORDER OTOMATIS: tombol Chat di layar order otomatis membuka chat aplikasi langsung (bukan WhatsApp)
+    window.crBukaKode = function (kode) {
+        if (!KODE.test(String(kode || ''))) return false;
+        var c = chats[kode];
+        if (c && c.aktif && !c.tutup) { bukaRuang(kode); return true; }
+        if (c && !c.aktif && !c.henti) { c.coba = 0; mulaiDengar(c); }   // sambung ulang lalu rider ketuk lagi
+        return false;
+    };
     window.crTutupSatu = function () {
         if (!$('cr-lihat').hidden) { tutupLihat(); return true; }
         if (!$('cr-pilih').hidden) { $('cr-pilih').hidden = true; gambarChip(); return true; }
@@ -29136,7 +29144,7 @@ window.PembuatQR = PembuatQR;
   setInterval(coba, 30000);   // cek ringan tiap 30 detik (juga saat ganti hari), tanpa baca Firebase
 })();
 </script>
-<!-- ===================== ORDER OTOMATIS: TAWARAN & LAYAR GAYA GRAB (17 Nov 2026) =====================
+<!-- ===================== ORDER OTOMATIS: TAWARAN & LAYAR ORDER BERJALAN (17 Nov 2026, tema oranye 18 Nov) =====================
      Pelanggan aplikasi (Ngojek / Antar barang, area Gombong) -> otomatis_order/{id} status "cari".
      Aplikasi ini mendengarkan tawaran yang masih dicari, lalu menampilkannya HANYA kalau rider:
        ON & siap, tidak sedang membawa order, jarak HP <= batas (2 km) ke titik jemput, saldo cukup untuk potongan 16%,
@@ -29144,70 +29152,85 @@ window.PembuatQR = PembuatQR;
      Rider terdekat melihat tawaran lebih dulu: tiap 0,5 km tambahan menunggu 1 putaran (15 detik).
      Terima = SATU transaksi: tawaran diterima + saldo dipotong 16% + catatan potongan + order berjalan + riwayat harian.
      Rules Firestore memeriksa semuanya (lihat blok ORDER OTOMATIS di rules). Gagal -> dicatat untuk admin.
-     Setelah diterima: layar gaya Grab (Sudah sampai -> Jemput -> Turunkan) di atas Tugas Berjalan, khusus order otomatis.
+     Setelah diterima: layar order berjalan (Sudah sampai -> Jemput -> Turunkan) di atas Tugas Berjalan, khusus order otomatis.
+     (18 Nov) + kode ulasan ikut dibuat saat Terima (ulasan_token), Chat selalu ke chat aplikasi (tidak pernah WhatsApp).
      "Turunkan" membuka langkah bukti selesai yang sudah ada (foto + pembayaran), jadi aturan selesai order tidak berubah.
      Semua teks dari pelanggan ditampilkan dengan textContent. -->
 <style id="oto-css">
-    .oto-tawar { position: fixed; inset: 0; z-index: 9998; background: #20232B; color: #fff; display: flex; flex-direction: column; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
-    .oto-tawar[hidden], .oto-grab[hidden], .oto-balik[hidden], .oto-ok[hidden], .oto-cat[hidden], .oto-helm[hidden] { display: none; }
-    .oto-atas { padding: calc(env(safe-area-inset-top, 0px) + 22px) 20px 18px; }
-    .oto-atas small { font-size: 12px; color: #AEB4C0; font-weight: 600; }
-    .oto-atas h2 { font-size: 34px; font-weight: 900; letter-spacing: -.5px; margin: 2px 0 2px; }
-    .oto-atas .pb { font-size: 12.5px; color: #C8CDD6; font-weight: 600; }
-    .oto-tg { display: inline-block; margin: 10px 6px 0 0; background: #3A3F4B; border-radius: 7px; font-size: 11.5px; font-weight: 800; padding: 4px 9px; }
-    .oto-tg.or { background: #FFB547; color: #3B2400; }
-    .oto-isi { background: #2A2E38; padding: 16px 20px; border-top: 1px solid #383D49; }
-    .oto-lyn { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 15px; font-weight: 800; margin-bottom: 8px; }
-    .oto-helm { font-size: 11.5px; font-weight: 800; background: #E8F5EC; color: #1E6B3A; border-radius: 7px; padding: 3px 8px; }
-    .oto-jr { font-size: 12.5px; color: #AEB4C0; font-weight: 600; margin-bottom: 8px; }
-    .oto-titik { display: flex; gap: 11px; align-items: flex-start; padding: 7px 0; font-size: 14px; font-weight: 800; line-height: 1.35; }
-    .oto-titik small { display: block; font-size: 12px; color: #9AA1AE; font-weight: 600; margin-top: 1px; }
-    .oto-dot { width: 13px; height: 13px; border-radius: 50%; flex: none; margin-top: 3px; }
-    .oto-cat { font-size: 12.5px; color: #C8CDD6; font-weight: 600; background: #343946; border-radius: 10px; padding: 8px 10px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .oto-bawah { margin-top: auto; padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 18px); }
-    .oto-lewat { display: block; width: 100%; background: none; border: 0; color: #AEB4C0; font-size: 14px; font-weight: 700; padding: 10px; margin-bottom: 6px; }
-    .oto-terima { position: relative; width: 100%; height: 60px; border: 0; border-radius: 16px; background: #16A34A; color: #fff; font-size: 19px; font-weight: 900; }
+    /* (18 Nov 2026) Tema ProjekGo (oranye), bukan gaya aplikasi lain */
+    .oto-tawar, .oto-grab, .oto-lembar { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1F1611; }
+    .oto-tawar[hidden], .oto-grab[hidden], .oto-balik[hidden], .oto-ok[hidden], .oto-helm[hidden], .oto-lembar[hidden], .oto-cat[hidden] { display: none; }
+    .oto-tawar { position: fixed; inset: 0; z-index: 9998; background: #FFF7ED; display: flex; flex-direction: column; overflow-y: auto; }
+    .oto-atas { background: linear-gradient(135deg, #EA580C, #C2410C); color: #fff; padding: calc(env(safe-area-inset-top, 0px) + 16px) 18px 20px; border-radius: 0 0 26px 26px; }
+    .oto-lbl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+    .oto-lbl b { background: #FFE7C2; color: #7C2D12; border-radius: 6px; padding: 2px 7px; }
+    .oto-atas h2 { font-size: 34px; font-weight: 900; margin: 6px 0 0; letter-spacing: -.5px; }
+    .oto-atas small { font-size: 12.5px; font-weight: 600; opacity: .92; }
+    .oto-chip { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .oto-chip span { background: rgba(255,255,255,.18); border-radius: 999px; padding: 4px 10px; font-size: 11.5px; font-weight: 800; }
+    .oto-helm { display: inline-block; align-self: flex-start; background: #DCFCE7; color: #166534; border-radius: 8px; padding: 4px 9px; font-size: 12px; font-weight: 800; margin: 12px 14px 0; }
+    /* kartu detail pesanan (jemput biru -> tujuan oranye) */
+    .oto-dk { background: #fff; border-radius: 16px; margin: 12px 14px 0; padding: 12px 14px 8px; border: 1px solid #F5E6D8; box-shadow: 0 2px 10px rgba(124,45,18,.06); }
+    .oto-tt { display: flex; gap: 10px; position: relative; padding-bottom: 10px; }
+    .oto-tt .d { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex: none; }
+    .oto-tt.j .d { background: #2563EB; } .oto-tt.t .d { background: #F97316; }
+    .oto-tt.j::after { content: ''; position: absolute; left: 4.5px; top: 19px; bottom: 0; width: 1.5px; background: #E5E7EB; }
+    .oto-tt b { display: block; font-size: 15.5px; font-weight: 800; overflow-wrap: anywhere; }
+    .oto-tt span.a { display: block; font-size: 12.5px; color: #6B7280; font-weight: 500; line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }
+    .oto-pill { display: inline-block; background: #F97316; color: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 800; margin: 5px 0 2px; }
+    .oto-kode { font-size: 11px; color: #B8BCC4; font-weight: 600; margin-top: 3px; letter-spacing: .03em; }
+    .oto-cat { font-size: 12.5px; color: #7C2D12; font-weight: 600; background: #FFF7ED; border-radius: 10px; padding: 8px 10px; margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .oto-trf { background: #fff; border-radius: 16px; margin: 10px 14px 0; padding: 2px 14px; border: 1px solid #F5E6D8; }
+    .oto-trf div { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; font-size: 13.5px; font-weight: 600; color: #4B5563; border-bottom: 1px solid #F3F4F6; }
+    .oto-trf div:last-child { border-bottom: 0; }
+    .oto-trf div b { color: #111827; font-weight: 800; white-space: nowrap; }
+    .oto-trf .min b { color: #B91C1C; }
+    .oto-trf .net b { color: #C2410C; font-size: 16px; }
+    .oto-bawah { margin-top: auto; padding: 12px 14px calc(env(safe-area-inset-bottom, 0px) + 16px); }
+    .oto-lewat { display: block; width: 100%; background: none; border: 0; color: #9A3412; font-size: 14px; font-weight: 700; padding: 10px; margin-bottom: 4px; }
+    .oto-terima { position: relative; width: 100%; height: 58px; border: 0; border-radius: 16px; background: #EA580C; color: #fff; font-size: 19px; font-weight: 900; box-shadow: 0 8px 18px rgba(234,88,12,.35); }
     .oto-terima:disabled { opacity: .7; }
-    .oto-terima i { position: absolute; right: 10px; top: 10px; width: 40px; height: 40px; border-radius: 50%; background: #0F7A36; font-style: normal; display: flex; align-items: center; justify-content: center; font-size: 16px; }
-    /* layar order berjalan (gaya Grab) */
-    .oto-grab { position: fixed; inset: 0; z-index: 9988; background: #E9E6DF; display: flex; flex-direction: column; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #1C1C1E; }
+    .oto-terima i { position: absolute; right: 9px; top: 9px; width: 40px; height: 40px; border-radius: 50%; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; font-style: normal; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+    /* layar order berjalan */
+    .oto-grab { position: fixed; inset: 0; z-index: 9988; background: #F3EEE8; display: flex; flex-direction: column; }
     .oto-peta { flex: 1; position: relative; min-height: 120px; overflow: hidden; background: #E9E6DF; }
     .oto-peta iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-    .oto-nav { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 12px; background: #1C1C1E; color: #fff; border-radius: 12px; padding: 8px 12px; font-size: 17px; font-weight: 900; max-width: 60%; }
-    .oto-nav small { display: block; font-size: 11px; color: #9AA1AE; font-weight: 700; }
-    .oto-tag { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 12px; background: #FFB547; color: #3B2400; border-radius: 10px; padding: 6px 10px; font-size: 11.5px; font-weight: 900; }
-    .oto-kartu { background: #fff; border-radius: 18px 18px 0 0; box-shadow: 0 -6px 18px rgba(0,0,0,.12); padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 92px); position: relative; }
-    .oto-bar { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; color: #5E554C; border-bottom: 1px solid #F1ECE6; padding-bottom: 9px; margin-bottom: 9px; }
-    .oto-bar b { color: #1C1C1E; font-size: 13px; }
-    .oto-nm { font-size: 12px; color: #7A7068; font-weight: 700; }
-    .oto-kartu h5 { font-size: 17px; font-weight: 900; margin: 2px 0 1px; }
-    .oto-al { font-size: 13px; color: #3C3631; font-weight: 600; overflow-wrap: anywhere; }
-    .oto-hr { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 15px; font-weight: 800; }
-    .oto-hr span { font-size: 11.5px; background: #F1ECE6; border-radius: 6px; padding: 2px 8px; color: #5E554C; }
-    .oto-ok { display: flex; gap: 6px; align-items: center; background: #E8F5EC; color: #1E6B3A; border-radius: 9px; padding: 6px 9px; font-size: 12px; font-weight: 800; margin-top: 7px; }
-    .oto-navbtn { width: 100%; margin-top: 10px; height: 46px; border-radius: 13px; border: 0; background: #E0EDFF; color: #1D4ED8; font-size: 14.5px; font-weight: 900; }
-    .oto-ikon { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 10px; border-top: 1px solid #F1ECE6; padding-top: 6px; }
-    .oto-ikon button { background: none; border: 0; padding: 6px 0; font-size: 11.5px; font-weight: 700; color: #5E554C; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 48px; }
+    .oto-nav { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 12px; background: #7C2D12; color: #fff; border-radius: 12px; padding: 8px 12px; font-size: 16px; font-weight: 900; max-width: 62%; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+    .oto-nav small { display: block; font-size: 11px; font-weight: 700; opacity: .85; }
+    .oto-tag { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 12px; background: #FFE7C2; color: #7C2D12; border-radius: 10px; padding: 6px 10px; font-size: 11.5px; font-weight: 900; }
+    .oto-kartu { background: #fff; border-radius: 18px 18px 0 0; box-shadow: 0 -6px 18px rgba(0,0,0,.12); padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 88px); position: relative; max-height: 62vh; overflow-y: auto; }
+    .oto-bar { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; color: #6B7280; border-bottom: 1px solid #F3F4F6; padding-bottom: 8px; margin-bottom: 10px; }
+    .oto-bar b { color: #C2410C; font-size: 13px; }
+    .oto-kartu .oto-tt { padding-bottom: 8px; }
+    .oto-tt.aktif b { color: #C2410C; }
+    .oto-tt.redup { opacity: .55; }
+    .oto-ok { display: flex; gap: 6px; align-items: center; background: #DCFCE7; color: #166534; border-radius: 9px; padding: 6px 9px; font-size: 12px; font-weight: 800; margin-top: 4px; }
+    .oto-hr { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 15px; font-weight: 800; }
+    .oto-hr span { font-size: 11.5px; background: #F3F4F6; border-radius: 6px; padding: 2px 8px; color: #6B7280; }
+    .oto-navbtn { width: 100%; margin-top: 10px; height: 46px; border-radius: 13px; border: 1.5px solid #FED7AA; background: #FFF1E6; color: #C2410C; font-size: 14.5px; font-weight: 900; }
+    .oto-ikon { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 8px; border-top: 1px solid #F3F4F6; padding-top: 4px; }
+    .oto-ikon button { background: none; border: 0; padding: 6px 0; font-size: 11.5px; font-weight: 700; color: #6B7280; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 48px; }
     .oto-ikon button b { font-size: 18px; }
-    .oto-aksi { position: absolute; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); height: 58px; border-radius: 29px; border: 0; background: #16A34A; color: #fff; font-size: 18px; font-weight: 900; box-shadow: 0 6px 14px rgba(22,163,74,.35); }
-    .oto-aksi.putih { background: #fff; color: #16A34A; border: 2px solid #16A34A; }
+    .oto-aksi { position: absolute; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); height: 56px; border-radius: 16px; border: 0; background: #EA580C; color: #fff; font-size: 18px; font-weight: 900; box-shadow: 0 6px 14px rgba(234,88,12,.35); }
+    .oto-aksi.garis { background: #fff; color: #C2410C; border: 2px solid #EA580C; box-shadow: 0 6px 14px rgba(0,0,0,.08); }
     .oto-aksi:disabled { opacity: .7; }
-    .oto-balik { position: fixed; right: 12px; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 9989; border: 0; border-radius: 26px; background: #FFB547; color: #3B2400; font-size: 13.5px; font-weight: 900; padding: 12px 16px; box-shadow: 0 8px 20px rgba(0,0,0,.25); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    .oto-balik { position: fixed; right: 12px; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 9989; border: 0; border-radius: 26px; background: #EA580C; color: #fff; font-size: 13.5px; font-weight: 900; padding: 12px 16px; box-shadow: 0 8px 20px rgba(0,0,0,.25); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    /* lembar detail pesanan */
+    .oto-lembar { position: fixed; inset: 0; z-index: 9993; background: rgba(28,25,23,.5); display: flex; align-items: flex-end; justify-content: center; }
+    .oto-lembar-isi { background: #FFF7ED; width: 100%; max-width: 520px; border-radius: 22px 22px 0 0; padding: 14px 0 calc(env(safe-area-inset-bottom, 0px) + 14px); max-height: 88vh; overflow-y: auto; }
+    .oto-lembar-isi h3 { font-size: 16px; font-weight: 900; margin: 0 16px 2px; }
+    .oto-lembar-isi .tutup { display: block; width: calc(100% - 28px); margin: 12px 14px 0; height: 48px; border-radius: 14px; border: 1.5px solid #FED7AA; background: #fff; color: #C2410C; font-size: 14px; font-weight: 900; }
+    .oto-lembar-isi .tb { display: block; width: calc(100% - 28px); margin: 8px 14px 0; height: 44px; border-radius: 14px; border: 0; background: none; color: #6B7280; font-size: 13px; font-weight: 800; }
 </style>
 <div class="oto-tawar" id="oto-tawar" hidden role="dialog" aria-modal="true" aria-labelledby="oto-t-ongkir">
     <div class="oto-atas">
-        <small>Rp</small>
-        <h2 id="oto-t-ongkir">0</h2>
-        <div class="pb" id="oto-t-bersih">Pendapatan bersih</div>
-        <span class="oto-tg">Uang tunai</span><span class="oto-tg or">⚡ Order otomatis</span>
+        <div class="oto-lbl"><b>⚡ Otomatis</b><span id="oto-t-lyn">Ngojek</span><span>·</span><span id="oto-t-jarak"></span></div>
+        <h2 id="oto-t-ongkir">Rp0</h2>
+        <small>Pendapatan bersih kamu</small>
+        <div class="oto-chip"><span>💵 Tunai</span><span id="oto-t-trip">🛣️ 0 km</span></div>
     </div>
-    <div class="oto-isi">
-        <div class="oto-lyn"><span id="oto-t-lyn">Ngojek</span><span class="oto-helm" id="oto-t-helm" hidden>🪖 Pakai helm ke-2</span></div>
-        <div class="oto-jr" id="oto-t-jarak"></div>
-        <div class="oto-titik"><span class="oto-dot" style="background:#16A34A"></span><div><span id="oto-t-jemput"></span><small id="oto-t-jemput2"></small></div></div>
-        <div class="oto-titik"><span class="oto-dot" style="background:#EF4444"></span><div><span id="oto-t-tujuan"></span><small id="oto-t-tujuan2"></small></div></div>
-        <div class="oto-cat" id="oto-t-cat" hidden></div>
-    </div>
+    <span class="oto-helm" id="oto-t-helm" hidden>🪖 Bawa helm ke-2 untuk penumpang</span>
+    <div id="oto-t-detail"></div>
     <div class="oto-bawah">
         <button type="button" class="oto-lewat" id="oto-t-lewat">Lewati</button>
         <button type="button" class="oto-terima" id="oto-t-terima">Terima<i id="oto-t-detik">15</i></button>
@@ -29219,12 +29242,10 @@ window.PembuatQR = PembuatQR;
         <div class="oto-tag">⚡ OTOMATIS</div>
     </div>
     <div class="oto-kartu">
-        <div class="oto-bar"><span id="oto-g-langkah">1 · Jemput</span><b id="oto-g-lyn">Ngojek</b><span id="oto-g-km"></span></div>
-        <div class="oto-nm" id="oto-g-nama"></div>
-        <h5 id="oto-g-judul"></h5>
-        <div class="oto-al" id="oto-g-alamat"></div>
+        <div class="oto-bar"><span id="oto-g-langkah">1 · Jemput</span><b id="oto-g-lyn">Ngojek</b><span id="oto-g-nama"></span></div>
+        <div id="oto-g-titik"></div>
         <div class="oto-ok" id="oto-g-ok" hidden></div>
-        <div class="oto-hr"><span id="oto-g-ongkir" style="background:none;padding:0;font-size:15px;color:#1C1C1E">Rp0</span><span>Uang tunai</span></div>
+        <div class="oto-hr"><span id="oto-g-ongkir" style="background:none;padding:0;font-size:15px;color:#111827">Rp0</span><span>Uang tunai</span></div>
         <button type="button" class="oto-navbtn" id="oto-g-navbtn">🧭 Navigasi ke titik jemput</button>
         <div class="oto-ikon">
             <button type="button" id="oto-g-chat"><b aria-hidden="true">💬</b>Chat</button>
@@ -29233,8 +29254,9 @@ window.PembuatQR = PembuatQR;
             <button type="button" id="oto-g-salin"><b aria-hidden="true">📋</b>Salin titik</button>
         </div>
     </div>
-    <button type="button" class="oto-aksi putih" id="oto-g-aksi">Sudah sampai</button>
+    <button type="button" class="oto-aksi garis" id="oto-g-aksi">Sudah sampai</button>
 </div>
+<div class="oto-lembar" id="oto-lembar" hidden role="dialog" aria-modal="true" aria-labelledby="oto-l-judul"><div class="oto-lembar-isi" id="oto-l-isi"></div></div>
 <button type="button" class="oto-balik" id="oto-balik" hidden>⚡ Tampilan otomatis</button>
 <script type="module">
     import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
@@ -29355,6 +29377,35 @@ window.PembuatQR = PembuatQR;
 
         // ---------- kartu tawaran ----------
         const LAYANAN = { ngojek: 'Ngojek', antar: 'Antar barang' };
+        const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+        const kodeTampil = (k) => 'PG-' + String(k || '').slice(0, 12).toUpperCase();
+        // Kartu detail pesanan: titik jemput (biru) -> tujuan (oranye) + jarak + kode. langkah: 'jemput' | 'antar' | null
+        function kartuDetail(o, langkahAktif, catatan) {
+            const w = el('div', 'oto-dk');
+            const j = pisahAlamat(o.jemput), t = pisahAlamat(o.tujuan);
+            const a = el('div', 'oto-tt j' + (langkahAktif === 'jemput' ? ' aktif' : (langkahAktif === 'antar' ? ' redup' : '')));
+            a.appendChild(el('span', 'd'));
+            const ai = el('div'); ai.appendChild(el('b', '', j[0])); if (j[1]) ai.appendChild(el('span', 'a', j[1])); a.appendChild(ai);
+            const b = el('div', 'oto-tt t' + (langkahAktif === 'antar' ? ' aktif' : ''));
+            b.appendChild(el('span', 'd'));
+            const bi = el('div'); bi.appendChild(el('b', '', t[0]));
+            bi.appendChild(el('span', 'oto-pill', 'Jarak • ' + fmtKm(Number(o.jarak_km) || 0)));
+            if (t[1]) bi.appendChild(el('span', 'a', t[1]));
+            bi.appendChild(el('div', 'oto-kode', kodeTampil(o.kode || o.ulasan_kode)));
+            b.appendChild(bi);
+            w.appendChild(a); w.appendChild(b);
+            const cat = String(catatan || '').trim();
+            if (cat) w.appendChild(el('div', 'oto-cat', cat));
+            return w;
+        }
+        function kartuTarif(fee, pot) {
+            const w = el('div', 'oto-trf');
+            const baris = (k, label, nilai) => { const d = el('div', k); d.appendChild(el('span', '', label)); d.appendChild(el('b', '', nilai)); w.appendChild(d); };
+            baris('', 'Tarif', rp(fee));
+            baris('min', 'Potongan administrasi 16%', '− ' + rp(pot));
+            baris('net', 'Pendapatan bersih', rp(Number(fee) - Number(pot)));
+            return w;
+        }
         function pisahAlamat(t) {
             const s = String((t && t.alamat) || '').trim();
             const i = s.indexOf(',');
@@ -29363,16 +29414,14 @@ window.PembuatQR = PembuatQR;
         function bukaTawaran(c) {
             tampil = Object.assign({}, c, { habis: Date.now() + c.giliran });
             const o = c.o;
-            $('oto-t-ongkir').textContent = Math.round(Number(o.fee) - c.pot).toLocaleString('id-ID');
-            $('oto-t-bersih').textContent = 'Pendapatan bersih (ongkir ' + rp(o.fee) + ' − adm 16% ' + rp(c.pot) + ')';
-            $('oto-t-lyn').textContent = '👤 ' + (LAYANAN[o.layanan] || 'Order');
+            $('oto-t-ongkir').textContent = rp(Number(o.fee) - c.pot);
+            $('oto-t-lyn').textContent = LAYANAN[o.layanan] || 'Order';
+            $('oto-t-jarak').textContent = fmtKm(c.jarak) + ' dari kamu';
+            $('oto-t-trip').textContent = '🛣️ ' + fmtKm(Number(o.jarak_km) || 0);
             $('oto-t-helm').hidden = o.layanan !== 'ngojek';
-            $('oto-t-jarak').textContent = fmtKm(c.jarak) + ' dari kamu · perjalanan ' + fmtKm(Number(o.jarak_km) || 0);
-            const j = pisahAlamat(o.jemput), t = pisahAlamat(o.tujuan);
-            $('oto-t-jemput').textContent = j[0]; $('oto-t-jemput2').textContent = j[1];
-            $('oto-t-tujuan').textContent = t[0]; $('oto-t-tujuan2').textContent = t[1];
-            const cat = String(o.catatan || '').trim();
-            $('oto-t-cat').hidden = !cat; $('oto-t-cat').textContent = cat ? 'Catatan: ' + cat : '';
+            const det = $('oto-t-detail'); while (det.firstChild) det.removeChild(det.firstChild);
+            det.appendChild(kartuDetail(o, null, o.catatan));
+            det.appendChild(kartuTarif(o.fee, c.pot));
             $('oto-t-terima').disabled = false;
             $('oto-tawar').hidden = false;
             hitungMundur();
@@ -29454,6 +29503,9 @@ window.PembuatQR = PembuatQR;
                         UID: uid, Nama_Rider: nama, Tanggal: w.tgl, Jam: w.jam, Nama_Pelanggan: String(o.nama || 'Pelanggan').slice(0, 60),
                         Nominal_Kotor: o.fee / 1000, Tambahan: 0, Status: 'Selesai', Keterangan: 'Order otomatis · ' + (LAYANAN[o.layanan] || 'Order'),
                         belum_selesai: true, created_at: ST, payment_type: 'Tunai', payment_nominal: 0, oto_id: id });
+                    // (18 Nov 2026) kode ulasan sekali pakai, sama seperti order dari admin
+                    if (KODE_OK.test(String(o.kode || ''))) trx.set(doc(db, 'artifacts', P, 'public', 'data', 'ulasan_token', o.kode), {
+                        order_id: id, dibuat_at: ST, terpakai: false, jenis: o.layanan === 'ngojek' ? 'ojek' : 'kirim' });
                     trx.update(doc(db, 'status_rider_aktif', uid), { is_available: false, is_online: true, in_main_queue: true,
                         tanggal_order_pertama: ST, last_updated: ST });
                     return { o, pot, sebelum, sesudah };
@@ -29521,13 +29573,13 @@ window.PembuatQR = PembuatQR;
             const o = aktif.o, x = o.oto || {}, lk = langkah();
             const keTujuan = lk === 'antar';
             const t = keTujuan ? x.tujuan : x.jemput;
-            const al = pisahAlamat(t);
             $('oto-g-langkah').textContent = keTujuan ? '2 · Antar' : '1 · Jemput';
             $('oto-g-lyn').textContent = LAYANAN[x.layanan] || 'Order';
-            $('oto-g-km').textContent = fmtKm(Number(x.jarak_km) || 0);
             $('oto-g-nama').textContent = String(o.customer_name || 'Pelanggan');
-            $('oto-g-judul').textContent = al[0];
-            $('oto-g-alamat').textContent = al[1];
+            const tk = $('oto-g-titik'); while (tk.firstChild) tk.removeChild(tk.firstChild);
+            const kd = kartuDetail(Object.assign({}, x, { kode: o.ulasan_kode }), keTujuan ? 'antar' : 'jemput', '');
+            kd.style.margin = '0'; kd.style.border = '0'; kd.style.boxShadow = 'none'; kd.style.padding = '0';
+            tk.appendChild(kd);
             $('oto-g-ongkir').textContent = rp(o.fee);
             $('oto-g-navbtn').textContent = keTujuan ? '🧭 Navigasi ke tujuan' : '🧭 Navigasi ke titik jemput';
             $('oto-g-nav').firstChild.textContent = keTujuan ? 'Menuju tujuan' : (lk === 'sampai' ? 'Di titik jemput' : 'Menuju jemput');
@@ -29537,7 +29589,7 @@ window.PembuatQR = PembuatQR;
             ok.textContent = lk === 'sampai' ? ('✓ Kamu sudah sampai' + (x.layanan === 'antar' ? ' · ambil barangnya' : ' · tunggu penumpang naik')) : '';
             const aksi = $('oto-g-aksi');
             aksi.disabled = false;
-            aksi.classList.toggle('putih', lk === 'jemput');
+            aksi.classList.toggle('garis', lk === 'jemput');
             aksi.textContent = lk === 'jemput' ? 'Sudah sampai' : (lk === 'sampai' ? 'Jemput' : 'Turunkan');
             // peta kecil (tanpa kunci API): titik tujuan langkah ini
             const peta = $('oto-g-peta');
@@ -29567,23 +29619,44 @@ window.PembuatQR = PembuatQR;
             const teks = 'https://www.google.com/maps?q=' + Number(t.lat).toFixed(6) + ',' + Number(t.lng).toFixed(6);
             try { navigator.clipboard.writeText(teks).then(() => toast('Link titik disalin'), () => toast(teks)); } catch (e) { toast(teks); }
         });
+        // Chat SELALU lewat chat aplikasi (tidak pernah membuka WhatsApp untuk order otomatis)
         $('oto-g-chat').addEventListener('click', () => {
+            const kode = aktif && aktif.o && aktif.o.ulasan_kode;
+            if (typeof window.crBukaKode === 'function' && kode && window.crBukaKode(kode)) return;
             const b = $('btn-wa-customer');
             if (b && b.classList.contains('cr-tombol')) { b.click(); return; }
-            toast('Chat pelanggan sedang disiapkan, coba lagi sebentar');
+            toast('Chat pelanggan sedang tersambung. Coba lagi beberapa detik lagi (cek sinyal).');
         });
+        // Nomor pelanggan aplikasi tidak ditampilkan (sama seperti order dari chat aplikasi): hubungi lewat Chat / Panggil.
+        // Khusus antar barang: telepon PENERIMA (nomor yang diisi pengirim untuk penerima).
         $('oto-g-telp').addEventListener('click', () => {
             const k = aktif && aktif.kontak;
             const lyn = aktif && aktif.o && aktif.o.oto && aktif.o.oto.layanan;
-            // antar barang setelah dijemput: telepon penerima kalau ada
-            let no = '';
-            if (k) no = (lyn === 'antar' && langkah() === 'antar' && k.penerima_hp) ? String(k.penerima_hp) : String(k.wa || '');
-            no = no.replace(/[^0-9+]/g, '');
-            if (!no) { toast('Nomor belum tersedia, pakai Chat'); return; }
+            let no = (lyn === 'antar' && k && k.penerima_hp) ? String(k.penerima_hp).replace(/[^0-9+]/g, '') : '';
+            if (!no) { toast('Hubungi pelanggan lewat Chat (ada tombol Panggil di chat)'); $('oto-g-chat').click(); return; }
             if (no.indexOf('62') === 0) no = '0' + no.slice(2);
             window.location.href = 'tel:' + no;
         });
-        $('oto-g-detail').addEventListener('click', () => { sembunyi = true; gambarGrab(); });
+        function bukaDetail() {
+            if (!aktif || !aktif.o) return;
+            const o = aktif.o, x = o.oto || {}, isi = $('oto-l-isi');
+            while (isi.firstChild) isi.removeChild(isi.firstChild);
+            const h = el('h3', '', 'Detail pesanan · ' + (LAYANAN[x.layanan] || 'Order')); h.id = 'oto-l-judul'; isi.appendChild(h);
+            const sub = el('div', '', 'Pelanggan: ' + String(o.customer_name || 'Pelanggan')); sub.style.cssText = 'font-size:12.5px;font-weight:700;color:#6B7280;margin:0 16px';
+            isi.appendChild(sub);
+            const k = aktif.kontak;
+            const cat = k && k.penerima_nama ? ('Penerima: ' + String(k.penerima_nama) + (k.penerima_hp ? ' · ' + String(k.penerima_hp) : '')) : '';
+            isi.appendChild(kartuDetail(Object.assign({}, x, { kode: o.ulasan_kode }), null, cat));
+            const pot = (o.adm_potong && Number(o.adm_potong.jumlah)) || Math.round(Number(o.fee) * 0.16);
+            isi.appendChild(kartuTarif(o.fee, pot));
+            const t1 = el('button', 'tutup', 'Tutup'); t1.type = 'button'; t1.addEventListener('click', () => { $('oto-lembar').hidden = true; });
+            const t2 = el('button', 'tb', 'Buka Tugas Berjalan (foto bukti, nota)'); t2.type = 'button';
+            t2.addEventListener('click', () => { $('oto-lembar').hidden = true; sembunyi = true; gambarGrab(); });
+            isi.appendChild(t1); isi.appendChild(t2);
+            $('oto-lembar').hidden = false;
+        }
+        $('oto-g-detail').addEventListener('click', bukaDetail);
+        $('oto-lembar').addEventListener('click', (e) => { if (e.target === $('oto-lembar')) $('oto-lembar').hidden = true; });
         $('oto-balik').addEventListener('click', () => { sembunyi = false; gambarGrab(); });
         $('oto-g-aksi').addEventListener('click', () => {
             if (!aktif || !aktif.o) return;

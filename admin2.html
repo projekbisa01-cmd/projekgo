@@ -4367,6 +4367,9 @@
                     <label class="oto-sw"><span>Jarak maks. ke titik jemput (km)</span><input type="text" inputmode="decimal" id="oto-a-km" class="oto-in pendek"></label>
                     <label class="oto-sw"><span>Waktu tawaran per rider (detik)</span><input type="number" inputmode="numeric" id="oto-a-tawar" class="oto-in pendek" min="5" max="60"></label>
                     <label class="oto-sw"><span>Lama mencari maks. (detik)<small>Lewat dari ini pelanggan diarahkan ke chat/WA admin</small></span><input type="number" inputmode="numeric" id="oto-a-cari" class="oto-in pendek" min="20" max="300"></label></div>
+                <div class="oto-g-a"><h6>Tampilan untuk pelanggan</h6>
+                    <p class="oto-info-a" style="margin-bottom:6px">Plat & jenis motor rider diambil dari dokumen rider (Kelola rider). Tekan lagi setiap ada rider baru / ganti motor.</p>
+                    <button type="button" id="oto-a-plat" class="oto-kecil">Salin plat & motor rider ke aplikasi pelanggan</button></div>
                 <div class="oto-g-a"><h6>Area operasional otomatis (maks. 3)</h6>
                     <p class="oto-info-a" style="margin-bottom:6px">Lokasi HP pelanggan saat memesan DAN titik jemput harus di dalam area yang aktif. Di luar area: pesanan lewat admin seperti biasa.</p>
                     <div id="oto-area"></div>
@@ -23893,7 +23896,9 @@
             function muatTambahan(o) {
                 if (!kontak.has(o.id)) {
                     kontak.set(o.id, null);
-                    getDoc(doc(db, 'otomatis_order', o.id, 'kontak', 'data')).then(s => { kontak.set(o.id, s.exists() ? s.data() : {}); if (halamanTampil()) gambar(); }).catch(() => kontak.set(o.id, {}));
+                    // (18 Nov 2026) kontak/data = nama & penerima, kontak/wa = nomor WA (rider tidak bisa membaca kontak/wa)
+                    Promise.all([getDoc(doc(db, 'otomatis_order', o.id, 'kontak', 'data')).catch(() => null), getDoc(doc(db, 'otomatis_order', o.id, 'kontak', 'wa')).catch(() => null)])
+                        .then(([a, b]) => { kontak.set(o.id, Object.assign({}, a && a.exists() ? a.data() : {}, b && b.exists() ? b.data() : {})); if (halamanTampil()) gambar(); });
                 }
                 if (o.status === 'diterima' && !ledger.has(o.id)) {
                     ledger.set(o.id, null);
@@ -24048,6 +24053,32 @@
                 finally { btn.disabled = false; btn.textContent = label; }
             }
 
+            // (18 Nov 2026) Plat & jenis motor rider (dari dokumen rider di Kelola rider) disalin ke ulasan_link/<kode rider>,
+            // supaya tampil di layar lacak pelanggan. ulasan_link hanya bisa dibaca 1 per 1 dengan kodenya (tidak bisa didaftar).
+            async function salinPlat() {
+                const btn = $('oto-a-plat'); btn.disabled = true; const label = btn.textContent; btn.textContent = 'Menyalin…';
+                let n = 0, kosong = 0;
+                try {
+                    const s = await getDocs(collection(db, 'artifacts', P, 'public', 'data', 'rider_profiles'));
+                    let b = writeBatch(db), isi = 0;
+                    for (const d of s.docs) {
+                        const x = d.data() || {};
+                        const kode = String(x.ulasan_kode || '');
+                        if (!/^[A-Za-z0-9]{10,32}$/.test(kode)) continue;
+                        const dok = x.dokumen && typeof x.dokumen === 'object' ? x.dokumen : {};
+                        const plat = String(dok.plat || '').replace(/\s+/g, ' ').trim().toUpperCase().slice(0, 15);
+                        const motor = String(dok.motor || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+                        if (!plat && !motor) { kosong++; continue; }
+                        b.set(doc(db, 'artifacts', P, 'public', 'data', 'ulasan_link', kode), { plat, motor, diperbarui_at: serverTimestamp() }, { merge: true });
+                        isi++; n++;
+                        if (isi >= 400) { await b.commit(); b = writeBatch(db); isi = 0; }
+                    }
+                    if (isi) await b.commit();
+                    toast('Plat & motor disalin', n + ' rider diperbarui' + (kosong ? ' · ' + kosong + ' rider belum punya data plat/motor (isi di Kelola rider → dokumen)' : ''));
+                } catch (e) { window.showAlert('Gagal', e && e.code === 'permission-denied' ? 'Akses ditolak.' : 'Periksa internet lalu coba lagi.', 'error'); }
+                finally { btn.disabled = false; btn.textContent = label; }
+            }
+
             // ---------- sambungan ke halaman ----------
             window.otoRenderHalaman = () => { dengar(); gambar(); muatAtur(); };
             window.otoTab = (t) => { tabAktif = t === 'atur' ? 'atur' : 'order'; gambar(); };
@@ -24057,6 +24088,7 @@
                 if (!t || !t.closest) return;
                 if (t.closest('#oto-a-simpan')) simpanAtur();
                 else if (t.closest('#oto-a-hitung')) hitungUlang();
+                else if (t.closest('#oto-a-plat')) salinPlat();
                 else if (t.closest('#oto-area-tambah')) {
                     const w = $('oto-area'); if (w.children.length >= 3) return;
                     w.appendChild(barisArea({ nama: 'Kebumen kota', lat: -7.6681, lng: 109.6525, km: 5, aktif: false }, w.children.length));
