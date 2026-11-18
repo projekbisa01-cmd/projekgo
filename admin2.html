@@ -20105,11 +20105,67 @@
                 logs.unshift({ action: (tx.module === 'saldo' && tx.actionType === 'set') ? 'Set Manual' : tx.actionText, amount: tx.amount, prev: tx.current, now: tx.newSaldo, time: Date.now() });
                 logs = logs.slice(0, tx.module === 'saldo' ? 20 : 20);
 
+                // (18 Nov 2026, tahap 4) TOP UP saldo dijalankan SERVER (Cloud Function topUpSaldoRider):
+                // saldo + catatan + pelacak harian ditulis server dalam satu transaksi, tercatat di Buku Mutasi
+                // dengan nama admin & alasan "Top Up Saldo", dan tidak bisa dobel walau sinyal putus lalu dicoba lagi.
+                // Kalau fungsi server belum terpasang, otomatis memakai cara lama di bawah.
+                let topupServer = false;
+                if (tx.module === 'saldo' && tx.actionType === 'add') {
+                    if (!tx.idem) tx.idem = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+                    try {
+                        const [{ getApp: ambilApp }, { getFunctions, httpsCallable }] = await Promise.all([
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js'),
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js')]);
+                        const fn = httpsCallable(getFunctions(ambilApp(), 'asia-southeast2'), 'topUpSaldoRider', { timeout: 25000 });
+                        const r = await fn({ uid: tx.uid, amount: tx.amount, idem: tx.idem, nama: String(tx.name || '').slice(0, 60) });
+                        const d = (r && r.data) || {};
+                        if (Number.isFinite(d.prev)) tx.current = d.prev;
+                        if (Number.isFinite(d.now)) tx.newSaldo = d.now;
+                        topupServer = true;
+                    } catch (eFn) {
+                        const kodeFn = String((eFn && eFn.code) || '');
+                        console.error('[Top Up server]', eFn);
+                        if (kodeFn === 'functions/invalid-argument' || kodeFn === 'functions/permission-denied' || kodeFn === 'functions/not-found' && eFn.details) {
+                            window.showAlert('Gagal', kodeFn === 'functions/permission-denied' ? 'Akun ini tidak boleh top up.' : String(eFn.message || 'Data top up tidak sah.'), 'error');
+                            return;
+                        }
+                        // (perbaikan) Server tidak bisa dihubungi / fungsi belum terpasang (dari HP muncul sebagai "internal"):
+                        // cek dulu apakah top up ini SUDAH tercatat server (catatan tu_<kode>); kalau sudah -> anggap berhasil,
+                        // kalau belum -> pakai cara lama di bawah supaya Top Up harian tidak macet.
+                        let sudahAda = false;
+                        try {
+                            const sL = await __fsSemua.getDocFromServer(doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan', 'tu_' + tx.idem));
+                            if (sL.exists()) { sudahAda = true; const l = sL.data(); if (Number.isFinite(l.saldo_sebelum)) tx.current = l.saldo_sebelum; if (Number.isFinite(l.saldo_sesudah)) tx.newSaldo = l.saldo_sesudah; }
+                        } catch (eCek) {
+                            window.showAlert('Gagal', 'Top up belum tercatat. Periksa internet, lalu tekan PIN lagi. Tidak akan dobel.', 'error');
+                            return;
+                        }
+                        if (sudahAda) topupServer = true;
+                    }
+                }
+                // (perbaikan) Cara lama (server tidak bisa dipakai) untuk TOP UP: catatan memakai ID tetap tu_<kode> yang sama
+                // dengan server, dalam SATU transaksi. Jadi walaupun server ternyata menyelesaikan top up ini belakangan,
+                // saldo tidak mungkin bertambah 2x (siapa yang duluan menulis tu_<kode>, yang lain otomatis berhenti).
+                let topupHp = false;
+                if (tx.module === 'saldo' && tx.actionType === 'add' && !topupServer) {
+                    const balRefC = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', tx.uid);
+                    const ledRefC = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan', 'tu_' + tx.idem);
+                    const sudahDiServer = await runTransaction(db, async (t) => {
+                        const l = await t.get(ledRefC);
+                        if (l.exists()) return true;
+                        t.set(balRefC, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                        t.set(ledRefC, { rider_uid: tx.uid, rider_name: tx.name, amount: -tx.amount, omset_order: 0, type: 'manual_add', desc: 'Top Up Saldo', created_at: serverTimestamp(), lewat: 'hp' });
+                        return false;
+                    });
+                    topupServer = true;              // langkah lama di bawah dilewati (sudah ditulis di transaksi ini / oleh server)
+                    topupHp = !sudahDiServer;        // pelacak harian ditambah HP hanya kalau HP yang menulis
+                }
+
                 if (tx.module === 'saldo') {
                     const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', tx.uid);
                     
                     if (tx.actionType === 'set') await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: tx.amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                    else if (tx.actionType === 'add') await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    else if (tx.actionType === 'add' && !topupServer) await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     else if (tx.actionType === 'sub') await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(-tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     
                     if (tx.actionType === 'sub') {
@@ -20117,7 +20173,7 @@
                             rider_uid: tx.uid, rider_name: tx.name, amount: tx.amount, omset_order: 0, 
                             type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
                         });
-                    } else if (tx.actionType === 'add') {
+                    } else if (tx.actionType === 'add' && !topupServer) {
                         await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
                             rider_uid: tx.uid, rider_name: tx.name, amount: -tx.amount, omset_order: 0, 
                             type: 'manual_add', desc: 'Top Up Saldo', created_at: serverTimestamp()
@@ -20135,7 +20191,7 @@
                     else if (tx.actionType === 'sub') topUpDiff = -tx.amount;
                     else if (tx.actionType === 'set') topUpDiff = tx.amount - tx.current;
 
-                    if (topUpDiff !== 0) {
+                    if (topUpDiff !== 0 && (!topupServer || topupHp)) {
                         const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
                         await setDoc(trackerRef, { top_up: increment(topUpDiff) }, { merge: true }).catch(e=>{});
                     }
@@ -33553,12 +33609,14 @@
                     id, koleksi, jenis, per, kunciUtama, utama: u, besar,
                     dok: String(d.dok || '').slice(0, 64), uid: String(d.uid || '').toUpperCase().slice(0, 64),
                     nama: String(d.nama || '').slice(0, 60), oleh: String(d.oleh || '').slice(0, 120), olehTipe: String(d.oleh_tipe || '').slice(0, 40),
+                    alasan: String(d.alasan || '').slice(0, 120),
                     t: ms(d.waktu), tanggal: POLA_TGL.test(d.tanggal || '') ? d.tanggal : '',
                 };
             }
             function namaOleh(o) {
                 const e = o.oleh.toLowerCase();
                 if (e === EMAIL_PEMILIK) return 'pemilik';
+                if (e.startsWith('server')) return o.oleh;
                 if (/^[a-z0-9_-]+@projekgo\.id$/.test(e) && e !== 'admin@projekgo.id') return e.split('@')[0].toUpperCase() + ' (rider)';
                 if (e.endsWith('.gserviceaccount.com')) return 'server';
                 return o.oleh || 'tidak diketahui';
@@ -33651,7 +33709,7 @@
                 if (o.jenis === 'hapus') k.appendChild(el('span', 'bm-tag merah', 'Dihapus'));
                 else if (o.besar) k.appendChild(el('span', 'bm-tag merah', '⚠ Besar'));
                 else if (o.jenis === 'buat') k.appendChild(el('span', 'bm-tag', 'Baru'));
-                k.appendChild(document.createTextNode('oleh ' + namaOleh(o)));
+                k.appendChild(document.createTextNode((o.alasan ? o.alasan + ' · ' : '') + 'oleh ' + namaOleh(o)));
                 m.appendChild(k); r.appendChild(m);
                 const kn = el('span', 'bm-kanan');
                 const sel = o.utama.selisih;
@@ -33752,9 +33810,10 @@
                         det(nm + ' sesudah', v.sesudah == null ? '–' : 'Rp' + angka(v.sesudah) + (v.sesudah < 0 ? ' (minus)' : ''));
                         det('Selisih', rpTanda(v.selisih), v.selisih > 0 ? 'pb-plus' : (v.selisih < 0 ? 'pb-min' : ''));
                     });
+                    if (o.alasan) det('Alasan', o.alasan);
                     det('Diubah oleh', o.oleh ? o.oleh + (o.oleh.toLowerCase() === EMAIL_PEMILIK ? ' (pemilik)' : '') : 'tidak diketahui');
                     det('Waktu (server)', (o.tanggal ? namaTgl(o.tanggal).replace(/^\w+, /, '') + ' · ' : '') + jamWIB(o.t, true) + ' WIB');
-                    s.appendChild(el('p', 'pb-kecil', 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Alasan perubahan (top up / potongan / koreksi) akan ikut tercatat setelah tahap berikutnya.'));
+                    s.appendChild(el('p', 'pb-kecil', o.alasan ? 'Catatan dibuat otomatis oleh server dan tidak bisa diubah.' : 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Perubahan ini ditulis langsung dari aplikasi, jadi alasannya belum tercatat (akan lengkap setelah semua operasi saldo pindah ke server).'));
                     const dua = el('div', 'pb-dua');
                     const lain = el('button', 'pb-btn2', 'Semua mutasi rider ini'); lain.type = 'button';
                     lain.onclick = () => { tutupPanel(); muatRider({ uid: o.uid || o.dok, nama: o.nama }); };

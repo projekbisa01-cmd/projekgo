@@ -29549,17 +29549,21 @@ window.PembuatQR = PembuatQR;
                     return { pot: Number(d.pot) || 0, sesudah: Number(d.sesudah) || 0 };
                 } catch (e) {
                     const kode = String((e && e.code) || '');
-                    if (kode === 'functions/not-found') return lewatHp();   // fungsi server belum dipasang
                     const det = (e && e.details) || {};
-                    if (det.oto) throw { oto: det.oto, saldo: det.saldo, pot: det.pot, pesan: e.message };
-                    // koneksi putus setelah server selesai? cek apakah order ini sudah jadi milik kita
-                    try {
-                        const sT = await getDocFromServer(refT);
-                        if (sT.exists() && sT.data().status === 'diterima' && String(sT.data().rider_uid || '').toUpperCase() === uid) {
-                            return { pot: Number(sT.data().potongan) || 0, sesudah: Number(sT.data().saldo_sesudah) || 0 };
-                        }
-                    } catch (e2) {}
-                    throw e;
+                    if (det.oto) throw { oto: det.oto, saldo: det.saldo, pot: det.pot, pesan: e.message };   // server menolak dengan alasan jelas
+                    if (kode === 'functions/permission-denied' || kode === 'functions/invalid-argument' || kode === 'functions/unauthenticated') throw e;
+                    // (18 Nov 2026, perbaikan) Server tidak bisa dihubungi / fungsi belum terpasang / error lain.
+                    // Dari HP sungguhan, fungsi yang belum ada muncul sebagai "internal" (bukan "not-found"), jadi semua kasus ini
+                    // ditangani sama: cek dulu apakah order sudah jadi milik kita; kalau masih "cari", pakai cara lama (dari HP).
+                    let sT = null;
+                    try { sT = await getDocFromServer(refT); } catch (e2) {}
+                    if (sT && sT.exists()) {
+                        const t = sT.data();
+                        if (t.status === 'diterima' && String(t.rider_uid || '').toUpperCase() === uid) return { pot: Number(t.potongan) || 0, sesudah: Number(t.saldo_sesudah) || 0 };
+                        if (t.status === 'cari') { console.warn('[Otomatis] server belum bisa dipakai (' + kode + '), pakai cara lama'); return lewatHp(); }
+                    }
+                    if (!sT) return lewatHp();   // tidak bisa membaca status: biarkan transaksi lama yang memeriksa
+                    throw { oto: 'diambil' };
                 }
             };
             try {
