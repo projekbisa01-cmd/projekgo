@@ -17692,7 +17692,9 @@
                       
                       // MENGGUNAKAN TOAST NON-BLOCKING SEBAGAI PENGGANTI ALERT BROWSER YANG BIKIN HANG
                       if (typeof window.showCustomToast === 'function') {
-                          window.showCustomToast("Pesanan dihapus Admin. Status otomatis dikembalikan ke antrean.");
+                          // (18 Nov 2026) order otomatis dibatalkan pelanggan / rider: pesan yang sesuai
+                          window.showCustomToast(window.__pesanBatalOto || "Pesanan dihapus Admin. Status otomatis dikembalikan ke antrean.");
+                          window.__pesanBatalOto = null;
                       }
                       
                       // KEMBALI KE BERANDA (Redirect)
@@ -29214,6 +29216,18 @@ window.PembuatQR = PembuatQR;
     .oto-aksi { position: absolute; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); height: 56px; border-radius: 16px; border: 0; background: #EA580C; color: #fff; font-size: 18px; font-weight: 900; box-shadow: 0 6px 14px rgba(234,88,12,.35); }
     .oto-aksi.garis { background: #fff; color: #C2410C; border: 2px solid #EA580C; box-shadow: 0 6px 14px rgba(0,0,0,.08); }
     .oto-aksi:disabled { opacity: .7; }
+    /* (18 Nov 2026) batalkan order otomatis sebelum dijemput */
+    .oto-batal { display: block; width: 100%; margin-top: 6px; height: 40px; border: 0; background: none; color: #B91C1C; font-size: 13px; font-weight: 800; }
+    .oto-batal[hidden] { display: none; }
+    .oto-bt-pil { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 16px 10px; }
+    .oto-bt-pil button { border: 1.5px solid #FED7AA; background: #fff; border-radius: 999px; padding: 8px 12px; font-size: 13px; font-weight: 700; color: #374151; }
+    .oto-bt-pil button[aria-pressed="true"] { border-color: #DC2626; background: #FEF2F2; color: #B91C1C; }
+    .oto-bt-ta { display: block; width: calc(100% - 32px); margin: 0 16px; box-sizing: border-box; border: 1.5px solid #FED7AA; border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 14px; min-height: 64px; }
+    .oto-bt-gal { color: #B91C1C; font-size: 12px; font-weight: 700; min-height: 16px; margin: 4px 16px 0; }
+    .oto-lembar-isi .merah { display: block; width: calc(100% - 28px); margin: 10px 14px 0; height: 48px; border-radius: 14px; border: 0; background: #DC2626; color: #fff; font-size: 14.5px; font-weight: 900; }
+    .oto-lembar-isi .merah:disabled { opacity: .55; }
+    .oto-bt-info { margin: 6px 16px 0; font-size: 12.5px; font-weight: 600; color: #6B7280; line-height: 1.45; }
+    .oto-bt-kotak { margin: 8px 16px 0; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 12px; padding: 10px 12px; font-size: 13.5px; font-weight: 800; color: #7F1D1D; overflow-wrap: anywhere; }
     .oto-balik { position: fixed; right: 12px; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 9989; border: 0; border-radius: 26px; background: #EA580C; color: #fff; font-size: 13.5px; font-weight: 900; padding: 12px 16px; box-shadow: 0 8px 20px rgba(0,0,0,.25); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
     /* lembar detail pesanan */
     .oto-lembar { position: fixed; inset: 0; z-index: 9993; background: rgba(28,25,23,.5); display: flex; align-items: flex-end; justify-content: center; }
@@ -29253,6 +29267,7 @@ window.PembuatQR = PembuatQR;
             <button type="button" id="oto-g-detail"><b aria-hidden="true">🧾</b>Detail</button>
             <button type="button" id="oto-g-salin"><b aria-hidden="true">📋</b>Salin titik</button>
         </div>
+        <button type="button" class="oto-batal" id="oto-g-batal" hidden>Batalkan order (sebelum menjemput)</button>
     </div>
     <button type="button" class="oto-aksi garis" id="oto-g-aksi">Sudah sampai</button>
 </div>
@@ -29260,7 +29275,7 @@ window.PembuatQR = PembuatQR;
 <button type="button" class="oto-balik" id="oto-balik" hidden>⚡ Tampilan otomatis</button>
 <script type="module">
     import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-    import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, serverTimestamp, setDoc, getDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, serverTimestamp, setDoc, getDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
     (function orderOtomatisRider() {
         'use strict';
         const P = 'onbid-2f87a';
@@ -29557,6 +29572,15 @@ window.PembuatQR = PembuatQR;
             sembunyi = false;
             henti.aktif = onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'active_orders', id), (s) => {
                 const o = s.exists() ? s.data() : null;
+                // (18 Nov 2026) dibatalkan pelanggan / rider sebelum dijemput
+                if (o && o.status === 'dibatalkan') {
+                    const oleh = o.batal_oleh === 'rider' ? 'rider' : 'pelanggan';
+                    const pot = (o.adm_potong && Number(o.adm_potong.jumlah)) || 0;
+                    window.__pesanBatalOto = oleh === 'pelanggan' ? 'Order otomatis dibatalkan pelanggan. Kamu kembali ke antrean.' : 'Order otomatis kamu batalkan. Kamu kembali ke antrean.';
+                    akhiriAktif(false);
+                    if (oleh === 'pelanggan') infoBatal(String(o.batal_alasan || ''), pot);
+                    return;
+                }
                 if (!o || String(o.rider_uid || '').toUpperCase() !== uid || !['processing', 'assigned'].includes(String(o.status))) {
                     akhiriAktif(o && o.status === 'completed');
                     return;
@@ -29593,6 +29617,7 @@ window.PembuatQR = PembuatQR;
             kd.style.margin = '0'; kd.style.border = '0'; kd.style.boxShadow = 'none'; kd.style.padding = '0';
             tk.appendChild(kd);
             $('oto-g-ongkir').textContent = rp(o.fee);
+            $('oto-g-batal').hidden = keTujuan || (o.tahap && !['menuju', 'lokasi'].includes(o.tahap));
             $('oto-g-navbtn').textContent = keTujuan ? '🧭 Navigasi ke tujuan' : '🧭 Navigasi ke titik jemput';
             $('oto-g-nav').firstChild.textContent = keTujuan ? 'Menuju tujuan' : (lk === 'sampai' ? 'Di titik jemput' : 'Menuju jemput');
             $('oto-g-nav').lastChild.textContent = keTujuan ? 'Turunkan setelah dibayar' : (lk === 'sampai' ? 'Tunggu pelanggan' : 'Ketuk Navigasi untuk rute');
@@ -29668,6 +29693,60 @@ window.PembuatQR = PembuatQR;
             $('oto-lembar').hidden = false;
         }
         $('oto-g-detail').addEventListener('click', bukaDetail);
+        // ---------- (18 Nov 2026) Batalkan order otomatis SEBELUM menjemput + alasan ----------
+        const ALASAN_R = ['Pelanggan tidak bisa dihubungi', 'Titik jemput tidak ditemukan', 'Motor / ban bermasalah', 'Pelanggan minta dibatalkan', 'Lainnya'];
+        function bukaBatal() {
+            if (!aktif || !aktif.o) return;
+            const isi = $('oto-l-isi'); while (isi.firstChild) isi.removeChild(isi.firstChild);
+            const h = el('h3', '', 'Batalkan order ini?'); h.id = 'oto-l-judul'; isi.appendChild(h);
+            isi.appendChild(el('div', 'oto-bt-info', 'Hanya bisa sebelum penumpang / barang dijemput. Potongan 16% tidak langsung kembali: admin meninjau alasanmu dulu.'));
+            const pil = el('div', 'oto-bt-pil'); let dipilih = '';
+            const ta = el('textarea', 'oto-bt-ta'); ta.maxLength = 150; ta.placeholder = 'Tulis alasan (wajib bila memilih "Lainnya")'; ta.setAttribute('aria-label', 'Alasan pembatalan');
+            const gal = el('div', 'oto-bt-gal', '');
+            const oke = el('button', 'merah', 'Ya, batalkan order'); oke.type = 'button'; oke.disabled = true;
+            const cek = () => { oke.disabled = !dipilih || (dipilih === 'Lainnya' && ta.value.trim().length < 3); };
+            ALASAN_R.forEach((a) => {
+                const b = el('button', '', a); b.type = 'button'; b.setAttribute('aria-pressed', 'false');
+                b.addEventListener('click', () => { dipilih = a; pil.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); cek(); });
+                pil.appendChild(b);
+            });
+            ta.addEventListener('input', cek);
+            oke.addEventListener('click', async () => {
+                if (!aktif || !aktif.o || oke.disabled) return;
+                const t = ta.value.trim().replace(/\s+/g, ' ');
+                const alasan = (dipilih === 'Lainnya' ? t : (t ? dipilih + ' · ' + t : dipilih)).slice(0, 200);
+                if (alasan.length < 3) { gal.textContent = 'Alasan terlalu pendek.'; return; }
+                oke.disabled = true; oke.textContent = 'Membatalkan…'; gal.textContent = '';
+                const id = aktif.id;
+                const isiBatal = { status: 'dibatalkan', batal_oleh: 'rider', batal_alasan: alasan, batal_at: serverTimestamp() };
+                try {
+                    const b = writeBatch(db);
+                    b.update(doc(db, 'otomatis_order', id), isiBatal);
+                    b.update(doc(db, 'artifacts', P, 'public', 'data', 'active_orders', id), isiBatal);
+                    await b.commit();
+                } catch (e) {
+                    oke.disabled = false; oke.textContent = 'Ya, batalkan order';
+                    gal.textContent = e && e.code === 'permission-denied' ? 'Tidak bisa dibatalkan: penumpang / barang sudah dijemput.' : 'Gagal. Periksa internet lalu coba lagi.';
+                    return;
+                }
+                $('oto-lembar').hidden = true;
+            });
+            isi.appendChild(pil); isi.appendChild(ta); isi.appendChild(gal); isi.appendChild(oke);
+            const kb = el('button', 'tutup', 'Tidak jadi'); kb.type = 'button'; kb.addEventListener('click', () => { $('oto-lembar').hidden = true; });
+            isi.appendChild(kb);
+            $('oto-lembar').hidden = false;
+        }
+        function infoBatal(alasan, pot) {
+            const isi = $('oto-l-isi'); while (isi.firstChild) isi.removeChild(isi.firstChild);
+            const h = el('h3', '', 'Order dibatalkan pelanggan'); h.id = 'oto-l-judul'; isi.appendChild(h);
+            if (alasan) isi.appendChild(el('div', 'oto-bt-kotak', 'Alasan: ' + alasan.slice(0, 200)));
+            isi.appendChild(el('div', 'oto-bt-info', 'Kamu kembali ke antrean. ' + (pot ? 'Potongan ' + rp(pot) + ' ditinjau admin untuk dikembalikan ke saldo.' : '')));
+            const t = el('button', 'tutup', 'Mengerti'); t.type = 'button'; t.addEventListener('click', () => { $('oto-lembar').hidden = true; });
+            isi.appendChild(t);
+            $('oto-lembar').hidden = false;
+            try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+        }
+        $('oto-g-batal').addEventListener('click', bukaBatal);
         $('oto-lembar').addEventListener('click', (e) => { if (e.target === $('oto-lembar')) $('oto-lembar').hidden = true; });
         $('oto-balik').addEventListener('click', () => { sembunyi = false; gambarGrab(); });
         $('oto-g-aksi').addEventListener('click', () => {

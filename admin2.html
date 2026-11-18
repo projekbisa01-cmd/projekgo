@@ -1363,6 +1363,13 @@
         .oto-pt { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed #DCD3C8; font-size: 11px; font-weight: 800; color: #1F1611; }
         .oto-ya { color: #1E6B3A; white-space: nowrap; } .oto-tdk { color: #B91C1C; }
         .oto-gagal { font-size: 11px; font-weight: 700; color: #B91C1C; margin-top: 3px; overflow-wrap: anywhere; }
+        /* (18 Nov 2026) pembatalan order otomatis + kembalikan potongan */
+        .oto-batal-a { background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 7px 9px; margin-top: 6px; font-size: 11.5px; font-weight: 700; color: #7F1D1D; overflow-wrap: anywhere; }
+        .oto-tb-a { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+        .oto-tb-a button { border: 0; border-radius: 9px; padding: 7px 10px; font-size: 11.5px; font-weight: 800; }
+        .oto-tb-a .ya { background: #16A34A; color: #fff; } .oto-tb-a .tdk { background: #E5E7EB; color: #374151; }
+        .oto-tb-a button:disabled { opacity: .55; }
+        .oto-tinjau-h { font-size: 12px; font-weight: 900; color: #B91C1C; margin: 4px 0 6px; }
         .oto-kosong { font-size: 12px; font-weight: 700; color: #6B5E52; text-align: center; padding: 18px 0; }
         .oto-g-a { background: #F8F5F0; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
         .oto-g-a h6 { font-size: 10px; font-weight: 900; color: #6B5E52; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
@@ -23859,6 +23866,7 @@
                 areas: [{ nama: 'Gombong', lat: -7.6077, lng: 109.5131, km: 6, aktif: true }, { nama: 'Kebumen kota', lat: -7.6681, lng: 109.6525, km: 5, aktif: false }] };
 
             let daftar = [], atur = null, tabAktif = 'order', pertama = true;
+            let tinjau = [];   // (18 Nov 2026) order otomatis dibatalkan yang potongannya belum ditinjau (semua hari)
             const kontak = new Map(), ledger = new Map(), logGagal = new Map(), status0 = new Map();
 
             // ---------- dengarkan pesanan otomatis hari ini ----------
@@ -23884,10 +23892,71 @@
                     if (halamanTampil()) gambar();
                 }, (e) => { console.warn('[Otomatis] daftar belum terbaca:', e && e.code); daftar = []; if (halamanTampil()) gambar(e && e.code); });
             }
+            // (18 Nov 2026) pembatalan (oleh pelanggan / rider, sebelum dijemput): potongan 16% ditinjau admin
+            let hentiBatal = null;
+            function dengarBatal() {
+                if (hentiBatal) return;
+                hentiBatal = onSnapshot(query(collection(db, 'otomatis_order'), where('status', '==', 'dibatalkan'), limit(80)), (s) => {
+                    const sbl = new Set(tinjau.map(o => o.id));
+                    tinjau = s.docs.filter(d => ID_OK.test(d.id)).map(d => Object.assign({ id: d.id }, d.data({ serverTimestamps: 'estimate' })))
+                        .filter(o => !o.tinjau).sort((a, b) => ms(b.batal_at) - ms(a.batal_at));
+                    tinjau.forEach(o => { if (!pertamaBatal && !sbl.has(o.id)) toast('✖ Order otomatis dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider ' + String(o.rider_nama || '') : 'pelanggan'), 'Alasan: ' + String(o.batal_alasan || '-').slice(0, 80) + ' · tinjau potongan ' + rp(o.potongan)); });
+                    pertamaBatal = false;
+                    lencana();
+                    if (halamanTampil()) gambar();
+                }, (e) => { console.warn('[Otomatis] pembatalan belum terbaca:', e && e.code); hentiBatal = null; });
+            }
+            let pertamaBatal = true;
+            async function putuskan(o, kembali, btn) {
+                if (!o || !ID_OK.test(o.id)) return;
+                const ruid = String(o.rider_uid || '').trim();
+                const pot = Math.round(Number(o.potongan) || 0);
+                if (!ruid) return toast('Data rider tidak lengkap', '', true);
+                const lanjut = async () => {
+                    btn && (btn.disabled = true);
+                    const oleh = (auth && auth.currentUser && auth.currentUser.email) || '';
+                    try {
+                        await runTransaction(db, async (trx) => {
+                            const refT = doc(db, 'otomatis_order', o.id);
+                            const refKbl = doc(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan', 'oto_' + o.id + '_kembali');
+                            const sT = await trx.get(refT), sK = await trx.get(refKbl);
+                            if (!sT.exists() || sT.data().status !== 'dibatalkan' || sT.data().tinjau) throw new Error('Sudah ditinjau admin lain');
+                            if (kembali && sK.exists()) throw new Error('Potongan sudah pernah dikembalikan');
+                            if (kembali && pot > 0) {
+                                trx.set(doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', ruid), { saldo: increment(pot) }, { merge: true });
+                                trx.set(refKbl, { order_id: o.id, rider_uid: ruid, rider_name: String(o.rider_nama || '').slice(0, 60), amount: -pot, omset_order: -(Number(o.fee) || 0),
+                                    type: 'refund_oto_batal', desc: ('Refund order otomatis dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider' : 'pelanggan')).slice(0, 80), created_at: serverTimestamp(), oto: true });
+                            }
+                            // riwayat harian rider untuk order ini dihapus (order tidak jadi)
+                            trx.delete(doc(db, 'artifacts', P, 'users', ruid, 'daily_orders', 'oto_' + o.id));
+                            trx.update(refT, { tinjau: kembali ? 'kembali' : 'tidak', tinjau_at: serverTimestamp(), tinjau_oleh: String(oleh).slice(0, 120) });
+                        });
+                        toast(kembali ? '✓ Potongan ' + rp(pot) + ' dikembalikan ke ' + String(o.rider_nama || 'rider') : '✓ Ditandai: potongan tidak dikembalikan');
+                    } catch (e) {
+                        btn && (btn.disabled = false);
+                        toast('Gagal menyimpan', String((e && (e.message || e.code)) || e).slice(0, 120), true);
+                    }
+                };
+                const judul = kembali ? 'Kembalikan potongan ' + rp(pot) + '?' : 'Potongan tidak dikembalikan?';
+                const teks = (kembali ? 'Saldo ' + String(o.rider_nama || 'rider') + ' bertambah ' + rp(pot) + '. ' : 'Saldo rider tidak berubah. ') + 'Riwayat harian order ini di aplikasi rider dihapus.';
+                if (typeof window.showConfirm === 'function') window.showConfirm(judul, teks, lanjut); else if (confirm(judul + '\n' + teks)) lanjut();
+            }
+            function kotakBatal(o, k) {
+                const kb = el('div', 'oto-batal-a');
+                kb.appendChild(document.createTextNode('✖ Dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider ' + String(o.rider_nama || '') : 'pelanggan') + ' · ' + jam(o.batal_at) + ' · Alasan: ' + String(o.batal_alasan || '-').slice(0, 200)));
+                k.appendChild(kb);
+                const pot = Math.round(Number(o.potongan) || 0);
+                if (o.tinjau === 'kembali') { k.appendChild(el('div', 'oto-al-a', '✓ Potongan ' + rp(pot) + ' sudah dikembalikan ke saldo rider')); return; }
+                if (o.tinjau === 'tidak') { k.appendChild(el('div', 'oto-al-a', 'Potongan ' + rp(pot) + ' tidak dikembalikan (sudah ditinjau)')); return; }
+                const tb = el('div', 'oto-tb-a');
+                const ya = el('button', 'ya', '↩ Kembalikan potongan ' + rp(pot)); ya.type = 'button'; ya.addEventListener('click', () => putuskan(o, true, ya));
+                const td = el('button', 'tdk', 'Tidak dikembalikan'); td.type = 'button'; td.addEventListener('click', () => putuskan(o, false, td));
+                tb.appendChild(ya); tb.appendChild(td); k.appendChild(tb);
+            }
             const halamanTampil = () => { const h = $('page-order-otomatis'); return !!h && !h.classList.contains('hidden-page'); };
             function lencana() {
                 const b = $('oto-badge-menu'); if (!b) return;
-                const n = daftar.filter(o => o.status === 'cari' || (o.status === 'diterima' && ['assigned', 'processing'].includes(statusOrder(o.id)))).length;
+                const n = daftar.filter(o => o.status === 'cari' || (o.status === 'diterima' && ['assigned', 'processing'].includes(statusOrder(o.id)))).length + tinjau.length;
                 b.textContent = String(n); b.classList.toggle('hidden', n === 0);
             }
             function statusOrder(id) { const o = allGlobalOrders.find(x => x.id === id); return o ? String(o.status || '') : ''; }
@@ -23900,7 +23969,7 @@
                     Promise.all([getDoc(doc(db, 'otomatis_order', o.id, 'kontak', 'data')).catch(() => null), getDoc(doc(db, 'otomatis_order', o.id, 'kontak', 'wa')).catch(() => null)])
                         .then(([a, b]) => { kontak.set(o.id, Object.assign({}, a && a.exists() ? a.data() : {}, b && b.exists() ? b.data() : {})); if (halamanTampil()) gambar(); });
                 }
-                if (o.status === 'diterima' && !ledger.has(o.id)) {
+                if ((o.status === 'diterima' || o.status === 'dibatalkan') && !ledger.has(o.id)) {
                     ledger.set(o.id, null);
                     getDoc(doc(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan', 'oto_' + o.id)).then(s => { ledger.set(o.id, s.exists() ? s.data() : false); if (halamanTampil()) gambar(); }).catch(() => ledger.set(o.id, false));
                 }
@@ -23923,6 +23992,7 @@
                     t.appendChild(badge((st === 'completed' ? 'Selesai · ' : (st ? 'Diterima ' : 'Diterima ')) + String(o.rider_nama || ''), st === 'completed' ? 'b-abu' : 'b-hijau'));
                 } else if (o.status === 'gagal') t.appendChild(badge('Tidak dapat rider → admin', 'b-merah'));
                 else if (o.status === 'batal') t.appendChild(badge('Dibatalkan pelanggan', 'b-abu'));
+                else if (o.status === 'dibatalkan') t.appendChild(badge('Batal ' + (o.batal_oleh === 'rider' ? 'oleh rider' : 'oleh pelanggan') + ' · ' + String(o.rider_nama || ''), o.tinjau ? 'b-abu' : 'b-merah'));
                 else t.appendChild(badge(String(o.status || '-'), 'b-abu'));
                 t.appendChild(badge(LYN[o.layanan] || 'Order', 'b-oranye'));
                 if (o.status === 'diterima' && isFinite(Number(o.rider_km))) t.appendChild(badge(String(Math.round(Number(o.rider_km) * 10) / 10).replace('.', ',') + ' km · ' + Math.max(0, Math.round((ms(o.diterima_at) - ms(o.dibuat_at)) / 1000)) + ' dtk', 'b-abu'));
@@ -23943,6 +24013,10 @@
                     k.appendChild(pt);
                     k.appendChild(el('div', 'oto-al-a', 'Saldo ' + String(o.rider_nama || 'rider') + ' ' + rp(o.saldo_sebelum) + ' → ' + rp(o.saldo_sesudah) + (lgr ? ' · tercatat di riwayat potongan' : '')));
                 }
+                if (o.status === 'dibatalkan') {
+                    k.appendChild(el('div', 'oto-al-a', rp(o.fee) + ' · adm 16% = ' + rp(o.potongan) + ' · saldo ' + String(o.rider_nama || 'rider') + ' ' + rp(o.saldo_sebelum) + ' → ' + rp(o.saldo_sesudah)));
+                    kotakBatal(o, k);
+                }
                 lg.forEach(x => k.appendChild(el('div', 'oto-gagal', '✗ ' + String(x.nama || x.uid) + ' gagal menerima: ' + String(x.alasan || '-'))));
                 if (o.status === 'gagal') k.appendChild(el('div', 'oto-al-a', 'Pelanggan diarahkan ke chat / WhatsApp admin seperti biasa.'));
                 muatTambahan(o);
@@ -23961,6 +24035,12 @@
                 const w = $('oto-daftar');
                 while (w.firstChild) w.removeChild(w.firstChild);
                 if (kodeGagal) { w.appendChild(el('p', 'oto-kosong', kodeGagal === 'permission-denied' ? 'Belum bisa membaca. Pastikan rules ORDER OTOMATIS sudah dipasang.' : 'Belum bisa membaca daftar (cek internet).')); return; }
+                // (18 Nov 2026) pembatalan yang menunggu keputusan potongan (termasuk hari sebelumnya) di paling atas
+                const idHariIni = new Set(daftar.map(o => o.id));
+                if (tinjau.length) {
+                    w.appendChild(el('div', 'oto-tinjau-h', '⚠ ' + tinjau.length + ' pembatalan menunggu keputusan potongan'));
+                    tinjau.filter(o => !idHariIni.has(o.id)).forEach(o => w.appendChild(kartu(o)));
+                }
                 if (!daftar.length) { w.appendChild(el('p', 'oto-kosong', 'Belum ada order otomatis hari ini.')); return; }
                 daftar.forEach(o => w.appendChild(kartu(o)));
             }
@@ -24111,7 +24191,7 @@
                     await b.commit();
                 } catch (e) { console.warn('[Otomatis] bersih tawaran lama:', e && e.code); }
             }
-            setInterval(() => { if (auth.currentUser) { dengar(); bersihkanBasi(); } if (halamanTampil() && tabAktif === 'order' && daftar.some(o => o.status === 'cari')) gambar(); }, 5000);
+            setInterval(() => { if (auth.currentUser) { dengar(); dengarBatal(); bersihkanBasi(); } if (halamanTampil() && tabAktif === 'order' && daftar.some(o => o.status === 'cari')) gambar(); }, 5000);
         })();
 
         // ===================== ID CARD MITRA (ADMIN) =====================
