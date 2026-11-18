@@ -33441,6 +33441,12 @@
         .bm-mid > small { font-size: 11.5px; font-weight: 600; color: #6B5E52; overflow-wrap: anywhere; }
         .bm-tag { display: inline-block; font-size: 10px; font-weight: 900; border-radius: 6px; padding: 1px 6px; margin-right: 4px; background: #F5EFE7; color: #4A3F35; vertical-align: 1px; }
         .bm-tag.merah { background: #FEE4E2; color: #B42318; }
+        /* (18 Nov 2026) keterangan dari catatan riwayat potongan: Top Up / Kurang manual / ADM order / Refund ... */
+        .bm-tag.k-hijau { background: #DCFCE7; color: #166534; }
+        .bm-tag.k-merah { background: #FFE4E6; color: #9F1239; }
+        .bm-tag.k-biru { background: #E0F2FE; color: #075985; }
+        .bm-tag.k-ungu { background: #EDE9FE; color: #5B21B6; }
+        .bm-tag.k-oren { background: #FFEDD5; color: #9A3412; }
         .bm-kanan { flex: none; max-width: 46%; text-align: right; display: flex; flex-direction: column; gap: 2px; }
         .bm-kanan b { font-size: 14.5px; font-weight: 800; }
         .bm-kanan small { font-size: 11px; font-weight: 600; color: #8A7D70; overflow-wrap: anywhere; }
@@ -33466,7 +33472,7 @@
     <script type="module">
         import { getApp, getApps, initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { initializeAuth, getAuth, inMemoryPersistence, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, getDoc, getDocs, query, where, limit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, getDoc, getDocs, query, where, limit, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
         (function bukuMutasiSaldo() {
             const EMAIL_PEMILIK = 'projekbisa01@gmail.com';
             const KOLEKSI = 'mutasi_saldo';
@@ -33622,15 +33628,68 @@
                 return o.oleh || 'tidak diketahui';
             }
 
+            // ---------- (18 Nov 2026) keterangan dari riwayat_potongan ----------
+            // Hanya MEMBACA. Setiap perubahan saldo dari aplikasi juga menulis 1 catatan riwayat_potongan (Top Up, Potong Manual,
+            // potongan ADM order, refund, dst). Catatan itu dicocokkan dengan mutasi: rider sama, nominal sama, waktu berdekatan.
+            const JEDA_COCOK = 120000;   // maks selisih waktu 2 menit
+            function jenisKet(type, desc, oto) {
+                const t = String(type || ''), d = String(desc || '');
+                if (t === 'manual_add') return ['Top Up', 'k-hijau'];
+                if (t === 'manual_sub') return ['Kurang manual', 'k-merah'];
+                if (t === 'manual_set') return ['Set manual', 'k-oren'];
+                if (t === 'auto_order') return [oto ? 'ADM order otomatis' : 'ADM order', 'k-biru'];
+                if (t === 'manual_order') return ['ADM order susulan', 'k-biru'];
+                if (t === 'koreksi_order') return ['Koreksi order', 'k-biru'];
+                if (t === 'adm_tambahan') return ['ADM 4%', 'k-ungu'];
+                if (t === 'auto_cicilan' || /cicilan/i.test(d)) return ['Cicilan', 'k-ungu'];
+                if (t === 'tabungan_lebaran') return ['Tab. Lebaran', 'k-ungu'];
+                if (t.indexOf('refund') === 0) return ['Refund', 'k-hijau'];
+                return [(d || t || 'Lainnya').slice(0, 28), ''];
+            }
+            function bacaLedger(s) {
+                const hasil = [];
+                s.forEach((d) => {
+                    const x = d.data() || {};
+                    const t = ms(x.created_at);
+                    const amount = Number(x.amount);
+                    if (!t || !isFinite(amount)) return;
+                    const [label, cls] = jenisKet(x.type, x.desc, x.oto === true);
+                    hasil.push({ uid: String(x.rider_uid || '').trim().toUpperCase(), amount, t, label, cls,
+                        desc: String(x.desc || '').replace(/[\u0000-\u001f]/g, ' ').slice(0, 80), omset: Number(x.omset_order) || 0, pakai: false });
+                });
+                return hasil;
+            }
+            function cocokkan(list, ledger) {
+                if (!ledger || !ledger.length) return;
+                // yang selisih waktunya paling kecil dipasangkan lebih dulu; 1 catatan hanya untuk 1 mutasi
+                const pasangan = [];
+                list.forEach((o) => {
+                    if (o.koleksi !== 'rider_balances' || !o.utama.selisih) return;
+                    ledger.forEach((l) => {
+                        if (l.uid !== o.uid || Math.round(l.amount) !== Math.round(-o.utama.selisih)) return;
+                        const j = Math.abs(l.t - o.t);
+                        if (j <= JEDA_COCOK) pasangan.push({ o, l, j });
+                    });
+                });
+                pasangan.sort((a, b) => a.j - b.j);
+                pasangan.forEach((p) => { if (!p.o.ket && !p.l.pakai) { p.l.pakai = true; p.o.ket = p.l; } });
+            }
+
             async function muatHari() {
                 mode = 'hari'; riderPilih = null;
                 const no = ++nomorMuat;
                 gambarMuat('Memuat mutasi ' + namaTgl(tgl) + '...');
                 try {
-                    const s = await getDocs(query(collection(dbP, KOLEKSI), where('tanggal', '==', tgl), limit(1500)));
+                    const awal = new Date(tgl + 'T00:00:00+07:00');
+                    const akhir = new Date(awal.getTime() + 86400000 + JEDA_COCOK);
+                    const [s, sL] = await Promise.all([
+                        getDocs(query(collection(dbP, KOLEKSI), where('tanggal', '==', tgl), limit(1500))),
+                        getDocs(query(collection(dbP, ...DATA, 'riwayat_potongan'), where('created_at', '>=', new Date(awal.getTime() - JEDA_COCOK)), where('created_at', '<', akhir), limit(3000))).catch((e) => { console.warn('[Buku Mutasi] keterangan', e && e.code); return null; }),
+                    ]);
                     if (no !== nomorMuat || !terbuka) return;
                     daftar = []; s.forEach((d) => { const x = bersihkan(d.id, d.data()); if (x) daftar.push(x); });
                     daftar.sort((a, b) => b.t - a.t);
+                    if (sL) cocokkan(daftar, bacaLedger(sL));
                     gambar();
                 } catch (er) { if (no === nomorMuat) gambarGalat(er); }
             }
@@ -33639,14 +33698,16 @@
                 const no = ++nomorMuat;
                 gambarMuat('Memuat mutasi ' + (r.nama || r.uid) + '...');
                 try {
-                    const [s, sal] = await Promise.all([
+                    const batas = Date.now() - HARI_CARI * 86400000;
+                    const [s, sal, sL] = await Promise.all([
                         getDocs(query(collection(dbP, KOLEKSI), where('uid', '==', r.uid), limit(1000))),
                         getDoc(doc(dbP, ...DATA, 'rider_balances', r.uid)).catch(() => null),
+                        getDocs(query(collection(dbP, ...DATA, 'riwayat_potongan'), where('rider_uid', '==', r.uid), where('created_at', '>=', new Date(batas - JEDA_COCOK)), orderBy('created_at', 'desc'), limit(1000))).catch((e) => { console.warn('[Buku Mutasi] keterangan', e && e.code); return null; }),
                     ]);
                     if (no !== nomorMuat || !terbuka) return;
-                    const batas = Date.now() - HARI_CARI * 86400000;
                     daftar = []; s.forEach((d) => { const x = bersihkan(d.id, d.data()); if (x && x.t >= batas) daftar.push(x); });
                     daftar.sort((a, b) => b.t - a.t);
+                    if (sL) cocokkan(daftar, bacaLedger(sL));
                     riderSaldo = sal && sal.exists() ? Number(sal.data().saldo) : null;
                     gambar();
                 } catch (er) { if (no === nomorMuat) gambarGalat(er); }
@@ -33709,7 +33770,8 @@
                 if (o.jenis === 'hapus') k.appendChild(el('span', 'bm-tag merah', 'Dihapus'));
                 else if (o.besar) k.appendChild(el('span', 'bm-tag merah', '⚠ Besar'));
                 else if (o.jenis === 'buat') k.appendChild(el('span', 'bm-tag', 'Baru'));
-                k.appendChild(document.createTextNode((o.alasan ? o.alasan + ' · ' : '') + 'oleh ' + namaOleh(o)));
+                if (o.ket) k.appendChild(el('span', 'bm-tag ' + o.ket.cls, o.ket.label));
+                k.appendChild(document.createTextNode((o.alasan && !o.ket ? o.alasan + ' · ' : '') + 'oleh ' + namaOleh(o)));
                 m.appendChild(k); r.appendChild(m);
                 const kn = el('span', 'bm-kanan');
                 const sel = o.utama.selisih;
@@ -33810,10 +33872,14 @@
                         det(nm + ' sesudah', v.sesudah == null ? '–' : 'Rp' + angka(v.sesudah) + (v.sesudah < 0 ? ' (minus)' : ''));
                         det('Selisih', rpTanda(v.selisih), v.selisih > 0 ? 'pb-plus' : (v.selisih < 0 ? 'pb-min' : ''));
                     });
+                    if (o.ket) {
+                        det('Keterangan', o.ket.label + (o.ket.desc && o.ket.desc !== o.ket.label ? ' — ' + o.ket.desc : ''));
+                        if (o.ket.omset > 0) det('Ongkir order', 'Rp' + angka(o.ket.omset));
+                    }
                     if (o.alasan) det('Alasan', o.alasan);
                     det('Diubah oleh', o.oleh ? o.oleh + (o.oleh.toLowerCase() === EMAIL_PEMILIK ? ' (pemilik)' : '') : 'tidak diketahui');
                     det('Waktu (server)', (o.tanggal ? namaTgl(o.tanggal).replace(/^\w+, /, '') + ' · ' : '') + jamWIB(o.t, true) + ' WIB');
-                    s.appendChild(el('p', 'pb-kecil', o.alasan ? 'Catatan dibuat otomatis oleh server dan tidak bisa diubah.' : 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Perubahan ini ditulis langsung dari aplikasi, jadi alasannya belum tercatat (akan lengkap setelah semua operasi saldo pindah ke server).'));
+                    s.appendChild(el('p', 'pb-kecil', o.alasan || o.ket ? 'Catatan dibuat otomatis oleh server dan tidak bisa diubah.' + (o.ket && !o.alasan ? ' Keterangan diambil dari riwayat potongan rider pada waktu yang sama.' : '') : 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Perubahan ini ditulis langsung dari aplikasi, jadi alasannya belum tercatat (akan lengkap setelah semua operasi saldo pindah ke server).'));
                     const dua = el('div', 'pb-dua');
                     const lain = el('button', 'pb-btn2', 'Semua mutasi rider ini'); lain.type = 'button';
                     lain.onclick = () => { tutupPanel(); muatRider({ uid: o.uid || o.dok, nama: o.nama }); };
