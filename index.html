@@ -28110,6 +28110,10 @@ window.PembuatQR = PembuatQR;
     .pg-cepat-lembar .pg-cepat-daftar > button:last-child { border-bottom: 0 !important; }
     .pg-cepat-lembar .pg-cepat-daftar > button i { width: 36px; height: 36px; flex: none; border-radius: 10px; background: #FFF1E6; color: #C2410C !important; display: grid; place-items: center; font-size: 16px; }
     .pg-cepat-lembar .pg-cepat-daftar > button:active { background: #F4F8F6 !important; }
+    /* (18 Nov 2026) pesan cepat = 1 baris geser di atas kolom ketik */
+    .pg-cepat-baris { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .pg-cepat-baris > button { flex: none; white-space: nowrap; }
+    .pg-cepat-baris.pg-cepat-sembunyi { display: none !important; }
 </style>
 <script>
 (function () {
@@ -28119,38 +28123,26 @@ window.PembuatQR = PembuatQR;
         var p = document.createElementNS(SVG, 'path'); p.setAttribute('d', 'M13.5 2 4 13.6h6.6L9.5 22 20 9.9h-6.7z'); p.setAttribute('fill', 'currentColor');
         s.appendChild(p); return s;
     }
-    // o = { wadah: daftar tombol lama, kolom: tempat ikon (di awal), layar: induk lembar (position fixed/relative), sub: teks kecil }
+    // (18 Nov 2026) PESAN CEPAT TAMPIL SEBAGAI BARIS TEKS di atas kolom ketik (ikon petir & lembar dihapus).
+    // Wadah tombol lama TIDAK dipindah / dibuat ulang, jadi semua fungsi klik lama tetap jalan.
+    // Baris disembunyikan selama kolom ketik berisi tulisan, muncul lagi saat kolom kosong.
     window.pgPasangCepat = function (o) {
-        var c = o && o.wadah, k = o && o.kolom, L = o && o.layar;
-        if (!c || !k || !L || c.__pgCepat) return null;
+        var c = o && o.wadah, k = o && o.kolom;
+        if (!c || !k || c.__pgCepat) return null;
         c.__pgCepat = true;
-        var bt = document.createElement('button'); bt.type = 'button'; bt.className = 'pg-petir';
-        bt.setAttribute('aria-label', 'Pesan cepat'); bt.setAttribute('aria-haspopup', 'dialog'); bt.setAttribute('aria-expanded', 'false');
-        bt.appendChild(petir());
-        k.insertBefore(bt, k.firstChild); k.classList.add('ada-petir');
-        var lat = document.createElement('div'); lat.className = 'pg-cepat-latar'; lat.hidden = true;
-        var sh = document.createElement('div'); sh.className = 'pg-cepat-lembar';
-        sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.setAttribute('aria-label', 'Pesan cepat');
-        var g = document.createElement('span'); g.className = 'pg-cepat-gagang'; g.setAttribute('aria-hidden', 'true');
-        var kp = document.createElement('div'); kp.className = 'pg-cepat-kepala';
-        var h = document.createElement('h2'); h.textContent = 'Pesan cepat';
-        var sm = document.createElement('small'); sm.textContent = o.sub || 'Ketuk salah satu';
-        kp.appendChild(h); kp.appendChild(sm);
-        sh.appendChild(g); sh.appendChild(kp);
-        c.classList.add('pg-cepat-daftar');
-        sh.appendChild(c);               // dipindah utuh: pendengar klik lama tetap menempel
-        lat.appendChild(sh); L.appendChild(lat);
-        function buka() { if (c.hidden) return; lat.hidden = false; bt.setAttribute('aria-expanded', 'true'); var f = c.querySelector('button'); if (f) { try { f.focus({ preventScroll: true }); } catch (e) {} } }
-        function tutup() { if (lat.hidden) return; lat.hidden = true; bt.setAttribute('aria-expanded', 'false'); }
-        bt.addEventListener('click', buka);
-        lat.addEventListener('click', function (e) { if (e.target === lat) tutup(); });
-        // didaftarkan SETELAH pendengar lama -> aksi lama jalan dulu, baru lembar ditutup
-        c.addEventListener('click', function (e) { if (e.target && e.target.closest && e.target.closest('button')) setTimeout(tutup, 0); });
-        lat.addEventListener('keydown', function (e) { if (e.key === 'Escape') { tutup(); bt.focus(); } });
-        function samakan() { bt.hidden = !!c.hidden; if (c.hidden) tutup(); }
-        try { new MutationObserver(samakan).observe(c, { attributes: true, attributeFilter: ['hidden'] }); } catch (e) {}
+        c.classList.add('pg-cepat-baris');
+        var ta = k.querySelector('textarea');
+        function samakan() { var ada = !!(ta && String(ta.value || '').trim()); c.classList.toggle('pg-cepat-sembunyi', ada); }
+        function nanti() { setTimeout(samakan, 0); setTimeout(samakan, 400); }
+        if (ta) {
+            ['input', 'keyup', 'focus', 'blur', 'change'].forEach(function (ev) { ta.addEventListener(ev, samakan); });
+            var f = ta.form || k.closest('form');
+            if (f) f.addEventListener('submit', nanti);
+        }
+        c.addEventListener('click', nanti);          // tombol pesan cepat yang mengisi kolom ketik
+        k.addEventListener('click', nanti);
         samakan();
-        return { buka: buka, tutup: tutup };
+        return { buka: function () {}, tutup: function () {}, samakan: samakan };
     };
 })();
 </script>
