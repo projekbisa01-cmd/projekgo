@@ -29278,7 +29278,8 @@ window.PembuatQR = PembuatQR;
 <button type="button" class="oto-balik" id="oto-balik" hidden>⚡ Tampilan otomatis</button>
 <script type="module">
     import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-    import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, serverTimestamp, setDoc, getDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    import { getFirestore, doc, collection, query, where, onSnapshot, runTransaction, serverTimestamp, setDoc, getDoc, getDocFromServer, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js';
     (function orderOtomatisRider() {
         'use strict';
         const P = 'onbid-2f87a';
@@ -29502,8 +29503,9 @@ window.PembuatQR = PembuatQR;
             const refT = doc(db, 'otomatis_order', id);
             const refSaku = doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', uid);
             let hasil = null;
-            try {
-                hasil = await runTransaction(db, async (trx) => {
+            // (18 Nov 2026, tahap 3) Terima lewat SERVER (Cloud Function terimaOrderOtomatis): server yang memeriksa
+            // syarat & memotong 16%. Cara lama (transaksi dari HP) hanya dipakai kalau fungsi server belum terpasang.
+            const lewatHp = () => runTransaction(db, async (trx) => {
                     const sT = await trx.get(refT);
                     if (!sT.exists()) throw { oto: 'hilang' };
                     const o = sT.data();
@@ -29539,6 +29541,29 @@ window.PembuatQR = PembuatQR;
                         tanggal_order_pertama: ST, last_updated: ST });
                     return { o, pot, sebelum, sesudah };
                 });
+            const lewatServer = async () => {
+                try {
+                    const fn = httpsCallable(getFunctions(getApp(), 'asia-southeast2'), 'terimaOrderOtomatis', { timeout: 25000 });
+                    const r = await fn({ id });
+                    const d = (r && r.data) || {};
+                    return { pot: Number(d.pot) || 0, sesudah: Number(d.sesudah) || 0 };
+                } catch (e) {
+                    const kode = String((e && e.code) || '');
+                    if (kode === 'functions/not-found') return lewatHp();   // fungsi server belum dipasang
+                    const det = (e && e.details) || {};
+                    if (det.oto) throw { oto: det.oto, saldo: det.saldo, pot: det.pot, pesan: e.message };
+                    // koneksi putus setelah server selesai? cek apakah order ini sudah jadi milik kita
+                    try {
+                        const sT = await getDocFromServer(refT);
+                        if (sT.exists() && sT.data().status === 'diterima' && String(sT.data().rider_uid || '').toUpperCase() === uid) {
+                            return { pot: Number(sT.data().potongan) || 0, sesudah: Number(sT.data().saldo_sesudah) || 0 };
+                        }
+                    } catch (e2) {}
+                    throw e;
+                }
+            };
+            try {
+                hasil = await lewatServer();
             } catch (e) {
                 sibukTerima = false; btn.disabled = false; btn.firstChild.textContent = 'Terima';
                 tutupTawaran();
@@ -29547,7 +29572,8 @@ window.PembuatQR = PembuatQR;
                 if (k === 'diambil' || k === 'hilang') { toast('Tawaran sudah diambil rider lain'); return; }
                 let alasan;
                 if (k === 'saldo') alasan = 'Saldo kurang (' + rp(e.saldo) + ', butuh ' + rp(e.pot) + ')';
-                else if (e && e.code === 'permission-denied') alasan = 'Ditolak server: cek GPS (Peta rider aktif?), jarak, helm ke-2, atau saldo';
+                else if (k && e.pesan) alasan = String(e.pesan).slice(0, 100);
+                else if (e && (e.code === 'permission-denied' || e.code === 'functions/permission-denied')) alasan = 'Ditolak server: cek GPS (Peta rider aktif?), jarak, helm ke-2, atau saldo';
                 else alasan = 'Gagal: ' + String((e && (e.code || e.message)) || 'koneksi').slice(0, 80);
                 toast('Order otomatis gagal diterima. ' + alasan);
                 catatGagal(id, alasan);
