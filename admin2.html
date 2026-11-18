@@ -3706,6 +3706,12 @@
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Pengeluaran<br>Bulanan</span>
                     <i class="fa-solid fa-lock absolute top-2 right-2 text-[10px] text-slate-400" aria-hidden="true"></i>
                 </button>
+                <!-- (18 Nov 2026) Buku Mutasi Saldo: catatan server setiap perubahan saldo (password pemilik) -->
+                <button type="button" id="btn-menu-mutasi" onclick="window.bmBuka && window.bmBuka()" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-amber-300 hover:shadow-md active:scale-95 transition-all group">
+                    <i class="fa-solid fa-book text-3xl text-amber-700 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Buku<br>Mutasi</span>
+                    <i class="fa-solid fa-lock absolute top-2 right-2 text-[10px] text-slate-400" aria-hidden="true"></i>
+                </button>
             </div>
         </div>
 
@@ -33342,6 +33348,420 @@
                         catch (er) { console.warn('[Pengeluaran]', er && er.code); sl.textContent = 'Gagal. Periksa internet lalu coba lagi.'; ok.disabled = false; }
                     };
                     dua.append(bt, ok); s.appendChild(dua);
+                });
+            }
+        })();
+    </script>
+
+    <!-- ===================== BUKU MUTASI SALDO (18 Nov 2026) =====================
+         Menu Lainnya > Keuangan > Buku Mutasi. HANYA MEMBACA koleksi mutasi_saldo yang ditulis Cloud Function
+         (mutasiRiderBalances dkk.): setiap perubahan saldo, tabungan, cicilan, tabungan lebaran, dan modal rider.
+         - Dibuka dengan password AKUN PEMILIK lewat sesi TERPISAH yang hanya disimpan di memori
+           (akun admin yang sedang login tidak berubah). Rules: mutasi_saldo hanya boleh dibaca pemilik, tidak bisa ditulis siapa pun.
+         - Terkunci otomatis: 5 menit tanpa aktivitas, aplikasi ditinggal, atau tombol Kunci.
+         - Hemat read: per tanggal (where tanggal == ...) atau per rider (where uid == ...), dimuat saat dibuka / ganti tanggal (tidak realtime). -->
+    <style>
+        #bm-layar { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; background: #FFFFFF; color: #2A2018; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+        #bm-layar[hidden] { display: none; }
+        #bm-layar button { font-family: inherit; cursor: pointer; }
+        .bm-cari { display: flex; gap: 8px; margin: 12px 0 6px; }
+        .bm-cari .pb-in { height: 46px; font-size: 15px; }
+        .bm-cari button { flex: none; width: 46px; height: 46px; border-radius: 12px; border: 1.5px solid #D9CFC2; background: #FFFFFF; color: #4A3F35; font-size: 16px; }
+        .bm-chip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; scrollbar-width: none; }
+        .bm-chip::-webkit-scrollbar { display: none; }
+        .bm-chip button { flex: none; height: 34px; padding: 0 12px; border-radius: 999px; border: 1.5px solid #D9CFC2; background: #FFFFFF; font-size: 12px; font-weight: 800; color: #4A3F35; }
+        .bm-chip button[aria-pressed="true"] { background: #2A2018; color: #FFFFFF; border-color: #2A2018; }
+        .bm-chip button.warn { border-color: #F5B7B1; color: #B42318; }
+        .bm-chip button.warn[aria-pressed="true"] { background: #B42318; color: #FFFFFF; border-color: #B42318; }
+        .bm-ring { display: flex; justify-content: space-between; gap: 8px; padding: 12px 0 4px; font-size: 12.5px; font-weight: 700; color: #6B5E52; }
+        .bm-ring b { display: block; font-size: 16px; font-weight: 800; margin-top: 2px; }
+        .bm-hari { font-size: 12px; font-weight: 800; color: #8A7D70; text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 2px; }
+        .bm-row { display: flex; gap: 10px; padding: 11px 4px; border: 0; border-bottom: 1px solid #F1EBE3; width: 100%; background: transparent; text-align: left; color: inherit; }
+        .bm-row.besar { background: #FFF6F5; }
+        .bm-jam { flex: none; width: 40px; font-size: 12px; font-weight: 800; color: #8A7D70; padding-top: 2px; }
+        .bm-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .bm-mid b { font-size: 14px; font-weight: 800; overflow-wrap: anywhere; }
+        .bm-mid b small { font-weight: 700; color: #6B5E52; }
+        .bm-mid > small { font-size: 11.5px; font-weight: 600; color: #6B5E52; overflow-wrap: anywhere; }
+        .bm-tag { display: inline-block; font-size: 10px; font-weight: 900; border-radius: 6px; padding: 1px 6px; margin-right: 4px; background: #F5EFE7; color: #4A3F35; vertical-align: 1px; }
+        .bm-tag.merah { background: #FEE4E2; color: #B42318; }
+        .bm-kanan { flex: none; max-width: 46%; text-align: right; display: flex; flex-direction: column; gap: 2px; }
+        .bm-kanan b { font-size: 14.5px; font-weight: 800; }
+        .bm-kanan small { font-size: 11px; font-weight: 600; color: #8A7D70; overflow-wrap: anywhere; }
+        .bm-det { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #F1EBE3; font-size: 14px; }
+        .bm-det span { color: #6B5E52; font-weight: 600; flex: none; }
+        .bm-det b { text-align: right; overflow-wrap: anywhere; }
+        .bm-pilih { display: block; width: 100%; text-align: left; padding: 12px 4px; border: 0; border-bottom: 1px solid #F1EBE3; background: transparent; font-size: 14.5px; font-weight: 800; color: #2A2018; }
+        .bm-pilih small { font-weight: 600; color: #6B5E52; margin-left: 6px; }
+        #bm-panel { position: fixed; inset: 0; z-index: 71; background: rgba(42,32,24,.45); display: flex; align-items: flex-end; justify-content: center; }
+        #bm-panel[hidden] { display: none; }
+    </style>
+
+    <section id="bm-layar" hidden aria-label="Buku Mutasi Saldo">
+        <div class="pb-kepala">
+            <button type="button" class="pb-ikon" id="bm-tutup" aria-label="Kembali ke Menu Lainnya"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            <b>Buku Mutasi Saldo</b>
+            <button type="button" class="pb-kunci" id="bm-kunci" hidden><i class="fa-solid fa-lock" aria-hidden="true"></i><span id="bm-sisa-waktu">Kunci</span></button>
+        </div>
+        <div class="pb-isi"><div class="pb-wadah" id="bm-wadah"></div></div>
+    </section>
+    <div id="bm-panel" hidden><div class="pb-sheet" id="bm-sheet" role="dialog" aria-modal="true" aria-labelledby="bm-sheet-judul"></div></div>
+
+    <script type="module">
+        import { getApp, getApps, initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { initializeAuth, getAuth, inMemoryPersistence, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, doc, getDoc, getDocs, query, where, limit } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        (function bukuMutasiSaldo() {
+            const EMAIL_PEMILIK = 'projekbisa01@gmail.com';
+            const KOLEKSI = 'mutasi_saldo';
+            const DATA = ['artifacts', 'onbid-2f87a', 'public', 'data'];
+            const DIAM_MS = 5 * 60 * 1000;
+            const BATAS_BESAR = 500000;          // perubahan sebesar ini ke atas ditandai "Perlu dicek"
+            const HARI_CARI = 30;                // cari per rider: 30 hari terakhir
+            const NAMA_BLN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+            const NAMA_HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const LABEL = { rider_balances: 'Saldo', rider_tabungan: 'Tabungan', rider_cicilan: 'Cicilan', tabungan_lebaran: 'Tab. Lebaran', modal_rider: 'Modal' };
+            const UTAMA = ['saldo', 'terkumpul', 'sisa', 'nominal', 'jumlah', 'total', 'amount'];
+            const POLA_TGL = /^\d{4}-\d{2}-\d{2}$/;
+            const $ = (id) => document.getElementById(id);
+            const el = (tag, cls, teks) => { const e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; };
+            const angka = (n) => Math.round(Math.abs(Number(n) || 0)).toLocaleString('id-ID');
+            const rpTanda = (n) => (n > 0 ? '+' : (n < 0 ? '−' : '')) + 'Rp' + angka(n);
+            const tglWIB = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+            const hariIni = () => tglWIB(new Date());
+            const geserTgl = (t, n) => { const [y, m, d] = t.split('-').map(Number); return tglWIB(new Date(Date.UTC(y, m - 1, d + n, 5))); };
+            const namaTgl = (t) => { const [y, m, d] = t.split('-').map(Number); const h = new Date(Date.UTC(y, m - 1, d, 5)).getUTCDay(); return NAMA_HARI[h] + ', ' + d + ' ' + NAMA_BLN[m - 1] + ' ' + y; };
+            const ms = (x) => x && typeof x.toMillis === 'function' ? x.toMillis() : (x && typeof x.seconds === 'number' ? x.seconds * 1000 : 0);
+            const jamWIB = (m, detik) => m ? new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: detik ? '2-digit' : undefined, hour12: false }).format(new Date(m)).replace(/:/g, '.') : '--.--';
+
+            // ---------- sesi pemilik terpisah (hanya di memori) ----------
+            let appP = null, authP = null, dbP = null;
+            function siapkanSesi() {
+                if (appP) return;
+                appP = getApps().find((a) => a.name === 'bm-pemilik') || initializeApp(getApp().options, 'bm-pemilik');
+                try { authP = initializeAuth(appP, { persistence: inMemoryPersistence }); } catch (e) { authP = getAuth(appP); }
+                dbP = getFirestore(appP);
+            }
+
+            let terbuka = false, diamTimer = null, detikTimer = null, aktivitasT = 0, gagal = 0, tahanSampai = 0, nomorMuat = 0;
+            let tgl = hariIni(), saring = 'semua', daftar = [], mode = 'hari', riderPilih = null, riderSaldo = null, semuaRider = null;
+
+            // ---------- buka / tutup / kunci ----------
+            window.bmBuka = () => {
+                $('bm-layar').hidden = false; document.body.style.overflow = 'hidden';
+                if (terbuka) { catatAktivitas(); gambar(); } else gambarKunci();
+            };
+            function tutupLayar() { kunci(); $('bm-layar').hidden = true; document.body.style.overflow = ''; }
+            async function kunci() {
+                const tadi = terbuka;
+                terbuka = false; nomorMuat++;
+                daftar = []; semuaRider = null; riderPilih = null; riderSaldo = null; mode = 'hari'; saring = 'semua'; tgl = hariIni();
+                clearTimeout(diamTimer); clearInterval(detikTimer);
+                tutupPanel();
+                $('bm-kunci').hidden = true;
+                if (authP && authP.currentUser) { try { await signOut(authP); } catch (e) {} }
+                if (tadi && !$('bm-layar').hidden) gambarKunci();
+            }
+            function catatAktivitas() {
+                if (!terbuka) return;
+                aktivitasT = Date.now();
+                clearTimeout(diamTimer);
+                diamTimer = setTimeout(kunci, DIAM_MS);
+            }
+            function jamKunci() {
+                const sisa = Math.max(0, Math.ceil((aktivitasT + DIAM_MS - Date.now()) / 1000));
+                $('bm-sisa-waktu').textContent = 'Kunci · ' + Math.floor(sisa / 60) + ':' + String(sisa % 60).padStart(2, '0');
+            }
+            $('bm-tutup').addEventListener('click', tutupLayar);
+            $('bm-kunci').addEventListener('click', () => kunci());
+            ['pointerdown', 'keydown', 'scroll'].forEach((ev) => {
+                $('bm-layar').addEventListener(ev, catatAktivitas, { passive: true, capture: true });
+                $('bm-panel').addEventListener(ev, catatAktivitas, { passive: true, capture: true });
+            });
+            document.addEventListener('visibilitychange', () => { if (document.hidden && terbuka) kunci(); });
+            document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('bm-layar').hidden) { if (!$('bm-panel').hidden) tutupPanel(); else tutupLayar(); } });
+
+            // ---------- layar kunci ----------
+            function gambarKunci() {
+                const w = $('bm-wadah'); w.textContent = '';
+                const g = el('div', 'pb-gembok');
+                const b = el('div', 'pb-bulat'); const ik = el('i', 'fa-solid fa-lock'); ik.setAttribute('aria-hidden', 'true'); b.appendChild(ik);
+                g.append(b, el('h2', '', 'Khusus pemilik'), el('p', '', 'Catatan setiap perubahan saldo, tabungan, cicilan, tabungan lebaran, dan modal rider. Dicatat otomatis oleh server, tidak bisa diubah atau dihapus siapa pun.'));
+                const f = el('form', 'pb-form'); f.setAttribute('autocomplete', 'off');
+                const lb = el('label', '', 'Password akun pemilik'); lb.htmlFor = 'bm-pw';
+                const pw = el('input', 'pb-in'); pw.type = 'password'; pw.id = 'bm-pw'; pw.autocomplete = 'new-password'; pw.maxLength = 128;
+                const ok = el('button', 'pb-btn', 'Buka buku mutasi'); ok.type = 'submit'; ok.style.marginTop = '10px';
+                const sl = el('p', 'pb-salah'); sl.setAttribute('role', 'alert');
+                f.append(lb, pw, ok, sl);
+                if (typeof window.adPasangMata === 'function') { try { window.adPasangMata(pw); } catch (e) {} }
+                f.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    if (ok.disabled) return;
+                    const v = pw.value;
+                    if (!v) { sl.textContent = 'Password belum diisi.'; return; }
+                    if (Date.now() < tahanSampai) { sl.textContent = 'Terlalu banyak percobaan. Coba lagi dalam ' + Math.ceil((tahanSampai - Date.now()) / 1000) + ' detik.'; return; }
+                    ok.disabled = true; ok.textContent = 'Memeriksa...'; sl.textContent = '';
+                    try {
+                        siapkanSesi();
+                        await signInWithEmailAndPassword(authP, EMAIL_PEMILIK, v);
+                        gagal = 0; pw.value = '';
+                        bukaHalaman();
+                    } catch (er) {
+                        const k = String((er && er.code) || '');
+                        pw.value = '';
+                        if (k === 'auth/too-many-requests') sl.textContent = 'Terlalu banyak percobaan. Firebase menahan sementara, coba lagi beberapa menit lagi.';
+                        else if (k === 'auth/network-request-failed') sl.textContent = 'Tidak ada koneksi. Periksa internet lalu coba lagi.';
+                        else { gagal++; if (gagal >= 5) { gagal = 0; tahanSampai = Date.now() + 60000; } sl.textContent = 'Password pemilik salah.'; }
+                        ok.disabled = false; ok.textContent = 'Buka buku mutasi';
+                        pw.focus();
+                    }
+                });
+                g.appendChild(f);
+                g.appendChild(el('p', 'pb-kecil', 'Password dicek Firebase dan tidak disimpan. Akun admin yang sedang login tidak berubah. Terkunci lagi setelah 5 menit tanpa aktivitas atau saat aplikasi ditinggal.'));
+                w.appendChild(g);
+                setTimeout(() => { try { pw.focus(); } catch (e) {} }, 60);
+            }
+
+            function bukaHalaman() {
+                terbuka = true;
+                $('bm-kunci').hidden = false;
+                catatAktivitas(); jamKunci();
+                clearInterval(detikTimer); detikTimer = setInterval(jamKunci, 1000);
+                tgl = hariIni(); mode = 'hari'; saring = 'semua';
+                muatHari();
+            }
+
+            // ---------- data: diperiksa ulang sebelum dipakai ----------
+            function bersihkan(id, d) {
+                if (!d || typeof d !== 'object') return null;
+                const koleksi = String(d.koleksi || '');
+                if (!LABEL[koleksi]) return null;
+                const per = {};
+                if (d.perubahan && typeof d.perubahan === 'object') {
+                    Object.keys(d.perubahan).slice(0, 20).forEach((k) => {
+                        const v = d.perubahan[k];
+                        if (!v || typeof v !== 'object') return;
+                        const sb = v.sebelum == null ? null : Number(v.sebelum), ss = v.sesudah == null ? null : Number(v.sesudah);
+                        per[String(k).slice(0, 60)] = { sebelum: isFinite(sb) ? sb : null, sesudah: isFinite(ss) ? ss : null, selisih: Number(v.selisih) || 0 };
+                    });
+                }
+                const kunciUtama = UTAMA.find((k) => per[k]) || Object.keys(per)[0] || '';
+                const u = kunciUtama ? per[kunciUtama] : { sebelum: null, sesudah: null, selisih: 0 };
+                const jenis = ['buat', 'ubah', 'hapus'].includes(d.jenis) ? d.jenis : 'ubah';
+                const besar = jenis === 'hapus' || Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR);
+                return {
+                    id, koleksi, jenis, per, kunciUtama, utama: u, besar,
+                    dok: String(d.dok || '').slice(0, 64), uid: String(d.uid || '').toUpperCase().slice(0, 64),
+                    nama: String(d.nama || '').slice(0, 60), oleh: String(d.oleh || '').slice(0, 120), olehTipe: String(d.oleh_tipe || '').slice(0, 40),
+                    t: ms(d.waktu), tanggal: POLA_TGL.test(d.tanggal || '') ? d.tanggal : '',
+                };
+            }
+            function namaOleh(o) {
+                const e = o.oleh.toLowerCase();
+                if (e === EMAIL_PEMILIK) return 'pemilik';
+                if (/^[a-z0-9_-]+@projekgo\.id$/.test(e) && e !== 'admin@projekgo.id') return e.split('@')[0].toUpperCase() + ' (rider)';
+                if (e.endsWith('.gserviceaccount.com')) return 'server';
+                return o.oleh || 'tidak diketahui';
+            }
+
+            async function muatHari() {
+                mode = 'hari'; riderPilih = null;
+                const no = ++nomorMuat;
+                gambarMuat('Memuat mutasi ' + namaTgl(tgl) + '...');
+                try {
+                    const s = await getDocs(query(collection(dbP, KOLEKSI), where('tanggal', '==', tgl), limit(1500)));
+                    if (no !== nomorMuat || !terbuka) return;
+                    daftar = []; s.forEach((d) => { const x = bersihkan(d.id, d.data()); if (x) daftar.push(x); });
+                    daftar.sort((a, b) => b.t - a.t);
+                    gambar();
+                } catch (er) { if (no === nomorMuat) gambarGalat(er); }
+            }
+            async function muatRider(r) {
+                mode = 'rider'; riderPilih = r; saring = 'semua';
+                const no = ++nomorMuat;
+                gambarMuat('Memuat mutasi ' + (r.nama || r.uid) + '...');
+                try {
+                    const [s, sal] = await Promise.all([
+                        getDocs(query(collection(dbP, KOLEKSI), where('uid', '==', r.uid), limit(1000))),
+                        getDoc(doc(dbP, ...DATA, 'rider_balances', r.uid)).catch(() => null),
+                    ]);
+                    if (no !== nomorMuat || !terbuka) return;
+                    const batas = Date.now() - HARI_CARI * 86400000;
+                    daftar = []; s.forEach((d) => { const x = bersihkan(d.id, d.data()); if (x && x.t >= batas) daftar.push(x); });
+                    daftar.sort((a, b) => b.t - a.t);
+                    riderSaldo = sal && sal.exists() ? Number(sal.data().saldo) : null;
+                    gambar();
+                } catch (er) { if (no === nomorMuat) gambarGalat(er); }
+            }
+            async function cariRider(teks) {
+                const q = String(teks || '').trim();
+                if (!q) { muatHari(); return; }
+                try {
+                    if (!semuaRider) {
+                        const s = await getDocs(collection(dbP, ...DATA, 'rider_balances'));
+                        semuaRider = [];
+                        s.forEach((d) => { const x = d.data() || {}; semuaRider.push({ uid: String(d.id).toUpperCase().slice(0, 64), nama: String(x.name || x.nama || '').slice(0, 60) }); });
+                    }
+                } catch (er) { gambarGalat(er); return; }
+                const k = q.toLowerCase();
+                let cocok = semuaRider.filter((r) => r.uid.toLowerCase() === k);
+                if (!cocok.length) cocok = semuaRider.filter((r) => r.nama.toLowerCase().includes(k) || r.uid.toLowerCase().includes(k));
+                if (!cocok.length) { muatRider({ uid: q.toUpperCase().slice(0, 64), nama: '' }); return; }   // rider sudah keluar: cari langsung per UID
+                if (cocok.length === 1) { muatRider(cocok[0]); return; }
+                bukaPanel((s) => {
+                    s.appendChild(el('h2', '', 'Pilih rider')).id = 'bm-sheet-judul';
+                    cocok.slice(0, 30).forEach((r) => {
+                        const b = el('button', 'bm-pilih', r.nama || r.uid); b.type = 'button';
+                        b.appendChild(el('small', '', r.uid));
+                        b.onclick = () => { tutupPanel(); muatRider(r); };
+                        s.appendChild(b);
+                    });
+                    const t = el('button', 'pb-btn2', 'Batal'); t.type = 'button'; t.onclick = tutupPanel; s.appendChild(t);
+                });
+            }
+
+            // ---------- tampilan ----------
+            function gambarMuat(teks) { const w = $('bm-wadah'); w.textContent = ''; w.appendChild(el('div', 'pb-muat', teks)); }
+            function gambarGalat(er) {
+                console.warn('[Buku Mutasi]', er && er.code);
+                const w = $('bm-wadah'); w.textContent = '';
+                w.appendChild(el('div', 'pb-muat', er && er.code === 'permission-denied'
+                    ? 'Data belum bisa dibuka: rules mutasi_saldo belum dipasang, atau akun ini bukan pemilik.'
+                    : 'Data belum bisa dimuat. Periksa internet lalu coba lagi.'));
+                const u = el('button', 'pb-btn2', 'Coba lagi'); u.type = 'button'; u.style.width = '100%';
+                u.onclick = () => (mode === 'rider' && riderPilih ? muatRider(riderPilih) : muatHari());
+                w.appendChild(u);
+            }
+            function kolomCari(isi) {
+                const f = el('form', 'bm-cari'); f.setAttribute('autocomplete', 'off'); f.setAttribute('role', 'search');
+                const i = el('input', 'pb-in'); i.type = 'search'; i.placeholder = 'Cari nama / UID rider (30 hari)'; i.maxLength = 60; i.value = isi || ''; i.setAttribute('aria-label', 'Cari nama atau UID rider');
+                const b = el('button'); b.type = 'submit'; b.setAttribute('aria-label', 'Cari');
+                const ik = el('i', 'fa-solid fa-magnifying-glass'); ik.setAttribute('aria-hidden', 'true'); b.appendChild(ik);
+                f.append(i, b);
+                f.addEventListener('submit', (e) => { e.preventDefault(); cariRider(i.value); });
+                return f;
+            }
+            function baris(o) {
+                const r = el('button', 'bm-row' + (o.besar ? ' besar' : '')); r.type = 'button';
+                r.appendChild(el('span', 'bm-jam', jamWIB(o.t)));
+                const m = el('span', 'bm-mid');
+                const nb = el('b', '', o.nama || o.uid || o.dok); if (o.nama) nb.appendChild(el('small', '', ' · ' + (o.uid || o.dok))); m.appendChild(nb);
+                const k = el('small');
+                k.appendChild(el('span', 'bm-tag', LABEL[o.koleksi]));
+                if (o.jenis === 'hapus') k.appendChild(el('span', 'bm-tag merah', 'Dihapus'));
+                else if (o.besar) k.appendChild(el('span', 'bm-tag merah', '⚠ Besar'));
+                else if (o.jenis === 'buat') k.appendChild(el('span', 'bm-tag', 'Baru'));
+                k.appendChild(document.createTextNode('oleh ' + namaOleh(o)));
+                m.appendChild(k); r.appendChild(m);
+                const kn = el('span', 'bm-kanan');
+                const sel = o.utama.selisih;
+                kn.appendChild(el('b', sel > 0 ? 'pb-plus' : (sel < 0 ? 'pb-min' : ''), sel ? rpTanda(sel) : 'Rp0'));
+                const pre = o.kunciUtama && o.kunciUtama !== 'saldo' ? o.kunciUtama.replace('.', ' ') + ' ' : '';
+                kn.appendChild(el('small', '', pre + (o.utama.sebelum == null ? '–' : angka(o.utama.sebelum)) + ' → ' + (o.utama.sesudah == null ? '–' : angka(o.utama.sesudah))));
+                r.appendChild(kn);
+                r.addEventListener('click', () => detail(o));
+                return r;
+            }
+            function gambar() {
+                if (!terbuka) return;
+                const w = $('bm-wadah'); w.textContent = '';
+                if (mode === 'hari') {
+                    const nav = el('div', 'pb-bulan');
+                    const kiri = el('button', '', '‹'); kiri.type = 'button'; kiri.setAttribute('aria-label', 'Hari sebelumnya');
+                    const kanan = el('button', '', '›'); kanan.type = 'button'; kanan.setAttribute('aria-label', 'Hari berikutnya');
+                    kanan.disabled = tgl >= hariIni();
+                    kiri.onclick = () => { tgl = geserTgl(tgl, -1); saring = 'semua'; muatHari(); };
+                    kanan.onclick = () => { if (tgl < hariIni()) { tgl = geserTgl(tgl, 1); saring = 'semua'; muatHari(); } };
+                    nav.append(kiri, el('b', '', (tgl === hariIni() ? 'Hari ini · ' : '') + namaTgl(tgl).replace(/^\w+, /, '')), kanan);
+                    w.appendChild(nav);
+                    w.appendChild(kolomCari(''));
+                } else {
+                    w.appendChild(kolomCari(riderPilih ? (riderPilih.nama || riderPilih.uid) : ''));
+                    const ket = el('p', 'pb-kecil'); ket.style.margin = '4px 0';
+                    ket.appendChild(document.createTextNode('Menampilkan '));
+                    ket.appendChild(el('b', '', (riderPilih.nama ? riderPilih.nama + ' · ' : '') + riderPilih.uid));
+                    ket.appendChild(document.createTextNode(' — ' + HARI_CARI + ' hari terakhir. '));
+                    const kb = el('button', '', '← Kembali ke per tanggal'); kb.type = 'button';
+                    kb.style.cssText = 'border:0;background:none;color:#C2410C;font-weight:800;font-size:12px;padding:0';
+                    kb.onclick = () => { tgl = hariIni(); muatHari(); };
+                    ket.appendChild(kb);
+                    w.appendChild(ket);
+                }
+                // saringan
+                const hitung = { semua: daftar.length, cek: daftar.filter((o) => o.besar).length };
+                Object.keys(LABEL).forEach((k) => { hitung[k] = daftar.filter((o) => o.koleksi === k).length; });
+                const chip = el('div', 'bm-chip'); chip.setAttribute('role', 'group'); chip.setAttribute('aria-label', 'Saring jenis');
+                const tombolChip = (kunci, teks, cls) => {
+                    if (kunci !== 'semua' && kunci !== 'cek' && !hitung[kunci]) return;
+                    const b = el('button', cls || '', teks + ' ' + hitung[kunci]); b.type = 'button'; b.setAttribute('aria-pressed', String(saring === kunci));
+                    b.onclick = () => { saring = kunci; gambar(); };
+                    chip.appendChild(b);
+                };
+                tombolChip('semua', 'Semua');
+                Object.keys(LABEL).forEach((k) => tombolChip(k, LABEL[k]));
+                tombolChip('cek', '⚠ Perlu dicek', 'warn');
+                w.appendChild(chip);
+                const tampil = daftar.filter((o) => saring === 'semua' ? true : (saring === 'cek' ? o.besar : o.koleksi === saring));
+                // ringkasan
+                const ring = el('div', 'bm-ring');
+                if (mode === 'rider') {
+                    const a = el('div', '', 'Saldo sekarang'); a.appendChild(el('b', '', riderSaldo == null || !isFinite(riderSaldo) ? '–' : (riderSaldo < 0 ? '−' : '') + 'Rp' + angka(riderSaldo)));
+                    const tot = tampil.filter((o) => o.koleksi === 'rider_balances').reduce((s, o) => s + o.utama.selisih, 0);
+                    const b = el('div', '', 'Perubahan saldo ' + HARI_CARI + ' hari'); b.style.textAlign = 'right'; b.appendChild(el('b', tot > 0 ? 'pb-plus' : (tot < 0 ? 'pb-min' : ''), rpTanda(tot)));
+                    ring.append(a, b);
+                } else {
+                    const naik = tampil.reduce((s, o) => s + (o.utama.selisih > 0 ? o.utama.selisih : 0), 0);
+                    const turun = tampil.reduce((s, o) => s + (o.utama.selisih < 0 ? o.utama.selisih : 0), 0);
+                    const a = el('div', '', 'Total bertambah'); a.appendChild(el('b', 'pb-plus', rpTanda(naik)));
+                    const b = el('div', '', 'Total berkurang'); b.style.textAlign = 'right'; b.appendChild(el('b', 'pb-min', rpTanda(turun)));
+                    ring.append(a, b);
+                }
+                w.appendChild(ring);
+                if (!tampil.length) {
+                    w.appendChild(el('p', 'pb-kosong', mode === 'rider' ? 'Belum ada mutasi untuk rider ini dalam ' + HARI_CARI + ' hari terakhir.' : 'Belum ada mutasi di tanggal ini.'));
+                } else if (mode === 'hari') {
+                    w.appendChild(el('div', 'bm-hari', 'Perubahan · terbaru di atas'));
+                    tampil.forEach((o) => w.appendChild(baris(o)));
+                } else {
+                    let hariTadi = '';
+                    tampil.forEach((o) => {
+                        const h = o.tanggal || (o.t ? tglWIB(new Date(o.t)) : '');
+                        if (h !== hariTadi) { hariTadi = h; w.appendChild(el('div', 'bm-hari', h ? namaTgl(h) : '-')); }
+                        w.appendChild(baris(o));
+                    });
+                }
+                w.appendChild(el('p', 'pb-info', '⚠ Perlu dicek = perubahan Rp' + angka(BATAS_BESAR) + ' ke atas atau data yang dihapus. Catatan dibuat otomatis oleh server sejak 18 Nov 2026 dan tidak bisa diubah.'));
+            }
+
+            // ---------- panel bawah ----------
+            function bukaPanel(isi) { const s = $('bm-sheet'); s.textContent = ''; isi(s); $('bm-panel').hidden = false; }
+            function tutupPanel() { $('bm-panel').hidden = true; $('bm-sheet').textContent = ''; }
+            $('bm-panel').addEventListener('click', (e) => { if (e.target === $('bm-panel')) tutupPanel(); });
+            function detail(o) {
+                bukaPanel((s) => {
+                    const h = el('h2', '', 'Detail perubahan'); h.id = 'bm-sheet-judul'; s.appendChild(h);
+                    const det = (k, v, cls) => { const r = el('div', 'bm-det'); r.append(el('span', '', k), el('b', cls || '', v)); s.appendChild(r); };
+                    det('Rider', (o.nama ? o.nama + ' · ' : '') + (o.uid || o.dok));
+                    det('Jenis', LABEL[o.koleksi] + ' (' + o.koleksi + ')' + (o.jenis === 'hapus' ? ' · DIHAPUS' : (o.jenis === 'buat' ? ' · data baru' : '')), o.jenis === 'hapus' ? 'pb-min' : '');
+                    if (o.koleksi !== 'rider_balances' && o.dok && o.dok !== o.uid) det('Dokumen', o.dok);
+                    const kunciSemua = Object.keys(o.per);
+                    if (!kunciSemua.length) det('Perubahan', '–');
+                    kunciSemua.forEach((k) => {
+                        const v = o.per[k], nm = k === 'saldo' ? 'Saldo' : k.replace('.', ' ');
+                        det(nm + ' sebelum', v.sebelum == null ? '–' : 'Rp' + angka(v.sebelum) + (v.sebelum < 0 ? ' (minus)' : ''));
+                        det(nm + ' sesudah', v.sesudah == null ? '–' : 'Rp' + angka(v.sesudah) + (v.sesudah < 0 ? ' (minus)' : ''));
+                        det('Selisih', rpTanda(v.selisih), v.selisih > 0 ? 'pb-plus' : (v.selisih < 0 ? 'pb-min' : ''));
+                    });
+                    det('Diubah oleh', o.oleh ? o.oleh + (o.oleh.toLowerCase() === EMAIL_PEMILIK ? ' (pemilik)' : '') : 'tidak diketahui');
+                    det('Waktu (server)', (o.tanggal ? namaTgl(o.tanggal).replace(/^\w+, /, '') + ' · ' : '') + jamWIB(o.t, true) + ' WIB');
+                    s.appendChild(el('p', 'pb-kecil', 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Alasan perubahan (top up / potongan / koreksi) akan ikut tercatat setelah tahap berikutnya.'));
+                    const dua = el('div', 'pb-dua');
+                    const lain = el('button', 'pb-btn2', 'Semua mutasi rider ini'); lain.type = 'button';
+                    lain.onclick = () => { tutupPanel(); muatRider({ uid: o.uid || o.dok, nama: o.nama }); };
+                    const t = el('button', 'pb-btn', 'Tutup'); t.type = 'button'; t.onclick = tutupPanel;
+                    if (mode === 'rider' && riderPilih && riderPilih.uid === (o.uid || o.dok)) { t.style.flex = '1'; dua.appendChild(t); }
+                    else dua.append(lain, t);
+                    s.appendChild(dua);
                 });
             }
         })();
