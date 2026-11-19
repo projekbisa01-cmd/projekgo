@@ -9736,11 +9736,26 @@
             container.innerHTML = html;
         };
 
+        // (19 Nov 2026, KEAMANAN) Dokumen status_rider_aktif bisa diubah oleh rider pemiliknya sendiri. Teks di dalamnya
+        // (nama, keterangan, dll.) dibersihkan dari tanda < > " ' ` sebelum dipakai halaman admin, supaya rider iseng
+        // tidak bisa menyisipkan kode ke Admin Dispatch lewat namanya. Hanya salinan di memori; data server tidak diubah.
+        function bersihStatusRider(d) {
+            const buang = (v) => (typeof v === 'string' && /[<>"'`]/.test(v)) ? v.replace(/[<>"'`]/g, '') : v;
+            if (!d || typeof d !== 'object') return d;
+            Object.keys(d).forEach((k) => {
+                const v = d[k];
+                if (typeof v === 'string') d[k] = buang(v);
+                else if (v && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) Object.keys(v).forEach((k2) => { if (typeof v[k2] === 'string') v[k2] = buang(v[k2]); });
+                else if (Array.isArray(v)) v.forEach((x, i) => { if (typeof x === 'string') v[i] = buang(x); });
+            });
+            return d;
+        }
+        window.bersihStatusRider = bersihStatusRider;
         function startRiderListener() {
             const statusCol = collection(db, 'status_rider_aktif');
             onSnapshot(statusCol, (snapshot) => {
                 snapshot.docChanges().forEach((change) => {
-                    const data = change.doc.data();
+                    const data = bersihStatusRider(change.doc.data());
                     const uid = change.doc.id;
                     const isOnline = data.is_online === true || data.is_online === 'true';
                     const isAvailable = data.is_available === true || data.is_available === 'true';
@@ -9806,7 +9821,7 @@
                 allRiders = [];
                 
                 snapshot.forEach(docSnap => {
-                    const data = docSnap.data();
+                    const data = bersihStatusRider(docSnap.data());
                     const uid = docSnap.id; 
                     data.uid = uid;
                     
@@ -10801,7 +10816,7 @@
 
             let optionsHtml = '<option value="">-- Pilih Rider --</option>';
             ridersToShow.forEach((r, idx) => {
-                optionsHtml += `<option value="${r.uid}">${idx + 1}. ${getRiderCode(r.uid)} - ${r.name}</option>`;
+                optionsHtml += `<option value="${window.escHtml(r.uid)}">${idx + 1}. ${window.escHtml(getRiderCode(r.uid))} - ${window.escHtml(r.name)}</option>`;
             });
 
             const modal = document.getElementById('custom-modal');
@@ -20161,14 +20176,74 @@
                     topupHp = !sudahDiServer;        // pelacak harian ditambah HP hanya kalau HP yang menulis
                 }
 
+                // (19 Nov 2026, tahap 5) KURANGI & SET MANUAL saldo dijalankan SERVER (Cloud Function koreksiSaldoRider).
+                // Server memeriksa sendiri bahwa password pemilik baru dimasukkan (token sesi pemilik), menghitung selisih dari
+                // saldo TERBARU, dan mencatat alasan + nama admin di Buku Mutasi. Tidak bisa dobel (catatan ks_<kode>).
+                // Kalau server tidak bisa dihubungi -> cara lama (transaksi di HP dengan catatan ID yang sama).
+                if (tx.module === 'saldo' && (tx.actionType === 'sub' || tx.actionType === 'set')) {
+                    if (!tx.idem) tx.idem = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+                    const ledRefK = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan', 'ks_' + tx.idem);
+                    let koreksiServer = false;
+                    try {
+                        const tokenPemilik = typeof window.pgTokenPemilik === 'function' ? await window.pgTokenPemilik() : '';
+                        const [{ getApp: ambilApp }, { getFunctions, httpsCallable }] = await Promise.all([
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js'),
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js')]);
+                        const fn = httpsCallable(getFunctions(ambilApp(), 'asia-southeast2'), 'koreksiSaldoRider', { timeout: 25000 });
+                        const r = await fn({ mode: tx.actionType, uid: tx.uid, amount: tx.amount, idem: tx.idem, nama: String(tx.name || '').slice(0, 60), tokenPemilik });
+                        const d = (r && r.data) || {};
+                        if (Number.isFinite(d.prev)) tx.current = d.prev;
+                        if (Number.isFinite(d.now)) tx.newSaldo = d.now;
+                        koreksiServer = true;
+                    } catch (eFn) {
+                        const kodeFn = String((eFn && eFn.code) || '');
+                        console.error('[Koreksi saldo server]', eFn);
+                        // server menjawab dengan alasan jelas -> berhenti, tidak pakai cara lama
+                        if (['functions/invalid-argument', 'functions/permission-denied', 'functions/not-found', 'functions/unauthenticated', 'functions/failed-precondition'].includes(kodeFn)) {
+                            if (kodeFn === 'functions/permission-denied' && typeof window.owKunciSekarang === 'function' && /owner/i.test(String(eFn.message || ''))) window.owKunciSekarang();
+                            window.showAlert('Gagal', String(eFn.message || 'Koreksi saldo ditolak server.'), 'error');
+                            return;
+                        }
+                        // server tidak bisa dihubungi: sudah tercatat server? (sinyal putus setelah server selesai)
+                        try {
+                            const sL = await __fsSemua.getDocFromServer(ledRefK);
+                            if (sL.exists()) { koreksiServer = true; const l = sL.data(); if (Number.isFinite(l.saldo_sebelum)) tx.current = l.saldo_sebelum; if (Number.isFinite(l.saldo_sesudah)) tx.newSaldo = l.saldo_sesudah; }
+                        } catch (eCek) {
+                            window.showAlert('Gagal', 'Koreksi saldo belum tercatat. Periksa internet, lalu tekan PIN lagi. Tidak akan dobel.', 'error');
+                            return;
+                        }
+                    }
+                    if (!koreksiServer) {
+                        // cara lama dalam SATU transaksi, ID catatan sama dengan server -> tidak mungkin dobel
+                        const balRefK = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', tx.uid);
+                        const hasilHp = await runTransaction(db, async (t) => {
+                            const l = await t.get(ledRefK);
+                            if (l.exists()) return { sudah: true, prev: Number(l.data().saldo_sebelum), now: Number(l.data().saldo_sesudah) };
+                            const b = await t.get(balRefK);
+                            const prev = parseInt((b.exists() && b.data().saldo) || 0, 10) || 0;
+                            const now = tx.actionType === 'sub' ? prev - tx.amount : tx.amount;
+                            logs[0] = Object.assign({}, logs[0], { prev, now });
+                            t.set(balRefK, { uid: tx.uid, name: tx.name, saldo: tx.actionType === 'sub' ? increment(-tx.amount) : tx.amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                            t.set(ledRefK, { rider_uid: tx.uid, rider_name: tx.name, amount: tx.actionType === 'sub' ? tx.amount : prev - now, omset_order: 0,
+                                type: tx.actionType === 'sub' ? 'manual_sub' : 'manual_set', desc: tx.actionType === 'sub' ? 'Potong Manual (Denda/Cicilan)' : 'Set Manual Saldo',
+                                created_at: serverTimestamp(), lewat: 'hp', saldo_sebelum: prev, saldo_sesudah: now });
+                            return { sudah: false, prev, now };
+                        });
+                        if (Number.isFinite(hasilHp.prev)) tx.current = hasilHp.prev;
+                        if (Number.isFinite(hasilHp.now)) tx.newSaldo = hasilHp.now;
+                        topupHp = !hasilHp.sudah;    // pelacak harian ditambah HP hanya kalau HP yang menulis
+                    }
+                    topupServer = true;              // langkah lama di bawah dilewati (sudah ditulis server / transaksi di atas)
+                }
+
                 if (tx.module === 'saldo') {
                     const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', tx.uid);
                     
-                    if (tx.actionType === 'set') await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: tx.amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    if (tx.actionType === 'set' && !topupServer) await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: tx.amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     else if (tx.actionType === 'add' && !topupServer) await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                    else if (tx.actionType === 'sub') await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(-tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    else if (tx.actionType === 'sub' && !topupServer) await setDoc(balanceRef, { uid: tx.uid, name: tx.name, saldo: increment(-tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     
-                    if (tx.actionType === 'sub') {
+                    if (tx.actionType === 'sub' && !topupServer) {
                         await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
                             rider_uid: tx.uid, rider_name: tx.name, amount: tx.amount, omset_order: 0, 
                             type: 'manual_sub', desc: 'Potong Manual (Denda/Cicilan)', created_at: serverTimestamp()
@@ -20178,7 +20253,7 @@
                             rider_uid: tx.uid, rider_name: tx.name, amount: -tx.amount, omset_order: 0, 
                             type: 'manual_add', desc: 'Top Up Saldo', created_at: serverTimestamp()
                         });
-                    } else if (tx.actionType === 'set') {
+                    } else if (tx.actionType === 'set' && !topupServer) {
                         let diff = tx.current - tx.amount; 
                         await addDoc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'), {
                             rider_uid: tx.uid, rider_name: tx.name, amount: diff, omset_order: 0, 
@@ -20189,7 +20264,7 @@
                     let topUpDiff = 0;
                     if (tx.actionType === 'add') topUpDiff = tx.amount;
                     else if (tx.actionType === 'sub') topUpDiff = -tx.amount;
-                    else if (tx.actionType === 'set') topUpDiff = tx.amount - tx.current;
+                    else if (tx.actionType === 'set') topUpDiff = tx.newSaldo - tx.current;
 
                     if (topUpDiff !== 0 && (!topupServer || topupHp)) {
                         const trackerRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'admin_config', 'daily_balance_tracker');
@@ -20216,9 +20291,10 @@
                     if (tx.actionType === 'add') await setDoc(tabunganRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     else if (tx.actionType === 'sub') await setDoc(tabunganRef, { uid: tx.uid, name: tx.name, saldo: increment(-tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
                     
-                    let successMsg = `Berhasil mengubah tabungan ${tx.name}.`;
-                    if (tx.actionType === 'add') successMsg = `Berhasil Input Setoran Tabungan <span class="text-xs font-black text-teal-600 uppercase tracking-wider bg-teal-50 px-1 rounded">${tx.name}</span> sebesar <span class="text-base font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-emerald-100">Rp ${tx.amount.toLocaleString('id-ID')}</span>`;
-                    else if (tx.actionType === 'sub') successMsg = `Berhasil Tarik Tabungan <span class="text-xs font-black text-teal-600 uppercase tracking-wider bg-teal-50 px-1 rounded">${tx.name}</span> sebesar <span class="text-base font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-rose-100">Rp ${tx.amount.toLocaleString('id-ID')}</span>`;
+                    const namaAman = window.escHtml(tx.name);
+                    let successMsg = `Berhasil mengubah tabungan ${namaAman}.`;
+                    if (tx.actionType === 'add') successMsg = `Berhasil Input Setoran Tabungan <span class="text-xs font-black text-teal-600 uppercase tracking-wider bg-teal-50 px-1 rounded">${namaAman}</span> sebesar <span class="text-base font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-emerald-100">Rp ${tx.amount.toLocaleString('id-ID')}</span>`;
+                    else if (tx.actionType === 'sub') successMsg = `Berhasil Tarik Tabungan <span class="text-xs font-black text-teal-600 uppercase tracking-wider bg-teal-50 px-1 rounded">${namaAman}</span> sebesar <span class="text-base font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg block mt-1.5 border border-rose-100">Rp ${tx.amount.toLocaleString('id-ID')}</span>`;
 
                     window.showAlert('Berhasil', successMsg, 'success');
                     window.switchPage('tabungan');
@@ -20278,7 +20354,7 @@
             const pilihanSebelumnya = selectEl.value; // jaga pilihan admin agar tidak ter-reset saat daftar diperbarui otomatis
             let optHtml = '<option value="">-- Pilih Rider --</option>';
             availableRiders.forEach(r => {
-                optHtml += `<option value="${r.uid}">${getRiderCode(r.uid)} - ${r.name}</option>`;
+                optHtml += `<option value="${window.escHtml(r.uid)}">${window.escHtml(getRiderCode(r.uid))} - ${window.escHtml(r.name)}</option>`;
             });
             selectEl.innerHTML = optHtml;
             if (pilihanSebelumnya && availableRiders.some(r => r.uid === pilihanSebelumnya)) selectEl.value = pilihanSebelumnya;
@@ -22267,14 +22343,32 @@
 
         // Pemeriksaan password pemilik oleh Firebase (instance terpisah, disimpan di memori saja)
         let uangAuthPemeriksa = null;
+        // (19 Nov 2026, tahap 5) Sesi pemilik TIDAK langsung ditutup: disimpan di memori HP ini selama 5 menit
+        // (sama dengan "Mode owner"), supaya server bisa memeriksa sendiri bahwa password pemilik baru saja dimasukkan
+        // (Kurangi / Set Manual saldo lewat server). Ditutup otomatis setelah 5 menit, saat tombol Kunci ditekan,
+        // atau saat aplikasi ditinggal. Password tetap tidak disimpan di mana pun.
+        let pemilikSesiSampai = 0, pemilikSesiTimer = null;
         async function uangCekPasswordPemilik(pw) {
             if (!uangAuthPemeriksa) {
                 const appPemeriksa = initializeApp(firebaseConfig, 'kunci-mode-omset');
                 uangAuthPemeriksa = initializeAuth(appPemeriksa, { persistence: inMemoryPersistence });
             }
             await signInWithEmailAndPassword(uangAuthPemeriksa, UANG_EMAIL_PEMILIK, pw);
-            try { await signOut(uangAuthPemeriksa); } catch (e) {}
+            pemilikSesiSampai = Date.now() + 5 * 60 * 1000;
+            if (pemilikSesiTimer) clearTimeout(pemilikSesiTimer);
+            pemilikSesiTimer = setTimeout(() => window.pgLepasPemilik(), 5 * 60 * 1000 + 5000);
         }
+        window.pgLepasPemilik = () => {
+            pemilikSesiSampai = 0;
+            if (pemilikSesiTimer) { clearTimeout(pemilikSesiTimer); pemilikSesiTimer = null; }
+            if (uangAuthPemeriksa && uangAuthPemeriksa.currentUser) signOut(uangAuthPemeriksa).catch(() => {});
+        };
+        window.pgTokenPemilik = async () => {
+            const u = uangAuthPemeriksa && uangAuthPemeriksa.currentUser;
+            if (!u || Date.now() > pemilikSesiSampai) return '';
+            try { return await u.getIdToken(); } catch (e) { return ''; }
+        };
+        document.addEventListener('visibilitychange', () => { if (document.hidden) window.pgLepasPemilik(); });
 
         // =====================================================================
         // KUNCI OWNER UNTUK KOREKSI / EDIT / HAPUS DATA UANG (12 Nov 2026)
@@ -22347,7 +22441,8 @@
                 document.getElementById('ow-chip-teks').textContent = '🔓 Mode owner · ' + Math.floor(sisa / 60) + ':' + String(sisa % 60).padStart(2, '0');
                 c.style.display = 'flex';
             }
-            function owKunci() { owSampai = 0; owSegarkanChip(); }
+            function owKunci() { owSampai = 0; owSegarkanChip(); if (typeof window.pgLepasPemilik === 'function') window.pgLepasPemilik(); }
+            window.owKunciSekarang = () => owKunci();
             function owBuka() {
                 owSampai = Date.now() + OW_JEDA_MS;
                 owSegarkanChip();
@@ -33594,6 +33689,8 @@
             }
 
             // ---------- data: diperiksa ulang sebelum dipakai ----------
+            // Field angka yang BUKAN uang (mis. "no" = nomor urut tiket modal di halaman Transfer)
+            const BUKAN_UANG = /^(no|nomor|no_urut|urut|urutan|index|idx|versi)$/i;
             function bersihkan(id, d) {
                 if (!d || typeof d !== 'object') return null;
                 const koleksi = String(d.koleksi || '');
@@ -33603,6 +33700,7 @@
                     Object.keys(d.perubahan).slice(0, 20).forEach((k) => {
                         const v = d.perubahan[k];
                         if (!v || typeof v !== 'object') return;
+                        if (BUKAN_UANG.test(String(k))) return;   // (19 Nov 2026) nomor urut dll. bukan uang -> tidak ditampilkan
                         const sb = v.sebelum == null ? null : Number(v.sebelum), ss = v.sesudah == null ? null : Number(v.sesudah);
                         per[String(k).slice(0, 60)] = { sebelum: isFinite(sb) ? sb : null, sesudah: isFinite(ss) ? ss : null, selisih: Number(v.selisih) || 0 };
                     });
@@ -33610,6 +33708,7 @@
                 const kunciUtama = UTAMA.find((k) => per[k]) || Object.keys(per)[0] || '';
                 const u = kunciUtama ? per[kunciUtama] : { sebelum: null, sesudah: null, selisih: 0 };
                 const jenis = ['buat', 'ubah', 'hapus'].includes(d.jenis) ? d.jenis : 'ubah';
+                if (jenis === 'ubah' && !Object.keys(per).length) return null;   // yang berubah hanya nomor urut -> bukan mutasi uang
                 const besar = jenis === 'hapus' || Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR);
                 return {
                     id, koleksi, jenis, per, kunciUtama, utama: u, besar,
