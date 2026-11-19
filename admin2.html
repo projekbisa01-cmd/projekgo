@@ -3712,6 +3712,8 @@
                     <i class="fa-solid fa-book text-3xl text-amber-700 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Buku<br>Mutasi</span>
                     <i class="fa-solid fa-lock absolute top-2 right-2 text-[10px] text-slate-400" aria-hidden="true"></i>
+                    <!-- (20 Nov 2026) lencana merah: catatan baru "Perlu dicek" sejak Buku Mutasi terakhir dibuka di HP ini -->
+                    <span id="bm-badge-menu" class="absolute top-1.5 left-1.5 bg-red-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full hidden shadow-sm border border-white" aria-label="Catatan perlu dicek">0</span>
                 </button>
             </div>
         </div>
@@ -4364,10 +4366,10 @@
     <main id="page-order-otomatis" class="hidden-page max-w-md mx-auto p-4 space-y-4 ad-warna">
         <button onclick="switchPage('lainnya')" class="mb-1 bg-white border border-gray-200 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-sm flex items-center gap-1.5 w-max hover:bg-slate-50 active:scale-95 transition-all"><i class="fa-solid fa-arrow-left"></i> Kembali</button>
         <section id="oto-isi" class="bg-white rounded-[1.5rem] p-4 shadow-sm border border-gray-100 space-y-3">
-            <div class="oto-judul-a"><i class="fa-solid fa-bolt text-amber-500 text-xl mt-0.5" aria-hidden="true"></i><div><b>Order otomatis · hari ini</b><span>Ngojek & Antar barang dari aplikasi pelanggan yang langsung diterima rider terdekat, lengkap dengan potongan 16%.</span></div></div>
+            <div class="oto-judul-a"><i class="fa-solid fa-bolt text-amber-500 text-xl mt-0.5" aria-hidden="true"></i><div><b>Order otomatis · <span id="oto-judul-tgl">hari ini</span></b><span>Ngojek & Antar barang dari aplikasi pelanggan yang langsung diterima rider terdekat, lengkap dengan potongan 16%.</span></div></div>
             <div class="oto-stat"><div><b id="oto-s-terima">0</b><small>Diterima</small></div><div><b id="oto-s-admin">0</b><small>Ke chat/WA</small></div><div><b id="oto-s-adm">Rp 0</b><small>Adm 16%</small></div></div>
             <div class="oto-tabs" role="tablist"><button type="button" id="oto-tab-order" class="on" onclick="window.otoTab('order')">Order</button><button type="button" id="oto-tab-atur" onclick="window.otoTab('atur')">Pengaturan</button></div>
-            <div id="oto-isi-order"><div id="oto-daftar"><p class="oto-kosong">Memuat…</p></div></div>
+            <div id="oto-isi-order"><div id="oto-tglbar"></div><div id="oto-daftar"><p class="oto-kosong">Memuat…</p></div></div>
             <div id="oto-isi-atur" hidden>
                 <div id="oto-a-peta" class="oto-cek">Memeriksa Peta rider…</div>
                 <div class="oto-g-a" style="margin-top:8px"><label class="oto-sw"><span>Order otomatis<small>Matikan = semua pesanan lewat admin lagi</small></span><input type="checkbox" id="oto-a-aktif"></label></div>
@@ -7192,6 +7194,40 @@
         // (19 Nov 2026, tahap 7) Penanda untuk Buku Mutasi: setiap perubahan saldo dari aplikasi membawa ID catatan
         // riwayat_potongan pasangannya + alasan. Server (fungsi mutasi) memeriksa catatan itu: rider sama & nominal sama.
         // Perubahan saldo tanpa catatan yang cocok ditandai "Perlu dicek". Ini persiapan kunci rules (tahap 8).
+        // (20 Nov 2026) PILIH TANGGAL bersama (Buku Mutasi & Order Otomatis): ‹ [📅 tanggal ▾] ›  + Hari ini / Kemarin
+        // o = { nilai: 'YYYY-MM-DD', min: 'YYYY-MM-DD', maks: 'YYYY-MM-DD' (hari ini), onPilih: (tgl) => {} }
+        window.pgBarTanggal = (o) => {
+            const geser = (t, n) => { const [y, m, d] = t.split('-').map(Number); const x = new Date(Date.UTC(y, m - 1, d + n, 5)); return x.toISOString().slice(0, 10); };
+            const BLN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+            const HR = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const teks = (t) => { const [y, m, d] = t.split('-').map(Number); return HR[new Date(Date.UTC(y, m - 1, d, 5)).getUTCDay()] + ', ' + d + ' ' + BLN[m - 1] + ' ' + y; };
+            const sah = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t) && t <= o.maks && (!o.min || t >= o.min);
+            const pilih = (t) => { if (sah(t) && t !== o.nilai) o.onPilih(t); };
+            const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+            const box = mk('div', 'pg-tgl');
+            const baris = mk('div', 'pg-tgl-b');
+            const kiri = mk('button', 'pg-tgl-p', '‹'); kiri.type = 'button'; kiri.setAttribute('aria-label', 'Hari sebelumnya');
+            const kanan = mk('button', 'pg-tgl-p', '›'); kanan.type = 'button'; kanan.setAttribute('aria-label', 'Hari berikutnya');
+            kiri.disabled = !!o.min && o.nilai <= o.min; kanan.disabled = o.nilai >= o.maks;
+            kiri.onclick = () => pilih(geser(o.nilai, -1)); kanan.onclick = () => pilih(geser(o.nilai, 1));
+            const tengah = mk('button', 'pg-tgl-t'); tengah.type = 'button'; tengah.setAttribute('aria-label', 'Pilih tanggal');
+            tengah.appendChild(mk('span', 'pg-tgl-i', '📅'));
+            tengah.appendChild(mk('b', '', (o.nilai === o.maks ? 'Hari ini · ' : (o.nilai === geser(o.maks, -1) ? 'Kemarin · ' : '')) + teks(o.nilai).replace(/^\w+, /, '')));
+            tengah.appendChild(mk('span', 'pg-tgl-i', '▾'));
+            const inp = mk('input', 'pg-tgl-in'); inp.type = 'date'; inp.max = o.maks; if (o.min) inp.min = o.min; inp.value = o.nilai; inp.tabIndex = -1; inp.setAttribute('aria-hidden', 'true');
+            inp.addEventListener('change', () => pilih(inp.value));
+            tengah.onclick = () => { try { inp.showPicker(); } catch (e) { inp.style.pointerEvents = 'auto'; inp.focus(); try { inp.click(); } catch (e2) {} } };
+            tengah.appendChild(inp);
+            baris.append(kiri, tengah, kanan);
+            box.appendChild(baris);
+            const cepat = mk('div', 'pg-tgl-c');
+            [['Hari ini', o.maks], ['Kemarin', geser(o.maks, -1)]].forEach(([n, t]) => {
+                if (o.min && t < o.min) return;
+                const b = mk('button', t === o.nilai ? 'on' : '', n); b.type = 'button'; b.onclick = () => pilih(t); cepat.appendChild(b);
+            });
+            box.appendChild(cepat);
+            return box;
+        };
         window.tandaMutasi = (ledgerId, alasan) => ({ ledger_terakhir: String(ledgerId || ''), mutasi_id: String(ledgerId || ''), mutasi_alasan: String(alasan || '').slice(0, 120) });
         window.escHtml = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
 
@@ -24071,6 +24107,33 @@
 
             // ---------- dengarkan pesanan otomatis hari ini ----------
             function awalHari() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+            // (20 Nov 2026) LIHAT HARI LAIN: '' = hari ini (langsung/real-time). Tanggal lain dibaca sekali (hemat).
+            const tglStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            let tglLihat = '', arsip = [], arsipMuat = false, arsipGagal = '';
+            async function muatArsip(t) {
+                arsipMuat = true; arsip = []; arsipGagal = '';
+                if (halamanTampil()) gambar();
+                const [y, m, d] = t.split('-').map(Number);
+                try {
+                    const s = await getDocs(query(collection(db, 'otomatis_order'), where('dibuat_at', '>=', new Date(y, m - 1, d)), where('dibuat_at', '<', new Date(y, m - 1, d + 1)), orderBy('dibuat_at', 'desc'), limit(300)));
+                    if (tglLihat !== t) return;
+                    arsip = s.docs.filter(x => ID_OK.test(x.id)).map(x => Object.assign({ id: x.id }, x.data({ serverTimestamps: 'estimate' })));
+                } catch (e) {
+                    if (tglLihat !== t) return;
+                    console.warn('[Otomatis] arsip belum terbaca:', e && e.code); arsipGagal = (e && e.code) || 'gagal';
+                }
+                arsipMuat = false;
+                if (halamanTampil()) gambar();
+            }
+            function barTanggal() {
+                const wadah = $('oto-tglbar'); if (!wadah || typeof window.pgBarTanggal !== 'function') return;
+                const hi = tglStr(new Date());
+                wadah.textContent = '';
+                wadah.appendChild(window.pgBarTanggal({ nilai: tglLihat || hi, min: '2026-11-01', maks: hi, onPilih: (t) => {
+                    tglLihat = t === tglStr(new Date()) ? '' : t;
+                    if (tglLihat) muatArsip(tglLihat); else gambar();
+                } }));
+            }
             let henti = null, hariDengar = '';
             function dengar() {
                 const k = new Date().toDateString();
@@ -24228,13 +24291,24 @@
                 $('oto-tab-atur').classList.toggle('on', tabAktif === 'atur');
                 $('oto-isi-order').hidden = tabAktif !== 'order';
                 $('oto-isi-atur').hidden = tabAktif !== 'atur';
-                const ditr = daftar.filter(o => o.status === 'diterima');
+                barTanggal();
+                const jt = $('oto-judul-tgl');
+                if (jt) jt.textContent = tglLihat ? (() => { const [y, m, d] = tglLihat.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }); })() : 'hari ini';
+                const lihat = tglLihat ? arsip : daftar;   // (20 Nov 2026) hari ini = langsung, tanggal lain = arsip
+                const ditr = lihat.filter(o => o.status === 'diterima');
                 $('oto-s-terima').textContent = String(ditr.length);
-                $('oto-s-admin').textContent = String(daftar.filter(o => o.status === 'gagal').length);
+                $('oto-s-admin').textContent = String(lihat.filter(o => o.status === 'gagal').length);
                 $('oto-s-adm').textContent = rp(ditr.reduce((a, o) => a + (Number(o.potongan) || 0), 0));
                 const w = $('oto-daftar');
                 while (w.firstChild) w.removeChild(w.firstChild);
-                if (kodeGagal) { w.appendChild(el('p', 'oto-kosong', kodeGagal === 'permission-denied' ? 'Belum bisa membaca. Pastikan rules ORDER OTOMATIS sudah dipasang.' : 'Belum bisa membaca daftar (cek internet).')); return; }
+                if (kodeGagal && !tglLihat) { w.appendChild(el('p', 'oto-kosong', kodeGagal === 'permission-denied' ? 'Belum bisa membaca. Pastikan rules ORDER OTOMATIS sudah dipasang.' : 'Belum bisa membaca daftar (cek internet).')); return; }
+                if (tglLihat) {
+                    if (arsipMuat) { w.appendChild(el('p', 'oto-kosong', 'Memuat…')); return; }
+                    if (arsipGagal) { w.appendChild(el('p', 'oto-kosong', 'Belum bisa membaca tanggal ini (cek internet), lalu pilih tanggalnya lagi.')); return; }
+                    if (!arsip.length) { w.appendChild(el('p', 'oto-kosong', 'Tidak ada order otomatis pada tanggal ini.')); return; }
+                    arsip.forEach(o => w.appendChild(kartu(o)));
+                    return;
+                }
                 // (18 Nov 2026) pembatalan yang menunggu keputusan potongan (termasuk hari sebelumnya) di paling atas
                 const idHariIni = new Set(daftar.map(o => o.id));
                 if (tinjau.length) {
@@ -33150,6 +33224,18 @@
         .pb-kecil { font-size: 12px; font-weight: 600; color: #6B5E52; line-height: 1.55; }
         /* halaman */
         .pb-bulan { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 12px 0 2px; }
+        /* (20 Nov 2026) pilih tanggal bersama */
+        .pg-tgl { padding: 8px 0 4px; }
+        .pg-tgl-b { display: flex; align-items: center; justify-content: center; gap: 6px; }
+        .pg-tgl-p { width: 44px; height: 44px; border: 0; border-radius: 12px; background: #F1ECE6; color: #3A2F27; font-size: 22px; font-weight: 800; flex: none; }
+        .pg-tgl-p:disabled { background: transparent; color: #DDD4C8; }
+        .pg-tgl-t { position: relative; flex: 1; max-width: 260px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1.5px solid #E7DFD5; border-radius: 12px; background: #fff; color: #1F1611; padding: 0 12px; }
+        .pg-tgl-t b { font-size: 14px; font-weight: 800; }
+        .pg-tgl-i { font-size: 13px; color: #8A7B6D; }
+        .pg-tgl-in { position: absolute; left: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; border: 0; }
+        .pg-tgl-c { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+        .pg-tgl-c button { font-size: 12px; font-weight: 800; padding: 6px 14px; border-radius: 999px; border: 1.5px solid #E7DFD5; background: #fff; color: #5E554C; }
+        .pg-tgl-c button.on { background: #1F1611; border-color: #1F1611; color: #fff; }
         .pb-bulan b { font-size: 15px; font-weight: 800; min-width: 150px; text-align: center; }
         .pb-bulan button { width: 44px; height: 44px; border: 0; background: transparent; color: #6B5E52; font-size: 22px; font-weight: 800; }
         .pb-bulan button:disabled { color: #DDD4C8; }
@@ -33611,7 +33697,8 @@
     <script type="module">
         import { getApp, getApps, initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { initializeAuth, getAuth, inMemoryPersistence, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { getFirestore, collection, doc, getDoc, getDocs, query, where, limit, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getFirestore, collection, doc, getDoc, getDocs, query, where, limit, orderBy, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         (function bukuMutasiSaldo() {
             const EMAIL_PEMILIK = 'projekbisa01@gmail.com';
             const KOLEKSI = 'mutasi_saldo';
@@ -33643,6 +33730,35 @@
                 try { authP = initializeAuth(appP, { persistence: inMemoryPersistence }); } catch (e) { authP = getAuth(appP); }
                 dbP = getFirestore(appP);
             }
+
+            // ---------- (20 Nov 2026) LENCANA "PERLU DICEK" di tombol menu ----------
+            // Server menghitung setiap catatan Perlu dicek di mutasi_saldo/_ringkas (hanya angka). Lencana = jumlah baru
+            // sejak Buku Mutasi terakhir dibuka di HP ini. Saat dibuka, langsung ke tanggal catatan terakhir + saringan Perlu dicek.
+            const KUNCI_LIHAT = 'pg_bm_cek_dilihat';
+            let ringkas = { total: 0, tgl: '' }, hentiRingkas = null;
+            const bacaLihat = () => { try { return Number(localStorage.getItem(KUNCI_LIHAT)) || 0; } catch (e) { return 0; } };
+            const tulisLihat = (n) => { try { localStorage.setItem(KUNCI_LIHAT, String(n)); } catch (e) {} };
+            const belumDilihat = () => Math.max(0, ringkas.total - bacaLihat());
+            function lencana() {
+                const b = $('bm-badge-menu'); if (!b) return;
+                const n = belumDilihat();
+                b.textContent = n > 99 ? '99+' : String(n);
+                b.classList.toggle('hidden', n <= 0);
+            }
+            (function mulaiLencana(coba) {
+                let appUtama = null;
+                try { appUtama = getApp(); } catch (e) { if (coba < 60) setTimeout(() => mulaiLencana(coba + 1), 1000); return; }   // tunggu aplikasi utama siap
+                onAuthStateChanged(getAuth(appUtama), (u) => {
+                    if (hentiRingkas) { try { hentiRingkas(); } catch (e) {} hentiRingkas = null; }
+                    ringkas = { total: 0, tgl: '' }; lencana();
+                    if (!u || !u.email) return;
+                    hentiRingkas = onSnapshot(doc(getFirestore(appUtama), KOLEKSI, '_ringkas'), (s) => {
+                        const x = s.exists() ? s.data() : {};
+                        ringkas = { total: Math.max(0, Math.floor(Number(x.perlu_cek_total) || 0)), tgl: POLA_TGL.test(String(x.terakhir_tanggal || '')) ? String(x.terakhir_tanggal) : '' };
+                        lencana();
+                    }, () => { /* rules belum mengizinkan / bukan admin: lencana diam saja */ });
+                });
+            })(0);
 
             let terbuka = false, diamTimer = null, detikTimer = null, aktivitasT = 0, gagal = 0, tahanSampai = 0, nomorMuat = 0;
             let tgl = hariIni(), saring = 'semua', daftar = [], mode = 'hari', riderPilih = null, riderSaldo = null, semuaRider = null;
@@ -33729,6 +33845,9 @@
                 catatAktivitas(); jamKunci();
                 clearInterval(detikTimer); detikTimer = setInterval(jamKunci, 1000);
                 tgl = hariIni(); mode = 'hari'; saring = 'semua';
+                // (20 Nov 2026) ada catatan baru Perlu dicek -> langsung ke tanggalnya dengan saringan Perlu dicek
+                if (belumDilihat() > 0 && ringkas.tgl && ringkas.tgl <= hariIni()) { tgl = ringkas.tgl; saring = 'cek'; }
+                tulisLihat(ringkas.total); lencana();
                 muatHari();
             }
 
@@ -33931,14 +34050,8 @@
                 if (!terbuka) return;
                 const w = $('bm-wadah'); w.textContent = '';
                 if (mode === 'hari') {
-                    const nav = el('div', 'pb-bulan');
-                    const kiri = el('button', '', '‹'); kiri.type = 'button'; kiri.setAttribute('aria-label', 'Hari sebelumnya');
-                    const kanan = el('button', '', '›'); kanan.type = 'button'; kanan.setAttribute('aria-label', 'Hari berikutnya');
-                    kanan.disabled = tgl >= hariIni();
-                    kiri.onclick = () => { tgl = geserTgl(tgl, -1); saring = 'semua'; muatHari(); };
-                    kanan.onclick = () => { if (tgl < hariIni()) { tgl = geserTgl(tgl, 1); saring = 'semua'; muatHari(); } };
-                    nav.append(kiri, el('b', '', (tgl === hariIni() ? 'Hari ini · ' : '') + namaTgl(tgl).replace(/^\w+, /, '')), kanan);
-                    w.appendChild(nav);
+                    // (20 Nov 2026) pilih tanggal: geser ‹ ›, ketuk tanggal untuk kalender, atau Hari ini / Kemarin
+                    w.appendChild(window.pgBarTanggal({ nilai: tgl, min: '2026-11-18', maks: hariIni(), onPilih: (t) => { tgl = t; saring = 'semua'; muatHari(); } }));
                     w.appendChild(kolomCari(''));
                 } else {
                     w.appendChild(kolomCari(riderPilih ? (riderPilih.nama || riderPilih.uid) : ''));
