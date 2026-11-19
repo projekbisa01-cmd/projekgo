@@ -7189,6 +7189,10 @@
         };
 
         // Escape teks sebelum dimasukkan ke innerHTML (cegah XSS dari nama/ID rider)
+        // (19 Nov 2026, tahap 7) Penanda untuk Buku Mutasi: setiap perubahan saldo dari aplikasi membawa ID catatan
+        // riwayat_potongan pasangannya + alasan. Server (fungsi mutasi) memeriksa catatan itu: rider sama & nominal sama.
+        // Perubahan saldo tanpa catatan yang cocok ditandai "Perlu dicek". Ini persiapan kunci rules (tahap 8).
+        window.tandaMutasi = (ledgerId, alasan) => ({ ledger_terakhir: String(ledgerId || ''), mutasi_id: String(ledgerId || ''), mutasi_alasan: String(alasan || '').slice(0, 120) });
         window.escHtml = (v) => String(v ?? '').replace(/[&<>"'`]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
 
         // Tab Kelola Rider (13 Okt 2026): data | baru | qris | suspend | off
@@ -12167,9 +12171,9 @@
                     if (currentData.fee) {
                         const cutAmount = Math.round(currentData.fee * 0.16);
                         const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
-                        transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
-
                         const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRefCut.id, 'ADM order 16% · Terima Order (Dari Pending)') }, { merge: true });
+
                         transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending)', created_at: serverTimestamp() });
                         penandaAdm = { jumlah: cutAmount, rider_uid: nextRider.uid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                     }
@@ -12258,9 +12262,9 @@
                     if (currentData.rider_uid && currentData.fee) {
                         const refundAmount = Math.round(currentData.fee * 0.16);
                         const oldBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', currentData.rider_uid);
-                        transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
-
                         const ledgerRefRefund = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        transaction.set(oldBalanceRef, { saldo: increment(refundAmount), ...window.tandaMutasi(ledgerRefRefund.id, 'Refund · Order Dilewatkan') }, { merge: true });
+
                         transaction.set(ledgerRefRefund, { order_id: orderRef.id, rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Order Dilewatkan', created_at: serverTimestamp() });
                     }
                     
@@ -12356,18 +12360,18 @@
                         if (currentData.rider_uid && currentData.fee) {
                             const refundAmount = Math.round(currentData.fee * 0.16);
                             const oldBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', currentData.rider_uid);
-                            transaction.set(oldBalanceRef, { saldo: increment(refundAmount) }, { merge: true });
-
                             const ledgerRefRefund = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                            transaction.set(oldBalanceRef, { saldo: increment(refundAmount), ...window.tandaMutasi(ledgerRefRefund.id, 'Refund · Alih Order') }, { merge: true });
+
                             transaction.set(ledgerRefRefund, { order_id: orderRef.id, rider_uid: currentData.rider_uid, amount: -refundAmount, omset_order: -(currentData.fee + (currentData.tambahan || 0)), type: 'refund_reassign', desc: 'Refund Alih Order', created_at: serverTimestamp() });
                         }
                         
                         if (currentData.fee) {
                             const cutAmount = Math.round(currentData.fee * 0.16);
                             const newBalanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', nextRider.uid);
-                            transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
-
                             const ledgerRefCut = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                            transaction.set(newBalanceRef, { uid: nextRider.uid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRefCut.id, 'ADM order 16% · Terima Lemparan Order') }, { merge: true });
+
                             transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: nextRider.uid, rider_name: nextRiderName, amount: cutAmount, omset_order: (currentData.fee + (currentData.tambahan || 0)), type: 'auto_order', desc: 'Terima Lemparan Order', created_at: serverTimestamp() });
                             penandaAdm = { jumlah: cutAmount, rider_uid: nextRider.uid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                         }
@@ -13706,10 +13710,10 @@
 
                 const adminCut = Math.round(feeParsed.real * 0.16);
                 const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                batch.set(balanceRef, { uid: riderUid, name: rName, saldo: increment(-adminCut), updated_at: serverTimestamp() }, { merge: true });
-
                 // TULIS KE BUKU KAS LEDGER
                 const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                batch.set(balanceRef, { uid: riderUid, name: rName, saldo: increment(-adminCut), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRef.id, `ADM order 16% · Order Susulan - ${custName}`) }, { merge: true });
+
                 batch.set(ledgerRef, {
                     order_id: activeOrderRef.id, rider_uid: riderUid, rider_name: rName,
                     amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
@@ -13997,7 +14001,7 @@
 
                         const saldoRef = doc(db, 'artifacts', proyek, 'public', 'data', 'rider_balances', b.uid);
                         batch.set(saldoRef, {
-                            uid: b.uid, name: b.namaRider, saldo: increment(-potong), updated_at: serverTimestamp()
+                            uid: b.uid, name: b.namaRider, saldo: increment(-potong), updated_at: serverTimestamp(), ...window.tandaMutasi(kasRef.id, 'ADM order 16% · Impor Susulan - ' + b.pelanggan)
                         }, { merge: true });
 
                         batch.set(kasRef, {
@@ -14716,10 +14720,10 @@
 
                     const adminCut = Math.round(feeParsed.real * 0.16);
                     const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                    batch.set(balanceRef, { uid: riderUid, name: riderName, saldo: increment(-adminCut), updated_at: serverTimestamp() }, { merge: true });
-
                     // TULIS KE BUKU KAS LEDGER
                     const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                    batch.set(balanceRef, { uid: riderUid, name: riderName, saldo: increment(-adminCut), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRef.id, `ADM order 16% · Potongan Sistem - ${custName || phone}`) }, { merge: true });
+
                     batch.set(ledgerRef, {
                         rider_uid: riderUid, rider_name: riderName,
                         amount: adminCut, omset_order: feeParsed.real + tamParsed.real,
@@ -16317,10 +16321,9 @@
                     if (order.rider_uid && order.fee) {
                         const refundAmount = Math.round(order.fee * 0.16);
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
-                        batch.set(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
-
                         // REFUND DI BUKU KAS
                         const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        batch.set(balanceRef, { saldo: increment(refundAmount), ...window.tandaMutasi(ledgerRef.id, 'Refund · Batal Order') }, { merge: true });
                         batch.set(ledgerRef, {
                             rider_uid: order.rider_uid, amount: -refundAmount, omset_order: -(order.fee + (order.tambahan || 0)), 
                             type: 'refund_cancel', desc: `Refund Batal Order`, created_at: serverTimestamp(), order_id: id
@@ -16400,10 +16403,9 @@
                     if (order.rider_uid && order.fee) {
                         const refundAmount = Math.round(order.fee * 0.16);
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', order.rider_uid);
-                        batch.set(balanceRef, { saldo: increment(refundAmount) }, { merge: true });
-
                         // REFUND DI BUKU KAS
                         const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        batch.set(balanceRef, { saldo: increment(refundAmount), ...window.tandaMutasi(ledgerRef.id, 'Refund · Tarik ke Pending') }, { merge: true });
                         batch.set(ledgerRef, {
                             rider_uid: order.rider_uid, amount: -refundAmount, omset_order: -(order.fee + (order.tambahan || 0)), 
                             type: 'refund_pending', desc: `Refund Tarik ke Pending`, created_at: serverTimestamp(), order_id: id
@@ -17507,7 +17509,8 @@
                         logs.unshift({ date: todayStr, amount: deduction });
                         
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', data.rider_uid);
-                        transaction.set(balanceRef, { saldo: increment(-deduction), updated_at: serverTimestamp() }, { merge: true });
+                        const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        transaction.set(balanceRef, { saldo: increment(-deduction), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRef.id, 'Potongan cicilan mingguan ' + todayStr) }, { merge: true });
 
                         transaction.update(cicilanRef, {
                             remaining_amount: increment(-deduction),
@@ -17516,7 +17519,6 @@
                             updated_at: serverTimestamp()
                         });
 
-                        const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
                         transaction.set(ledgerRef, {
                             rider_uid: data.rider_uid,
                             rider_name: data.rider_name,
@@ -19457,10 +19459,9 @@
                         if (diffFee !== 0) {
                             const diffAdminCut = Math.round(diffFee * 0.16);
                             const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                            batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
-
                             // KOREKSI DI BUKU KAS
                             const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                            batch.set(balanceRef, { saldo: increment(-diffAdminCut), ...window.tandaMutasi(ledgerRef.id, 'Koreksi Edit Order (selisih ongkir)') }, { merge: true });
                             batch.set(ledgerRef, {
                                 rider_uid: riderUid, amount: diffAdminCut, omset_order: diffFee, 
                                 type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp(), order_id: id
@@ -19495,10 +19496,9 @@
                         if (diffFee !== 0 && oldData.rider_uid) {
                             const diffAdminCut = Math.round(diffFee * 0.16);
                             const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', oldData.rider_uid);
-                            batch.set(balanceRef, { saldo: increment(-diffAdminCut) }, { merge: true });
-
                             // KOREKSI DI BUKU KAS
                             const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                            batch.set(balanceRef, { saldo: increment(-diffAdminCut), ...window.tandaMutasi(ledgerRef.id, 'Koreksi Edit Order (selisih ongkir)') }, { merge: true });
                             batch.set(ledgerRef, {
                                 rider_uid: oldData.rider_uid, amount: diffAdminCut, omset_order: diffFee, 
                                 type: 'koreksi_order', desc: `Koreksi Edit Order`, created_at: serverTimestamp(), order_id: id
@@ -19587,10 +19587,9 @@
                     if (feeRealToRefund > 0) {
                         const refundCut = Math.round(feeRealToRefund * 0.16);
                         const balanceRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_balances', riderUid);
-                        batch.set(balanceRef, { saldo: increment(refundCut) }, { merge: true });
-
                         // REFUND DI BUKU KAS
                         const ledgerRef = doc(collection(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'riwayat_potongan'));
+                        batch.set(balanceRef, { saldo: increment(refundCut), ...window.tandaMutasi(ledgerRef.id, 'Refund · Hapus Histori') }, { merge: true });
                         batch.set(ledgerRef, {
                             rider_uid: riderUid, amount: -refundCut, omset_order: -(feeRealToRefund + tamRealToRefund), 
                             type: 'refund_cancel', desc: `Refund Hapus Histori`, created_at: serverTimestamp()
@@ -20173,7 +20172,7 @@
                     const sudahDiServer = await runTransaction(db, async (t) => {
                         const l = await t.get(ledRefC);
                         if (l.exists()) return true;
-                        t.set(balRefC, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                        t.set(balRefC, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs, ...window.tandaMutasi(ledRefC.id, 'Top Up Saldo') }, { merge: true });
                         t.set(ledRefC, { rider_uid: tx.uid, rider_name: tx.name, amount: -tx.amount, omset_order: 0, type: 'manual_add', desc: 'Top Up Saldo', created_at: serverTimestamp(), lewat: 'hp' });
                         return false;
                     });
@@ -20228,7 +20227,7 @@
                             const prev = parseInt((b.exists() && b.data().saldo) || 0, 10) || 0;
                             const now = tx.actionType === 'sub' ? prev - tx.amount : tx.amount;
                             logs[0] = Object.assign({}, logs[0], { prev, now });
-                            t.set(balRefK, { uid: tx.uid, name: tx.name, saldo: tx.actionType === 'sub' ? increment(-tx.amount) : tx.amount, updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                            t.set(balRefK, { uid: tx.uid, name: tx.name, saldo: tx.actionType === 'sub' ? increment(-tx.amount) : tx.amount, updated_at: serverTimestamp(), edit_logs: logs, ...window.tandaMutasi(ledRefK.id, tx.actionType === 'sub' ? 'Kurangi Saldo' : 'Set Manual Saldo') }, { merge: true });
                             t.set(ledRefK, { rider_uid: tx.uid, rider_name: tx.name, amount: tx.actionType === 'sub' ? tx.amount : prev - now, omset_order: 0,
                                 type: tx.actionType === 'sub' ? 'manual_sub' : 'manual_set', desc: tx.actionType === 'sub' ? 'Potong Manual (Denda/Cicilan)' : 'Set Manual Saldo',
                                 created_at: serverTimestamp(), lewat: 'hp', saldo_sebelum: prev, saldo_sesudah: now });
@@ -22833,7 +22832,7 @@
                         const sisa = saldo - nominal;
                         const nama = String(t.nama || t.uid).slice(0, 60); // nama dari daftar rider admin, bukan isian rider
                         const terakhirLama = String(ps.data().terakhir_potong || '');
-                        tx.set(balRef, { saldo: increment(-nominal), updated_at: serverTimestamp() }, { merge: true });
+                        tx.set(balRef, { saldo: increment(-nominal), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRef.id, `Tabungan Lebaran ${D}`) }, { merge: true });
                         tx.set(ledgerRef, {
                             rider_uid: t.uid, rider_name: nama, amount: nominal, omset_order: 0,
                             type: 'tabungan_lebaran', desc: `Tabungan Lebaran ${D}`, tanggal_tabungan: D,
@@ -23661,9 +23660,9 @@
                     if (od.fee) {
                         const cutAmount = Math.round(od.fee * 0.16);
                         const newBalanceRef = doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', selectedUid);
-                        transaction.set(newBalanceRef, { uid: selectedUid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp() }, { merge: true });
-
                         const ledgerRefCut = doc(collection(db, 'artifacts', P, 'public', 'data', 'riwayat_potongan'));
+                        transaction.set(newBalanceRef, { uid: selectedUid, name: nextRiderName, saldo: increment(-cutAmount), updated_at: serverTimestamp(), ...window.tandaMutasi(ledgerRefCut.id, 'ADM order 16% · Terima Order (Dari Pending Manual)') }, { merge: true });
+
                         transaction.set(ledgerRefCut, { order_id: orderRef.id, rider_uid: selectedUid, rider_name: nextRiderName, amount: cutAmount, omset_order: (od.fee + (od.tambahan || 0)), type: 'auto_order', desc: 'Terima Order (Dari Pending Manual)', created_at: serverTimestamp() });
                         penandaAdm = { jumlah: cutAmount, rider_uid: selectedUid, ledger_id: ledgerRefCut.id, at: serverTimestamp() };
                     }
@@ -24124,7 +24123,7 @@
                             if (!sT.exists() || sT.data().status !== 'dibatalkan' || sT.data().tinjau) throw new Error('Sudah ditinjau admin lain');
                             if (kembali && sK.exists()) throw new Error('Potongan sudah pernah dikembalikan');
                             if (kembali && pot > 0) {
-                                trx.set(doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', ruid), { saldo: increment(pot) }, { merge: true });
+                                trx.set(doc(db, 'artifacts', P, 'public', 'data', 'rider_balances', ruid), { saldo: increment(pot), ...window.tandaMutasi(refKbl.id, 'Refund · order otomatis dibatalkan') }, { merge: true });
                                 trx.set(refKbl, { order_id: o.id, rider_uid: ruid, rider_name: String(o.rider_nama || '').slice(0, 60), amount: -pot, omset_order: -(Number(o.fee) || 0),
                                     type: 'refund_oto_batal', desc: ('Refund order otomatis dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider' : 'pelanggan')).slice(0, 80), created_at: serverTimestamp(), oto: true });
                             }
@@ -29246,7 +29245,8 @@
                     const logs = Array.isArray(b.edit_logs) ? b.edit_logs.slice() : [];
                     logs.unshift({action: d.jenis === 'saldo' ? 'Top Up Saldo' : 'Setor Tabungan', amount: d.nominal, prev: sebelum, now: sesudah, time: Date.now()});
                     const nama = b.name || d.namaRider;
-                    tx.set(balRef, {uid: d.uid, name: nama, saldo: sesudah, updated_at: fs.serverTimestamp(), edit_logs: logs.slice(0, 20)}, {merge: true});
+                    const tandaBulk = d.jenis === 'saldo' && typeof window.tandaMutasi === 'function' ? window.tandaMutasi('bulk_' + t.id, 'Top Up Saldo (daftar No ' + d.no + ')') : {};
+                    tx.set(balRef, Object.assign({uid: d.uid, name: nama, saldo: sesudah, updated_at: fs.serverTimestamp(), edit_logs: logs.slice(0, 20)}, tandaBulk), {merge: true});
                     if (d.jenis === 'saldo') {
                         tx.set(pd('riwayat_potongan', 'bulk_' + t.id), {rider_uid: d.uid, rider_name: nama, amount: -d.nominal, omset_order: 0, type: 'manual_add', desc: 'Top Up Saldo (daftar No ' + d.no + ')', created_at: fs.serverTimestamp(), sumber: 'daftar', tiket: t.id});
                         tx.set(pd('admin_config', 'daily_balance_tracker'), {top_up: fs.increment(d.nominal)}, {merge: true});
@@ -33753,12 +33753,14 @@
                 const u = kunciUtama ? per[kunciUtama] : { sebelum: null, sesudah: null, selisih: 0 };
                 const jenis = ['buat', 'ubah', 'hapus'].includes(d.jenis) ? d.jenis : 'ubah';
                 if (jenis === 'ubah' && !Object.keys(per).length) return null;   // yang berubah hanya nomor urut -> bukan mutasi uang
-                const besar = jenis === 'hapus' || Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR);
+                // (tahap 7) cek = hasil pemeriksaan server: saldo berubah tanpa catatan riwayat potongan yang cocok -> Perlu dicek
+                const cek = ['cocok', 'tanpa_catatan', 'catatan_hilang', 'beda_nominal', 'gagal_cek'].includes(d.cek) ? d.cek : '';
+                const besar = jenis === 'hapus' || (cek && cek !== 'cocok') || Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR);
                 return {
                     id, koleksi, jenis, per, kunciUtama, utama: u, besar,
                     dok: String(d.dok || '').slice(0, 64), uid: String(d.uid || '').toUpperCase().slice(0, 64),
                     nama: String(d.nama || '').slice(0, 60), oleh: String(d.oleh || '').slice(0, 120), olehTipe: String(d.oleh_tipe || '').slice(0, 40),
-                    alasan: String(d.alasan || '').slice(0, 120),
+                    alasan: String(d.alasan || '').slice(0, 120), cek,
                     t: ms(d.waktu), tanggal: POLA_TGL.test(d.tanggal || '') ? d.tanggal : '',
                 };
             }
@@ -33993,7 +33995,7 @@
                         w.appendChild(baris(o));
                     });
                 }
-                w.appendChild(el('p', 'pb-info', '⚠ Perlu dicek = perubahan Rp' + angka(BATAS_BESAR) + ' ke atas atau data yang dihapus. Catatan dibuat otomatis oleh server sejak 18 Nov 2026 dan tidak bisa diubah.'));
+                w.appendChild(el('p', 'pb-info', '⚠ Perlu dicek = perubahan Rp' + angka(BATAS_BESAR) + ' ke atas, data yang dihapus, atau saldo berubah tanpa catatan potongan yang cocok. Catatan dibuat otomatis oleh server sejak 18 Nov 2026 dan tidak bisa diubah.'));
             }
 
             // ---------- panel bawah ----------
@@ -34020,6 +34022,7 @@
                         if (o.ket.omset > 0) det('Ongkir order', 'Rp' + angka(o.ket.omset));
                     }
                     if (o.alasan) det('Alasan', o.alasan);
+                    if (o.cek) det('Pemeriksaan server', ({ cocok: '✓ Cocok dengan catatan potongan', tanpa_catatan: '⚠ Tanpa catatan potongan', catatan_hilang: '⚠ Catatan potongan tidak ditemukan', beda_nominal: '⚠ Nominal tidak sama dengan catatan', gagal_cek: '⚠ Belum bisa diperiksa' })[o.cek]);
                     det('Diubah oleh', o.oleh ? o.oleh + (o.oleh.toLowerCase() === EMAIL_PEMILIK ? ' (pemilik)' : '') : 'tidak diketahui');
                     det('Waktu (server)', (o.tanggal ? namaTgl(o.tanggal).replace(/^\w+, /, '') + ' · ' : '') + jamWIB(o.t, true) + ' WIB');
                     s.appendChild(el('p', 'pb-kecil', o.alasan || o.ket ? 'Catatan dibuat otomatis oleh server dan tidak bisa diubah.' + (o.ket && !o.alasan ? ' Keterangan diambil dari riwayat potongan rider pada waktu yang sama.' : '') : 'Catatan dibuat otomatis oleh server dan tidak bisa diubah. Perubahan ini ditulis langsung dari aplikasi, jadi alasannya belum tercatat (akan lengkap setelah semua operasi saldo pindah ke server).'));
