@@ -3606,7 +3606,8 @@
         <div class="ml-kat">
             <h3 class="ml-kat-h">Skema Tambahan</h3>
             <div class="grid grid-cols-3 gap-3">
-                <button onclick="switchPage('adm-tambahan')" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-rose-300 hover:shadow-md active:scale-95 transition-all group">
+                <!-- (19 Nov 2026) ADM Tambahan 4% DIHENTIKAN atas permintaan pemilik: tombol disembunyikan, kodenya tidak dijalankan -->
+                <button onclick="switchPage('adm-tambahan')" hidden style="display:none !important" data-adm4-mati="1" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-rose-300 hover:shadow-md active:scale-95 transition-all group">
                     <span id="adm4-dot-tile" class="hidden absolute top-2 right-2 bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full animate-pulse">BARU</span>
                     <i class="fa-solid fa-percent text-3xl text-rose-500 group-hover:scale-110 transition-transform"></i>
                     <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">ADM<br>Tambahan 4%</span>
@@ -17161,6 +17162,9 @@
         };
 
         window.mulaiAdmTambahan = () => {
+            // (19 Nov 2026) ADM Tambahan 4% DIHENTIKAN: tidak membaca pengaturan, tidak menghitung, tidak memotong, tidak ada pop up.
+            // Untuk menghidupkan lagi cukup hapus baris "return" di bawah ini.
+            return;
             if (adm4SudahMulai) return;
             adm4SudahMulai = true;
             onSnapshot(adm4SetRef(), (s) => {
@@ -17303,6 +17307,7 @@
             if (adm4Pin.length === 6) setTimeout(window.pinAdm4Cek, 120);
         };
         window.pinAdm4Cek = async () => {
+            if (true) { window.showAlert('Dihentikan', 'ADM Tambahan 4% sudah dihentikan.', 'info'); return; }   // (19 Nov 2026) fitur dimatikan
             if (adm4PinSibuk || adm4Pin.length !== 6) return;
             const benar = window.cekPinTransaksi(adm4Pin);
             adm4Pin = '';
@@ -20287,9 +20292,48 @@
 
                 } else if (tx.module === 'tabungan') {
                     const tabunganRef = doc(db, 'artifacts', firebaseConfig.projectId, 'public', 'data', 'rider_tabungan', tx.uid);
-                    
-                    if (tx.actionType === 'add') await setDoc(tabunganRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
-                    else if (tx.actionType === 'sub') await setDoc(tabunganRef, { uid: tx.uid, name: tx.name, saldo: increment(-tx.amount), updated_at: serverTimestamp(), edit_logs: logs }, { merge: true });
+                    // (19 Nov 2026, tahap 6) SETOR / TARIK TABUNGAN dijalankan SERVER (Cloud Function tabunganRider).
+                    // Tarik: server memeriksa password pemilik & sisa tabungan TERBARU. Anti dobel lewat kode transaksi
+                    // (rider_tabungan.idem_terakhir). Server tidak bisa dihubungi -> cara lama dalam satu transaksi (kode sama).
+                    if (!tx.idem) tx.idem = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+                    let tabServer = false;
+                    try {
+                        const tokenPemilik = tx.actionType === 'sub' && typeof window.pgTokenPemilik === 'function' ? await window.pgTokenPemilik() : '';
+                        const [{ getApp: ambilApp }, { getFunctions, httpsCallable }] = await Promise.all([
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js'),
+                            import('https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js')]);
+                        const fn = httpsCallable(getFunctions(ambilApp(), 'asia-southeast2'), 'tabunganRider', { timeout: 25000 });
+                        const r = await fn({ mode: tx.actionType === 'add' ? 'setor' : 'tarik', uid: tx.uid, amount: tx.amount, idem: tx.idem, nama: String(tx.name || '').slice(0, 60), tokenPemilik });
+                        const d = (r && r.data) || {};
+                        if (Number.isFinite(d.prev)) tx.current = d.prev;
+                        if (Number.isFinite(d.now)) tx.newSaldo = d.now;
+                        tabServer = true;
+                    } catch (eFn) {
+                        const kodeFn = String((eFn && eFn.code) || '');
+                        console.error('[Tabungan server]', eFn);
+                        if (['functions/invalid-argument', 'functions/permission-denied', 'functions/not-found', 'functions/unauthenticated', 'functions/failed-precondition'].includes(kodeFn)) {
+                            if (kodeFn === 'functions/permission-denied' && typeof window.owKunciSekarang === 'function' && /owner/i.test(String(eFn.message || ''))) window.owKunciSekarang();
+                            window.showAlert('Gagal', String(eFn.message || 'Transaksi tabungan ditolak server.'), 'error');
+                            return;
+                        }
+                    }
+                    if (!tabServer) {
+                        const hasilHp = await runTransaction(db, async (t) => {
+                            const s = await t.get(tabunganRef);
+                            const x = s.exists() ? s.data() : {};
+                            const idemLama = Array.isArray(x.idem_terakhir) ? x.idem_terakhir.filter(v => typeof v === 'string') : [];
+                            if (idemLama.includes(tx.idem)) return { sudah: true };   // ternyata sudah diproses server
+                            const prev = parseInt(x.saldo || 0, 10) || 0;
+                            if (tx.actionType === 'sub' && tx.amount > prev) return { kurang: prev };
+                            const now = tx.actionType === 'add' ? prev + tx.amount : prev - tx.amount;
+                            logs[0] = Object.assign({}, logs[0], { prev, now });
+                            t.set(tabunganRef, { uid: tx.uid, name: tx.name, saldo: increment(tx.actionType === 'add' ? tx.amount : -tx.amount), updated_at: serverTimestamp(), edit_logs: logs, idem_terakhir: [tx.idem].concat(idemLama).slice(0, 20) }, { merge: true });
+                            return { prev, now };
+                        });
+                        if (hasilHp.kurang !== undefined) { window.showAlert('Gagal', 'Nominal penarikan lebih besar dari tabungan (Rp ' + Number(hasilHp.kurang).toLocaleString('id-ID') + ').', 'warning'); return; }
+                        if (Number.isFinite(hasilHp.prev)) tx.current = hasilHp.prev;
+                        if (Number.isFinite(hasilHp.now)) tx.newSaldo = hasilHp.now;
+                    }
                     
                     const namaAman = window.escHtml(tx.name);
                     let successMsg = `Berhasil mengubah tabungan ${namaAman}.`;
