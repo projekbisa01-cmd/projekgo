@@ -3715,6 +3715,11 @@
                     <!-- (20 Nov 2026) lencana merah: catatan baru "Perlu dicek" sejak Buku Mutasi terakhir dibuka di HP ini -->
                     <span id="bm-badge-menu" class="absolute top-1.5 left-1.5 bg-red-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full hidden shadow-sm border border-white" aria-label="Catatan perlu dicek">0</span>
                 </button>
+                <!-- (20 Nov 2026) Nota PDF: buat nota/invoice pengantaran berbentuk PDF untuk pelanggan -->
+                <button type="button" id="btn-menu-nota" onclick="window.npBuka && window.npBuka()" class="relative bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center justify-center aspect-square gap-2 hover:border-red-300 hover:shadow-md active:scale-95 transition-all group">
+                    <i class="fa-solid fa-file-pdf text-3xl text-red-500 group-hover:scale-110 transition-transform"></i>
+                    <span class="text-[9px] font-black uppercase tracking-wider text-slate-600 text-center leading-tight mt-1">Nota<br>PDF</span>
+                </button>
             </div>
         </div>
 
@@ -34465,5 +34470,423 @@
         })();
     </script>
     <!-- ===================== AKHIR PENGINGAT JAM ORDER PENDING ===================== -->
+    <!-- ===================== NOTA PDF (20 Nov 2026) =====================
+         Menu Lainnya > Keuangan > Nota PDF. Membuat nota/invoice pengantaran berbentuk PDF (A4) seperti contoh invoice Canva.
+         - Nomor otomatis "Delivery/(bulan)/(tahun)" mengikuti tanggal yang dipilih (dropdown tanggal, bulan, tahun).
+         - "Kepada" diisi bebas, metode pembayaran dipilih, rincian bisa sampai 5 baris, diskon opsional.
+         - PDF dibuat langsung di HP (gambar A4 200 dpi dibungkus jadi PDF), TANPA library luar dan TANPA menyimpan apa pun ke Firebase.
+         - Logo & stempel diambil dari link i.ibb.co. Bila link gagal dipakai, admin bisa memilih gambar dari HP (disimpan di HP ini saja). -->
+    <style>
+        #np-layar { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; background: #FFFFFF; color: #2A2018; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+        #np-layar[hidden] { display: none; }
+        #np-layar button, #np-layar select, #np-layar input { font-family: inherit; }
+        #np-layar button { cursor: pointer; }
+        .np-blok { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }
+        .np-tgl { display: grid; grid-template-columns: 1fr 1.8fr 1.3fr; gap: 8px; }
+        .np-sel { height: 48px; border-radius: 12px; border: 1.5px solid #D9CFC2; background: #FFFFFF; padding: 0 10px; font-size: 15px; font-weight: 700; color: #2A2018; width: 100%; box-sizing: border-box; }
+        .np-sel:focus, .np-in2:focus { outline: 2px solid #C2410C; outline-offset: 1px; border-color: #C2410C; }
+        .np-nomor { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-radius: 12px; background: #F5EFE7; font-size: 14px; font-weight: 800; }
+        .np-nomor small { font-size: 11.5px; font-weight: 700; color: #6B5E52; }
+        .np-baris { border: 1.5px solid #EEE7DE; border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+        .np-baris-k { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 800; color: #6B5E52; }
+        .np-hapus { border: 0; background: transparent; color: #B42318; font-size: 12.5px; font-weight: 800; min-height: 36px; padding: 0 6px; }
+        .np-dua { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; }
+        .np-in2 { height: 46px; border-radius: 12px; border: 1.5px solid #D9CFC2; background: #FFFFFF; padding: 0 12px; font-size: 15px; font-weight: 700; color: #2A2018; width: 100%; box-sizing: border-box; }
+        .np-tambah { min-height: 46px; border-radius: 12px; border: 1.5px dashed #D9CFC2; background: #FFFFFF; color: #4A3F35; font-size: 13.5px; font-weight: 800; }
+        .np-tambah[hidden] { display: none; }
+        .np-ring { margin-top: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+        .np-ring div { display: flex; justify-content: space-between; }
+        .np-ring .np-tot { font-size: 18px; font-weight: 800; border-top: 1.5px solid #2A2018; padding-top: 8px; margin-top: 4px; }
+        .np-gbr { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 700; color: #4A3F35; }
+        .np-gbr div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .np-gbr .ok { color: #15803D; } .np-gbr .gagal { color: #B42318; }
+        .np-gbr button { border: 1.5px solid #D9CFC2; background: #FFFFFF; border-radius: 999px; font-size: 11.5px; font-weight: 800; padding: 6px 12px; color: #4A3F35; }
+        .np-pratinjau { margin-top: 20px; }
+        .np-pratinjau canvas { width: 100%; height: auto; display: block; border-radius: 6px; box-shadow: 0 2px 14px rgba(42,32,24,.18); background: #F4F5F3; }
+        .np-aksi { position: sticky; bottom: 0; background: #FFFFFF; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); display: flex; gap: 10px; border-top: 1px solid #EEE7DE; margin-top: 18px; }
+        .np-aksi .pb-btn { flex: 2; } .np-aksi .pb-btn2 { flex: 1.3; }
+        .np-aksi [hidden] { display: none; }
+    </style>
+
+    <section id="np-layar" hidden aria-label="Nota PDF">
+        <div class="pb-kepala">
+            <button type="button" class="pb-ikon" id="np-tutup" aria-label="Kembali ke Menu Lainnya"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            <b>Nota PDF</b>
+        </div>
+        <div class="pb-isi">
+            <div class="pb-wadah">
+                <form id="np-form" autocomplete="off" novalidate>
+                    <div class="np-blok">
+                        <span class="pb-lbl">Tanggal</span>
+                        <div class="np-tgl">
+                            <select class="np-sel" id="np-hari" aria-label="Tanggal"></select>
+                            <select class="np-sel" id="np-bulan" aria-label="Bulan"></select>
+                            <select class="np-sel" id="np-tahun" aria-label="Tahun"></select>
+                        </div>
+                        <span class="pb-kecil" id="np-tgl-teks"></span>
+                    </div>
+                    <div class="np-blok">
+                        <span class="pb-lbl">Nomor</span>
+                        <div class="np-nomor"><span id="np-nomor">Delivery/01/2026</span><small>otomatis dari tanggal</small></div>
+                    </div>
+                    <div class="np-blok">
+                        <label class="pb-lbl" for="np-kepada">Kepada</label>
+                        <input class="pb-in" id="np-kepada" type="text" maxlength="60" placeholder="Contoh: Apotek K24" autocapitalize="words">
+                    </div>
+                    <div class="np-blok">
+                        <label class="pb-lbl" for="np-metode">Metode pembayaran</label>
+                        <select class="np-sel" id="np-metode">
+                            <option>Cash</option>
+                            <option>Transfer</option>
+                            <option>QRIS</option>
+                        </select>
+                    </div>
+                    <div class="np-blok">
+                        <span class="pb-lbl">Rincian</span>
+                        <div id="np-daftar" style="display:flex;flex-direction:column;gap:10px"></div>
+                        <button type="button" class="np-tambah" id="np-tambah">+ Tambah baris</button>
+                    </div>
+                    <div class="np-blok">
+                        <label class="pb-lbl" for="np-diskon">Diskon (boleh kosong)</label>
+                        <input class="pb-in" id="np-diskon" type="text" inputmode="numeric" maxlength="13" placeholder="Rp 0">
+                    </div>
+                    <div class="np-ring" aria-live="polite">
+                        <div><span>Sub total</span><b id="np-sub">Rp 0</b></div>
+                        <div><span>Diskon</span><b id="np-dis">-</b></div>
+                        <div class="np-tot"><span>Total</span><span id="np-total">Rp 0</span></div>
+                    </div>
+                    <div class="np-gbr" id="np-gbr"></div>
+                    <input type="file" id="np-file" accept="image/png,image/jpeg,image/webp" hidden>
+                    <p class="pb-salah" id="np-salah" role="alert"></p>
+                    <div class="np-pratinjau"><span class="pb-lbl">Pratinjau</span><canvas id="np-kanvas" width="1654" height="2339" aria-label="Pratinjau nota"></canvas></div>
+                    <div class="np-aksi">
+                        <button type="button" class="pb-btn2" id="np-bagikan" hidden><i class="fa-brands fa-whatsapp" aria-hidden="true"></i> Bagikan</button>
+                        <button type="submit" class="pb-btn" id="np-unduh"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i> Unduh PDF</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        (function notaPdf() {
+            const URL_GAMBAR = {
+                logo: 'https://i.ibb.co.com/SDHXzKyX/Desain-tanpa-judul-77.png',
+                stempel: 'https://i.ibb.co.com/tPw1v6Ks/Makanan-Nusantara-INDONESIA.png'
+            };
+            const NAMA_GAMBAR = { logo: 'Logo PROJEKGO', stempel: 'Stempel' };
+            const SIMPAN_GAMBAR = 'np_gambar_';          // + logo / stempel (cadangan pilihan dari HP)
+            const MAKS_BARIS = 5, MAKS_HARGA = 999999999;
+            const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const FONT = '"Plus Jakarta Sans", system-ui, sans-serif';
+            const A4 = { w: 595.28, h: 841.89 }, PX_W = 1654, PX_H = 2339, S = PX_W / A4.w;   // 200 dpi
+            const $ = (id) => document.getElementById(id);
+            const el = (tag, cls, teks) => { const e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; };
+            const angka = (v) => { const n = parseInt(String(v || '').replace(/\D/g, '').slice(0, 10), 10); return Number.isFinite(n) ? Math.min(n, MAKS_HARGA) : 0; };
+            const rp = (n) => 'Rp ' + Math.round(n).toLocaleString('id-ID');
+
+            const gbr = { logo: { img: null, st: 'belum', dari: '' }, stempel: { img: null, st: 'belum', dari: '' } };
+            let baris = [], timerGambar = null, pdfTerakhir = null;
+
+            /* ---------- tanggal (dropdown) ---------- */
+            function isiTanggal() {
+                const n = new Date();
+                const th = $('np-tahun'), bl = $('np-bulan');
+                th.textContent = ''; bl.textContent = '';
+                for (let y = n.getFullYear() - 1; y <= n.getFullYear() + 1; y++) { const o = el('option', '', String(y)); o.value = String(y); th.appendChild(o); }
+                BLN.forEach((b, i) => { const o = el('option', '', b); o.value = String(i + 1); bl.appendChild(o); });
+                th.value = String(n.getFullYear()); bl.value = String(n.getMonth() + 1);
+                isiHari(n.getDate());
+            }
+            function isiHari(pilih) {
+                const y = +$('np-tahun').value, m = +$('np-bulan').value, h = $('np-hari');
+                const maks = new Date(y, m, 0).getDate();
+                const tadi = pilih || +h.value || 1;
+                h.textContent = '';
+                for (let d = 1; d <= maks; d++) { const o = el('option', '', String(d)); o.value = String(d); h.appendChild(o); }
+                h.value = String(Math.min(tadi, maks));
+            }
+            function tglDipilih() {
+                const y = +$('np-tahun').value, m = +$('np-bulan').value, d = +$('np-hari').value;
+                return { y, m, d, teks: HARI[new Date(y, m - 1, d).getDay()] + ', ' + d + ' ' + BLN[m - 1] + ' ' + y, nomor: 'Delivery/' + String(m).padStart(2, '0') + '/' + y };
+            }
+
+            /* ---------- rincian ---------- */
+            function barisBaru() { return { desk: 'Pengantaran via PROJEKGO', qty: '1', harga: '' }; }
+            function gambarDaftar() {
+                const w = $('np-daftar'); w.textContent = '';
+                baris.forEach((b, i) => {
+                    const kotak = el('div', 'np-baris');
+                    const k = el('div', 'np-baris-k'); k.appendChild(el('span', '', 'Baris ' + (i + 1)));
+                    if (baris.length > 1) {
+                        const h = el('button', 'np-hapus', 'Hapus'); h.type = 'button'; h.setAttribute('aria-label', 'Hapus baris ' + (i + 1));
+                        h.onclick = () => { baris.splice(i, 1); gambarDaftar(); berubah(); };
+                        k.appendChild(h);
+                    }
+                    const ds = el('input', 'np-in2'); ds.type = 'text'; ds.maxLength = 60; ds.value = b.desk; ds.placeholder = 'Deskripsi'; ds.setAttribute('aria-label', 'Deskripsi baris ' + (i + 1));
+                    ds.oninput = () => { b.desk = ds.value; berubah(); };
+                    const dua = el('div', 'np-dua');
+                    const q = el('input', 'np-in2'); q.type = 'text'; q.inputMode = 'numeric'; q.maxLength = 4; q.value = b.qty; q.placeholder = 'Jumlah'; q.setAttribute('aria-label', 'Jumlah baris ' + (i + 1));
+                    q.oninput = () => { q.value = q.value.replace(/\D/g, ''); b.qty = q.value; berubah(); };
+                    const hg = el('input', 'np-in2'); hg.type = 'text'; hg.inputMode = 'numeric'; hg.maxLength = 13; hg.value = b.harga ? rp(angka(b.harga)) : ''; hg.placeholder = 'Harga (Rp)'; hg.setAttribute('aria-label', 'Harga baris ' + (i + 1));
+                    hg.oninput = () => { const n = angka(hg.value); b.harga = n ? String(n) : ''; hg.value = n ? rp(n) : ''; berubah(); };
+                    dua.append(q, hg);
+                    kotak.append(k, ds, dua);
+                    w.appendChild(kotak);
+                });
+                $('np-tambah').hidden = baris.length >= MAKS_BARIS;
+            }
+            function hitung() {
+                const isi = baris.map((b) => { const q = angka(b.qty), h = angka(b.harga); return { desk: String(b.desk || '').trim(), q, h, t: (q || 1) * h }; })
+                    .filter((b) => b.desk || b.h);
+                const sub = isi.reduce((s, b) => s + b.t, 0);
+                const dis = Math.min(angka($('np-diskon').value), sub);
+                return { isi, sub, dis, total: sub - dis };
+            }
+            function berubah() {
+                const t = tglDipilih(), h = hitung();
+                $('np-tgl-teks').textContent = t.teks;
+                $('np-nomor').textContent = t.nomor;
+                $('np-sub').textContent = rp(h.sub);
+                $('np-dis').textContent = h.dis ? '- ' + rp(h.dis) : '-';
+                $('np-total').textContent = rp(h.total);
+                $('np-salah').textContent = '';
+                pdfTerakhir = null;
+                clearTimeout(timerGambar); timerGambar = setTimeout(gambarNota, 250);
+            }
+
+            /* ---------- gambar logo & stempel ---------- */
+            function muatSatu(src, pakaiCors) {
+                return new Promise((res) => {
+                    const im = new Image();
+                    if (pakaiCors) im.crossOrigin = 'anonymous';
+                    im.referrerPolicy = 'no-referrer';
+                    im.onload = () => res(im); im.onerror = () => res(null);
+                    im.src = src;
+                });
+            }
+            function bersih(im) {   // gambar boleh dipakai di PDF bila kanvas tidak "tercemar"
+                try { const c = document.createElement('canvas'); c.width = c.height = 2; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 2, 2); x.getImageData(0, 0, 1, 1); return true; } catch (e) { return false; }
+            }
+            async function muatGambar(k) {
+                const g = gbr[k]; g.st = 'muat'; gambarStatus();
+                let im = await muatSatu(URL_GAMBAR[k], true);
+                if (im && bersih(im)) { g.img = im; g.st = 'ok'; g.dari = 'link'; }
+                else {
+                    let simpan = ''; try { simpan = localStorage.getItem(SIMPAN_GAMBAR + k) || ''; } catch (e) {}
+                    im = /^data:image\/(png|jpeg|webp);base64,/.test(simpan) ? await muatSatu(simpan, false) : null;
+                    if (im) { g.img = im; g.st = 'ok'; g.dari = 'hp'; } else { g.img = null; g.st = 'gagal'; g.dari = ''; }
+                }
+                gambarStatus(); berubah();
+            }
+            let pilihUntuk = '';
+            function gambarStatus() {
+                const w = $('np-gbr'); w.textContent = '';
+                Object.keys(gbr).forEach((k) => {
+                    const g = gbr[k], r = el('div');
+                    const t = el('span', g.st === 'ok' ? 'ok' : (g.st === 'gagal' ? 'gagal' : ''),
+                        NAMA_GAMBAR[k] + ': ' + (g.st === 'ok' ? 'siap ✓' + (g.dari === 'hp' ? ' (dari HP ini)' : '') : g.st === 'gagal' ? 'gagal dimuat dari link' : 'memuat…'));
+                    r.appendChild(t);
+                    if (g.st === 'gagal' || g.dari === 'hp') {
+                        const b = el('button', '', g.st === 'gagal' ? 'Pilih dari HP' : 'Ganti'); b.type = 'button';
+                        b.onclick = () => { pilihUntuk = k; $('np-file').value = ''; $('np-file').click(); };
+                        r.appendChild(b);
+                    }
+                    w.appendChild(r);
+                });
+            }
+            $('np-file').addEventListener('change', async () => {
+                const f = $('np-file').files && $('np-file').files[0], k = pilihUntuk;
+                if (!f || !gbr[k]) return;
+                if (!/^image\/(png|jpeg|webp)$/.test(f.type) || f.size > 8 * 1024 * 1024) { $('np-salah').textContent = 'Pilih gambar PNG/JPG maksimal 8 MB.'; return; }
+                const url = URL.createObjectURL(f);
+                const im = await muatSatu(url, false);
+                URL.revokeObjectURL(url);
+                if (!im) { $('np-salah').textContent = 'Gambar tidak bisa dibaca.'; return; }
+                const sk = Math.min(1, 800 / Math.max(im.naturalWidth, im.naturalHeight));   // kecilkan agar muat di penyimpanan HP
+                const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * sk)); c.height = Math.max(1, Math.round(im.naturalHeight * sk));
+                c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+                const data = c.toDataURL('image/png');
+                try { localStorage.setItem(SIMPAN_GAMBAR + k, data); } catch (e) {}
+                gbr[k].img = await muatSatu(data, false); gbr[k].st = gbr[k].img ? 'ok' : 'gagal'; gbr[k].dari = 'hp';
+                gambarStatus(); berubah();
+            });
+
+            /* ---------- menggambar nota (satuan pt, A4) ---------- */
+            function teks(x, s, xx, yy, font, warna, rata, spasi) {
+                x.font = font; x.fillStyle = warna || '#1D2630'; x.textAlign = rata || 'left'; x.textBaseline = 'alphabetic';
+                if ('letterSpacing' in x) x.letterSpacing = spasi || '0px';
+                x.fillText(s, xx, yy);
+                if ('letterSpacing' in x) x.letterSpacing = '0px';
+            }
+            function garis(x, x1, y1, x2, y2, tebal, warna) { x.beginPath(); x.moveTo(x1, y1); x.lineTo(x2, y2); x.lineWidth = tebal; x.strokeStyle = warna || '#1D2630'; x.stroke(); }
+            function pecah(x, s, lebar, maksBaris) {   // bungkus teks per kata
+                const kata = String(s).split(/\s+/).filter(Boolean), hasil = [];
+                let cur = '';
+                kata.forEach((w) => { const coba = cur ? cur + ' ' + w : w; if (x.measureText(coba).width <= lebar || !cur) cur = coba; else { hasil.push(cur); cur = w; } });
+                if (cur) hasil.push(cur);
+                if (hasil.length > maksBaris) { hasil.length = maksBaris; hasil[maksBaris - 1] = hasil[maksBaris - 1].replace(/.{0,2}$/, '…'); }
+                return hasil.length ? hasil : [''];
+            }
+            function pasGambar(x, im, bx, by, bw, bh) {
+                const r = Math.min(bw / im.naturalWidth, bh / im.naturalHeight), w = im.naturalWidth * r, h = im.naturalHeight * r;
+                x.drawImage(im, bx + (bw - w) / 2, by + (bh - h) / 2, w, h);
+            }
+            function gambarNota() {
+                const c = $('np-kanvas'), x = c.getContext('2d');
+                const t = tglDipilih(), h = hitung();
+                x.setTransform(1, 0, 0, 1, 0, 0);
+                x.fillStyle = '#F4F5F3'; x.fillRect(0, 0, PX_W, PX_H);
+                x.setTransform(S, 0, 0, S, 0, 0);
+                const GELAP = '#1D2630', F = (b, u) => b + ' ' + u + 'px ' + FONT;
+
+                // kotak gelap + logo (kanan atas)
+                const kx = 389, kw = 152, kh = 178, r = 18;
+                x.fillStyle = GELAP; x.beginPath();
+                x.moveTo(kx, 0); x.lineTo(kx + kw, 0); x.lineTo(kx + kw, kh - r); x.quadraticCurveTo(kx + kw, kh, kx + kw - r, kh);
+                x.lineTo(kx + r, kh); x.quadraticCurveTo(kx, kh, kx, kh - r); x.closePath(); x.fill();
+                if (gbr.logo.img) pasGambar(x, gbr.logo.img, kx + 10, 10, kw - 20, kh - 22);
+
+                // judul
+                let uj = 54; x.font = F(800, uj); while (x.measureText('INVOICE').width + 30 > 320 && uj > 30) { uj -= 2; x.font = F(800, uj); }
+                teks(x, 'INVOICE', 46, 94, F(800, uj), GELAP, 'left', '5px');
+                teks(x, 'Nomor :', 57, 131, F(500, 12), GELAP); teks(x, t.nomor, 121, 131, F(500, 12.5), GELAP);
+                teks(x, 'Tanggal :', 57, 154, F(700, 12.5), GELAP); teks(x, t.teks, 124, 154, F(500, 12.5), GELAP);
+
+                // kepada & metode
+                teks(x, 'Kepada :', 60, 213, F(500, 11), GELAP);
+                x.font = F(500, 15); pecah(x, ($('np-kepada').value || '').trim() || '-', 290, 2).forEach((s, i) => teks(x, s, 60, 234 + i * 18, F(500, 15), GELAP));
+                teks(x, 'Metode Pembayaran', 530, 215, F(500, 12.5), GELAP, 'right');
+                teks(x, $('np-metode').value, 530, 238, F(500, 12.5), GELAP, 'right');
+
+                // tabel
+                const X0 = 57, X1 = 536, C = { no: 80, desk: 122, qty: 294, harga: 386, tot: 486 };
+                garis(x, X0, 307, X1, 307, 2, GELAP);
+                [['NO', C.no, 'center'], ['DESKRIPSI', 128, 'left'], ['JUMLAH', C.qty, 'center'], ['HARGA', C.harga, 'center'], ['TOTAL', C.tot, 'center']]
+                    .forEach(([s, xx, a]) => teks(x, s, xx, 331, F(800, 10.5), GELAP, a));
+                garis(x, X0, 353, X1, 353, 2, GELAP);
+                let y = 353;
+                const isi = h.isi.length ? h.isi : [{ desk: '', q: 0, h: 0, t: 0 }];
+                isi.forEach((b, i) => {
+                    x.font = F(500, 10.5);
+                    const ls = pecah(x, b.desk || '-', 146, 2);
+                    const tinggi = 34 + (ls.length - 1) * 14, by = y + 29;
+                    teks(x, String(i + 1), C.no, by, F(500, 12), GELAP, 'center');
+                    ls.forEach((s, j) => teks(x, s, C.desk, by + j * 14, F(500, 10.5), GELAP));
+                    teks(x, b.q ? String(b.q) : '-', C.qty, by, F(500, 10.5), GELAP, 'center');
+                    teks(x, b.h ? rp(b.h) : '-', C.harga, by, F(500, 10.5), GELAP, 'center');
+                    teks(x, b.h ? rp(b.t) : '-', C.tot, by, F(500, 10.5), GELAP, 'center');
+                    y += tinggi;
+                });
+                garis(x, 46, y + 8, 523, y + 8, 1, '#5B6168');
+
+                // stempel (di bawah teks total)
+                const T = Math.max(590, y + 50);
+                if (gbr.stempel.img) { x.save(); x.globalAlpha = 0.92; pasGambar(x, gbr.stempel.img, 262, T - 30, 140, 140); x.restore(); }
+
+                // total
+                teks(x, 'Sub Total', 349, T + 13, F(500, 13), GELAP);
+                const vs = rp(h.sub); teks(x, vs, 527, T + 13, F(600, 13), GELAP, 'right');
+                x.font = F(600, 13); garis(x, 527 - x.measureText(vs).width, T + 16, 527, T + 16, 0.8, GELAP);
+                teks(x, 'Diskon', 349, T + 33, F(500, 11), GELAP);
+                teks(x, h.dis ? '- ' + rp(h.dis) : '-', h.dis ? 527 : 512, T + 33, F(600, 12), GELAP, 'right');
+                garis(x, 333, T + 52, 535, T + 52, 2, GELAP);
+                teks(x, 'Total', 345, T + 90, F(700, 17), GELAP);
+                const vt = rp(h.total); teks(x, vt, 535, T + 90, F(800, 18), GELAP, 'right');
+                x.font = F(800, 18); garis(x, 535 - x.measureText(vt).width, T + 94, 535, T + 94, 1, GELAP);
+                garis(x, 340, T + 107, 522, T + 107, 1.5, GELAP);
+
+                // penutup
+                const P = Math.max(740, T + 150);
+                teks(x, 'TERIMA KASIH !', 58, P, F(800, 26), GELAP, 'left', '1px');
+                teks(x, 'sudah mempercayakan pengantaran melalui PROJEKGO', 59, P + 27, F(500, 12.5), GELAP);
+                x.setTransform(1, 0, 0, 1, 0, 0);
+            }
+
+            /* ---------- PDF: gambar JPEG dibungkus jadi 1 halaman A4 (tanpa library) ---------- */
+            function pdfDariJpeg(jpg, wPx, hPx, judul) {
+                const enc = new TextEncoder(), bagian = [], letak = [];
+                let pjg = 0;
+                const tulis = (v) => { const b = typeof v === 'string' ? enc.encode(v) : v; bagian.push(b); pjg += b.length; };
+                const obj = (n, isi) => { letak[n] = pjg; tulis(n + ' 0 obj\n'); isi(); tulis('\nendobj\n'); };
+                const W = A4.w.toFixed(2), H = A4.h.toFixed(2);
+                const aman = String(judul).replace(/[^\x20-\x7E]/g, '').replace(/[()\\]/g, '').slice(0, 80);
+                tulis('%PDF-1.4\n%âãÏÓ\n');
+                obj(1, () => tulis('<< /Type /Catalog /Pages 2 0 R >>'));
+                obj(2, () => tulis('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'));
+                obj(3, () => tulis('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] /Resources << /XObject << /Im0 4 0 R >> /ProcSet [/PDF /ImageC] >> /Contents 5 0 R >>'));
+                obj(4, () => { tulis('<< /Type /XObject /Subtype /Image /Width ' + wPx + ' /Height ' + hPx + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpg.length + ' >>\nstream\n'); tulis(jpg); tulis('\nendstream'); });
+                const isi = 'q ' + W + ' 0 0 ' + H + ' 0 0 cm /Im0 Do Q';
+                obj(5, () => tulis('<< /Length ' + isi.length + ' >>\nstream\n' + isi + '\nendstream'));
+                obj(6, () => tulis('<< /Title (' + aman + ') /Producer (PROJEKGO Admin) >>'));
+                const xref = pjg;
+                let x = 'xref\n0 7\n0000000000 65535 f \n';
+                for (let n = 1; n <= 6; n++) x += String(letak[n]).padStart(10, '0') + ' 00000 n \n';
+                tulis(x + 'trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+                return new Blob(bagian, { type: 'application/pdf' });
+            }
+            async function buatPdf() {
+                const kepada = ($('np-kepada').value || '').trim(), h = hitung();
+                if (!kepada) { $('np-salah').textContent = 'Isi dulu kolom "Kepada".'; $('np-kepada').focus(); return null; }
+                if (!h.isi.some((b) => b.h > 0)) { $('np-salah').textContent = 'Isi harga minimal di satu baris rincian.'; return null; }
+                if (pdfTerakhir) return pdfTerakhir;
+                clearTimeout(timerGambar); gambarNota();
+                const blob = await new Promise((res) => { try { $('np-kanvas').toBlob(res, 'image/jpeg', 0.92); } catch (e) { res(null); } });
+                if (!blob) { $('np-salah').textContent = 'PDF gagal dibuat. Coba pilih logo/stempel dari HP lalu ulangi.'; return null; }
+                const jpg = new Uint8Array(await blob.arrayBuffer());
+                const t = tglDipilih();
+                const nm = kepada.replace(/[^A-Za-z0-9 _-]/g, '').trim().replace(/\s+/g, '_').slice(0, 40) || 'Pelanggan';
+                const namaFile = 'Nota_' + nm + '_' + t.y + '-' + String(t.m).padStart(2, '0') + '-' + String(t.d).padStart(2, '0') + '.pdf';
+                const pdf = pdfDariJpeg(jpg, PX_W, PX_H, 'Nota ' + t.nomor + ' - ' + kepada);
+                pdfTerakhir = { pdf, namaFile };
+                return pdfTerakhir;
+            }
+
+            /* ---------- buka / tutup / tombol ---------- */
+            let pernahBuka = false;
+            window.npBuka = async () => {
+                $('np-layar').hidden = false; document.body.style.overflow = 'hidden';
+                if (!pernahBuka) {
+                    pernahBuka = true;
+                    isiTanggal(); baris = [barisBaru()]; gambarDaftar(); berubah();
+                    try { await Promise.race([Promise.all([500, 600, 700, 800].map((w) => document.fonts.load(w + ' 16px "Plus Jakarta Sans"'))), new Promise((r) => setTimeout(r, 3000))]); } catch (e) {}
+                    berubah();
+                    muatGambar('logo'); muatGambar('stempel');
+                } else berubah();
+                try { const f = new File([new Uint8Array(1)], 'a.pdf', { type: 'application/pdf' }); $('np-bagikan').hidden = !(navigator.canShare && navigator.canShare({ files: [f] })); } catch (e) { $('np-bagikan').hidden = true; }
+            };
+            $('np-tutup').addEventListener('click', () => { $('np-layar').hidden = true; document.body.style.overflow = ''; });
+            $('np-tambah').addEventListener('click', () => { if (baris.length < MAKS_BARIS) { baris.push(barisBaru()); gambarDaftar(); berubah(); } });
+            $('np-tahun').addEventListener('change', () => { isiHari(); berubah(); });
+            $('np-bulan').addEventListener('change', () => { isiHari(); berubah(); });
+            $('np-hari').addEventListener('change', berubah);
+            $('np-metode').addEventListener('change', berubah);
+            $('np-kepada').addEventListener('input', berubah);
+            $('np-diskon').addEventListener('input', () => { const d = $('np-diskon'), n = angka(d.value); d.value = n ? rp(n) : ''; berubah(); });
+            $('np-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const b = $('np-unduh'); if (b.disabled) return;
+                b.disabled = true;
+                try {
+                    const p = await buatPdf(); if (!p) return;
+                    const url = URL.createObjectURL(p.pdf), a = document.createElement('a');
+                    a.href = url; a.download = p.namaFile; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                } finally { b.disabled = false; }
+            });
+            $('np-bagikan').addEventListener('click', async () => {
+                const b = $('np-bagikan'); if (b.disabled) return;
+                b.disabled = true;
+                try {
+                    const p = await buatPdf(); if (!p) return;
+                    const f = new File([p.pdf], p.namaFile, { type: 'application/pdf' });
+                    await navigator.share({ files: [f], title: p.namaFile });
+                } catch (er) { if (!er || er.name !== 'AbortError') $('np-salah').textContent = 'Gagal membagikan. Pakai tombol Unduh PDF lalu kirim lewat WhatsApp.'; }
+                finally { b.disabled = false; }
+            });
+        })();
+    </script>
+    <!-- ===================== AKHIR NOTA PDF ===================== -->
 </body>
 </html>
