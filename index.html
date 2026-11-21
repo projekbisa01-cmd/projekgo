@@ -1329,6 +1329,17 @@
         /* (21 Nov 2026) Nama barang: kolom ikut memanjang ke bawah sesuai panjang teks (tidak terpotong) */
         .nt-g2 { align-items: start; }
         .nt-tambah .nt-g2 { grid-template-columns: 1fr; }   /* pilihan B: Nama barang selebar kartu, Harga di bawahnya */
+        /* (21 Nov 2026) Jumlah + Total harga; harga per pcs dihitung otomatis */
+        .nt-qh { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 10px; align-items: end; }
+        .nt-qty { display: flex; align-items: stretch; height: 48px; border: 1.5px solid #E5DCCF; border-radius: 12px; background: #fff; overflow: hidden; }
+        .nt-qty:focus-within { border-color: #EA580C; }
+        .nt-qb { width: 40px; flex: none; border: 0; background: #FFF4EC; color: #C2410C; font-size: 22px; font-weight: 800; cursor: pointer; font-family: inherit; }
+        .nt-qb:active { background: #FFE2CC; }
+        .nt-in.nt-qty-in { flex: 1; min-width: 0; width: 100%; height: 100%; border: 0; border-radius: 0; text-align: center; font-weight: 800; font-size: 16px; padding: 0 2px; outline: none; }
+        .nt-pcs { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; font-size: 13px; font-weight: 700; }
+        .nt-pcs[hidden] { display: none; }
+        .nt-row .n.titik { background: none; border: 0; width: 14px; min-width: 14px; height: auto; font-size: 22px; line-height: 1; color: #EA580C; align-self: flex-start; margin-top: 2px; }
+        .nt-row .t .q { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 600; color: #78716C; }
         .nt-in.nt-nama-in { display: block; height: 48px; white-space: pre-wrap; text-overflow: ellipsis; min-height: 48px; padding: 12px; line-height: 1.35; resize: none; overflow: hidden; font-family: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
         .nt-in:focus { outline: 2px solid #EA580C; outline-offset: 1px; border-color: #EA580C; }
         .nt-kanan { text-align: right; }
@@ -2592,7 +2603,8 @@
             if (teks.indexOf(AWAL + '\n') !== 0) return null;
             var h = { items: [], ongkir: 0, extra: 0, total: null, catatan: '' }, m;
             teks.split('\n').slice(1).forEach(function (b) {
-                if ((m = /^(\d{1,3})\. (.{1,80}): Rp ([\d.]{1,15})$/.exec(b))) h.items.push({ nama: m[2], harga: angka(m[3]) });
+                if ((m = /^- (.{1,80}?)(?: \((\d{1,3}) x Rp ([\d.]{1,15})\))?: Rp ([\d.]{1,15})$/.exec(b))) h.items.push({ nama: m[1], qty: m[2] ? Math.max(1, parseInt(m[2], 10) || 1) : 1, satuan: m[3] ? angka(m[3]) : 0, harga: angka(m[4]) });   // (21 Nov 2026) format baru
+                else if ((m = /^(\d{1,3})\. (.{1,80}): Rp ([\d.]{1,15})$/.exec(b))) h.items.push({ nama: m[2], qty: 1, satuan: 0, harga: angka(m[3]) });   // format lama
                 else if ((m = /^Ongkir: Rp ([\d.]{1,15})$/.exec(b))) h.ongkir = angka(m[1]);
                 else if ((m = /^Tambahan: Rp ([\d.]{1,15})$/.exec(b))) h.extra = angka(m[1]);
                 else if ((m = /^TOTAL: Rp ([\d.]{1,15})$/.exec(b))) h.total = angka(m[1]);
@@ -2605,9 +2617,13 @@
         function kartu(teks) {
             var h = baca(teks), k = el('div', 'pg-nota-k');
             if (!h) { k.textContent = String(teks || ''); return k; }
-            var a = el('div', 'pg-nota-h'); a.appendChild(el('span', '', '🧾 NOTA PROJEKGO')); a.appendChild(el('span', '', h.items.length + ' barang')); k.appendChild(a);
+            var jml = h.items.reduce(function (t, it) { return t + (it.qty || 1); }, 0);
+            var a = el('div', 'pg-nota-h'); a.appendChild(el('span', '', '🧾 NOTA PROJEKGO')); a.appendChild(el('span', '', jml + ' barang')); k.appendChild(a);
             var isi = el('div', 'pg-nota-i');
-            h.items.forEach(function (it, i) { isi.appendChild(baris((i + 1) + '. ' + it.nama, rp(it.harga))); });
+            h.items.forEach(function (it) {
+                isi.appendChild(baris('• ' + (it.qty > 1 ? it.qty + '× ' : '') + it.nama, rp(it.harga)));
+                if (it.qty > 1 && it.satuan) isi.appendChild(el('div', 'pg-nota-s', it.qty + ' pcs × ' + rp(it.satuan)));
+            });
             if (h.ongkir) isi.appendChild(baris('Ongkir', rp(h.ongkir)));
             if (h.extra) isi.appendChild(baris('Tambahan', rp(h.extra)));
             isi.appendChild(baris('TOTAL', rp(h.total), 'tot'));
@@ -2667,6 +2683,7 @@
     .pg-nota-r b { white-space: nowrap; font-weight: 700; }
     .pg-nota-r.tot { border-top: 1.5px dashed #CFC6BA; margin-top: 6px; padding-top: 6px; font-size: 15.5px; }
     .pg-nota-r.tot b, .pg-nota-r.tot span { font-weight: 900; }
+    .pg-nota-s { font-size: 12px; color: #78716C; font-weight: 600; margin: -1px 0 3px 12px; }
     .pg-nota-c { padding: 0 12px 8px; font-size: 12.5px; color: #57534E; line-height: 1.4; }
     .pg-nomor { display: inline; border: 0; background: none; padding: 0; margin: 0; font: inherit; font-weight: 800; color: #1D4ED8; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
     .pga-bisa-geser { touch-action: pan-y; }
@@ -3461,7 +3478,11 @@
                     <div class="nt-tambah">
                         <div class="nt-g2">
                             <div><label for="active-nota-item">Nama barang</label><textarea id="active-nota-item" class="nt-in nt-nama-in" rows="1" placeholder="Contoh: Nasi goreng" maxlength="80" enterkeyhint="next" autocomplete="off"></textarea></div>
-                            <div><label for="active-nota-price">Harga</label><input type="text" inputmode="numeric" id="active-nota-price" class="nt-in nt-kanan" placeholder="Rp 0" oninput="formatCurrencyInput(this)" enterkeyhint="done"></div>
+                            <div class="nt-qh">
+                                <div><label for="active-nota-qty">Jumlah</label><div class="nt-qty"><button type="button" class="nt-qb" onclick="ntUbahQty('active-nota', -1)" aria-label="Kurangi jumlah">−</button><input type="text" inputmode="numeric" id="active-nota-qty" class="nt-in nt-qty-in" value="1" maxlength="3" oninput="ntQtyInput('active-nota')" aria-label="Jumlah" autocomplete="off"><button type="button" class="nt-qb" onclick="ntUbahQty('active-nota', 1)" aria-label="Tambah jumlah">+</button></div></div>
+                                <div><label for="active-nota-price">Total harga</label><input type="text" inputmode="numeric" id="active-nota-price" class="nt-in nt-kanan" placeholder="Rp 0" oninput="formatCurrencyInput(this); ntPerPcs('active-nota')" enterkeyhint="done"></div>
+                            </div>
+                            <div class="nt-pcs" id="active-nota-pcs" hidden></div>
                         </div>
                         <button type="button" onclick="addActiveNotaItem()" class="nt-btn-tambah"><i class="fa-solid fa-plus" aria-hidden="true"></i> Tambah ke nota</button>
                     </div>
@@ -5250,7 +5271,11 @@
                     <div class="nt-tambah">
                         <div class="nt-g2">
                             <div><label for="nota-input-item">Nama barang</label><textarea id="nota-input-item" class="nt-in nt-nama-in" rows="1" placeholder="Contoh: Nasi goreng" maxlength="80" enterkeyhint="next" autocomplete="off"></textarea></div>
-                            <div><label for="nota-input-price">Harga</label><input type="text" inputmode="numeric" id="nota-input-price" class="nt-in nt-kanan" placeholder="Rp 0" oninput="formatCurrencyInput(this)" enterkeyhint="done"></div>
+                            <div class="nt-qh">
+                                <div><label for="nota-input-qty">Jumlah</label><div class="nt-qty"><button type="button" class="nt-qb" onclick="ntUbahQty('nota', -1)" aria-label="Kurangi jumlah">−</button><input type="text" inputmode="numeric" id="nota-input-qty" class="nt-in nt-qty-in" value="1" maxlength="3" oninput="ntQtyInput('nota')" aria-label="Jumlah" autocomplete="off"><button type="button" class="nt-qb" onclick="ntUbahQty('nota', 1)" aria-label="Tambah jumlah">+</button></div></div>
+                                <div><label for="nota-input-price">Total harga</label><input type="text" inputmode="numeric" id="nota-input-price" class="nt-in nt-kanan" placeholder="Rp 0" oninput="formatCurrencyInput(this); ntPerPcs('nota')" enterkeyhint="done"></div>
+                            </div>
+                            <div class="nt-pcs" id="nota-input-pcs" hidden></div>
                         </div>
                         <button type="button" onclick="addNotaItem()" class="nt-btn-tambah"><i class="fa-solid fa-plus" aria-hidden="true"></i> Tambah ke nota</button>
                     </div>
@@ -9505,6 +9530,21 @@
         };
 
         // --- Nota: data, teks pesan WhatsApp, dan pratinjau teks (dipakai Nota Belanja & Nota Pelanggan) ---
+        // ---------- (21 Nov 2026) JUMLAH (qty) + harga per pcs otomatis ----------
+        function ntIdQ(p) { return p === 'active-nota' ? { q: 'active-nota-qty', h: 'active-nota-price', s: 'active-nota-pcs' } : { q: 'nota-input-qty', h: 'nota-input-price', s: 'nota-input-pcs' }; }
+        function ntAmbilQty(p) { const e = document.getElementById(ntIdQ(p).q); const n = parseInt(String(e ? e.value : '1').replace(/[^0-9]/g, ''), 10); return Math.min(999, Math.max(1, n || 1)); }
+        function ntSetQty(p, n) { const e = document.getElementById(ntIdQ(p).q); if (e) e.value = String(Math.min(999, Math.max(1, parseInt(n, 10) || 1))); ntPerPcs(p); }
+        window.ntUbahQty = function (p, d) { ntSetQty(p, ntAmbilQty(p) + d); };
+        window.ntQtyInput = function (p) { const e = document.getElementById(ntIdQ(p).q); if (e) e.value = String(e.value || '').replace(/[^0-9]/g, '').slice(0, 3); ntPerPcs(p); };
+        window.ntPerPcs = function (p) {
+            const id = ntIdQ(p), box = document.getElementById(id.s), h = document.getElementById(id.h);
+            if (!box) return;
+            const q = ntAmbilQty(p), total = parseInt(String(h ? h.value : '').replace(/\./g, ''), 10) || 0;
+            if (q > 1 && total > 0) { box.hidden = false; box.textContent = 'Harga per pcs: Rp ' + Math.round(total / q).toLocaleString('id-ID') + ' (otomatis, ' + q + ' pcs)'; }
+            else { box.hidden = true; box.textContent = ''; }
+        };
+        const ntRp = (n) => 'Rp ' + (Math.round(Number(n) || 0)).toLocaleString('id-ID');
+        const ntQ = (it) => Math.min(999, Math.max(1, parseInt(it && it.qty, 10) || 1));
         function rvNotaData(p) {
             const aktif = (p === 'active-nota');
             const items = (aktif ? activeNotaItems : notaItems) || [];
@@ -9534,7 +9574,8 @@
             b.push(''); b.push(sapa + ', ini totalan pesanannya ya:');
             if (d.items.length > 0) {
                 b.push(''); b.push('*Pesanan*');
-                d.items.forEach((it, i) => b.push((i + 1) + '. ' + bersih(it.name) + ': ' + rp(it.price)));
+                // (21 Nov 2026) tanda "-" + jumlah & harga per pcs (otomatis)
+                d.items.forEach((it) => { const q = ntQ(it); b.push('- ' + bersih(it.name) + (q > 1 ? ' (' + q + ' x ' + rp(Math.round(it.price / q)) + ')' : '') + ': ' + rp(it.price)); });
             }
             if (d.ongkir > 0 || d.extra > 0) {
                 b.push(''); b.push('*Pengiriman*');
@@ -9556,18 +9597,21 @@
             const buat = (tag, kelas, teks) => { const el = document.createElement(tag); if (kelas) el.className = kelas; if (teks != null) el.textContent = teks; return el; };
             const rpN = (n) => 'Rp ' + (Number(n) || 0).toLocaleString('id-ID');
             const jml = document.getElementById('rv-' + p + '-jml');
-            if (jml) jml.textContent = d.items.length + ' barang';
+            const nBarang = d.items.reduce((t, it) => t + ntQ(it), 0);
+            if (jml) jml.textContent = nBarang + ' barang';
             const list = document.getElementById('rv-' + p + '-list');
             if (list) {
                 list.textContent = '';
-                if (d.items.length === 0) list.appendChild(buat('div', 'nt-kosong', 'Belum ada barang. Isi nama dan harga di bawah, lalu tekan "Tambah ke nota".'));
+                if (d.items.length === 0) list.appendChild(buat('div', 'nt-kosong', 'Belum ada barang. Isi nama, jumlah, dan total harga di bawah, lalu tekan "Tambah ke nota".'));
                 d.items.forEach((it, i) => {
                     // (20 Nov 2026) baris barang gaya baru: nomor, nama, harga, ubah, hapus (textContent saja)
                     const baris = buat('div', 'nt-row');
-                    baris.appendChild(buat('span', 'n', String(i + 1)));
+                    baris.appendChild(buat('span', 'n titik', '•'));   // (21 Nov 2026) tanda "•", bukan nomor (supaya tidak tertukar dengan jumlah)
                     // (21 Nov 2026) harga di bawah nama, supaya nama panjang punya ruang lebar
                     const tk = buat('div', 't');
-                    tk.appendChild(buat('b', '', String(it.name)));
+                    const q = ntQ(it);
+                    tk.appendChild(buat('b', '', (q > 1 ? q + '× ' : '') + String(it.name)));
+                    if (q > 1) tk.appendChild(buat('span', 'q', q + ' pcs × ' + ntRp(it.price / q)));
                     tk.appendChild(buat('span', 'h', rpN(it.price)));
                     baris.appendChild(tk);
                     const ubah = buat('button', 'nt-ik'); ubah.type = 'button'; ubah.setAttribute('aria-label', 'Ubah ' + String(it.name));
@@ -9585,7 +9629,7 @@
             // ringkasan
             const belanja = d.items.reduce((t, it) => t + (Number(it.price) || 0), 0);
             const isiId = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
-            isiId('rv-' + p + '-r-blj', 'Belanja (' + d.items.length + ' barang)');
+            isiId('rv-' + p + '-r-blj', 'Belanja (' + nBarang + ' barang)');
             isiId('rv-' + p + '-r-belanja', rpN(belanja));
             isiId('rv-' + p + '-r-ongkir', rpN(d.ongkir));
             isiId('rv-' + p + '-r-extra', rpN(d.extra));
@@ -9611,11 +9655,11 @@
             const nameInput = document.getElementById('nota-input-item');
             const priceInput = document.getElementById('nota-input-price');
             const name = nameInput.value.trim();
-            const qty = 1;
+            const qty = ntAmbilQty('nota');   // (21 Nov 2026) jumlah; price = TOTAL harga barang ini
             const price = parseInt((priceInput.value || "").replace(/\./g, '')) || 0;
             if (!name) { alert("Masukkan nama barang!"); return; }
             notaItems.push({ name, qty, price });
-            nameInput.value = ""; priceInput.value = ""; nameInput.focus();
+            nameInput.value = ""; priceInput.value = ""; ntSetQty('nota', 1); nameInput.focus();
             updateNotaPreview(); playBeep(600, 0.05);
         }
         function resetNota() {
@@ -9711,6 +9755,7 @@
             const item = notaItems[index];
             document.getElementById('nota-input-item').value = item.name;
             document.getElementById('nota-input-price').value = item.price.toLocaleString('id-ID');
+            ntSetQty('nota', ntQ(item));
             
             notaItems.splice(index, 1);
             updateNotaPreview();
@@ -9845,11 +9890,11 @@
             const nameInput = document.getElementById('active-nota-item');
             const priceInput = document.getElementById('active-nota-price');
             const name = nameInput.value.trim();
-            const qty = 1;
+            const qty = ntAmbilQty('active-nota');   // (21 Nov 2026) jumlah; price = TOTAL harga barang ini
             const price = parseInt((priceInput.value || "").replace(/\./g, '')) || 0;
             if (!name) { alert("Masukkan nama barang!"); return; }
             activeNotaItems.push({ name, qty, price });
-            nameInput.value = ""; priceInput.value = ""; nameInput.focus();
+            nameInput.value = ""; priceInput.value = ""; ntSetQty('active-nota', 1); nameInput.focus();
             updateActiveNotaPreview(); 
             playBeep(600, 0.05);
         }
@@ -9959,6 +10004,7 @@
             const item = activeNotaItems[index];
             document.getElementById('active-nota-item').value = item.name;
             document.getElementById('active-nota-price').value = item.price.toLocaleString('id-ID');
+            ntSetQty('active-nota', ntQ(item));
             
             activeNotaItems.splice(index, 1);
             updateActiveNotaPreview();
@@ -10051,7 +10097,7 @@
             const rp = (n) => 'Rp ' + (Number(n) || 0).toLocaleString('id-ID');
             const bersih = (t) => String(t == null ? '' : t).replace(/[*_~`\n\r]/g, ' ').replace(/:/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);   // (21 Nov 2026) 80 = batas kartu nota di chat
             const b = ['🧾 NOTA PROJEKGO'];
-            d.items.forEach((it, i) => b.push((i + 1) + '. ' + (bersih(it.name) || 'Barang') + ': ' + rp(it.price)));
+            d.items.forEach((it) => { const q = ntQ(it); b.push('- ' + (bersih(it.name) || 'Barang') + (q > 1 ? ' (' + q + ' x ' + rp(Math.round(it.price / q)) + ')' : '') + ': ' + rp(it.price)); });   // (21 Nov 2026)
             if (d.ongkir > 0) b.push('Ongkir: ' + rp(d.ongkir));
             if (d.extra > 0) b.push('Tambahan: ' + rp(d.extra));
             b.push('TOTAL: ' + rp(d.total));
