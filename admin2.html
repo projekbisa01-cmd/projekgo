@@ -3264,6 +3264,15 @@
         .ak-k-aksi { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 14px 14px; }
         .ak-btn { flex: 1; min-height: 42px; border-radius: 12px; border: 1.5px solid #CBD5E1; color: #334155; font-size: 12.5px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; text-decoration: none; background: #fff; }
         .ak-btn-utama { flex: 1.6; background: #FF6600; border-color: #FF6600; color: #fff; }
+        /* (20 Nov 2026) foto paket dari pelanggan */
+        .ak-foto { display: flex; align-items: center; gap: 10px; width: calc(100% - 24px); margin: 0 12px 10px; padding: 8px; border: 1.5px solid #FFD2AE; border-radius: 12px; background: #FFF8F1; text-align: left; cursor: pointer; color: #1E293B; }
+        .ak-foto-g { width: 54px; height: 54px; flex: none; border-radius: 9px; background: #F3E6D8 center / cover no-repeat; display: grid; place-items: center; font-size: 20px; }
+        .ak-foto b { display: block; font-size: 13px; font-weight: 800; }
+        .ak-foto small { display: block; font-size: 11.5px; color: #8A5A35; font-weight: 600; }
+        .ak-foto-layar { position: fixed; inset: 0; z-index: 100000; background: rgba(10,8,6,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; }
+        .ak-foto-layar[hidden] { display: none; }
+        .ak-foto-layar img { max-width: 100%; max-height: calc(100% - 80px); border-radius: 12px; object-fit: contain; background: #222; }
+        .ak-foto-layar button { margin-top: 14px; min-height: 44px; padding: 0 26px; border-radius: 12px; border: 0; background: #fff; color: #1E293B; font-weight: 800; }
         .ak-btn-tolak { flex: .8; color: #C62828; border-color: #F8C9C9; background: #FDECEC; }
         #ak-badge-strip { position: absolute; top: -8px; right: -4px; font-style: normal; font-size: 9.5px; font-weight: 800; background: #D7263D; color: #fff; padding: 2px 6px; border-radius: 99px; border: 2px solid #fff; white-space: nowrap; line-height: 1.3; z-index: 2; }
         .ak-titik-badge { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px; border-radius: 99px; background: #D7263D; color: #fff; font-size: 9.5px; font-weight: 800; }
@@ -12696,6 +12705,7 @@
                     return pr(a.status) - pr(b.status) || ((a.dibuatAt?.seconds || 0) - (b.dibuatAt?.seconds || 0));
                 });
                 if (!urut.length) { kh.innerHTML = '<p class="ak-kosong">Belum ada permintaan dari mitra / pelanggan.</p>'; return; }
+                setTimeout(akMuatFotoKecil, 0);
                 kh.innerHTML = urut.map(p => {
                     if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(p.id || ''))) return '';
                     const jam = p.dibuatAt && p.dibuatAt.seconds ? new Date(p.dibuatAt.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--';
@@ -12710,6 +12720,7 @@
                             <span class="ak-st ${st[1]}">${st[0]}</span></div>
                         <div class="ak-k-angka"><div><b>${titik.length} titik</b><small>urut otomatis</small></div><div><b>${escDx(plg && !(Number(p.jarakKm) > 0) ? '-' : akKm(p.jarakKm))}</b><small>jarak rute</small></div><div><b class="ak-oranye">${(plg && !(Number(p.totalOngkir) > 0)) ? 'Hitung' : escDx(akRp(p.totalOngkir))}</b><small>${(plg && !(Number(p.totalOngkir) > 0)) ? 'ongkir manual' : 'ongkir rider'}</small></div></div>
                         <ol class="ak-k-titik">${titik.map(t => `<li><b>${escDx(t.nama || '-')}</b>${t.patokan ? ' · ' + escDx(t.patokan) : ''}</li>`).join('')}</ol>
+                        ${akFotoSah(p.fotoPaket) ? `<button type="button" class="ak-foto" data-ak-foto="${p.id}"><span class="ak-foto-g" data-ak-foto-g="${p.id}" aria-hidden="true">📦</span><span><b>Foto paket dari pelanggan</b><small>Ketuk untuk melihat foto besar</small></span></button>` : ''}
                         <div class="ak-k-aksi">
                             ${p.status === 'menunggu' ? `<button type="button" class="ak-btn ak-btn-utama" data-ak-isi="${p.id}">Isi ke form &amp; pilih rider</button>` : ''}
                             ${rute ? `<a class="ak-btn" href="${escDx(rute)}" target="_blank" rel="noopener noreferrer">Lihat rute</a>` : ''}
@@ -12828,6 +12839,40 @@
                 if (nm) { nm.dataset.oto = '0'; }
             }
             // Dipanggil submitOrder / submitPendingOrder SEBELUM batch.commit(): order ditandai, permintaan ikut diperbarui
+            // ---------- (20 Nov 2026) FOTO PAKET pelanggan (Storage foto_paket/{uid}/{acak}.jpg) ----------
+            function akFotoSah(x) { return typeof x === 'string' && /^foto_paket\/[A-Za-z0-9]{10,128}\/[A-Za-z0-9]{20}\.jpg$/.test(x); }
+            const akFotoUrl = {}, akFotoMinta = {};
+            function akAmbilFoto(path) {
+                if (akFotoUrl[path]) return Promise.resolve(akFotoUrl[path]);
+                if (akFotoMinta[path]) return akFotoMinta[path];
+                akFotoMinta[path] = Promise.all([
+                    import('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js'),
+                    import('https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js')
+                ]).then(([a, st]) => st.getDownloadURL(st.ref(st.getStorage(a.getApp()), path)))
+                  .then((u) => { akFotoUrl[path] = u; return u; })
+                  .catch((e) => { delete akFotoMinta[path]; throw e; });
+                return akFotoMinta[path];
+            }
+            function akMuatFotoKecil() {
+                document.querySelectorAll('[data-ak-foto-g]').forEach((g) => {
+                    const p = akData.find(x => x.id === g.dataset.akFotoG); if (!p || !akFotoSah(p.fotoPaket)) return;
+                    akAmbilFoto(p.fotoPaket).then((u) => { g.textContent = ''; g.style.backgroundImage = 'url("' + String(u).replace(/["\\\n\r]/g, '') + '")'; }).catch((e) => console.warn('Foto paket:', e && e.code));
+                });
+            }
+            function akBukaFoto(path) {
+                let l = document.getElementById('ak-foto-layar');
+                if (!l) {
+                    l = document.createElement('div'); l.id = 'ak-foto-layar'; l.className = 'ak-foto-layar'; l.hidden = true;
+                    l.setAttribute('role', 'dialog'); l.setAttribute('aria-modal', 'true'); l.setAttribute('aria-label', 'Foto paket');
+                    const img = document.createElement('img'); img.alt = 'Foto paket';
+                    const t = document.createElement('button'); t.type = 'button'; t.textContent = 'Tutup';
+                    t.addEventListener('click', () => { l.hidden = true; });
+                    l.addEventListener('click', (e) => { if (e.target === l) l.hidden = true; });
+                    l.appendChild(img); l.appendChild(t); document.body.appendChild(l);
+                }
+                const img = l.querySelector('img'); img.removeAttribute('src'); l.hidden = false;
+                akAmbilFoto(path).then((u) => { img.src = u; }).catch(() => { l.hidden = true; alert('Foto paket belum bisa dibuka. Periksa internet.'); });
+            }
             window.akSisipkan = (batch, orderRef, riderUid, riderName) => {
                 if (!akAktif) return;
                 const p = akData.find(x => x.id === akAktif); if (!p) { akAktif = null; return; }
@@ -12838,7 +12883,7 @@
                     if (fee > 0) titik[0].ongkir = fee;
                 }
                 const asalOk = akAdaKoord({ lat: p.asalLat, lng: p.asalLng });
-                batch.set(orderRef, { antar_id: p.id, antar_mitra: String(p.mitraNama || '').slice(0, 60), antar_mitra_id: String(p.mitraId || ''), antar_titik: titik, antar_rute: akLinkAman(p.ruteLink), antar_bayar: (p.pembayar === 'penerima' || p.pembayar === 'campur') ? p.pembayar : 'pengirim', antar_alamat: String(p.mitraAlamat || '').slice(0, 160), antar_asal: asalOk ? { lat: Number(p.asalLat), lng: Number(p.asalLng) } : null }, { merge: true });
+                batch.set(orderRef, { antar_id: p.id, antar_mitra: String(p.mitraNama || '').slice(0, 60), antar_mitra_id: String(p.mitraId || ''), antar_titik: titik, antar_rute: akLinkAman(p.ruteLink), antar_bayar: (p.pembayar === 'penerima' || p.pembayar === 'campur') ? p.pembayar : 'pengirim', antar_alamat: String(p.mitraAlamat || '').slice(0, 160), antar_asal: asalOk ? { lat: Number(p.asalLat), lng: Number(p.asalLng) } : null, foto_paket: akFotoSah(p.fotoPaket) ? p.fotoPaket : null }, { merge: true });
                 batch.update(doc(db, 'antar_permintaan', p.id), {
                     status: riderUid ? 'dibawa' : 'diproses', orderId: orderRef.id, riderUid: riderUid || null, riderNama: riderName || null,
                     diprosesOleh: akEmail(), diprosesAt: serverTimestamp(), dilihatAdmin: true
@@ -12901,6 +12946,8 @@
                 if (tab) { akTab = tab.dataset.akTab; window.akRender(); return; }
                 const isi = e.target.closest('[data-ak-isi]');
                 if (isi) { window.akIsiForm(isi.dataset.akIsi); return; }
+                const fto = e.target.closest('[data-ak-foto]');
+                if (fto) { const p = akData.find(x => x.id === fto.dataset.akFoto); if (p && akFotoSah(p.fotoPaket)) akBukaFoto(p.fotoPaket); return; }
                 if (e.target.closest('#ak-chip-batal')) { akAktif = null; akChip(); return; }
                 const tolak = e.target.closest('[data-ak-tolak]');
                 if (tolak) {
@@ -33714,7 +33761,7 @@
             const NAMA_BLN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
             const NAMA_HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
             const LABEL = { rider_balances: 'Saldo', rider_tabungan: 'Tabungan', rider_cicilan: 'Cicilan', tabungan_lebaran: 'Tab. Lebaran', modal_rider: 'Modal' };
-            const UTAMA = ['saldo', 'terkumpul', 'sisa', 'nominal', 'jumlah', 'total', 'amount'];
+            const UTAMA = ['saldo', 'terkumpul', 'total_terkumpul', 'sisa', 'remaining_amount', 'nominal', 'jumlah', 'total', 'amount'];
             const POLA_TGL = /^\d{4}-\d{2}-\d{2}$/;
             const $ = (id) => document.getElementById(id);
             const el = (tag, cls, teks) => { const e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; };
@@ -33858,7 +33905,8 @@
 
             // ---------- data: diperiksa ulang sebelum dipakai ----------
             // Field angka yang BUKAN uang (mis. "no" = nomor urut tiket modal di halaman Transfer)
-            const BUKAN_UANG = /^(no|nomor|no_urut|urut|urutan|index|idx|versi)$/i;
+            // (20 Nov 2026) juga hitungan hari (mis. jml_hari_terpotong di Tabungan Lebaran) -> bukan uang
+            const BUKAN_UANG = /^(no|nomor|no_urut|urut|urutan|index|idx|versi)$|^jml_|^jumlah_hari|hari_terpotong$/i;
             function bersihkan(id, d) {
                 if (!d || typeof d !== 'object') return null;
                 const koleksi = String(d.koleksi || '');
@@ -33879,7 +33927,8 @@
                 if (jenis === 'ubah' && !Object.keys(per).length) return null;   // yang berubah hanya nomor urut -> bukan mutasi uang
                 // (tahap 7) cek = hasil pemeriksaan server: saldo berubah tanpa catatan riwayat potongan yang cocok -> Perlu dicek
                 const cek = ['cocok', 'tanpa_catatan', 'catatan_hilang', 'beda_nominal', 'gagal_cek'].includes(d.cek) ? d.cek : '';
-                const besar = jenis === 'hapus' || (cek && cek !== 'cocok') || Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR);
+                // (20 Nov 2026) pinjaman modal tidak punya batas -> modal besar tidak ditandai (kecuali dihapus)
+                const besar = jenis === 'hapus' || (cek && cek !== 'cocok') || (koleksi !== 'modal_rider' && Object.values(per).some((x) => Math.abs(x.selisih) >= BATAS_BESAR));
                 return {
                     id, koleksi, jenis, per, kunciUtama, utama: u, besar,
                     dok: String(d.dok || '').slice(0, 64), uid: String(d.uid || '').toUpperCase().slice(0, 64),
@@ -34080,10 +34129,17 @@
                     b.onclick = () => { saring = kunci; gambar(); };
                     chip.appendChild(b);
                 };
+                // (20 Nov 2026) "Perlu dicek" langsung setelah "Semua" supaya selalu terlihat; chip yang aktif digeser ke layar
                 tombolChip('semua', 'Semua');
-                Object.keys(LABEL).forEach((k) => tombolChip(k, LABEL[k]));
                 tombolChip('cek', '⚠ Perlu dicek', 'warn');
+                Object.keys(LABEL).forEach((k) => tombolChip(k, LABEL[k]));
                 w.appendChild(chip);
+                requestAnimationFrame(() => {
+                    const aktif = chip.querySelector('[aria-pressed="true"]');
+                    if (!aktif) return;
+                    const a = aktif.getBoundingClientRect(), c = chip.getBoundingClientRect();
+                    if (a.left < c.left || a.right > c.right) chip.scrollLeft += a.left - c.left - 12;
+                });
                 const tampil = daftar.filter((o) => saring === 'semua' ? true : (saring === 'cek' ? o.besar : o.koleksi === saring));
                 // ringkasan
                 const ring = el('div', 'bm-ring');
