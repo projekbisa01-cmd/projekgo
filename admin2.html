@@ -3935,6 +3935,8 @@
                 <div class="card"><h2>Modal belum lunas <small id="tf-mdRingkas"></small></h2>
                     <p class="hint" style="margin:0 0 8px">Terisi otomatis dari baris pelanggan <b>modal</b> yang diinput di "Kerja hari ini". Selama belum lunas, rider melihat kartu berkedip di beranda aplikasinya. Tekan <b>Lunas</b> setelah uangnya diterima. Baris modal yang di-Batal otomatis hilang dari HP rider.</p>
                     <div class="scroll" id="tf-mdList"></div></div>
+                <!-- BLOKIR PINJAM MODAL (22 Nov 2026): diisi skrip "blokirModal" -->
+                <div class="card" id="tf-mbKartu"></div>
                 <div class="card"><h2>Sudah lunas (7 hari terakhir)</h2><div id="tf-mdLunas"></div></div>
             </section>
 
@@ -27714,12 +27716,19 @@
             const logOp = (aksi, tiketId, alasan, sebelum, sesudah, oleh) => ({op: 'set', col: C.log, data: {aksi: aksi, tiketId: tiketId || '', oleh: oleh || S.me, waktu: NOW, alasan: String(alasan || '').slice(0, 300), sebelum: String(sebelum || '').slice(0, 400), sesudah: String(sesudah || '').slice(0, 400)}});
             const findT = id => S.tiket.find(x => x.id === id) || S.hist.find(x => x.id === id) || S.pend.find(x => x.id === id) || S.jamList.find(x => x.id === id);
             const up = (t, data) => ({op: 'update', col: C.tiket, id: t.id, data: data});
-            function validTransaksi(kode, nominal, pel, J) {
+            function validTransaksi(kode, nominal, pel, J, lama) {
                 const r = S.riders.find(x => x.id === kode);
                 if (!r) return 'Kode transfer rider belum ada di daftar. Tambahkan dulu lewat tombol "+ Tambah kode".';
                 if (!(nominal > 0) || nominal > MAX_NOMINAL || Math.floor(nominal) !== nominal) return 'Nominal harus angka bulat antara 1 dan ' + MAX_NOMINAL.toLocaleString('id-ID') + '.';
                 if (pel.length < 2 || pel.length > 80) return 'Nama pelanggan 2 sampai 80 huruf.';
                 if (J && J.err) return J.err;
+                // (22 Nov 2026) BLOKIR PINJAM MODAL: rider di daftar blokir tidak bisa dicatat sebagai pelanggan "modal".
+                // Baris modal LAMA milik rider yang sama tetap boleh dikoreksi (lama = baris yang sedang diubah).
+                if (normNama(pel).toLowerCase() === 'modal' && !(lama && lama.kodeRider === kode && normNama(lama.pelanggan).toLowerCase() === 'modal')) {
+                    const blk = typeof window.mbDiblokir === 'function' ? window.mbDiblokir(kode) : null;
+                    if (blk === 'belum') return 'Daftar blokir pinjam modal belum termuat. Tunggu sebentar lalu coba lagi.';
+                    if (blk) { try { window.mbPopBlokir(blk); } catch (e) {} return 'Rider ' + kode + ' diblokir pinjam modal. Jangan lanjutkan.'; }
+                }
                 return '';
             }
             function cekLokal(t, status) { if (!t || t.status !== status) { toast('Data sudah berubah. Coba lagi.', 'bad'); return false; } return needP(); }
@@ -27983,7 +27992,7 @@
                         {name: 'alasan', label: 'Apa yang salah?', type: 'textarea', req: 1, min: 3, max: 150}]});
                     if (!v) return;
                     const kode = normKode(v.kode), nominal = Number(v.nominal), r = S.riders.find(x => x.id === kode);
-                    const bad = validTransaksi(kode, nominal, t.pelanggan, null);
+                    const bad = validTransaksi(kode, nominal, t.pelanggan, null, t);
                     if (bad) return toast(bad, 'bad');
                     if (kode === t.kodeRider && nominal === t.nominal) return toast('Tidak ada yang diubah. Kalau sudah benar, pakai tombol Cocok.', 'bad');
                     const dari = (t.kodeRider + ' ' + rp(t.nominal) + ' — ' + v.alasan).slice(0, 200);
@@ -28306,7 +28315,7 @@
                         {name: 'alasan', label: 'Alasan perubahan', type: 'textarea', req: 1, min: 3, max: 300, value: (b && b.alasanAwal) || ''}]});
                     if (!v) return;
                     const kode = normKode(v.kode), nominal = Number(v.nominal), pel = normNama(v.pel), J = bacaJam(v.jam, t.tanggal);
-                    const bad = validTransaksi(kode, nominal, pel, J);
+                    const bad = validTransaksi(kode, nominal, pel, J, t);
                     if (bad) return toast(bad, 'bad');
                     const r = S.riders.find(x => x.id === kode);
                     const after = {kodeRider: kode, namaRider: r.nama, nominal: nominal, pelanggan: pel, waktuTransfer: J.ms, jamTeks: J.teks};
@@ -32640,6 +32649,285 @@
             });
         })();
     </script>
+<!-- ===================== BLOKIR PINJAM MODAL (22 Nov 2026) =====================
+     Daftar rider yang tidak boleh diberi modal. HANYA akun pemilik yang bisa memblokir / membuka blokir
+     (dijaga rules); akun admin hanya melihat daftar dan terkena pop up saat mencatat.
+       modal_blokir/{KODE}        : kode, nama, catatan, oleh, sejak  -> hanya admin & pemilik yang bisa membaca
+       modal_blokir_rider/{UID}   : kode, sejak                       -> dibaca rider pemiliknya (tanpa catatan)
+     Di "Kerja hari ini": kode rider yang diblokir + pelanggan "modal" -> pop up merah dan baris tidak bisa
+     ditambahkan (pemeriksaan ada di validTransaksi). Semua isi ditampilkan lewat textContent. -->
+<style id="gaya-blokir-modal-22nov">
+    #tf-mbKartu .mb-tag { font-size: 11.5px; font-weight: 700; color: var(--tf-bad); background: var(--tf-badbg); padding: 2px 8px; border-radius: 999px; }
+    #tf-mbKartu .mb-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 6px; margin: 4px 0 6px; }
+    #tf-mbKartu .mb-form input { width: 100%; min-width: 0; border: 1px solid var(--tf-line); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13.5px; background: #fff; color: var(--tf-ink); }
+    #tf-mbKartu .mb-nama { font-size: 12.5px; color: var(--tf-mut); min-height: 18px; margin-bottom: 6px; }
+    #tf-mbKartu .mb-baris { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--tf-line); }
+    #tf-mbKartu .mb-baris > div { min-width: 0; }
+    #tf-mbKartu .mb-baris b { font-size: 14px; }
+    #tf-mbKartu .mb-baris small { display: block; color: var(--tf-mut); font-size: 12px; overflow-wrap: anywhere; }
+    #tf-mbKartu .mb-baris small.awas { color: var(--tf-warn); font-weight: 600; }
+    .mb-lapis { position: fixed; inset: 0; z-index: 2147483000; background: rgba(20, 33, 61, .58); display: flex; align-items: center; justify-content: center; padding: 18px; font: 14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; color: #14213d; }
+    .mb-lapis[hidden] { display: none; }
+    .mb-kotak { width: 100%; max-width: 380px; max-height: 100%; overflow-y: auto; background: #fff; border-radius: 18px; border-top: 6px solid #c81e3a; padding: 20px 18px 16px; display: flex; flex-direction: column; gap: 10px; text-align: center; box-shadow: 0 18px 50px rgba(0, 0, 0, .3); }
+    .mb-kotak .mb-ik { width: 58px; height: 58px; margin: 0 auto; border-radius: 50%; background: #fde4e8; color: #c81e3a; display: grid; place-items: center; }
+    .mb-kotak .mb-ik svg { width: 30px; height: 30px; }
+    .mb-kotak h3 { margin: 0; font-size: 18px; color: #c81e3a; }
+    .mb-kotak .mb-rid { background: #f4f6f9; border-radius: 10px; padding: 10px; font-weight: 700; font-size: 15px; }
+    .mb-kotak .mb-rid small { display: block; font-weight: 500; color: #5b6b82; font-size: 12px; }
+    .mb-kotak p { margin: 0; font-size: 13.5px; color: #334155; }
+    .mb-kotak .mb-cat { font-size: 12.5px; background: #fff4d6; color: #6b4500; border-radius: 8px; padding: 8px 10px; text-align: left; overflow-wrap: anywhere; }
+    .mb-kotak button { border: 0; border-radius: 10px; padding: 12px; font: inherit; font-weight: 700; background: #c81e3a; color: #fff; cursor: pointer; }
+    .mb-kotak button:focus-visible { outline: 3px solid #0a5cc2; outline-offset: 2px; }
+</style>
+<script type="module">
+    import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    import { getFirestore, collection, doc, onSnapshot, writeBatch, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    (function blokirModal() {
+        let app; try { app = getApp(); } catch (e) { console.warn('[Blokir modal] Firebase belum siap'); return; }
+        const auth = getAuth(app), db = getFirestore(app);
+        const P = 'onbid-2f87a';
+        const KOL = () => collection(db, 'artifacts', P, 'public', 'data', 'modal_blokir');
+        const DOK = k => doc(db, 'artifacts', P, 'public', 'data', 'modal_blokir', k);
+        const KOL_R = () => collection(db, 'artifacts', P, 'public', 'data', 'modal_blokir_rider');
+        const DOK_R = u => doc(db, 'artifacts', P, 'public', 'data', 'modal_blokir_rider', u);
+        const KODE_OK = v => /^[A-Z0-9]{1,10}$/.test(String(v || ''));
+        const UID_OK = v => /^[A-Za-z0-9._-]{1,64}$/.test(String(v || '')) && !/^\.+$/.test(String(v));
+        const normKode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+        const normNama = s => String(s || '').replace(/\s+/g, ' ').trim();
+        const g = id => document.getElementById(id);
+        const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+        const BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+        const keMs = v => typeof v === 'number' ? v : (v && typeof v.toMillis === 'function' ? v.toMillis() : 0);
+        const tgl = v => { const ms = keMs(v); if (!ms) return 'baru saja'; const d = new Date(ms + 7 * 36e5); return d.getUTCDate() + ' ' + BULAN[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); };
+
+        let siap = false, gagal = '', pemilik = false, blokir = {}, riderDocs = {}, petaKode = {}, henti = [], sibuk = false, jadwal = 0;
+        const kodeKeUid = kode => Object.keys(petaKode).find(u => petaKode[u] === kode) || '';
+
+        /* ---------- dipakai validTransaksi (halaman Transfer) ---------- */
+        // null = boleh; 'belum' = data belum termuat; objek = diblokir. Kalau rules belum dipasang (gagal baca), dianggap tidak ada blokir.
+        window.mbDiblokir = function (kode) {
+            kode = normKode(kode);
+            if (!siap) return gagal ? null : 'belum';
+            return blokir[kode] ? Object.assign({ kode: kode }, blokir[kode]) : null;
+        };
+
+        /* ---------- pop up merah ---------- */
+        let lapis = null, fokusAsal = null;
+        window.mbPopBlokir = function (b) {
+            if (!b || !KODE_OK(b.kode)) return;
+            tutupPop();
+            fokusAsal = document.activeElement;
+            lapis = el('div', 'mb-lapis');
+            lapis.setAttribute('role', 'alertdialog'); lapis.setAttribute('aria-modal', 'true'); lapis.setAttribute('aria-labelledby', 'mb-judul');
+            const k = el('div', 'mb-kotak');
+            const ik = el('div', 'mb-ik');
+            ik.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>';
+            const h = el('h3', '', 'Rider diblokir pinjam modal'); h.id = 'mb-judul';
+            const rid = el('div', 'mb-rid', b.kode + (b.nama ? ' · ' + b.nama : ''));
+            rid.appendChild(el('small', '', 'Diblokir sejak ' + tgl(b.sejak) + (b.oleh ? ' oleh ' + b.oleh : '')));
+            const p = el('p'); p.appendChild(el('b', '', 'Jangan lanjutkan. '));
+            p.appendChild(document.createTextNode('Rider ini tidak boleh diberi modal. Baris "modal" untuk rider ini tidak bisa ditambahkan ke daftar.'));
+            k.append(ik, h, rid, p);
+            if (b.catatan) k.appendChild(el('div', 'mb-cat', 'Catatan: ' + b.catatan));
+            const ok = el('button', '', 'Mengerti, jangan lanjutkan'); ok.type = 'button';
+            ok.addEventListener('click', () => {
+                const pel = g('tf-fPel'), kd = g('tf-fKode');
+                const diForm = pel && kd && normNama(pel.value).toLowerCase() === 'modal' && normKode(kd.value) === b.kode;
+                tutupPop();
+                if (diForm) { pel.value = ''; setTimeout(() => pel.focus(), 0); }
+            });
+            k.appendChild(ok); lapis.appendChild(k); document.body.appendChild(lapis);
+            setTimeout(() => ok.focus(), 0);
+        };
+        function tutupPop() {
+            if (lapis) { lapis.remove(); lapis = null; }
+            if (fokusAsal && document.contains(fokusAsal)) { try { fokusAsal.focus(); } catch (e) {} }
+            fokusAsal = null;
+        }
+        document.addEventListener('keydown', ev => { if (lapis && ev.key === 'Escape') { ev.preventDefault(); lapis.querySelector('button').click(); } }, true);
+        // Enter di form Transfer tidak boleh "menembus" pop up yang sedang terbuka
+        document.addEventListener('keydown', ev => { if (lapis && ev.key === 'Enter' && !lapis.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); } }, true);
+
+        /* ---------- peringatan langsung saat mengetik di "Kerja hari ini" ---------- */
+        let terakhirPop = '', tunda = 0;
+        function cekForm() {
+            const pel = g('tf-fPel'), kd = g('tf-fKode');
+            if (!pel || !kd) return;
+            const kode = normKode(kd.value), modal = normNama(pel.value).toLowerCase() === 'modal';
+            const blk = modal && KODE_OK(kode) ? window.mbDiblokir(kode) : null;
+            [pel, kd].forEach(x => { x.style.outline = blk && blk !== 'belum' ? '2px solid #c81e3a' : ''; });
+            if (!blk || blk === 'belum') { terakhirPop = ''; return; }
+            if (terakhirPop === kode) return;      // pop up untuk kode ini sudah tampil, tunggu tombol Tambah
+            terakhirPop = kode;
+            window.mbPopBlokir(blk);
+        }
+        function pasangForm() {
+            const pel = g('tf-fPel'), kd = g('tf-fKode');
+            if (!pel || !kd) { setTimeout(pasangForm, 2000); return; }
+            const jalan = () => { clearTimeout(tunda); tunda = setTimeout(cekForm, 450); };
+            pel.addEventListener('input', jalan); kd.addEventListener('input', jalan);
+            pel.addEventListener('change', cekForm); kd.addEventListener('change', cekForm);
+        }
+        pasangForm();
+
+        /* ---------- kotak "Blokir pinjam modal" di tab Modal rider ---------- */
+        function namaDariKode(kode) {
+            const dl = g('tf-dlRider'); if (!dl) return '';
+            const o = Array.from(dl.options).find(x => x.value === kode);
+            return o ? normNama(o.textContent).slice(0, 60) : '';
+        }
+        function namaPetugas() {
+            const s = g('tf-selPetugas'), o = s && s.selectedIndex >= 0 ? s.options[s.selectedIndex] : null;
+            const n = o && o.value ? String(o.textContent || '').trim() : '';
+            return /^[A-Za-z][A-Za-z .-]{0,39}$/.test(n) ? n : 'Pemilik';
+        }
+        let formKode = '', formCatatan = '';
+        function gambar() {
+            const w = g('tf-mbKartu'); if (!w) return;
+            // simpan isian form & fokus agar tidak hilang saat daftar diperbarui
+            const ik = g('tf-mbKode'), ic = g('tf-mbCatatan'), aktif = document.activeElement && document.activeElement.id;
+            if (ik) formKode = ik.value; if (ic) formCatatan = ic.value;
+            w.textContent = '';
+            const kodeList = Object.keys(blokir).sort();
+            const h = el('h2', '', '⛔ Blokir pinjam modal ');
+            if (kodeList.length) h.appendChild(el('span', 'mb-tag', kodeList.length + ' rider'));
+            w.appendChild(h);
+            if (gagal) { w.appendChild(el('p', 'hint', gagal)); return; }
+            if (!siap) { w.appendChild(el('p', 'hint', 'Memuat…')); return; }
+            const hint = el('p', 'hint', 'Rider di daftar ini tidak bisa dicatat sebagai pelanggan "modal" di "Kerja hari ini", dan di aplikasinya muncul pemberitahuan. Catatan hanya terlihat di aplikasi admin, tidak tampil ke rider.');
+            hint.style.margin = '0 0 8px'; w.appendChild(hint);
+            if (pemilik) {
+                const f = el('div', 'mb-form');
+                const a = el('input'); a.id = 'tf-mbKode'; a.setAttribute('list', 'tf-dlRider'); a.maxLength = 10; a.placeholder = 'Kode rider, mis. A07';
+                a.autocomplete = 'off'; a.setAttribute('autocapitalize', 'characters'); a.setAttribute('aria-label', 'Kode rider yang diblokir'); a.value = formKode;
+                const c = el('input'); c.id = 'tf-mbCatatan'; c.maxLength = 120; c.placeholder = 'Catatan (boleh kosong)'; c.autocomplete = 'off';
+                c.setAttribute('aria-label', 'Catatan alasan blokir'); c.value = formCatatan;
+                f.append(a, c); w.appendChild(f);
+                const nm = el('div', 'mb-nama'); w.appendChild(nm);
+                const isiNama = () => {
+                    a.value = normKode(a.value); formKode = a.value;
+                    const k = a.value, n = namaDariKode(k);
+                    nm.textContent = !k ? '' : blokir[k] ? k + ' sudah ada di daftar blokir.' : n ? k + ' · ' + n : 'Kode ' + k + ' belum ada di daftar kode transfer.';
+                };
+                a.addEventListener('input', isiNama); c.addEventListener('input', () => { formCatatan = c.value; }); isiNama();
+                const b = el('button', 'bad solid', '+ Blokir rider ini'); b.type = 'button'; b.style.width = '100%'; b.style.marginBottom = '6px';
+                b.addEventListener('click', () => tambah(a, c, b));
+                [a, c].forEach(x => x.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); b.click(); } }));
+                w.appendChild(b);
+            } else {
+                const p = el('p', 'hint', 'Hanya akun pemilik yang bisa memblokir atau membuka blokir.'); p.style.margin = '0 0 6px'; w.appendChild(p);
+            }
+            if (!kodeList.length) w.appendChild(el('p', 'hint', 'Belum ada rider yang diblokir.'));
+            kodeList.forEach(k => {
+                const d = blokir[k], r = el('div', 'mb-baris'), kiri = el('div');
+                kiri.appendChild(el('b', '', k + (d.nama ? ' · ' + d.nama : '')));
+                kiri.appendChild(el('small', '', 'Sejak ' + tgl(d.sejak) + (d.oleh ? ' · oleh ' + d.oleh : '') + (d.catatan ? ' · ' + d.catatan : '')));
+                const uid = kodeKeUid(k);
+                if (!UID_OK(uid)) kiri.appendChild(el('small', 'awas', 'Belum tampil di HP rider: kode ini belum ada di Top Up Saldo.'));
+                else if (!riderDocs[uid] && pemilik) kiri.appendChild(el('small', 'awas', 'Sedang dikirim ke HP rider…'));
+                r.appendChild(kiri);
+                if (pemilik) {
+                    const bb = el('button', 'sm', 'Buka blokir'); bb.type = 'button';
+                    bb.addEventListener('click', () => buka(k, bb));
+                    r.appendChild(bb);
+                }
+                w.appendChild(r);
+            });
+            if (aktif && g(aktif) && (aktif === 'tf-mbKode' || aktif === 'tf-mbCatatan')) { const x = g(aktif); x.focus(); try { x.setSelectionRange(x.value.length, x.value.length); } catch (e) {} }
+        }
+
+        /* ---------- tulis (pemilik saja; rules juga menolak akun lain) ---------- */
+        async function tambah(a, c, b) {
+            if (!pemilik) return;
+            const kode = normKode(a.value), nama = namaDariKode(kode), catatan = normNama(c.value).slice(0, 120);
+            if (!KODE_OK(kode)) { a.focus(); return window.alert('Isi kode rider dulu, mis. A07.'); }
+            if (!nama) return window.alert('Kode ' + kode + ' belum ada di daftar kode transfer rider.');
+            if (blokir[kode]) return window.alert(kode + ' sudah ada di daftar blokir.');
+            if (!window.confirm('Blokir pinjam modal?\n\n' + kode + ' · ' + nama + '\n\nRider ini tidak bisa dicatat sebagai pelanggan "modal", dan di aplikasinya muncul pemberitahuan.')) return;
+            b.disabled = true;
+            try {
+                const bt = writeBatch(db);
+                bt.set(DOK(kode), { kode: kode, nama: nama, catatan: catatan, oleh: namaPetugas(), sejak: serverTimestamp() });
+                const uid = kodeKeUid(kode);
+                if (UID_OK(uid)) bt.set(DOK_R(uid), { kode: kode, sejak: serverTimestamp() });
+                await bt.commit();
+                ['tf-mbKode', 'tf-mbCatatan'].forEach(id => { const x = g(id); if (x) x.value = ''; }); formKode = ''; formCatatan = ''; gambar();
+            } catch (e) { b.disabled = false; window.alert('Gagal menyimpan: ' + ((e && e.code) || 'coba lagi')); }
+        }
+        async function buka(kode, b) {
+            if (!pemilik) return;
+            const d = blokir[kode] || {};
+            if (!window.confirm('Buka blokir pinjam modal?\n\n' + kode + (d.nama ? ' · ' + d.nama : '') + '\n\nRider ini bisa dicatat sebagai pelanggan "modal" lagi, dan pemberitahuan di aplikasinya hilang.')) return;
+            b.disabled = true;
+            try {
+                const bt = writeBatch(db);
+                bt.delete(DOK(kode));
+                Object.keys(riderDocs).forEach(u => { if (riderDocs[u].kode === kode) bt.delete(DOK_R(u)); });
+                await bt.commit();
+            } catch (e) { b.disabled = false; window.alert('Gagal menyimpan: ' + ((e && e.code) || 'coba lagi')); }
+        }
+        // Menyamakan modal_blokir_rider dengan daftar blokir (mis. kode baru dipasang di Top Up Saldo setelah diblokir).
+        function jadwalSinkron() { if (jadwal) return; jadwal = setTimeout(() => { jadwal = 0; sinkron(); }, 800); }
+        async function sinkron() {
+            if (!pemilik || !siap || gagal || sibuk || !petaSiap || !riderSiap) return;
+            const bt = writeBatch(db); let n = 0;
+            Object.keys(blokir).forEach(k => {
+                const uid = kodeKeUid(k);
+                if (UID_OK(uid) && !(riderDocs[uid] && riderDocs[uid].kode === k)) { bt.set(DOK_R(uid), { kode: k, sejak: serverTimestamp() }); n++; }
+            });
+            Object.keys(riderDocs).forEach(u => {
+                const k = riderDocs[u].kode;
+                if (!blokir[k] || kodeKeUid(k) !== u) { bt.delete(DOK_R(u)); n++; }
+            });
+            if (!n || n > 400) return;
+            sibuk = true;
+            try { await bt.commit(); } catch (e) { console.warn('[Blokir modal] sinkron', e && e.code); }
+            setTimeout(() => { sibuk = false; }, 1500);
+        }
+
+        /* ---------- mulai setelah admin masuk ---------- */
+        let petaSiap = false, riderSiap = false;
+        function mulai(peran) {
+            berhenti();
+            pemilik = peran === 'owner';
+            henti.push(onSnapshot(KOL(), snap => {
+                const baru = {};
+                snap.forEach(s => {
+                    const d = s.data() || {};
+                    if (KODE_OK(s.id)) baru[s.id] = { nama: String(d.nama || '').slice(0, 60), catatan: String(d.catatan || '').slice(0, 120), oleh: String(d.oleh || '').slice(0, 40), sejak: d.sejak || null };
+                });
+                blokir = baru; siap = true; gagal = ''; gambar(); cekForm(); jadwalSinkron();
+            }, e => {
+                console.warn('[Blokir modal] baca', e && e.code);
+                siap = true; blokir = {};
+                gagal = (e && e.code) === 'permission-denied' ? 'Fitur blokir belum aktif: Firestore Rules "modal_blokir" belum dipasang.' : 'Daftar blokir gagal dimuat. Muat ulang halaman.';
+                gambar();
+            }));
+            if (pemilik) {
+                henti.push(onSnapshot(KOL_R(), snap => {
+                    const r = {};
+                    snap.forEach(s => { const d = s.data() || {}; if (UID_OK(s.id) && KODE_OK(d.kode)) r[s.id] = { kode: d.kode }; });
+                    riderDocs = r; riderSiap = true; gambar(); jadwalSinkron();
+                }, e => console.warn('[Blokir modal] baca rider', e && e.code)));
+            }
+            henti.push(onSnapshot(doc(db, 'artifacts', P, 'public', 'data', 'admin_config', 'topup_daftar'), snap => {
+                const r = (snap.exists() && snap.data().riders) || {}, p = {};
+                Object.keys(r).forEach(u => { if (UID_OK(u) && KODE_OK(r[u])) p[u] = r[u]; });
+                petaKode = p; petaSiap = true; gambar(); jadwalSinkron();
+            }, e => console.warn('[Blokir modal] kode', e && e.code)));
+        }
+        function berhenti() {
+            henti.forEach(f => { try { f(); } catch (e) {} }); henti = [];
+            siap = false; gagal = ''; pemilik = false; blokir = {}; riderDocs = {}; petaKode = {}; petaSiap = false; riderSiap = false;
+            tutupPop(); gambar();
+        }
+        onAuthStateChanged(auth, u => {
+            const peran = u && typeof window.roleFromEmail === 'function' ? window.roleFromEmail(u.email) : null;
+            if (peran) mulai(peran); else berhenti();
+        });
+    })();
+</script>
 <style id="gaya-chat-admin-tahap2-11nov">
     /* 11 Nov 2026: tahap 2 chat admin (balas, diedit, pesan suara, teruskan) */
     .cpa-isi .cpa-bub { touch-action: pan-y; }
