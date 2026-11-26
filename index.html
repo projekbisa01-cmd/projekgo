@@ -18222,6 +18222,8 @@
                 } else {
                     itemsListEl.innerHTML = `<div class="text-gray-400 italic text-[15px]">- Pesanan dari admin (tanpa rincian item)</div>`;
                 }
+                // (26 Nov 2026) gambar pesanan dari admin
+                try { if (typeof window.rgTampilGambar === 'function') window.rgTampilGambar(itemsListEl, data.gambar, 'masuk'); } catch (e) {}
             }
 
             // --- PERBAIKAN LANGKAH 2: PENGAMANAN POPUP TAMPIL KE DEPAN KAPANPUN DIPANGGIL ---
@@ -18738,6 +18740,8 @@
                       detailPesananWA += `- Pesanan dari admin\n`;
                       window.currentActiveOrderItems = "- Pesanan dari admin";
                   }
+                  // (26 Nov 2026) gambar pesanan dari admin (ketuk = layar penuh, bisa diperbesar)
+                  try { if (typeof window.rgTampilGambar === 'function') window.rgTampilGambar(listEl, data.gambar, 'aktif'); } catch (e) {}
               }
 
               // Link pantau pesanan (+ ulasan di halaman yang sama) langsung di bawah salam
@@ -30324,5 +30328,98 @@ window.PembuatQR = PembuatQR;
 </script>
 <!-- ===================== AKHIR ORDER OTOMATIS (RIDER) ===================== -->
 
+
+    <!-- (26 Nov 2026) GAMBAR PESANAN dari admin (Dispatch): gambar kecil di bawah rincian pesanan, ketuk = layar penuh.
+         Layar penuh: cubit dua jari / ketuk dua kali untuk memperbesar, geser untuk melihat bagian lain. -->
+    <style>
+        .rg-gambar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .rg-gambar button { width: 72px; height: 72px; padding: 0; border: 2px solid #fff; border-radius: 12px; overflow: hidden; background: #e5e7eb; cursor: zoom-in; box-shadow: 0 2px 6px rgba(0,0,0,.2); }
+        .rg-gambar button img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .rg-gambar small { flex-basis: 100%; font-size: 11px; font-weight: 700; opacity: .8; }
+        .rg-layar { position: fixed; inset: 0; z-index: 2147483000; background: rgba(0,0,0,.94); display: flex; flex-direction: column; touch-action: none; }
+        .rg-layar[hidden] { display: none; }
+        .rg-atas { display: flex; justify-content: space-between; align-items: center; padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 8px; color: #fff; font: 700 13px system-ui, sans-serif; }
+        .rg-atas button { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(255,255,255,.18); color: #fff; font-size: 22px; cursor: pointer; }
+        .rg-bidang { flex: 1; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; }
+        .rg-bidang img { max-width: 100%; max-height: 100%; transform-origin: 0 0; will-change: transform; user-select: none; -webkit-user-drag: none; }
+        .rg-bawah { display: flex; justify-content: center; gap: 10px; padding: 8px 12px calc(14px + env(safe-area-inset-bottom, 0px)); }
+        .rg-bawah button { min-width: 44px; height: 40px; border-radius: 999px; border: 0; background: rgba(255,255,255,.18); color: #fff; font: 800 14px system-ui, sans-serif; padding: 0 14px; cursor: pointer; }
+        .rg-bawah button:disabled { opacity: .35; }
+        .rg-gambar button:focus-visible, .rg-layar button:focus-visible { outline: 3px solid #FDE047; outline-offset: 2px; }
+    </style>
+    <div class="rg-layar" id="rg-layar" hidden role="dialog" aria-modal="true" aria-label="Gambar pesanan">
+        <div class="rg-atas"><span id="rg-judul">Gambar 1/1</span><button type="button" id="rg-tutup" aria-label="Tutup gambar">×</button></div>
+        <div class="rg-bidang" id="rg-bidang"><img id="rg-img" alt="Gambar pesanan"></div>
+        <div class="rg-bawah"><button type="button" id="rg-kiri" aria-label="Gambar sebelumnya">‹</button><button type="button" id="rg-reset">Ukuran asli</button><button type="button" id="rg-kanan" aria-label="Gambar berikutnya">›</button></div>
+    </div>
+    <script>
+        (function gambarPesananRider() {
+            const $ = (id) => document.getElementById(id);
+            // hanya alamat gambar dari Firebase Storage proyek ini
+            const sah = (u) => typeof u === 'string' && u.length < 2000 && /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/[A-Za-z0-9._-]+\/o\/order_gambar%2F[A-Za-z0-9]{20}%2F[1-3]\.jpg\?/.test(u);
+            let daftar = [], ke = 0, sk = 1, tx = 0, ty = 0;
+            window.rgTampilGambar = (listEl, arr, jenis) => {
+                if (!listEl || !listEl.parentNode) return;
+                const id = 'rg-gambar-' + (jenis || 'x');
+                let w = document.getElementById(id);
+                const ok = Array.isArray(arr) ? arr.filter(sah).slice(0, 3) : [];
+                if (!ok.length) { if (w) w.remove(); return; }
+                if (!w) { w = document.createElement('div'); w.id = id; w.className = 'rg-gambar'; listEl.insertAdjacentElement('afterend', w); }
+                w.textContent = '';
+                const k = document.createElement('small'); k.textContent = '🖼 Gambar dari admin · ketuk untuk memperbesar'; w.appendChild(k);
+                ok.forEach((u, i) => {
+                    const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', 'Lihat gambar pesanan ' + (i + 1));
+                    const im = document.createElement('img'); im.src = u; im.alt = ''; im.loading = 'lazy'; im.referrerPolicy = 'no-referrer';
+                    b.appendChild(im); b.addEventListener('click', (e) => { e.stopPropagation(); buka(ok, i); });
+                    w.appendChild(b);
+                });
+            };
+            function terapkan() { $('rg-img').style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + sk + ')'; }
+            function tampil() {
+                $('rg-img').src = daftar[ke]; $('rg-judul').textContent = 'Gambar ' + (ke + 1) + '/' + daftar.length;
+                $('rg-kiri').disabled = ke <= 0; $('rg-kanan').disabled = ke >= daftar.length - 1;
+                sk = 1; tx = 0; ty = 0; terapkan();
+            }
+            function buka(arr, i) { daftar = arr; ke = i; $('rg-layar').hidden = false; tampil(); setTimeout(() => $('rg-tutup').focus(), 30); }
+            function tutup() { $('rg-layar').hidden = true; $('rg-img').removeAttribute('src'); }
+            $('rg-tutup').addEventListener('click', tutup);
+            $('rg-kiri').addEventListener('click', () => { if (ke > 0) { ke--; tampil(); } });
+            $('rg-kanan').addEventListener('click', () => { if (ke < daftar.length - 1) { ke++; tampil(); } });
+            $('rg-reset').addEventListener('click', () => { sk = 1; tx = 0; ty = 0; terapkan(); });
+            document.addEventListener('keydown', (e) => { if (!$('rg-layar').hidden && e.key === 'Escape') tutup(); });
+            // cubit / geser / ketuk dua kali (pointer events)
+            const bid = $('rg-bidang'), jari = new Map();
+            let awal = null, ketukTerakhir = 0;
+            function zoomDi(cx, cy, skBaru) {
+                skBaru = Math.min(5, Math.max(1, skBaru));
+                const r = bid.getBoundingClientRect(), im = $('rg-img');
+                const ox = im.offsetLeft, oy = im.offsetTop;   // posisi gambar sebelum transform
+                const px = cx - r.left - ox, py = cy - r.top - oy;
+                tx = px - (px - tx) * (skBaru / sk); ty = py - (py - ty) * (skBaru / sk); sk = skBaru;
+                if (sk === 1) { tx = 0; ty = 0; }
+                terapkan();
+            }
+            bid.addEventListener('pointerdown', (e) => {
+                bid.setPointerCapture && bid.setPointerCapture(e.pointerId);
+                jari.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (jari.size === 2) { const [a, b] = [...jari.values()]; awal = { d: Math.hypot(a.x - b.x, a.y - b.y), sk, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 }; }
+                else if (jari.size === 1) {
+                    const kini = Date.now();
+                    if (kini - ketukTerakhir < 300) { zoomDi(e.clientX, e.clientY, sk > 1 ? 1 : 2.5); ketukTerakhir = 0; }
+                    else ketukTerakhir = kini;
+                    awal = { x: e.clientX, y: e.clientY, tx, ty };
+                }
+            });
+            bid.addEventListener('pointermove', (e) => {
+                if (!jari.has(e.pointerId)) return;
+                jari.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (jari.size === 2 && awal && awal.d) { const [a, b] = [...jari.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); zoomDi(awal.cx, awal.cy, awal.sk * d / awal.d); awal.sk = sk; awal.d = d; }
+                else if (jari.size === 1 && awal && awal.x != null && sk > 1) { tx = awal.tx + (e.clientX - awal.x); ty = awal.ty + (e.clientY - awal.y); terapkan(); }
+            });
+            const lepas = (e) => { jari.delete(e.pointerId); if (jari.size === 1) { const [a] = [...jari.values()]; awal = { x: a.x, y: a.y, tx, ty }; } else if (!jari.size) awal = null; };
+            bid.addEventListener('pointerup', lepas); bid.addEventListener('pointercancel', lepas);
+            bid.addEventListener('wheel', (e) => { e.preventDefault(); zoomDi(e.clientX, e.clientY, sk * (e.deltaY < 0 ? 1.15 : 0.87)); }, { passive: false });
+        })();
+    </script>
 </body>
 </html>
