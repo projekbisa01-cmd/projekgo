@@ -30544,6 +30544,23 @@ window.PembuatQR = PembuatQR;
     body.dark-mode .fd-panel { background: #1C1917; border-color: #7C2D12; }
     body.dark-mode .fd-it .n, body.dark-mode .fd-warung, body.dark-mode .fd-nama, body.dark-mode .fd-alamat, body.dark-mode .fd-uang.total { color: #F5F5F4; }
     body.dark-mode .fd-uang, body.dark-mode .fd-it .h, body.dark-mode .fd-sisa { color: #D6D3D1; }
+    /* (28 Nov 2026 v2) layar food gaya ojek online (memakai gaya layar order otomatis .oto-*) */
+    .fd-grab .oto-kartu { max-height: 64vh; }
+    .fd-g-kode { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #FFF7ED; border: 1.5px dashed #FDBA74; border-radius: 12px; padding: 8px 12px; margin-bottom: 8px; }
+    .fd-g-kode span { font-size: 12px; font-weight: 800; color: #9A3412; }
+    .fd-g-kode b { font-size: 26px; font-weight: 900; color: #C2410C; letter-spacing: .04em; line-height: 1; }
+    .fd-grab .fd-st { margin: 0 0 10px; }
+    .fd-g-titik { margin-top: 2px; }
+    .fd-g-uang { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+    .fd-g-uang > div { background: #F9FAFB; border: 1px solid #F3F4F6; border-radius: 12px; padding: 8px 10px; }
+    .fd-g-uang > div.tagih { background: #FFF7ED; border-color: #FED7AA; }
+    .fd-g-uang small { display: block; font-size: 11px; font-weight: 800; color: #6B7280; letter-spacing: .02em; }
+    .fd-g-uang b { display: block; font-size: 17px; font-weight: 900; color: #111827; }
+    .fd-g-uang .tagih b { color: #C2410C; }
+    .fd-grab .oto-ikon button:disabled { opacity: .4; }
+    .fd-grab .oto-ikon.fd-g-ikon { grid-template-columns: repeat(2, 1fr); }
+    .fd-g-lengkap { display: block; width: 100%; margin-top: 4px; min-height: 40px; border: 0; background: none; color: #6B7280; font: inherit; font-size: 12.5px; font-weight: 800; text-decoration: underline; }
+    .fd-l-rapi { margin: 8px 16px 0; background: #FFFFFF; border: 1px solid #F5E6D8; border-radius: 14px; padding: 10px 12px; }
     /* (28 Nov 2026) pop up tahap: info kabar otomatis ke chat pelanggan */
     .tp-pop-kabar { margin-top: 10px; background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; border-radius: 12px; padding: 8px 10px; font-size: 12.5px; font-weight: 700; line-height: 1.4; text-align: left; }
     /* (28 Nov 2026) Nota bagian 3: rincian tiap barang */
@@ -30696,7 +30713,7 @@ window.PembuatQR = PembuatQR;
         var wa = el('button', 'wa', '💬 WA warung'); wa.type = 'button'; wa.disabled = !no;
         wa.addEventListener('click', function () { if (no) window.open('https://wa.me/' + no + '?text=' + encodeURIComponent('Halo, saya rider ProjekGo untuk pesanan ' + pf + ' 🙏'), '_blank', 'noopener'); });
         tb.appendChild(tl); tb.appendChild(wa);
-        if (keWarung) p.appendChild(tb);
+        // (28 Nov 2026) telepon / WA warung tidak ditampilkan di aplikasi rider
         return p;
     }
     // baris teks lama yang ditulis showActiveOrderOverlay (disembunyikan saat tampilan rapi aktif)
@@ -30743,11 +30760,179 @@ window.PembuatQR = PembuatQR;
         });
         wadah.__fdJaga.observe(wadah, { childList: true });
     }
+
+    // ======================= (28 Nov 2026 v2) LAYAR GAYA OJEK ONLINE UNTUK FOOD OTOMATIS =======================
+    // Sama seperti layar order otomatis antar paket: peta di atas, kartu di bawah, satu tombol besar per langkah.
+    //   1 · Ke warung   : "Sudah sampai di warung"            -> tahap 'lokasi'
+    //   2 · Di warung   : "Pesanan sudah diambil, mulai antar" -> tahap 'antar'
+    //   3 · Ke pelanggan: "Sudah sampai, selesaikan"          -> langkah bukti selesai yang sudah ada (foto + pembayaran)
+    // Tahap disimpan lewat fungsi Tugas Berjalan yang sama (barLacakAksi -> majuKe), jadi admin, pelanggan & kabar chat ikut jalan.
+    var gb = { sembunyi: false, id: '', tunggu: 0 };
+    function rp(n) { return 'Rp' + Math.round(Number(n) || 0).toLocaleString('id-ID'); }
+    function angkaRp(s) { return parseInt(String(s || '').replace(/[^\d]/g, ''), 10) || 0; }
+    function pasangGrab() {
+        if (document.getElementById('fd-grab')) return;
+        var g = el('div', 'oto-grab fd-grab'); g.id = 'fd-grab'; g.hidden = true;
+        var pt = el('div', 'oto-peta'); pt.id = 'fd-g-peta';
+        var nav = el('div', 'oto-nav'); nav.id = 'fd-g-nav'; nav.appendChild(document.createTextNode('Menuju warung')); nav.appendChild(el('small', '', ''));
+        var tag = el('div', 'oto-tag'); tag.id = 'fd-g-tag';
+        pt.appendChild(nav); pt.appendChild(tag);
+        var k = el('div', 'oto-kartu'); k.id = 'fd-g-kartu';
+        var aksi = el('button', 'oto-aksi garis', 'Sudah sampai di warung'); aksi.type = 'button'; aksi.id = 'fd-g-aksi';
+        aksi.addEventListener('click', tekanAksi);
+        g.appendChild(pt); g.appendChild(k); g.appendChild(aksi);
+        document.body.appendChild(g);
+        var bl = el('button', 'oto-balik', '🍲 Tampilan food'); bl.type = 'button'; bl.id = 'fd-balik'; bl.hidden = true;
+        bl.addEventListener('click', function () { gb.sembunyi = false; gambarGrab(); });
+        document.body.appendChild(bl);
+        var lb = el('div', 'oto-lembar'); lb.id = 'fd-lembar'; lb.hidden = true; lb.setAttribute('role', 'dialog'); lb.setAttribute('aria-modal', 'true');
+        var li = el('div', 'oto-lembar-isi'); li.id = 'fd-l-isi'; lb.appendChild(li);
+        lb.addEventListener('click', function (e) { if (e.target === lb) lb.hidden = true; });
+        document.body.appendChild(lb);
+    }
+    function overlayTerbuka() {
+        var ov = document.getElementById('active-order-overlay');
+        if (!ov || ov.classList.contains('hidden') || getComputedStyle(ov).display === 'none') return false;
+        var s2 = document.getElementById('step2');
+        return !(s2 && !s2.classList.contains('hidden'));   // sedang di langkah bukti selesai -> layar food disembunyikan
+    }
+    function pfAktif() {
+        var d = cur.data;
+        return !!(d && PF_OK.test(String(d.pf_kode || '')) && ID_OK.test(String(d.pf_id || '')) && String(d.status || 'processing') === 'processing');
+    }
+    function tutupGrab() {
+        var g = document.getElementById('fd-grab'), b = document.getElementById('fd-balik'), l = document.getElementById('fd-lembar');
+        if (g) g.hidden = true; if (b) b.hidden = true; if (l) l.hidden = true;
+    }
+    function petaSrc(a, b) {
+        if (a && b) return 'https://maps.google.com/maps?saddr=' + a.lat + ',' + a.lng + '&daddr=' + b.lat + ',' + b.lng + '&output=embed';
+        var t = a || b; return t ? 'https://maps.google.com/maps?q=' + t.lat + ',' + t.lng + '&z=16&output=embed' : '';
+    }
+    function titikBaris(kls, judul, alamat, aktif) {
+        var a = el('div', 'oto-tt ' + kls + (aktif === true ? ' aktif' : (aktif === false ? ' redup' : '')));
+        a.appendChild(el('span', 'd'));
+        var ai = el('div'); ai.appendChild(el('b', '', judul)); if (alamat) ai.appendChild(el('span', 'a', alamat));
+        a.appendChild(ai); return a;
+    }
+    function gambarGrab() {
+        pasangGrab();
+        if (!pfAktif() || !overlayTerbuka()) { tutupGrab(); return; }
+        var d = cur.data, pf = String(d.pf_kode), lok = d.pf_lok || {};
+        if (gb.id !== cur.id) { gb.id = cur.id; gb.sembunyi = false; }
+        var teks = d.pesanan_text || d.items_string || d.List_Pesanan || '';
+        var h = urai(typeof teks === 'string' ? teks : '');
+        var tw = titik(lok.warung), ta = titik(lok.antar) || titikDariLink(h.maps);
+        var tahap = String(d.tahap || 'menuju'), keAntar = tahap === 'antar';
+        if (gb.tunggu && gb.dari !== tahap) { clearTimeout(gb.tunggu); gb.tunggu = 0; }   // tahap sudah tersimpan -> tombol aktif lagi
+        var warung = String(d.pf_vendor || (h.warung[0] && h.warung[0].nama) || 'Warung');
+        // peta: ke warung = titik warung; antar = rute warung -> pelanggan
+        var pt = document.getElementById('fd-g-peta'), fr = pt.querySelector('iframe');
+        var src = keAntar ? petaSrc(tw, ta) : petaSrc(tw, null);
+        if (src) {
+            if (!fr) { fr = document.createElement('iframe'); fr.setAttribute('title', 'Peta'); fr.setAttribute('loading', 'lazy'); fr.setAttribute('referrerpolicy', 'no-referrer'); pt.insertBefore(fr, pt.firstChild); }
+            if (fr.getAttribute('src') !== src) fr.setAttribute('src', src);
+        } else if (fr) fr.remove();
+        var nav = document.getElementById('fd-g-nav');
+        nav.firstChild.textContent = keAntar ? 'Menuju pelanggan' : (tahap === 'lokasi' ? 'Di warung' : 'Menuju warung');
+        nav.lastChild.textContent = keAntar ? 'Selesaikan setelah dibayar' : (tahap === 'lokasi' ? 'Ambil pesanan saat siap' : 'Ketuk Navigasi untuk rute');
+        document.getElementById('fd-g-tag').textContent = '🍲 FOOD · ' + pf;
+        // kartu bawah
+        var k = document.getElementById('fd-g-kartu'); k.textContent = '';
+        var bar = el('div', 'oto-bar');
+        bar.appendChild(el('span', '', keAntar ? '2 · Antar' : '1 · Ke warung')); bar.appendChild(el('b', '', 'Food'));
+        bar.appendChild(el('span', '', String(d.customer_name || 'Pelanggan')));
+        k.appendChild(bar);
+        var kd = el('div', 'fd-g-kode');
+        kd.appendChild(el('span', '', keAntar ? 'Kode pesanan' : 'Sebutkan kode ini ke warung'));
+        kd.appendChild(el('b', '', pf));
+        k.appendChild(kd);
+        if (d.pf_batal) k.appendChild(el('div', 'fd-st batal', '⚠ Pesanan ini sudah DIBATALKAN. Hubungi admin sebelum lanjut.'));
+        else if (!keAntar) k.appendChild(d.pf_status === 'siap' ? el('div', 'fd-st siap', '✅ Makanan sudah SIAP, tinggal diambil') : el('div', 'fd-st dibuat', '🍳 Warung sedang membuat pesanan'));
+        var tt = el('div', 'fd-g-titik');
+        tt.appendChild(titikBaris('j', '🏪 ' + warung, tw ? '' : 'Lokasi warung belum ada di peta', keAntar ? false : true));
+        tt.appendChild(titikBaris('t', '📍 ' + (h.nama ? h.nama : String(d.customer_name || 'Pelanggan')), h.alamat || (ta ? 'Titik di peta' : ''), keAntar ? true : null));
+        k.appendChild(tt);
+        if (h.catatan.length) k.appendChild(el('div', 'oto-cat', '📝 ' + h.catatan.join(' · ')));
+        // uang
+        var bayarWarung = 0, tagih = 0;
+        h.biaya.forEach(function (b) { if (/subtotal/i.test(b[0])) bayarWarung = angkaRp(b[1]); else if (/total/i.test(b[0])) tagih = angkaRp(b[1]); });
+        var u = el('div', 'fd-g-uang');
+        var u1 = el('div'); u1.appendChild(el('small', '', 'Bayar ke warung')); u1.appendChild(el('b', '', bayarWarung ? rp(bayarWarung) : '-'));
+        var u2 = el('div', 'tagih'); u2.appendChild(el('small', '', 'Tagih pelanggan')); u2.appendChild(el('b', '', tagih ? rp(tagih) : '-'));
+        u.appendChild(u1); u.appendChild(u2); k.appendChild(u);
+        var nb = el('button', 'oto-navbtn', keAntar ? '🧭 Navigasi ke pelanggan' : '🧭 Navigasi ke warung'); nb.type = 'button';
+        nb.addEventListener('click', function () { bukaPeta(keAntar ? ta : tw); });
+        k.appendChild(nb);
+        var ik = el('div', 'oto-ikon fd-g-ikon');
+        function ikon(emoji, label, fn, mati) { var b = el('button'); b.type = 'button'; b.appendChild(el('b', '', emoji)); b.appendChild(document.createTextNode(label)); if (mati) b.disabled = true; b.addEventListener('click', fn); ik.appendChild(b); }
+        // (28 Nov 2026) telepon / WA warung tidak ditampilkan di aplikasi rider
+        ikon('💬', 'Chat pelanggan', bukaChat);
+        ikon('🧾', 'Detail pesanan', function () { bukaDetail(h, pf); });
+        k.appendChild(ik);
+        // (28 Nov 2026) tanpa tombol "tampilan lengkap": nota & template pesan ada di chat pelanggan
+        // tombol aksi
+        var aksi = document.getElementById('fd-g-aksi');
+        aksi.disabled = !!gb.tunggu;
+        aksi.classList.toggle('garis', tahap === 'menuju');
+        aksi.textContent = keAntar ? 'Sudah sampai · Selesaikan' : (tahap === 'lokasi' ? 'Pesanan sudah diambil · Mulai antar' : 'Sudah sampai di warung');
+        var g = document.getElementById('fd-grab'), bl = document.getElementById('fd-balik');
+        g.hidden = gb.sembunyi; bl.hidden = !gb.sembunyi;
+    }
+    function bukaChat() {
+        var id = cur.id;
+        var kode = typeof window.crKodeUntukOrder === 'function' ? window.crKodeUntukOrder(id) : '';
+        if (kode && typeof window.crBukaKode === 'function' && window.crBukaKode(kode)) return;
+        var b = document.getElementById('btn-wa-customer');
+        if (b) { b.click(); return; }
+        toast('Chat pelanggan belum tersambung. Coba lagi sebentar.');
+    }
+    function bukaDetail(h, pf) {
+        var lb = document.getElementById('fd-lembar'), isi = document.getElementById('fd-l-isi');
+        isi.textContent = '';
+        var j = el('h3', '', 'Detail pesanan · ' + pf); isi.appendChild(j);
+        var w = el('div', 'fd-l-rapi'); w.appendChild(rapi(h, pf)); isi.appendChild(w);
+        var t = el('button', 'tutup', 'Tutup'); t.type = 'button'; t.addEventListener('click', function () { lb.hidden = true; });
+        isi.appendChild(t);
+        lb.hidden = false;
+    }
+    function tekanAksi() {
+        if (!pfAktif()) return;
+        var d = cur.data, tahap = String(d.tahap || 'menuju'), id = cur.id;
+        if (tahap === 'antar') {
+            // langkah bukti selesai (foto + pembayaran). Layar food otomatis tersembunyi selama langkah itu terbuka,
+            // dan muncul lagi kalau rider kembali.
+            try { if (typeof window.goToPage === 'function') window.goToPage(2); } catch (e) {}
+            gambarGrab();
+            toast('Foto bukti & pilih pembayaran, lalu selesaikan order');
+            return;
+        }
+        var ke = tahap === 'menuju' ? 'lokasi' : 'antar';
+        gb.dari = tahap;
+        try { if (typeof window.barLacakAksi === 'function') window.barLacakAksi(id, 'maju:' + ke); } catch (e) {}
+        gb.tunggu = setTimeout(function () {
+            gb.tunggu = 0;
+            if (cur.id === id && cur.data && String(cur.data.tahap || 'menuju') === tahap) {
+                toast(ke === 'antar' ? 'Belum tersimpan. Pastikan izin lokasi aktif, lalu tekan lagi.' : 'Belum tersimpan. Cek sinyal, lalu tekan lagi.');
+            }
+            gambarGrab();
+        }, 2500);
+        gambarGrab();
+    }
+    // layar Tugas Berjalan dibuka / ditutup / pindah ke langkah bukti -> layar food ikut menyesuaikan
+    setInterval(function () { if (cur.data) gambarGrabRingan(); }, 1000);
+    var sidikGrab = '';
+    function gambarGrabRingan() {
+        var tampil = pfAktif() && overlayTerbuka();
+        var s = String(tampil) + '|' + gb.sembunyi;
+        if (s === sidikGrab) return;
+        sidikGrab = s; gambarGrab();
+    }
     window.fdRender = function (data, docId) {
         cur = { id: String(docId || ''), data: data || null };
         jaga();
         gambar();
         setTimeout(gambar, 50);   // panel Antar Hemat / gambar order bisa dipasang sesudahnya
+        try { gambarGrab(); } catch (e) { console.warn('[Food grab]', e); }   // (28 Nov 2026 v2) layar gaya ojek online
     };
 })();
 </script>
