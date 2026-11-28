@@ -29904,7 +29904,7 @@ window.PembuatQR = PembuatQR;
             if (!titikOk(o.jemput) || !titikOk(o.tujuan) || !(Number(o.fee) > 0)) return null;
             if (!((o.layanan === 'ngojek' && a.ngojek === true) || (o.layanan === 'antar' && a.antar === true))) return null;
             if (o.layanan === 'ngojek' && !helm2Hari()) return null;
-            const pot = Math.round(Number(o.fee) * 0.16);
+            const pot = potOto(o);   // (28 Nov 2026) tambahan ongkir tidak dipotong
             if (!(saldo >= pot)) return null;
             if (!pos || Date.now() - posT > 120000) return null;
             const jarak = km(pos, { lat: Number(o.jemput.lat), lng: Number(o.jemput.lng) });
@@ -29971,11 +29971,16 @@ window.PembuatQR = PembuatQR;
             w.appendChild(b);
             return w;
         }
-        function kartuTarif(fee, pot) {
+        // (28 Nov 2026) tambahan ongkir (mis. hujan) tidak kena potongan administrasi 16%
+        function tamOto(o) { const f = Number(o && o.fee), t = Number(o && o.tambahan); return (Number.isInteger(t) && t > 0 && t < f) ? t : 0; }
+        function potOto(o) { return Math.round((Number(o.fee) - tamOto(o)) * 0.16); }
+        function kartuTarif(fee, pot, tam) {
             const w = el('div', 'oto-trf');
             const baris = (k, label, nilai) => { const d = el('div', k); d.appendChild(el('span', '', label)); d.appendChild(el('b', '', nilai)); w.appendChild(d); };
-            baris('', 'Tarif', rp(fee));
-            baris('min', 'Potongan administrasi 16%', '− ' + rp(pot));
+            tam = Number(tam) || 0;
+            if (tam > 0) { baris('', 'Ongkir', rp(fee - tam)); baris('', 'Tambahan (tidak dipotong)', rp(tam)); }
+            else baris('', 'Tarif', rp(fee));
+            baris('min', 'Potongan administrasi 16%' + (tam > 0 ? ' (dari ongkir)' : ''), '− ' + rp(pot));
             baris('net', 'Pendapatan bersih', rp(Number(fee) - Number(pot)));
             return w;
         }
@@ -29996,7 +30001,7 @@ window.PembuatQR = PembuatQR;
             det.appendChild(kartuDetail(o, null, o.catatan));
             // (20 Nov 2026) foto paket dari pelanggan: boleh dilihat sebelum menerima
             if (o.layanan === 'antar' && o.foto_paket && typeof window.pgFotoPaketEl === 'function') { const fp = window.pgFotoPaketEl(o.foto_paket); if (fp) { fp.style.margin = '10px 14px 0'; fp.style.width = 'calc(100% - 28px)'; det.appendChild(fp); } }
-            det.appendChild(kartuTarif(o.fee, c.pot));
+            det.appendChild(kartuTarif(o.fee, c.pot, tamOto(o)));
             $('oto-t-terima').disabled = false;
             $('oto-tawar').hidden = false;
             hitungMundur();
@@ -30057,7 +30062,8 @@ window.PembuatQR = PembuatQR;
                     if (o.status !== 'cari') throw { oto: 'diambil' };
                     const sS = await trx.get(refSaku);
                     const sebelum = sS.exists() ? Number(sS.data().saldo) : NaN;
-                    const pot = Math.round(Number(o.fee) * 0.16);
+                    const pot = potOto(o);   // (28 Nov 2026) 16% dari ongkir murni (tanpa tambahan)
+                    const tamO = tamOto(o);
                     if (!(sebelum >= pot)) throw { oto: 'saldo', saldo: sebelum, pot };
                     const sesudah = sebelum - pot;
                     const ST = serverTimestamp(), w = tglJam();
@@ -30069,7 +30075,7 @@ window.PembuatQR = PembuatQR;
                         desc: 'Order otomatis (aplikasi pelanggan)', created_at: ST, oto: true });
                     trx.set(doc(db, 'artifacts', P, 'public', 'data', 'active_orders', id), {
                         status: 'processing', rider_uid: uid, rider_name: nama, customer_name: String(o.nama || 'Pelanggan').slice(0, 60), customer_phone: '',
-                        items: [{ name: teksPesanan(o) }], fee: o.fee, tambahan: 0, jenis: o.layanan === 'ngojek' ? 'ojek' : 'kirim',
+                        items: [{ name: teksPesanan(o) }], fee: o.fee - tamO, tambahan: tamO, jenis: o.layanan === 'ngojek' ? 'ojek' : 'kirim',
                         created_at: ST, accepted_at: ST, daily_order_id: 'oto_' + id,
                         adm_potong: { jumlah: pot, rider_uid: uid, ledger_id: 'oto_' + id, at: ST },
                         ulasan_kode: o.kode, akt_uid: o.pelanggan_uid, cr: true, otomatis: true,
@@ -30077,7 +30083,7 @@ window.PembuatQR = PembuatQR;
                         missed_by: null, payment_type: 'Tunai', tahap: 'menuju', tahap_at: ST });
                     trx.set(doc(db, 'artifacts', P, 'users', uid, 'daily_orders', 'oto_' + id), {
                         UID: uid, Nama_Rider: nama, Tanggal: w.tgl, Jam: w.jam, Nama_Pelanggan: String(o.nama || 'Pelanggan').slice(0, 60),
-                        Nominal_Kotor: o.fee / 1000, Tambahan: 0, Status: 'Selesai', Keterangan: 'Order otomatis · ' + (LAYANAN[o.layanan] || 'Order'),
+                        Nominal_Kotor: (o.fee - tamO) / 1000, Tambahan: tamO / 1000, Status: 'Selesai', Keterangan: 'Order otomatis · ' + (LAYANAN[o.layanan] || 'Order'),
                         belum_selesai: true, created_at: ST, payment_type: 'Tunai', payment_nominal: 0, oto_id: id });
                     // (18 Nov 2026) kode ulasan sekali pakai, sama seperti order dari admin
                     if (KODE_OK.test(String(o.kode || ''))) trx.set(doc(db, 'artifacts', P, 'public', 'data', 'ulasan_token', o.kode), {
@@ -30196,7 +30202,7 @@ window.PembuatQR = PembuatQR;
             const kd = kartuDetail(Object.assign({}, x, { kode: o.ulasan_kode }), keTujuan ? 'antar' : 'jemput', '');
             kd.style.margin = '0'; kd.style.border = '0'; kd.style.boxShadow = 'none'; kd.style.padding = '0';
             tk.appendChild(kd);
-            $('oto-g-ongkir').textContent = rp(o.fee);
+            $('oto-g-ongkir').textContent = rp(Number(o.fee) + (Number(o.tambahan) || 0));   // (28 Nov 2026) ongkir + tambahan yang ditagih
             // (18 Nov 2026 b) tombol batal dipindah ke lembar "Detail" (jauh dari tombol Sudah sampai / Chat)
             aktif.bisaBatal = !(keTujuan || (o.tahap && !['menuju', 'lokasi'].includes(o.tahap)));
             $('oto-g-batal').hidden = true;
@@ -30272,8 +30278,9 @@ window.PembuatQR = PembuatQR;
             isi.appendChild(kartuDetail(Object.assign({}, x, { kode: o.ulasan_kode }), null, cat));
             if (hpPen.length >= 9 && hpPen.length <= 15) isi.appendChild(kartuPenerima(String(k.penerima_nama || 'Penerima'), hpPen, o));
             if (aktif.foto && typeof window.pgFotoPaketEl === 'function') { const fp = window.pgFotoPaketEl(aktif.foto); if (fp) { fp.style.margin = '0 14px 10px'; fp.style.width = 'calc(100% - 28px)'; isi.appendChild(fp); } }
+            const tamA = Number(o.tambahan) || 0;   // (28 Nov 2026) order berjalan: fee = ongkir murni, tambahan terpisah
             const pot = (o.adm_potong && Number(o.adm_potong.jumlah)) || Math.round(Number(o.fee) * 0.16);
-            isi.appendChild(kartuTarif(o.fee, pot));
+            isi.appendChild(kartuTarif(Number(o.fee) + tamA, pot, tamA));
             const t1 = el('button', 'tutup', 'Tutup'); t1.type = 'button'; t1.addEventListener('click', () => { $('oto-lembar').hidden = true; });
             // (18 Nov 2026 b) pembatalan di sini, terpisah jauh di paling bawah (hanya sebelum menjemput)
             let bw = null;
