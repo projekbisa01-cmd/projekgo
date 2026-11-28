@@ -9630,6 +9630,21 @@
             const belanja = d.items.reduce((t, it) => t + (Number(it.price) || 0), 0);
             const isiId = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
             isiId('rv-' + p + '-r-blj', 'Belanja (' + nBarang + ' barang)');
+            // (28 Nov 2026) rincian tiap barang di bagian 3 Ringkasan
+            const blj = document.getElementById('rv-' + p + '-r-blj');
+            if (blj && blj.parentElement) {
+                let rc = document.getElementById('rv-' + p + '-r-rinci');
+                if (!rc) { rc = buat('div', 'nt-rinci'); rc.id = 'rv-' + p + '-r-rinci'; blj.parentElement.after(rc); }
+                rc.textContent = '';
+                d.items.forEach((it) => {
+                    const q = ntQ(it), r = buat('div', 'nt-rinci-r');
+                    const n = buat('span', '', (q > 1 ? q + '× ' : '') + String(it.name));
+                    if (q > 1) n.appendChild(buat('small', '', q + ' pcs × ' + ntRp(it.price / q)));
+                    r.appendChild(n); r.appendChild(buat('b', '', rpN(it.price)));
+                    rc.appendChild(r);
+                });
+                rc.hidden = !d.items.length;
+            }
             isiId('rv-' + p + '-r-belanja', rpN(belanja));
             isiId('rv-' + p + '-r-ongkir', rpN(d.ongkir));
             isiId('rv-' + p + '-r-extra', rpN(d.extra));
@@ -18794,6 +18809,8 @@
               try { if (typeof window.antarRender === 'function') window.antarRender(data, docId); } catch (eAntar) { console.warn('[Antar Hemat]', eAntar); }
               // CHAT PELANGGAN DI APLIKASI (7 Nov 2026): hanya order dari chat aplikasi, order biasa tidak berubah
               try { if (typeof window.crRender === 'function') window.crRender(data, docId); } catch (eCr) { console.warn('[Chat pelanggan]', eCr); }
+              // (28 Nov 2026) FOOD OTOMATIS: panel warung + peta + detail pesanan yang rapi
+              try { if (typeof window.fdRender === 'function') window.fdRender(data, docId); } catch (eFd) { console.warn('[Food rider]', eFd); }
 
               // Pastikan status on-bid menyala (Opsional tapi berguna agar radar tetap online)
               const toggle = document.getElementById('onbid-toggle');
@@ -24497,6 +24514,7 @@ window.PembuatQR = PembuatQR;
         tutupAlarm(); alarm.tunda = 0;
         tulis({ tahap: baru }, dataLacakTahap(baru, lama));
         lokasiIkutiTahap();
+        kabarChatTahap(baru);   // (28 Nov 2026) pelanggan chat aplikasi dikabari otomatis
         // Salah ketuk? 8 detik untuk membatalkan
         clearTimeout(st.undoTimer);
         st.undo = lama;
@@ -24504,6 +24522,39 @@ window.PembuatQR = PembuatQR;
         gambar();
         return true;
     }
+    // (28 Nov 2026) KABAR OTOMATIS KE CHAT PELANGGAN saat rider menggeser tahap.
+    // Hanya untuk order yang punya chat aplikasi (nomor pelanggan privat). Order WhatsApp biasa tidak berubah.
+    // Dikirim setelah waktu "Salah geser? Kembalikan" (8 detik) habis, sekali per tahap per order.
+    var KABAR_TAHAP = {
+        food:  { lokasi: 'Saya sudah di warung ya Kak 🙏 Pesanan sedang disiapkan penjual, nanti saya kabari lagi.', antar: 'Pesanan sudah saya ambil dan sedang diantar ke lokasi Kakak 🛵' },
+        kirim: { antar: 'Barang sudah saya ambil dan sedang diantar ke penerima ya Kak 🛵' },
+        lain:  { lokasi: 'Saya sudah sampai di lokasi ya Kak 🙏', antar: 'Pesanan sedang saya antar ke lokasi Kakak ya 🛵' }
+    };
+    function teksKabar(t) { return (KABAR_TAHAP[st.jenis] || {})[t] || ''; }
+    function kodeChat(id) { try { return typeof window.crKodeUntukOrder === 'function' ? window.crKodeUntukOrder(id) : ''; } catch (e) { return ''; } }
+    function kabarChatTahap(t) {
+        var tk = teksKabar(t), id = st.id;
+        if (!tk || !id) return;
+        var kunci = 'kbr_' + id + '_' + t;
+        try { if (localStorage.getItem(kunci)) return; } catch (e) {}
+        setTimeout(function () {
+            if (st.id !== id || st.tahap !== t) return;   // rider menekan "Kembalikan"
+            var kode = kodeChat(id);
+            if (!kode || typeof window.crKirimTeks !== 'function') return;
+            window.crKirimTeks(kode, tk).then(function (ok) {
+                if (!ok) return;
+                try { localStorage.setItem(kunci, '1'); } catch (e) {}
+                toast('💬 Pelanggan sudah dikabari lewat chat');
+            }).catch(function () {});
+        }, 8600);
+    }
+    window.lacakKabarChat = function (id, teks, kunci) {   // dipakai layar order otomatis ("Sudah sampai")
+        if (!id || !teks) return;
+        try { if (kunci && localStorage.getItem(kunci)) return; } catch (e) {}
+        var kode = kodeChat(id);
+        if (!kode || typeof window.crKirimTeks !== 'function') return;
+        window.crKirimTeks(kode, teks).then(function (ok) { if (ok) { try { if (kunci) localStorage.setItem(kunci, '1'); } catch (e) {} toast('💬 Pelanggan sudah dikabari lewat chat'); } }).catch(function () {});
+    };
     function batalkan() {
         if (!st.undo) return;
         var ke = st.undo, dari = st.tahap; st.undo = null; clearTimeout(st.undoTimer);
@@ -24695,6 +24746,8 @@ window.PembuatQR = PembuatQR;
         k.appendChild(el('h3', '', judul));
         k.appendChild(el('p', '', ket));
         var ln = el('div', 'tp-pop-lanjut', lanjut); ln.style.background = w[1]; ln.style.color = w[2]; k.appendChild(ln);
+        // (28 Nov 2026) pelanggan chat aplikasi: diberi tahu bahwa kabar otomatis akan dikirim
+        if (teksKabar(st.tahap) && kodeChat(st.id)) { var kb = el('div', 'tp-pop-kabar', '💬 Pelanggan otomatis dikabari di chat: "' + teksKabar(st.tahap) + '"'); k.appendChild(kb); }
         // (24 Okt 2026) Tanpa waktu: pop up hanya tertutup lewat tombol OK (atau Kembalikan)
         var cekUn = 0;
         var tutup = function () { clearInterval(cekUn); latar.remove(); };
@@ -27459,7 +27512,7 @@ window.PembuatQR = PembuatQR;
     <div class="cr-isi" id="cr-isi" role="log" aria-live="polite"></div>
     <div class="cr-cepat" id="cr-cepat">
         <button type="button" class="utama" data-cr="nota"><i class="fa-solid fa-receipt" aria-hidden="true"></i> Buat nota</button>
-        <button type="button" class="utama" data-cr="qris"><i class="fa-solid fa-qrcode" aria-hidden="true"></i> Kirim QRIS</button>
+        <button type="button" class="utama" data-cr="qris"><i class="fa-solid fa-qrcode" aria-hidden="true"></i> QRIS + rekening</button>
         <button type="button" class="utama" data-cr="transfer"><i class="fa-solid fa-building-columns" aria-hidden="true"></i> Info transfer</button>
         <button type="button">Saya menuju lokasi ya Kak</button>
         <button type="button">Sudah sampai di lokasi ya Kak</button>
@@ -28196,8 +28249,14 @@ window.PembuatQR = PembuatQR;
         if (aksi === 'qris') {
             var url = '';
             try { url = typeof window.getAssignedQrisUrl === 'function' ? String(window.getAssignedQrisUrl(uidKu()) || '') : ''; } catch (x) {}
-            if (!/^https:\/\/[^\s"'<>`\\]+$/i.test(url) || url.length > 500) { toast('QRIS belum tersedia untuk akun ini'); return; }
-            kirim({ jenis: 'qris', qris: url, teks: 'Ini QRIS pembayaran ya Kak. Setelah bayar, mohon kabari di chat ini 🙏' });
+            // (28 Nov 2026) QRIS + rekening rider dalam SATU pesan
+            var bnk = String(window.currentRiderBankName || '').trim(), rk = String(window.currentRiderBankAccount || '').trim(), anm = String(window.currentRiderBankAccountName || '').trim();
+            var infoRek = (bnk && rk) ? '\nJika mau transfer ke rekening saya juga bisa di:\n' + bnk + ' ' + rk + (anm ? ' a.n. ' + anm : '') : '';
+            if (!/^https:\/\/[^\s"'<>`\\]+$/i.test(url) || url.length > 500) {
+                if (infoRek) { kirim({ jenis: 'teks', teks: ('Pembayaran non-tunai bisa transfer ya Kak.' + infoRek + '\nSetelah transfer, mohon kabari di chat ini 🙏').slice(0, 3000) }); return; }
+                toast('QRIS belum tersedia untuk akun ini'); return;
+            }
+            kirim({ jenis: 'qris', qris: url, teks: ('Ini QRIS pembayaran ya Kak.' + infoRek + '\nSetelah bayar, mohon kabari di chat ini 🙏').slice(0, 3000) });
             return;
         }
         if (aksi === 'transfer') {
@@ -30293,6 +30352,9 @@ window.PembuatQR = PembuatQR;
             if (lk === 'jemput') {
                 try { localStorage.setItem(kunciSampai(id), '1'); } catch (e) {}
                 gambarGrab();
+                // (28 Nov 2026) pelanggan dikabari otomatis lewat chat aplikasi
+                const lyn = aktif.o.oto && aktif.o.oto.layanan;
+                try { if (typeof window.lacakKabarChat === 'function') window.lacakKabarChat(id, lyn === 'antar' ? 'Saya sudah sampai di lokasi pengambilan barang ya Kak 🙏' : 'Saya sudah sampai di titik jemput ya Kak 🙏', 'kbr_' + id + '_sampai'); } catch (e) {}
                 return;
             }
             if (lk === 'sampai') {
@@ -30421,5 +30483,267 @@ window.PembuatQR = PembuatQR;
             bid.addEventListener('wheel', (e) => { e.preventDefault(); zoomDi(e.clientX, e.clientY, sk * (e.deltaY < 0 ? 1.15 : 0.87)); }, { passive: false });
         })();
     </script>
+
+<!-- ===================== (28 Nov 2026) TAHAP D: FOOD OTOMATIS DI TUGAS BERJALAN + DETAIL PESANAN RAPI =====================
+     - Order food dari aplikasi pelanggan (ada pf_kode, mis. PF207): panel di atas Detail Pesanan berisi kode besar,
+       status makanan dari warung (sedang dibuat / sudah siap), peta rute warung -> pelanggan (tanpa kunci API, gratis),
+       tombol navigasi ke warung / ke pelanggan sesuai tahap, dan telepon / WhatsApp warung.
+     - Teks pesanan yang terstruktur (dari aplikasi: ada daftar menu + Total) ditampilkan rapi:
+       jumlah × menu, harga di kanan, catatan kuning, rincian biaya, alamat + tombol peta.
+       Teks pesanan biasa buatan admin TIDAK berubah (tetap tampilan lama).
+     - Semua isi ditampilkan dengan textContent. Tautan peta hanya alamat google.com/maps yang sah. -->
+<style id="fd-css">
+    .fd-wrap { white-space: normal; display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    .fd-panel { border: 1.5px solid #FED7AA; border-radius: 16px; overflow: hidden; background: #FFFFFF; }
+    .fd-kepala { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: linear-gradient(135deg, #EA580C, #C2410C); color: #FFFFFF; }
+    .fd-kepala small { display: block; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .9; }
+    .fd-kepala b { display: block; font-size: 15px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+    .fd-kode { flex: none; background: #FFFFFF; color: #C2410C; border-radius: 12px; padding: 6px 10px; font-size: 24px; font-weight: 900; letter-spacing: .04em; line-height: 1; }
+    .fd-ket { padding: 8px 12px 0; font-size: 12.5px; font-weight: 700; color: #7C2D12; }
+    .fd-st { margin: 8px 12px 0; display: flex; align-items: center; gap: 8px; border-radius: 12px; padding: 9px 11px; font-size: 14px; font-weight: 800; line-height: 1.35; }
+    .fd-st.dibuat { background: #FFF7ED; color: #9A3412; border: 1px solid #FED7AA; }
+    .fd-st.siap { background: #DCFCE7; color: #166534; border: 1px solid #86EFAC; }
+    .fd-st.batal { background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; }
+    .fd-peta { position: relative; margin: 10px 12px 0; height: 170px; border-radius: 12px; overflow: hidden; background: #E9E6DF; border: 1px solid #EEE4D9; }
+    .fd-peta iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .fd-legenda { display: flex; gap: 12px; padding: 6px 12px 0; font-size: 12px; font-weight: 700; color: #57534E; }
+    .fd-legenda span { display: flex; align-items: center; gap: 5px; }
+    .fd-legenda i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .fd-nav { display: block; width: calc(100% - 24px); margin: 10px 12px 0; min-height: 48px; border: 0; border-radius: 13px; background: #EA580C; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 900; cursor: pointer; }
+    .fd-nav:active { transform: scale(.98); }
+    .fd-tb { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 12px 12px; }
+    .fd-tb button { min-height: 44px; border-radius: 12px; border: 1.5px solid #E7DCCF; background: #FFFFFF; color: #3B2F26; font: inherit; font-size: 13.5px; font-weight: 800; cursor: pointer; }
+    .fd-tb button.wa { border-color: #86EFAC; color: #166534; }
+    .fd-tb button:disabled { opacity: .45; }
+    /* detail pesanan rapi */
+    .fd-rapi { display: flex; flex-direction: column; gap: 2px; }
+    .fd-lbl { margin-top: 8px; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #9A6B47; }
+    .fd-lbl:first-child { margin-top: 0; }
+    .fd-warung { font-size: 15px; font-weight: 800; color: #1C1917; margin-top: 2px; }
+    .fd-it { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 0; border-bottom: 1px dashed #EAE2D9; font-size: 15.5px; line-height: 1.35; }
+    .fd-it .q { color: #C2410C; font-weight: 900; min-width: 26px; }
+    .fd-it .n { font-weight: 700; color: #1C1917; overflow-wrap: anywhere; }
+    .fd-it .n em { display: block; margin-top: 4px; font-style: normal; background: #FEF08A; color: #713F12; border-radius: 7px; padding: 3px 7px; font-size: 13.5px; font-weight: 800; }
+    .fd-it .h { font-weight: 700; color: #44403C; white-space: nowrap; }
+    .fd-sisa { margin: 2px 0 0; padding-left: 18px; font-size: 14.5px; color: #44403C; }
+    .fd-catatan { margin-top: 6px; background: #FEF3C7; border: 1.5px solid #F59E0B; color: #78350F; border-radius: 10px; padding: 8px 10px; font-size: 14px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+    .fd-uang { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 14.5px; color: #44403C; }
+    .fd-uang span:last-child { font-weight: 700; white-space: nowrap; }
+    .fd-uang.total { border-top: 1.5px solid #EAE2D9; margin-top: 4px; padding-top: 7px; font-size: 16.5px; font-weight: 900; color: #1C1917; }
+    .fd-uang.total span:last-child { color: #C2410C; }
+    .fd-alamat { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; font-size: 14.5px; color: #1C1917; line-height: 1.4; overflow-wrap: anywhere; }
+    .fd-alamat a { flex: none; border: 1.5px solid #BFDBFE; background: #EFF6FF; color: #1D4ED8; border-radius: 10px; padding: 6px 10px; font-size: 12.5px; font-weight: 800; text-decoration: none; }
+    .fd-nama { font-size: 14.5px; font-weight: 700; color: #1C1917; }
+    body.dark-mode .fd-panel { background: #1C1917; border-color: #7C2D12; }
+    body.dark-mode .fd-it .n, body.dark-mode .fd-warung, body.dark-mode .fd-nama, body.dark-mode .fd-alamat, body.dark-mode .fd-uang.total { color: #F5F5F4; }
+    body.dark-mode .fd-uang, body.dark-mode .fd-it .h, body.dark-mode .fd-sisa { color: #D6D3D1; }
+    /* (28 Nov 2026) pop up tahap: info kabar otomatis ke chat pelanggan */
+    .tp-pop-kabar { margin-top: 10px; background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; border-radius: 12px; padding: 8px 10px; font-size: 12.5px; font-weight: 700; line-height: 1.4; text-align: left; }
+    /* (28 Nov 2026) Nota bagian 3: rincian tiap barang */
+    .nt-rinci { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px 10px; padding-left: 10px; border-left: 2px solid #FED7AA; }
+    .nt-rinci[hidden] { display: none; }
+    .nt-rinci-r { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: #57534E; line-height: 1.35; }
+    .nt-rinci-r span { min-width: 0; overflow-wrap: anywhere; }
+    .nt-rinci-r small { display: block; font-size: 11.5px; color: #8A8178; }
+    .nt-rinci-r b { font-weight: 700; white-space: nowrap; }
+</style>
+<script>
+(function foodRider() {
+    'use strict';
+    var PF_OK = /^PF[0-9]{1,6}$/, ID_OK = /^[A-Za-z0-9]{20}$/;
+    var cur = { id: '', data: null };
+    var sibuk = false;
+    function el(tag, cls, teks) { var e = document.createElement(tag); if (cls) e.className = cls; if (teks != null) e.textContent = teks; return e; }
+    function toast(t) { try { if (typeof window.showCustomToast === 'function') window.showCustomToast(t); } catch (e) {} }
+    function titik(t) {
+        if (!t) return null;
+        var lat = Number(t.lat), lng = Number(t.lng);
+        return (isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat || lng)) ? { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) } : null;
+    }
+    function petaSah(u) {
+        try { var x = new URL(String(u || '')); return x.protocol === 'https:' && /^(www\.)?google\.[a-z.]+$|^maps\.google\.[a-z.]+$|^maps\.app\.goo\.gl$|^goo\.gl$/i.test(x.hostname); } catch (e) { return false; }
+    }
+    function titikDariLink(u) {
+        var m = /[?&](?:q|query|destination)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/.exec(String(u || ''));
+        return m ? titik({ lat: m[1], lng: m[2] }) : null;
+    }
+    // ---------- membaca teks pesanan (sama dengan halaman lacak di aplikasi pelanggan) ----------
+    function urai(teks) {
+        var h = { warung: [], biaya: [], alamat: '', maps: '', nama: '', catatan: [], sisa: [] };
+        var wr = null, it = null;
+        function pastikanWarung() { if (!wr) { wr = { nama: '', items: [] }; h.warung.push(wr); } return wr; }
+        String(teks || '').split('\n').forEach(function (asli) {
+            var miring = /^\s*_.*_\s*$/.test(asli);
+            var l = asli.replace(/[*_~`]/g, '').replace(/\s+/g, ' ').trim();
+            if (!l || /^[-–—_=.\s]+$/.test(l)) return;
+            if (/^(halo|hai|hallo)\b.*(admin|projekgo)/i.test(l) || /^terima ?kasih/i.test(l) || /^pesanan:?$/i.test(l) || /FOOD OTOMATIS/i.test(l)) return;
+            var url = l.match(/https?:\/\/\S+/), m;
+            if (url && petaSah(url[0])) { if (!h.maps) h.maps = url[0]; var sisa = l.replace(url[0], '').replace(/^(maps|lokasi|titik|link)\s*:?\s*/i, '').trim(); if (sisa && !h.alamat) h.alamat = sisa; return; }
+            if ((m = l.match(/^(alamat|antar ke|tujuan|alamat antar)\s*:\s*(.+)$/i))) { h.alamat = m[2]; return; }
+            if ((m = l.match(/^(atas nama|nama pemesan|pemesan)\s*:\s*(.+)$/i))) { h.nama = m[2]; return; }
+            if ((m = l.match(/^🏪\s*(.+)$/))) { wr = { nama: m[1], items: [] }; h.warung.push(wr); it = null; return; }
+            if ((m = l.match(/^[-•·]?\s*(\d{1,3})\s*[x×]\s*(.+)$/i))) {
+                var nama = m[2], harga = '';
+                var hm = nama.match(/\(?\s*(Rp\.?\s?[\d.,]+)\s*\)?\s*$/i);
+                if (hm) { harga = hm[1].replace(/^Rp\.?\s?/i, 'Rp'); nama = nama.slice(0, hm.index).trim(); }
+                it = { qty: m[1], nama: nama, harga: harga, meta: [] }; pastikanWarung().items.push(it); return;
+            }
+            if ((miring || /^(varian|catatan)\s*:/i.test(l)) && it && !/^catatan tambahan/i.test(l)) { it.meta.push(l); return; }
+            if ((m = l.match(/^(catatan( tambahan)?|note|request)\s*:\s*(.+)$/i))) { h.catatan.push(m[3]); return; }
+            if ((m = l.match(/^(.{2,40}?)\s*:\s*(\(?.*Rp\.?\s?[\d.,]+.*|\(dihitung.*\)|gratis)$/i)) && /(ongkos|ongkir|subtotal|total|biaya|tambahan|harga|makanan|belanja|diskon|potongan)/i.test(m[1])) {
+                h.biaya.push([m[1], m[2].replace(/^Rp\.?\s?/i, 'Rp')]); it = null; return;
+            }
+            it = null; h.sisa.push(l);
+        });
+        return h;
+    }
+    // Teks dianggap "terstruktur" (dari aplikasi) kalau ada daftar menu DAN baris Total. Teks admin biasa: tidak diubah.
+    function terstruktur(h) {
+        var nItem = h.warung.reduce(function (a, w) { return a + w.items.length; }, 0);
+        return nItem > 0 && h.biaya.some(function (b) { return /total/i.test(b[0]) && !/subtotal/i.test(b[0]); });
+    }
+    function rapi(h, pf) {
+        var w = el('div', 'fd-rapi');
+        function lbl(t) { w.appendChild(el('div', 'fd-lbl', t)); }
+        lbl('Pesanan');
+        h.warung.forEach(function (x) {
+            if (x.nama) w.appendChild(el('div', 'fd-warung', '🏪 ' + x.nama));
+            x.items.forEach(function (i) {
+                var r = el('div', 'fd-it'), n = el('span', 'n', i.nama);
+                i.meta.forEach(function (mt) { n.appendChild(el('em', '', '📝 ' + mt.replace(/^catatan\s*:\s*/i, ''))); });
+                r.appendChild(el('b', 'q', i.qty + '×')); r.appendChild(n); r.appendChild(el('span', 'h', i.harga || ''));
+                w.appendChild(r);
+            });
+        });
+        if (h.sisa.length) { var u = el('ul', 'fd-sisa'); h.sisa.forEach(function (t) { u.appendChild(el('li', '', t)); }); w.appendChild(u); }
+        if (h.catatan.length) { var c = el('div', 'fd-catatan'); c.appendChild(el('b', '', '⚠ Catatan pelanggan: ')); c.appendChild(document.createTextNode(h.catatan.join(' · '))); w.appendChild(c); }
+        if (h.biaya.length) {
+            lbl('Pembayaran');
+            h.biaya.forEach(function (b) {
+                var k = b[0];
+                if (pf && /subtotal/i.test(k)) k = 'Bayar ke warung (pakai kode ' + pf + ')';
+                if (/^total/i.test(k)) k = 'Total tagih ke pelanggan';
+                var r = el('div', 'fd-uang' + (/total/i.test(b[0]) && !/subtotal/i.test(b[0]) ? ' total' : ''));
+                r.appendChild(el('span', '', k)); r.appendChild(el('span', '', b[1]));
+                w.appendChild(r);
+            });
+        }
+        if (h.nama) { lbl('Atas nama'); w.appendChild(el('div', 'fd-nama', h.nama)); }
+        if (h.alamat || h.maps) {
+            lbl('Diantar ke');
+            var a = el('div', 'fd-alamat'); a.appendChild(el('span', '', '📍 ' + (h.alamat || 'Titik di peta')));
+            if (petaSah(h.maps)) { var p = el('a', '', 'Buka peta'); p.href = h.maps; p.target = '_blank'; p.rel = 'noopener noreferrer'; a.appendChild(p); }
+            w.appendChild(a);
+        }
+        return w;
+    }
+    function bukaPeta(t) {
+        if (!t) { toast('Titik belum ada'); return; }
+        var q = t.lat.toFixed(6) + ',' + t.lng.toFixed(6);
+        if (window.AndroidInterface && typeof window.AndroidInterface.bukaPeta === 'function') { try { window.AndroidInterface.bukaPeta(t.lat, t.lng); return; } catch (e) {} }
+        if (window.AndroidInterface) { window.location.href = 'geo:' + q + '?q=' + q; return; }
+        window.open('https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(q) + '&travelmode=driving', '_blank', 'noopener');
+    }
+    function nomorWarung(d) {
+        var n = String(d.pf_warung_wa || '').replace(/[^0-9]/g, '');
+        if (!/^[0-9]{9,15}$/.test(n)) return '';
+        return n.indexOf('0') === 0 ? '62' + n.slice(1) : n;
+    }
+    function panelFood(d, h) {
+        var pf = String(d.pf_kode), lok = d.pf_lok || {};
+        var tw = titik(lok.warung), ta = titik(lok.antar) || titikDariLink(h.maps);
+        var tahap = String(d.tahap || 'menuju'), keWarung = tahap !== 'antar';
+        var p = el('div', 'fd-panel');
+        var kp = el('div', 'fd-kepala'), kk = el('div');
+        kk.appendChild(el('small', '', '🍲 Food otomatis · ' + (keWarung ? 'ambil di warung' : 'antar ke pelanggan')));
+        kk.appendChild(el('b', '', String(d.pf_vendor || (h.warung[0] && h.warung[0].nama) || 'Warung')));
+        kp.appendChild(kk); kp.appendChild(el('span', 'fd-kode', pf));
+        p.appendChild(kp);
+        p.appendChild(el('div', 'fd-ket', 'Sebutkan kode ' + pf + ' ke warung saat mengambil & membayar pesanan.'));
+        var st;
+        if (d.pf_batal) st = el('div', 'fd-st batal', '⚠ Pesanan ini sudah DIBATALKAN. Hubungi admin sebelum lanjut.');
+        else if (d.pf_status === 'siap') st = el('div', 'fd-st siap', '✅ Makanan sudah SIAP. Segera ambil di warung.');
+        else if (keWarung) st = el('div', 'fd-st dibuat', '🍳 Warung sedang membuat pesanan. Nanti tulisan ini berubah hijau saat makanan siap.');
+        if (st && (keWarung || d.pf_batal)) p.appendChild(st);
+        if (tw || ta) {
+            var pt = el('div', 'fd-peta'), fr = document.createElement('iframe');
+            fr.setAttribute('title', 'Peta warung ke pelanggan'); fr.setAttribute('loading', 'lazy'); fr.setAttribute('referrerpolicy', 'no-referrer');
+            var src = (tw && ta) ? 'https://maps.google.com/maps?saddr=' + tw.lat + ',' + tw.lng + '&daddr=' + ta.lat + ',' + ta.lng + '&output=embed'
+                : 'https://maps.google.com/maps?q=' + (tw || ta).lat + ',' + (tw || ta).lng + '&z=16&output=embed';
+            fr.setAttribute('src', src);
+            pt.appendChild(fr); p.appendChild(pt);
+            if (tw && ta) {
+                var lg = el('div', 'fd-legenda');
+                var a1 = el('span'); var i1 = el('i'); i1.style.background = '#16A34A'; a1.appendChild(i1); a1.appendChild(document.createTextNode('A = warung'));
+                var a2 = el('span'); var i2 = el('i'); i2.style.background = '#DC2626'; a2.appendChild(i2); a2.appendChild(document.createTextNode('B = pelanggan'));
+                lg.appendChild(a1); lg.appendChild(a2); p.appendChild(lg);
+            }
+        }
+        var nav = el('button', 'fd-nav', keWarung ? '🧭 Navigasi ke warung' : '🧭 Navigasi ke pelanggan'); nav.type = 'button';
+        nav.addEventListener('click', function () { bukaPeta(keWarung ? (tw || null) : (ta || null)); });
+        if (keWarung ? tw : ta) p.appendChild(nav);
+        var no = nomorWarung(d);
+        var tb = el('div', 'fd-tb');
+        var tl = el('button', '', '📞 Telepon warung'); tl.type = 'button'; tl.disabled = !no;
+        tl.addEventListener('click', function () { if (no) window.location.href = 'tel:+' + no; });
+        var wa = el('button', 'wa', '💬 WA warung'); wa.type = 'button'; wa.disabled = !no;
+        wa.addEventListener('click', function () { if (no) window.open('https://wa.me/' + no + '?text=' + encodeURIComponent('Halo, saya rider ProjekGo untuk pesanan ' + pf + ' 🙏'), '_blank', 'noopener'); });
+        tb.appendChild(tl); tb.appendChild(wa);
+        if (keWarung) p.appendChild(tb);
+        return p;
+    }
+    // baris teks lama yang ditulis showActiveOrderOverlay (disembunyikan saat tampilan rapi aktif)
+    function barisLama(c) { return c.tagName === 'DIV' && !c.classList.contains('fd-wrap') && (c.classList.contains('pl-4') || c.classList.contains('text-amber-900')); }
+    function bersihkan(wadah) {
+        var w = document.getElementById('fd-wrap'); if (w) w.remove();
+        Array.prototype.forEach.call(wadah.querySelectorAll('[data-fd-sembunyi]'), function (c) { c.removeAttribute('data-fd-sembunyi'); c.style.display = ''; });
+    }
+    function gambar() {
+        var wadah = document.getElementById('active-order-items');
+        if (!wadah) return;
+        var d = cur.data;
+        if (!d || document.getElementById('ah-panel')) { bersihkan(wadah); return; }   // Antar Hemat punya panel sendiri
+        var teks = d.pesanan_text || d.items_string || d.List_Pesanan || '';
+        var h = urai(typeof teks === 'string' ? teks : '');
+        var pf = PF_OK.test(String(d.pf_kode || '')) && ID_OK.test(String(d.pf_id || ''));
+        var rp = terstruktur(h);
+        if (!pf && !rp) { bersihkan(wadah); return; }
+        var sig = JSON.stringify([cur.id, teks, d.pf_kode, d.tahap, d.pf_status, !!d.pf_batal, d.pf_lok || null, d.pf_warung_wa || '', d.pf_vendor || '']);
+        sibuk = true;
+        try {
+            var w = document.getElementById('fd-wrap');
+            if (w && w.parentNode === wadah && w.dataset.sig === sig) {   // sama persis: cukup pastikan teks lama tetap tersembunyi (peta tidak dimuat ulang)
+                if (wadah.firstChild !== w) wadah.insertBefore(w, wadah.firstChild);
+                if (rp) Array.prototype.forEach.call(wadah.children, function (c) { if (barisLama(c) && !c.hasAttribute('data-fd-sembunyi')) { c.setAttribute('data-fd-sembunyi', '1'); c.style.display = 'none'; } });
+                return;
+            }
+            if (w) w.remove();
+            w = el('div', 'fd-wrap'); w.id = 'fd-wrap'; w.dataset.sig = sig;
+            if (pf) w.appendChild(panelFood(d, h));
+            if (rp) w.appendChild(rapi(h, pf ? String(d.pf_kode) : ''));
+            wadah.insertBefore(w, wadah.firstChild);
+            if (rp) Array.prototype.forEach.call(wadah.children, function (c) { if (barisLama(c)) { c.setAttribute('data-fd-sembunyi', '1'); c.style.display = 'none'; } });
+        } finally { setTimeout(function () { sibuk = false; }, 0); }
+    }
+    function jaga() {
+        var wadah = document.getElementById('active-order-items');
+        if (!wadah || wadah.__fdJaga || typeof MutationObserver !== 'function') return;
+        wadah.__fdJaga = new MutationObserver(function () {
+            if (sibuk || !cur.data) return;
+            var w = document.getElementById('fd-wrap');
+            var lamaTampil = Array.prototype.some.call(wadah.children, function (c) { return barisLama(c) && !c.hasAttribute('data-fd-sembunyi'); });
+            if (!w || w.parentNode !== wadah || (lamaTampil && w.querySelector('.fd-rapi'))) gambar();
+        });
+        wadah.__fdJaga.observe(wadah, { childList: true });
+    }
+    window.fdRender = function (data, docId) {
+        cur = { id: String(docId || ''), data: data || null };
+        jaga();
+        gambar();
+        setTimeout(gambar, 50);   // panel Antar Hemat / gambar order bisa dipasang sesudahnya
+    };
+})();
+</script>
+<!-- ===================== AKHIR TAHAP D: FOOD OTOMATIS & DETAIL RAPI ===================== -->
 </body>
 </html>
