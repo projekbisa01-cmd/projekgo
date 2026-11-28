@@ -7014,6 +7014,7 @@
                 return;
             }
             if (amount > 10000000) { window.showAlert('Nominal Terlalu Besar', 'Maksimal Rp 10.000.000 sekali input. Periksa lagi angkanya.', 'warning'); return; }
+            if (typeof window.rkTolakTx === "function" && window.rkTolakTx({ module: 'saldo', actionType: mode, uid })) return;   // (28 Nov 2026) rider keluar
 
             const bal = allRiderBalances.find(r => String(r.id) === uid) || {};
             const current = parseInt(bal.saldo || 0);
@@ -20201,6 +20202,7 @@
                 window.showAlert('Tidak Valid', 'Nominal harus lebih dari 0.', 'warning');
                 return;
             }
+            if (typeof window.rkTolakTx === "function" && window.rkTolakTx({ module: window.tempTx.module, actionType, uid: window.tempTx.uid })) return;   // (28 Nov 2026) rider keluar
 
             let newSaldo = window.tempTx.current;
             let actionText = '';
@@ -20282,8 +20284,20 @@
             }
         };
 
+        // (28 Nov 2026) RIDER KELUAR: top up / set saldo / setor tabungan ditolak (kurangi saldo & tarik tabungan tetap boleh)
+        window.rkTolakTx = (tx) => {
+            try {
+                if (!tx || !tx.uid || typeof window.rkKeluarUid !== 'function') return false;
+                const isi = (tx.module === 'saldo' && (tx.actionType === 'add' || tx.actionType === 'set')) || (tx.module === 'tabungan' && tx.actionType === 'add');
+                if (!isi || window.rkKeluarUid(tx.uid) !== true) return false;
+                window.showAlert('Rider Sudah Keluar', window.escHtml(window.rkPesanKeluar(window.rkNamaKeluar(tx.uid))), 'warning');
+                return true;
+            } catch (e) { return false; }
+        };
+
         window.confirmTransactionFinal = async () => {
             const tx = window.tempTx;
+            if (window.rkTolakTx(tx)) return;
             const loader = document.getElementById('loading-overlay');
             loader.classList.remove('hidden'); loader.classList.add('flex');
 
@@ -23107,6 +23121,7 @@
                     tlPeserta = snap.docs.filter(d => uidSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
                     tlSiapPeserta = true;
                     window.renderTabunganLebaran(); tlJadwalkan();
+                    window.tlSinkronKeluar();
                 }, (e) => { console.error('[TL] baca peserta:', e); tlPeserta = []; tlSiapPeserta = false; window._tlGalat = e.code || 'error'; window.renderTabunganLebaran(); });
                 onSnapshot(query(lapCol(), orderBy('tanggal', 'desc'), limit(15)), (snap) => {
                     tlLaporan = snap.docs.filter(d => tglSah(d.id)).map(d => ({ id: d.id, ...d.data() }));
@@ -23274,9 +23289,26 @@
                 });
             }
 
+            // (28 Nov 2026) rider KELUAR -> tabungan lebaran otomatis "berhenti" (dipanggil saat data peserta / status rider berubah).
+            // Uang yang sudah terkumpul tetap tercatat; hanya potongan hariannya yang berhenti.
+            const tlSedangHenti = new Set();
+            window.tlSinkronKeluar = () => {
+                if (!tlSiapPeserta || typeof window.rkKeluarUid !== 'function') return;
+                tlPeserta.forEach(p => {
+                    if (p.status === 'berhenti' || tlSedangHenti.has(p.id) || window.rkKeluarUid(p.id) !== true) return;
+                    tlSedangHenti.add(p.id);
+                    updateDoc(doc(pesertaCol(), p.id), { status: 'berhenti', diubah_oleh: 'otomatis: rider keluar', diubah_at: serverTimestamp() })
+                        .catch(e => console.warn('[TL] henti otomatis', p.id, e && e.code))
+                        .finally(() => setTimeout(() => tlSedangHenti.delete(p.id), 60000));
+                });
+            };
             function ubahStatus(uid, status) {
                 const p = tlPeserta.find(x => x.id === uid);
                 if (!p) return;
+                if (status !== 'berhenti' && typeof window.rkKeluarUid === 'function' && window.rkKeluarUid(uid) === true) {
+                    window.showAlert('Rider Sudah Keluar', 'Tabungan lebaran rider yang sudah keluar tidak bisa diaktifkan lagi. Aktifkan dulu ridernya di Kelola Rider › tab Keluar.', 'warning');
+                    return;
+                }
                 const nama = namaRider(uid, p.nama);
                 const henti = status === 'berhenti';
                 window.showConfirm(henti ? 'Hentikan tabungan?' : 'Aktifkan lagi?',
@@ -24343,11 +24375,12 @@
             }
             function kotakBatal(o, k) {
                 const kb = el('div', 'oto-batal-a');
-                kb.appendChild(document.createTextNode('✖ Dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider ' + String(o.rider_nama || '') : 'pelanggan') + ' · ' + jam(o.batal_at) + ' · Alasan: ' + String(o.batal_alasan || '-').slice(0, 200)));
+                kb.appendChild(document.createTextNode('✖ Dibatalkan ' + (o.batal_oleh === 'rider' ? 'rider ' + String(o.rider_nama || '') : o.batal_oleh === 'admin' ? 'admin di Pantauan' : 'pelanggan') + ' · ' + jam(o.batal_at) + ' · Alasan: ' + String(o.batal_alasan || '-').slice(0, 200)));
                 k.appendChild(kb);
                 const pot = Math.round(Number(o.potongan) || 0);
                 if (o.tinjau === 'kembali') { k.appendChild(el('div', 'oto-al-a', '✓ Potongan ' + rp(pot) + ' sudah dikembalikan ke saldo rider')); return; }
                 if (o.tinjau === 'tidak') { k.appendChild(el('div', 'oto-al-a', 'Potongan ' + rp(pot) + ' tidak dikembalikan (sudah ditinjau)')); return; }
+                if (o.tinjau === 'admin') { k.appendChild(el('div', 'oto-al-a', '✓ Potongan sudah dikembalikan saat admin menekan Batal di Pantauan')); return; }
                 const tb = el('div', 'oto-tb-a');
                 const ya = el('button', 'ya', '↩ Kembalikan potongan ' + rp(pot)); ya.type = 'button'; ya.addEventListener('click', () => putuskan(o, true, ya));
                 const td = el('button', 'tdk', 'Tidak dikembalikan'); td.type = 'button'; td.addEventListener('click', () => putuskan(o, false, td));
@@ -24392,7 +24425,7 @@
                     t.appendChild(badge((st === 'completed' ? 'Selesai · ' : (st ? 'Diterima ' : 'Diterima ')) + String(o.rider_nama || ''), st === 'completed' ? 'b-abu' : 'b-hijau'));
                 } else if (o.status === 'gagal') t.appendChild(badge('Tidak dapat rider → admin', 'b-merah'));
                 else if (o.status === 'batal') t.appendChild(badge('Dibatalkan pelanggan', 'b-abu'));
-                else if (o.status === 'dibatalkan') t.appendChild(badge('Batal ' + (o.batal_oleh === 'rider' ? 'oleh rider' : 'oleh pelanggan') + ' · ' + String(o.rider_nama || ''), o.tinjau ? 'b-abu' : 'b-merah'));
+                else if (o.status === 'dibatalkan') t.appendChild(badge('Batal ' + (o.batal_oleh === 'rider' ? 'oleh rider' : o.batal_oleh === 'admin' ? 'oleh admin (Pantauan)' : 'oleh pelanggan') + ' · ' + String(o.rider_nama || ''), o.tinjau ? 'b-abu' : 'b-merah'));
                 else t.appendChild(badge(String(o.status || '-'), 'b-abu'));
                 t.appendChild(badge(LYN[o.layanan] || 'Order', 'b-oranye'));
                 if (o.status === 'diterima' && isFinite(Number(o.rider_km))) t.appendChild(badge(String(Math.round(Number(o.rider_km) * 10) / 10).replace('.', ',') + ' km · ' + Math.max(0, Math.round((ms(o.diterima_at) - ms(o.dibuat_at)) / 1000)) + ' dtk', 'b-abu'));
@@ -27805,6 +27838,28 @@
             const up = (t, data) => ({op: 'update', col: C.tiket, id: t.id, data: data});
             // (25 Nov 2026) nama pelanggan yang menyerupai "modal" (mis. "Modal", "modal A07", "m.o.d.a.l") dianggap modal
             const miripModal = s => { const h = normNama(s).toLowerCase(); return h.replace(/[^a-z]/g, '') === 'modal' || /^modal($|[^a-z])/.test(h); };
+            // (28 Nov 2026) ATURAN MODAL: rider tidak boleh pinjam modal dengan NOMINAL YANG SAMA di hari yang sama
+            // atau sehari sebelumnya (H-1). Sumber: daftar Transfer yang termuat + data tab "Modal rider".
+            const kemarinDari = k => { const d = new Date(String(k) + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
+            function modalKembar(kode, nominal, tgl, kecualiId) {
+                const tgls = [tgl, kemarinDari(tgl)];
+                const hasil = {}, isModalT = t => normNama(t.pelanggan).toLowerCase() === 'modal';
+                S.tiket.concat(S.pend, S.hist).forEach(t => {
+                    if (!t || t.id === kecualiId || t.status === 'batal' || !isModalT(t)) return;
+                    if (t.kodeRider === kode && Number(t.nominal) === nominal && tgls.includes(t.tanggal)) hasil[t.id] = {tanggal: t.tanggal, no: t.no};
+                });
+                if (typeof window.mdNominalSama === 'function') {
+                    window.mdNominalSama(kode, nominal, tgls).forEach(x => { if (x.id !== kecualiId && !hasil[x.id]) hasil[x.id] = {tanggal: x.tanggal, no: x.no}; });
+                }
+                return Object.keys(hasil).map(id => hasil[id]).sort((a, b) => a.tanggal < b.tanggal ? 1 : -1);
+            }
+            function pesanModalKembar(kode, nama, nominal, tgl, daftar) {
+                const x = daftar[0], hari = x.tanggal === tgl ? 'hari ini' : 'kemarin';
+                return '<p>Rider <b>' + esc(kode) + ' ' + esc(nama || '') + '</b> sudah pinjam modal <b>' + esc(rp(nominal)) + '</b> ' + hari +
+                    ' (' + esc(teksTgl(x.tanggal)) + (x.no ? ', No ' + esc(x.no) : '') + ').</p>' +
+                    '<p>Modal dengan nominal yang <b>sama</b> tidak bisa dicatat lagi di hari yang sama atau hari berikutnya.</p>' +
+                    '<p class="hint">👉 Silakan pinjamkan dengan <b>nominal lain</b>, misalnya ' + esc(rp(Math.max(10000, nominal - 10000))) + ' atau ' + esc(rp(nominal + 10000)) + '.</p>';
+            }
             function validTransaksi(kode, nominal, pel, J, lama, dariModal) {
                 // (25 Nov 2026) MODAL TERPISAH: baris modal BARU hanya dari form tab "Modal rider".
                 // Baris modal lama tetap boleh dikoreksi (Ubah / perbaikan Cek UID) tanpa mengubah pelanggannya.
@@ -27814,6 +27869,14 @@
                 if (dariModal && pel !== 'modal') return 'Data modal tidak sah.';
                 const r = S.riders.find(x => x.id === kode);
                 if (!r) return 'Kode transfer rider belum ada di daftar. Tambahkan dulu lewat tombol "+ Tambah kode".';
+                // (28 Nov 2026) rider KELUAR: tidak bisa dicatat transaksi baru (baris lama rider yang sama tetap boleh dikoreksi)
+                if (!(lama && lama.kodeRider === kode) && typeof window.rkKeluarKode === 'function' && window.rkKeluarKode(kode) === true)
+                    return window.rkPesanKeluar(kode + ' ' + r.nama);
+                // (28 Nov 2026) baris modal LAMA yang nominal / ridernya diubah: aturan nominal sama hari ini / kemarin tetap berlaku
+                if (lama && normNama(pel).toLowerCase() === 'modal' && (Number(lama.nominal) !== nominal || lama.kodeRider !== kode) && /^\d{4}-\d{2}-\d{2}$/.test(String(lama.tanggal || ''))) {
+                    const km = modalKembar(kode, nominal, lama.tanggal, lama.id);
+                    if (km.length) return 'Rider ' + kode + ' sudah pinjam modal ' + rp(nominal) + ' ' + (km[0].tanggal === lama.tanggal ? 'di hari yang sama' : 'sehari sebelumnya') + '. Modal dengan nominal sama tidak bisa dicatat. Silakan pakai nominal lain.';
+                }
                 if (!(nominal > 0) || nominal > MAX_NOMINAL || Math.floor(nominal) !== nominal) return 'Nominal harus angka bulat antara 1 dan ' + MAX_NOMINAL.toLocaleString('id-ID') + '.';
                 if (pel.length < 2 || pel.length > 80) return 'Nama pelanggan 2 sampai 80 huruf.';
                 if (J && J.err) return J.err;
@@ -28711,6 +28774,14 @@
                 const bad = blokirKetat(kode) || validTransaksi(kode, nominal, 'modal', J, null, true);   // blokir dulu: tidak terbaca = ditolak (tanpa "tetap catat")
                 if (bad) return toast(bad, 'bad');
                 const r = S.riders.find(x => x.id === kode);
+                // (28 Nov 2026) nominal sama hari ini / kemarin -> DITOLAK (tanpa tombol "tetap catat")
+                if (typeof window.mdNominalSama === 'function' && window.mdNominalSama.siap && !window.mdNominalSama.siap()) return toast('Data modal belum termuat. Tunggu sebentar lalu coba lagi.', 'bad');
+                const kembarM = modalKembar(kode, nominal, tgl, null);
+                if (kembarM.length) {
+                    await ask({title: '⛔ Nominal modal tidak bisa dicatat', ok: 'Mengerti, ganti nominal', cancel: 'Tutup', noEnter: true, info: pesanModalKembar(kode, r.nama, nominal, tgl, kembarM)});
+                    try { g('tf-mfNominal').focus(); g('tf-mfNominal').select(); } catch (e) {}
+                    return;
+                }
                 if (tgl !== today()) {
                     const v = await ask({title: 'Tanggal kerja bukan hari ini', ok: 'Tetap catat di ' + teksTgl(tgl), cancel: 'Batal', tone: 'bad', noEnter: true,
                         info: '<p>Modal akan dicatat di tanggal <b>' + esc(teksTgl(tgl)) + '</b>.</p><p class="hint">Kartu modal di HP rider hanya dibuat untuk modal yang dicatat di tanggal hari ini. Kalau ini modal hari ini, tekan Batal lalu kembali ke hari ini.</p>'});
@@ -29198,6 +29269,7 @@
                 if (!isKey(t.tanggal) || t.tanggal > hariIni()) m.push('tanggal tidak valid');
                 else if (t.tanggal !== hariIni() && !O.izinOk(t.tanggal)) m.push('tanggal ' + t.tanggal + ' belum mendapat izin owner');
                 if (!Number.isInteger(t.menit) || t.menit < 0 || t.menit > 1439) m.push('jam tidak valid');
+                if (uid && typeof window.rkKeluarUid === 'function' && window.rkKeluarUid(uid) === true) m.push('rider sudah KELUAR: top up / setoran tidak bisa dicatat');   // (28 Nov 2026)
                 if (S.jenis === 'saldo' && !O.adaDompet('saldo', uid)) m.push('dompet saldo rider tidak ditemukan');
                 if (S.jenis === 'tabungan' && !O.adaDompet('tabungan', uid)) w.push('tabungan rider belum ada, akan dibuat baru');
                 const kembar = semua.filter(x => x.id !== t.id && x.uid === t.uid && x.nominal === t.nominal && x.tanggal === t.tanggal && x.menit === t.menit);
@@ -32906,6 +32978,13 @@
             let siap = false, petaKode = {}, data = {}, tiket = {}, sibuk = {}, henti = [];
             const kodeKeUid = kode => Object.keys(petaKode).find(u => petaKode[u] === kode) || '';
 
+            // (28 Nov 2026) aturan nominal modal: cari modal rider (kode) dengan nominal sama di tanggal-tanggal tertentu
+            window.mdNominalSama = function (kode, nominal, tgls) {
+                const k = String(kode || '').toUpperCase(), n = Number(nominal), t = Array.isArray(tgls) ? tgls : [];
+                return Object.keys(data).filter(id => { const d = data[id] || {}; return String(d.kode || '').toUpperCase() === k && Number(d.nominal) === n && t.includes(d.tanggal); })
+                    .map(id => ({ id, tanggal: data[id].tanggal, no: Number(data[id].no) || 0 }));
+            };
+            window.mdNominalSama.siap = () => siap;
             /* ---------- sinkron: tiket Transfer -> modal_rider ---------- */
             window.mdSinkron = function (daftar) {
                 try { (daftar || []).forEach(t => { if (t && ID_OK(t.id) && isModal(t)) tiket[t.id] = t; }); } catch (e) {}
@@ -36121,8 +36200,13 @@
                     if (o.ao_id && !o.rider_nama) tombol(b, '🛵 Kirim ke rider', 'pri', () => kePending(o));
                 } else if (o.status === 'diantar') {
                     k.appendChild(prosesRider(o));
-                    const b = el('div', 'pfa-tb ' + (o.ao_id ? 'satu' : 'dua')); k.appendChild(b);
+                    const b = el('div', 'pfa-tb ' + (o.ao_id ? 'tiga' : 'dua')); k.appendChild(b);
                     tombol(b, '💬 Chat', '', () => chat(o));
+                    // (28 Nov 2026) cadangan kalau order rider sudah tidak ada di Pantauan (mis. dihapus sebelum fitur otomatis aktif)
+                    if (o.ao_id) {
+                        tombol(b, 'Batalkan', 'bad', () => { if (window.confirm('Batalkan ' + o.kode + '?\n\nPakai ini hanya kalau order sudah TIDAK ADA di Pantauan / memang batal.')) batalkan(o); });
+                        tombol(b, '✓ Selesai', 'wa', () => { if (window.confirm('Tandai ' + o.kode + ' SELESAI?\n\nPakai ini hanya kalau makanan sudah sampai ke pelanggan tapi status belum berubah.')) ubah(o, { status: 'selesai', selesai_at: serverTimestamp() }, 'Pesanan selesai'); });
+                    }
                     if (!o.ao_id) tombol(b, '✓ Tandai selesai', 'wa', () => ubah(o, { status: 'selesai', selesai_at: serverTimestamp() }, 'Pesanan selesai'));   // pesanan lama (sebelum otomatis ke Pending)
                 } else if (o.status === 'batal') {
                     const b = o.batal || {};
@@ -36705,5 +36789,59 @@
     /* (28 Nov 2026) Order Otomatis sudah ada di navbar bawah: ikon di Menu Lainnya disembunyikan */
     #btn-menu-oto { display: none !important; }
 </style>
+    <!-- ===================== STATUS RIDER KELUAR (28 Nov 2026) =====================
+         Satu sumber untuk "rider ini sudah keluar?" dipakai Transfer, Modal, Top Up, Tabungan, Bulk, Tabungan Lebaran.
+         Membaca 2 dokumen saja: admin_config/rider_master (status) + admin_config/topup_daftar (uid -> kode).
+         window.rkKeluarUid(uid) / rkKeluarKode(kode): true = keluar, false = aktif/tidak tercatat keluar, null = data belum termuat. -->
+    <script type="module">
+        import { getApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        (function statusRiderKeluar() {
+            let app; try { app = getApp(); } catch (e) { console.warn('[Rider keluar] Firebase belum siap'); return; }
+            const auth = getAuth(app), db = getFirestore(app);
+            const P = 'onbid-2f87a';
+            const pd = (...s) => doc(db, 'artifacts', P, 'public', 'data', ...s);
+            let master = null, peta = null, henti = [];
+            const keluarSet = () => {
+                const s = new Set();
+                if (master) Object.keys(master).forEach(u => { if (master[u] && master[u].status === 'keluar') s.add(u); });
+                return s;
+            };
+            window.rkKeluarUid = (uid) => {
+                if (!master) return null;
+                const u = String(uid || '').trim();
+                return !!(u && master[u] && master[u].status === 'keluar');
+            };
+            window.rkKeluarKode = (kode) => {
+                if (!master || !peta) return null;
+                const k = String(kode || '').trim().toUpperCase();
+                if (!k) return false;
+                return Object.keys(peta).some(u => String(peta[u] || '').toUpperCase() === k && master[u] && master[u].status === 'keluar');
+            };
+            window.rkNamaKeluar = (uid) => { const m = master && master[String(uid || '')]; return m ? String(m.nama || uid) : String(uid || ''); };
+            window.rkDaftarKeluar = () => Array.from(keluarSet());
+            // Pesan seragam untuk semua tempat input
+            window.rkPesanKeluar = (siapa) => 'Rider ' + (siapa || '') + ' sudah berstatus KELUAR. Top up, transfer, modal, dan setor tabungan tidak bisa dicatat lagi. Kalau rider ini bekerja lagi, aktifkan dulu di Kelola Rider › tab Keluar.';
+            const kabari = () => { try { if (typeof window.tlSinkronKeluar === 'function') window.tlSinkronKeluar(); } catch (e) {} };
+            function mulai() {
+                berhenti();
+                henti.push(onSnapshot(pd('admin_config', 'rider_master'), s => {
+                    const d = s.exists() ? (s.data() || {}) : {};
+                    master = (d.riders && typeof d.riders === 'object') ? d.riders : {};
+                    kabari();
+                }, e => console.warn('[Rider keluar] master', e && e.code)));
+                henti.push(onSnapshot(pd('admin_config', 'topup_daftar'), s => {
+                    const r = (s.exists() && s.data().riders) || {};
+                    peta = (r && typeof r === 'object') ? r : {};
+                }, e => console.warn('[Rider keluar] kode', e && e.code)));
+            }
+            function berhenti() { henti.forEach(f => { try { f(); } catch (e) {} }); henti = []; master = null; peta = null; }
+            onAuthStateChanged(auth, u => {
+                const peran = u && typeof window.roleFromEmail === 'function' ? window.roleFromEmail(u.email) : null;
+                if (peran) mulai(); else berhenti();
+            });
+        })();
+    </script>
 </body>
 </html>
